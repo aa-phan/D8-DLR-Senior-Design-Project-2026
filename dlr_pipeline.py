@@ -1,7 +1,7 @@
 """
-West Texas Mesonet → Dynamic Line Rating Pipeline
+Dynamic Line Rating Pipeline
 ==================================================
-Uses the Synoptic Data API (official WTM distributor) to fetch
+Uses the Synoptic Data API to fetch
 5-minute weather observations and compute IEEE 738 conductor ratings.
 
 Requirements:
@@ -527,10 +527,14 @@ if __name__ == "__main__":
     OUTPUT_CSV = "outputs/station_data"
     os.makedirs(OUTPUT_CSV, exist_ok=True)
     OUTPUT_PLOTS = "outputs/station_plots"
+    STATIC_RATINGS = {
+        "AUSTIN": None,
+        "EL_PASO": None,
+        "MIDLAND": None
+    }
+    stations_df = pd.read_csv("wtm_stations_austin.csv")
     
-    stations_df = pd.read_csv("wtm_stations.csv")
-    
-    TARGET_STATIONS = stations_df.head(20)["stid"].tolist()
+    TARGET_STATIONS = stations_df["stid"].tolist()
     # ── Time window ───────────────────────────────────────────────────────────
     START = "2025-07-01T00:00:00Z"
     END   = "2025-07-04T23:55:00Z"

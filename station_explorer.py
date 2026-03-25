@@ -96,9 +96,10 @@ if __name__ == "__main__":
     # Comment this out if you want all Texas stations instead
     # network_id = get_network_id(token, "wtm")
     #network_id = get_network_id(token, "WTEXAS")
-
+    network_id = 152
+    # network_id = None
     print("Fetching stations in Texas …")
-    stations = get_all_stations(token, network_id=None)
+    stations = get_all_stations(token, network_id)
     print(f"  Found {len(stations)} stations")
 
     if stations.empty:
@@ -106,7 +107,7 @@ if __name__ == "__main__":
         raise SystemExit(1)
 
     stations = rank_by_corridor(stations)
-    stations.to_csv("wtm_stations.csv", index=False)
+    stations.to_csv("wtm_stations_austin.csv", index=False)
     print("  → Saved to wtm_stations.csv")
 
     print("\nTop 15 stations by proximity to DLR-relevant corridors:")
