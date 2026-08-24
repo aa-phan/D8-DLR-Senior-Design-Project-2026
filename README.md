@@ -15,7 +15,7 @@ Synoptic Data API
   └── WTM network (~168 stations, 5-min obs)
         │
         ▼
-wtm_dlr_pipeline.py
+src/dlr_pipeline.py
   ├── 1. Fetch timeseries  (air_temp, wind_speed, wind_dir, solar_rad, RH)
   ├── 2. Perpendicular wind component  (line azimuth projection)
   ├── 3. IEEE 738 heat balance  → ampacity (A)
@@ -44,21 +44,23 @@ export SYNOPTIC_TOKEN=your_token_here
 ### 3 — Discover stations near your corridors
 
 ```bash
-python wtm_station_explorer.py
-# → writes wtm_stations.csv with nearest-corridor ranking
+python src/station_explorer.py
+# → writes data/wtm_stations_austin.csv with nearest-corridor ranking
 ```
 
 ### 4 — Run the DLR pipeline
 
-Edit the bottom of `wtm_dlr_pipeline.py` to set:
+Edit the bottom of `src/dlr_pipeline.py` to set:
 - `TARGET_STATIONS`  — stids from the explorer output
 - `START` / `END`    — analysis window (ISO-8601 UTC)
 - `ConductorConfig`  — your actual conductor specs
 
 ```bash
-python wtm_dlr_pipeline.py
-# → writes dlr_results.csv + dlr_{STID}.png plots
+python src/dlr_pipeline.py
+# → writes outputs/station_data/*.csv + outputs/station_plots/*.png
 ```
+
+All commands are run from the repo root.
 
 ---
 
@@ -106,9 +108,9 @@ Solve for I:
 
 | File | Description |
 |---|---|
-| `dlr_results.csv` | Per-timestamp DLR, headroom %, uplift flag for each station |
-| `dlr_{STID}.png` | 4-panel summary: DLR vs static, wind, temp, headroom histogram |
-| `wtm_stations.csv` | Station metadata ranked by corridor proximity |
+| `outputs/station_data/*.csv` | Per-timestamp DLR, headroom %, uplift flag for each station |
+| `outputs/station_plots/*.png` | 4-panel summary: DLR vs static, wind, temp, headroom histogram |
+| `data/wtm_stations_austin.csv` | Station metadata ranked by corridor proximity |
 
 ---
 

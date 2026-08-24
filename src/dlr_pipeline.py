@@ -532,7 +532,7 @@ if __name__ == "__main__":
         "EL_PASO": None,
         "MIDLAND": None
     }
-    stations_df = pd.read_csv("wtm_stations_austin.csv")
+    stations_df = pd.read_csv("data/wtm_stations_austin.csv")
     
     TARGET_STATIONS = stations_df["stid"].tolist()
     # ── Time window ───────────────────────────────────────────────────────────
