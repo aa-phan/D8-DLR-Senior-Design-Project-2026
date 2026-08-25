@@ -8,7 +8,7 @@
 
 ## 1. Why This Ordering
 
-The repo's five production modules (`src/station_explorer.py`, `src/dlr_pipeline.py`, `src/DLRSafetyMonitor.py`, `src/units_def.py`, `src/ercot_data_retriever.py` / `src/ercot_dlr_merger.py`) have **zero cross-module imports**. They communicate entirely through CSV files on disk, coupled by column name — e.g. `src/ercot_dlr_merger.py` reads `dlr_amps`, `datetime_utc`, `wind_speed`, `air_temp` directly out of whatever `src/dlr_pipeline.py` exported. That's already close to the modularity the team wants: different people can own different files without touching each other's code. What's missing is that the file contract is **implicit and unenforced** — nothing stops a column rename from silently breaking a downstream script until someone runs it.
+The repo's five production modules (`backend/station_explorer.py`, `backend/dlr_pipeline.py`, `backend/DLRSafetyMonitor.py`, `backend/units_def.py`, `backend/ercot_data_retriever.py` / `backend/ercot_dlr_merger.py`) have **zero cross-module imports**. They communicate entirely through CSV files on disk, coupled by column name — e.g. `backend/ercot_dlr_merger.py` reads `dlr_amps`, `datetime_utc`, `wind_speed`, `air_temp` directly out of whatever `backend/dlr_pipeline.py` exported. That's already close to the modularity the team wants: different people can own different files without touching each other's code. What's missing is that the file contract is **implicit and unenforced** — nothing stops a column rename from silently breaking a downstream script until someone runs it.
 
 That fact drives the whole roadmap: **formalizing the implicit contract is the cheapest, highest-leverage first move**, because it's the specific thing that lets multiple people build against each other's outputs safely and in parallel. Everything after that is ordered least→most complex, with the two Phase 4 components deliberately last because they're both highest-effort and dependent on everything else.
 
@@ -16,9 +16,9 @@ That fact drives the whole roadmap: **formalizing the implicit contract is the c
 
 | ID | Component | Phase | Effort | Status |
 |---|---|---|---|---|
-| C1 | Configuration & Parameterization | 1 | S | Not started |
-| C2 | Pipeline Data Contract | 1 | S | Partial (`src/units_def.py` built, unintegrated) |
-| C3 | Export & Visualization | 1 | S | Implemented, schema informal |
+| C1 | Configuration & Parameterization | 1 | S | Implemented (`backend/config.py`) |
+| C2 | Pipeline Data Contract | 1 | S | Implemented and integrated — `run_pipeline` validates every row against `PIPELINE_SCHEMA` |
+| C3 | Export & Visualization | 1 | S | Implemented — schema now documented at `docs/data-science/schema/pipeline_output_v1.md`, with a fixture at `data/fixtures/sample_pipeline_output.csv` |
 | C4 | Weather Ingestion | 2 | M | Implemented (Synoptic), provider-locked |
 | C5 | Thermal Model (IEEE 738) | 2 | M | Implemented, not importable as a clean module |
 | C6 | Grid Load Integration (ERCOT) | 2 | M | Implemented |
@@ -56,8 +56,8 @@ C4 + C5 ──> C9 Forecasting
 
 Lowest complexity, highest fan-out — nearly everything else either reads config (C1) or produces/consumes the pipeline's CSV schema (C2, C3). This is a deliberate **serialization point**: land it in one focused pass rather than letting people start Phase 2 work against a contract that's still moving underneath them.
 
-- **C1** pulls the hardcoded values scattered across `src/dlr_pipeline.py`, `src/DLRSafetyMonitor.py`, and `src/ercot_dlr_merger.py` (station file, date window, `900.0` A static rating duplicated in two places, conductor defaults) into one place.
-- **C2** takes `src/units_def.py`'s already-built `PIPELINE_SCHEMA` and makes it the single enforced source of truth for column names/units/ranges, rather than a library that exists but is never called.
+- **C1** pulls the hardcoded values scattered across `backend/dlr_pipeline.py`, `backend/DLRSafetyMonitor.py`, and `backend/ercot_dlr_merger.py` (station file, date window, `900.0` A static rating duplicated in two places, conductor defaults) into one place.
+- **C2** takes `backend/units_def.py`'s already-built `PIPELINE_SCHEMA` and makes it the single enforced source of truth for column names/units/ranges, rather than a library that exists but is never called.
 - **C3** documents and stabilizes the CSV/plot output shape that C2 defines, so downstream consumers (C6, the Software sub-team) can build against a fixed contract.
 
 ### Phase 2 — Core Consolidation (C4, C5, C6)

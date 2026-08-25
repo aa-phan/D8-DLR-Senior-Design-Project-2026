@@ -4,11 +4,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
+import config
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 1. CONFIG & CONSTANTS
 # ──────────────────────────────────────────────────────────────────────────────
-LINE_VOLTAGE_KV = 345.0  # ERCOT West Texas standard backbone
-POWER_FACTOR = 0.95      # Standard conservative assumption for grid power
+LINE_VOLTAGE_KV = config.LINE_VOLTAGE_KV  # ERCOT West Texas standard backbone
+POWER_FACTOR = config.POWER_FACTOR        # Standard conservative assumption for grid power
 
 def amps_to_mw(amps: float, voltage_kv: float, pf: float) -> float:
     """
@@ -39,7 +41,7 @@ def process_dlr_to_hourly(dlr_csv_path: str) -> pd.DataFrame:
     
     # Convert Amps to MW for ERCOT comparison
     hourly["dlr_capacity_mw"] = amps_to_mw(hourly["dlr_amps"], LINE_VOLTAGE_KV, POWER_FACTOR)
-    hourly["static_capacity_mw"] = amps_to_mw(900.0, LINE_VOLTAGE_KV, POWER_FACTOR)
+    hourly["static_capacity_mw"] = amps_to_mw(config.DEFAULT_STATIC_RATING, LINE_VOLTAGE_KV, POWER_FACTOR)
     
     return hourly.reset_index()
 

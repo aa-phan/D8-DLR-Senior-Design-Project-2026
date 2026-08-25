@@ -6,7 +6,7 @@
 
 ## Current Implementation
 
-None. `src/DLRSafetyMonitor.py` (C7) is entirely deterministic threshold/range gating (G1–G5) — no learned component anywhere.
+None. `backend/DLRSafetyMonitor.py` (C7) is entirely deterministic threshold/range gating (G1–G5) — no learned component anywhere.
 
 ## Interface & Data Contract
 

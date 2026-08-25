@@ -6,11 +6,11 @@
 
 ## Current Implementation
 
-- `src/ercot_data_retriever.py::pull_ercot_data(start, end)` — pulls via the `gridstatus` library, sums ERCOT zone columns matching `"WEST"` (case-insensitive) as a western-corridor load proxy (falls back to total-ERCOT if no match), writes `outputs/ercot_data/ercot_west_load_july2025.csv`.
-- `src/ercot_dlr_merger.py::amps_to_mw(amps, voltage_kv, pf) -> float` — `P = sqrt(3) * V * I * pf / 1000`. Module defaults: `LINE_VOLTAGE_KV = 345.0`, `POWER_FACTOR = 0.95`.
-- `src/ercot_dlr_merger.py::process_dlr_to_hourly(dlr_csv_path) -> pd.DataFrame` — resamples 5-minute DLR data to 1-hour bins, `.min()` for `dlr_amps` (worst-case-within-hour: "if wind dies for 15 minutes, the hourly rating must reflect the weakest link"), `.mean()` for wind/temp context. Converts to `dlr_capacity_mw` and `static_capacity_mw`.
-- `src/ercot_dlr_merger.py::load_ercot_west_data(start, end, csv_path) -> pd.DataFrame` — loads and time-filters the retriever's output.
-- `src/ercot_dlr_merger.py::plot_holistic_grid_view(merged_df, stid)` — two-panel plot: MW capacity (DLR vs. static) vs. ERCOT load, plus a derived "stress %" (load / capacity) for both.
+- `backend/ercot_data_retriever.py::pull_ercot_data(start, end)` — pulls via the `gridstatus` library, sums ERCOT zone columns matching `"WEST"` (case-insensitive) as a western-corridor load proxy (falls back to total-ERCOT if no match), writes `outputs/ercot_data/ercot_west_load_july2025.csv`.
+- `backend/ercot_dlr_merger.py::amps_to_mw(amps, voltage_kv, pf) -> float` — `P = sqrt(3) * V * I * pf / 1000`. Module defaults: `LINE_VOLTAGE_KV = 345.0`, `POWER_FACTOR = 0.95`.
+- `backend/ercot_dlr_merger.py::process_dlr_to_hourly(dlr_csv_path) -> pd.DataFrame` — resamples 5-minute DLR data to 1-hour bins, `.min()` for `dlr_amps` (worst-case-within-hour: "if wind dies for 15 minutes, the hourly rating must reflect the weakest link"), `.mean()` for wind/temp context. Converts to `dlr_capacity_mw` and `static_capacity_mw`.
+- `backend/ercot_dlr_merger.py::load_ercot_west_data(start, end, csv_path) -> pd.DataFrame` — loads and time-filters the retriever's output.
+- `backend/ercot_dlr_merger.py::plot_holistic_grid_view(merged_df, stid)` — two-panel plot: MW capacity (DLR vs. static) vs. ERCOT load, plus a derived "stress %" (load / capacity) for both.
 
 ## Interface & Data Contract
 
@@ -30,7 +30,7 @@ C4, C5 (all Phase 2) — fully isolated, no shared files or functions with eithe
 
 ## Known Issues
 
-- `static_capacity_mw` is computed from a hardcoded `900.0` A (`src/ercot_dlr_merger.py:42`) — this is the **second** of the two independent `900.0` literals flagged in C1; must be unified there, not fixed locally here.
+- `static_capacity_mw` is computed from a hardcoded `900.0` A (`backend/ercot_dlr_merger.py:42`) — this is the **second** of the two independent `900.0` literals flagged in C1; must be unified there, not fixed locally here.
 - `pull_ercot_data`'s output filename (`ercot_west_load_july2025.csv`) is hardcoded regardless of the `start`/`end` arguments passed in — running it for a different date range silently overwrites the July 2025 file with mismatched content.
 - The "stress %" metric (`ercot_west_load_mw / dlr_capacity_mw`) treats total ERCOT western-zone load as if it all flows across the single modeled line — explicitly labeled a "simplified metric for visual correlation" in-code. Fine for illustrative plots; should not be read as an actual utilization number in the research paper without real power-flow allocation (that's Power Systems sub-team territory, out of DS scope).
 - `resample("1H")` uses the deprecated pandas alias `"1H"` rather than `"1h"` — works today but will warn/break on a future pandas major version.

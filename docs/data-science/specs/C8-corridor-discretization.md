@@ -6,7 +6,7 @@
 
 ## Current Implementation
 
-None. The closest existing artifact is `src/station_explorer.py::CORRIDORS` — five hardcoded `(lat, lon)` tuples (Panhandle Export, Permian Basin 345kV, Sweetwater Wind Hub, Big Spring Corridor, West TX to Hill Country) used only to **rank nearby stations by proximity to a single reference point per corridor**. This is not corridor discretization — there's no notion of a line, a route, or multiple points along one.
+None. The closest existing artifact is `backend/station_explorer.py::CORRIDORS` — five hardcoded `(lat, lon)` tuples (Panhandle Export, Permian Basin 345kV, Sweetwater Wind Hub, Big Spring Corridor, West TX to Hill Country) used only to **rank nearby stations by proximity to a single reference point per corridor**. This is not corridor discretization — there's no notion of a line, a route, or multiple points along one.
 
 ## Interface & Data Contract
 
@@ -15,7 +15,7 @@ Not yet designed. Should minimally need:
 - A corridor definition: substation endpoints (lat/lon) at minimum; the System Design Report's stated future step is real transmission-line geometry (e.g. GIS shapefiles) rather than a straight line between endpoints — the SDR explicitly calls the current five-point setup a "development and validation environment" using "synthetically connected substation coordinates," which matches: no such synthetic-line generator exists in code either, so this component starts from zero on both the synthetic and real geometry paths.
 - A discretization step: N points along the corridor (interpolated or from real geometry).
 - Per-point weather (via C4) and per-point ampacity (via C5).
-- A reduction step: corridor-level rating = `min()` across points, analogous to C6's existing hourly `.min()` resampling pattern (`src/ercot_dlr_merger.py::process_dlr_to_hourly`) — same "weakest link" principle, different axis (space vs. time).
+- A reduction step: corridor-level rating = `min()` across points, analogous to C6's existing hourly `.min()` resampling pattern (`backend/ercot_dlr_merger.py::process_dlr_to_hourly`) — same "weakest link" principle, different axis (space vs. time).
 
 ## Blocked by
 

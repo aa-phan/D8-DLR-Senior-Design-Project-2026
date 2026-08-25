@@ -6,7 +6,7 @@
 
 ## Current Implementation
 
-`src/DLRSafetyMonitor.py`, single class:
+`backend/DLRSafetyMonitor.py`, single class:
 
 - `DLRSafetyMonitor(static_rating, logger=None)` — `logger` defaults to `print`; `last_good_rating` initializes to `static_rating`.
 - `run_check(raw_data: dict) -> dict` — returns `{"status", "rating", "fallback", "alerts"}`. Expects keys: `sensor_status`, `link_status`, `wind`, `temp`, `solar`.
@@ -46,11 +46,11 @@ Input `raw_data` dict keys map loosely to `PIPELINE_SCHEMA` fields (`wind` ≈ `
 - **`_compute_ampacity` doesn't call the real thermal model.** Until unified with C5's `ieee738_ampacity`, the safety monitor and the pipeline can disagree on what rating a given weather observation implies — undermining the point of G4/G5.
 - **G1/G2 vs. G3/G4 fall back to different values.** G1 and G2 fall back to `last_good_rating` (the last trusted *dynamic* value); G3 and G4 fall back all the way to `static_rating`. This is a real, possibly-intentional design distinction (sensor/link loss ≠ implausible reading), but it's undocumented anywhere and should be explicitly confirmed as intended, not assumed.
 - **Range gates duplicate `PIPELINE_SCHEMA`.** `WIND_BOUNDS`, `TEMP_BOUNDS`, `SOLAR_BOUNDS` are a second, independently-maintained copy of ranges C2 already owns — see C2's Known Issues for the same finding from the other side.
-- **`tests/SafetyMonitor_TestSuite.py::test_gate_2_fails_when_link_status_not_ok` (line 62) contradicts itself.** It asserts `result["status"] == "ok"` while also asserting `result["fallback"] is True`. `_fallback()` unconditionally sets `status` to `"fallback"`, so `status` can never be `"ok"` when `fallback` is `True`. **Verified failing** via `pytest tests/SafetyMonitor_TestSuite.py tests/units_def_test.py` on 2026-08-24: `1 failed, 17 passed`. Not fixed per team decision to document rather than fix in this pass — needs a decision on intended semantics (is `status` supposed to reflect gate-2-specifically, requiring a richer result shape? or is the test simply a copy-paste error from a passing-case test?) before it's touched.
+- **`backend/tests/SafetyMonitor_TestSuite.py::test_gate_2_fails_when_link_status_not_ok` (line 62) contradicts itself.** It asserts `result["status"] == "ok"` while also asserting `result["fallback"] is True`. `_fallback()` unconditionally sets `status` to `"fallback"`, so `status` can never be `"ok"` when `fallback` is `True`. **Verified failing** via `pytest backend/tests/SafetyMonitor_TestSuite.py backend/tests/units_def_test.py` on 2026-08-24: `1 failed, 17 passed`. Not fixed per team decision to document rather than fix in this pass — needs a decision on intended semantics (is `status` supposed to reflect gate-2-specifically, requiring a richer result shape? or is the test simply a copy-paste error from a passing-case test?) before it's touched.
 
 ## Acceptance Criteria
 
-- All injected anomalies (out-of-range, implausible rating, large delta) correctly flagged; zero false positives on clean data; fallback to static rating confirmed on every anomaly case. Per System Design Report §3.3. `tests/SafetyMonitor_TestSuite.py` covers this except for the gate-2 contradiction above.
+- All injected anomalies (out-of-range, implausible rating, large delta) correctly flagged; zero false positives on clean data; fallback to static rating confirmed on every anomaly case. Per System Design Report §3.3. `backend/tests/SafetyMonitor_TestSuite.py` covers this except for the gate-2 contradiction above.
 - Once wired to C5: for identical weather inputs, `DLRSafetyMonitor`'s computed rating matches `dlr_pipeline`'s `ieee738_ampacity` output exactly (or within floating-point tolerance).
 - The gate-2 test contradiction is resolved (fixed or the semantics it was probing are formally redefined) before this component is considered done.
 

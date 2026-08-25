@@ -1,14 +1,14 @@
 # C3 — Export & Visualization
 
-**Phase:** 1 (Foundation) · **Effort:** S · **Status:** Implemented; schema is real but informal (defined by code, not published).
+**Phase:** 1 (Foundation) · **Effort:** S · **Status:** Implemented; schema now formally published.
 
 **Responsibility:** Write pipeline results to CSV and produce summary plots, in a format stable enough for other components (C6) and other sub-teams (Software's dashboard) to build against without re-deriving it by reading source.
 
 ## Current Implementation
 
-- `src/dlr_pipeline.py::export_results(df, output_path, file_prefix)` — writes one CSV per station to `outputs/station_data/`, columns: `stid, datetime_utc, air_temp, wind_speed, wind_direction, wind_perp_ms, solar_radiation, relative_humidity, dlr_amps, dlr_headroom_pct, dlr_uplift_flag`.
-- `src/dlr_pipeline.py::plot_dlr_summary(df, static_rating, output_dir, file_prefix)` — one 4-panel PNG per station to `outputs/station_plots/`: DLR vs. static time series, wind (total + perpendicular), ambient temp, headroom histogram.
-- `src/ercot_dlr_merger.py::plot_holistic_grid_view(merged_df, stid)` — two-panel PNG (`holistic_view_{stid}.png`): MW capacity vs. ERCOT load, and a derived "stress %" panel.
+- `backend/dlr_pipeline.py::export_results(df, output_path, file_prefix)` — writes one CSV per station to `outputs/station_data/`, columns: `stid, datetime_utc, air_temp, wind_speed, wind_direction, wind_perp_ms, solar_radiation, relative_humidity, dlr_amps, dlr_headroom_pct, dlr_uplift_flag`.
+- `backend/dlr_pipeline.py::plot_dlr_summary(df, static_rating, output_dir, file_prefix)` — one 4-panel PNG per station to `outputs/station_plots/`: DLR vs. static time series, wind (total + perpendicular), ambient temp, headroom histogram.
+- `backend/ercot_dlr_merger.py::plot_holistic_grid_view(merged_df, stid)` — two-panel PNG (`holistic_view_{stid}.png`): MW capacity vs. ERCOT load, and a derived "stress %" panel.
 
 ## Interface & Data Contract
 
@@ -20,7 +20,7 @@ Output CSV columns are exactly the list in `export_results` above, which is a **
 
 ## Blocks
 
-- **C6** — `src/ercot_dlr_merger.py::process_dlr_to_hourly` reads the CSV C3 produces by column name (`dlr_amps`, `wind_speed`, `air_temp`, `datetime_utc`) with zero validation that those columns exist or hold what's expected.
+- **C6** — `backend/ercot_dlr_merger.py::process_dlr_to_hourly` reads the CSV C3 produces by column name (`dlr_amps`, `wind_speed`, `air_temp`, `datetime_utc`) with zero validation that those columns exist or hold what's expected.
 - **Software sub-team's dashboard (external)** — this is the actual interface between DS and Software. Per `ROADMAP.md` Finding 2, publishing this schema (plus a small sample fixture CSV) as early as possible is the single highest-leverage item in Phase 1 for unblocking a different sub-team.
 
 ## Parallel-safe with
@@ -29,14 +29,14 @@ C1, C2 (all Phase 1).
 
 ## Known Issues
 
-- The exported schema exists only as the `cols` list inside `export_results` — there's no standalone document or fixture a dashboard developer could read without opening `src/dlr_pipeline.py`.
-- Filenames encode the date window and station ID (`{prefix}_{stid}.csv`) with no versioning — a schema change (new/renamed column) is not distinguishable from an old export by filename alone.
+- ~~The exported schema exists only as the `cols` list...~~ **Fixed** — see `docs/data-science/schema/pipeline_output_v1.md`.
+- Filenames still encode the date window and station ID (`{prefix}_{stid}.csv`) with no versioning — a schema change (new/renamed column) is still not distinguishable from an old export by filename alone. Not addressed this pass (see Open Questions — versioning strategy is still undecided).
 
 ## Acceptance Criteria
 
-- A documented, versioned schema for the exported CSV exists independent of the `export_results` source code (e.g. a schema doc or fixture file), and matches `PIPELINE_SCHEMA` for every overlapping column.
-- A sample fixture CSV with realistic values exists so the Software sub-team can build/test the dashboard without needing to run the full pipeline or hold a Synoptic token.
-- Given a full `run_pipeline` output DataFrame, `export_results` and `plot_dlr_summary` run without error on all target stations, including edge cases (a station with all-missing data, per `profile_missing_data`'s dead-sensor detection in `src/dlr_pipeline.py`).
+- ✅ A documented, versioned schema for the exported CSV exists independent of the `export_results` source code, and matches `PIPELINE_SCHEMA` for every overlapping column: `docs/data-science/schema/pipeline_output_v1.md`.
+- ✅ A sample fixture CSV with realistic values exists so the Software sub-team can build/test the dashboard without needing to run the full pipeline or hold a Synoptic token: `data/fixtures/sample_pipeline_output.csv` (10 rows, one station, 5-minute cadence, round-trips through `validate_pipeline_row` with zero violations).
+- ⚠️ Given a full `run_pipeline` output DataFrame, `export_results` and `plot_dlr_summary` run without error on all target stations, including edge cases (a station with all-missing data). **Not verified this pass** — no live Synoptic token available in this environment to generate a full real `run_pipeline` output; the fixture above is hand-constructed, not pipeline-generated. Still open.
 
 ## Open Questions
 

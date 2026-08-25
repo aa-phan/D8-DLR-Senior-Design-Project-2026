@@ -26,6 +26,8 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from typing import Union
 
+from units_def import validate_pipeline_row
+
 logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
 log = logging.getLogger(__name__)
 
@@ -372,7 +374,58 @@ def run_pipeline(
         f"Median DLR = {obs['dlr_amps'].median():.0f} A | "
         f"% time DLR > static = {obs['dlr_uplift_flag'].mean()*100:.1f}%"
     )
+
+    # Step 6 — Data contract validation (C2). Detection/logging only — does
+    # NOT modify, drop, or filter any rows. Non-strict so one bad row
+    # (e.g. a unit mismatch) surfaces as a warning instead of aborting an
+    # entire multi-station pipeline run.
+    validate_pipeline_output(obs)
+
     return obs
+
+
+def validate_pipeline_output(df: pd.DataFrame, max_examples: int = 10) -> int:
+    """
+    Validate every row of a pipeline output DataFrame against PIPELINE_SCHEMA
+    (backend/units_def.py) in non-strict mode, and log a summary.
+
+    Detection/logging only: never mutates or filters `df`.
+
+    Returns:
+        Number of rows with at least one violation.
+    """
+    total_rows = len(df)
+    rows_with_violations = 0
+    message_counts: dict[str, int] = {}
+
+    for row in df.to_dict("records"):
+        violations = validate_pipeline_row(row, strict=False)
+        if violations:
+            rows_with_violations += 1
+            for msg in violations:
+                message_counts[msg] = message_counts.get(msg, 0) + 1
+
+    if rows_with_violations == 0:
+        log.info(
+            f"Data contract check: {total_rows:,} rows checked, "
+            f"0 violations (PIPELINE_SCHEMA, backend/units_def.py)."
+        )
+    else:
+        log.warning(
+            f"Data contract check: {rows_with_violations:,}/{total_rows:,} rows "
+            f"violated PIPELINE_SCHEMA — exported output may contain bad data."
+        )
+        unique_messages = sorted(message_counts.items(), key=lambda kv: -kv[1])
+        for msg, count in unique_messages[:max_examples]:
+            log.warning(f"  [{count}x] {msg}")
+        if len(unique_messages) > max_examples:
+            log.warning(
+                f"  … {len(unique_messages) - max_examples} more distinct "
+                f"violation message(s) not shown."
+            )
+
+    return rows_with_violations
+
 
 def profile_missing_data(df: pd.DataFrame):
     """Analyzes and prints the percentage of missing values per station."""
@@ -501,18 +554,12 @@ def export_results(df: pd.DataFrame, output_path: str = ".", file_prefix: str=".
 # ──────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    import config
+
     # ── Transmission line config ──────────────────────────────────────────────
     # Example: West Texas 345 kV line running roughly E–W (azimuth ~90°)
     # through the Permian Basin wind corridor
-    conductor = ConductorConfig(
-        diameter_m    = 0.02814,   # 795 kcmil Drake ACSR
-        resistance_ac = 0.0726,    # Ω/km at 25°C
-        emissivity    = 0.8,
-        absorptivity  = 0.8,
-        max_temp_c    = 75.0,
-        line_azimuth  = 90.0,      # ← set to actual line bearing
-        elevation_m   = 900.0,     # West Texas Permian Basin avg elevation
-    )
+    conductor = ConductorConfig(**config.DEFAULT_CONDUCTOR_CONFIG_KWARGS)
 
     # ── Target stations ───────────────────────────────────────────────────────
     # WTM stations near high-wind West Texas corridors.
@@ -532,12 +579,12 @@ if __name__ == "__main__":
         "EL_PASO": None,
         "MIDLAND": None
     }
-    stations_df = pd.read_csv("data/wtm_stations_austin.csv")
-    
+    stations_df = pd.read_csv(config.DEFAULT_STATION_SOURCE)
+
     TARGET_STATIONS = stations_df["stid"].tolist()
     # ── Time window ───────────────────────────────────────────────────────────
-    START = "2025-07-01T00:00:00Z"
-    END   = "2025-07-04T23:55:00Z"
+    START = config.DEFAULT_START
+    END   = config.DEFAULT_END
 
     # ── Run ───────────────────────────────────────────────────────────────────
     results = run_pipeline(
@@ -545,11 +592,11 @@ if __name__ == "__main__":
         start          = START,
         end            = END,
         conductor      = conductor,
-        static_rating  = 900.0,
+        static_rating  = config.DEFAULT_STATIC_RATING,
         solar_alt_deg  = 72.0,   # July midday sun in West Texas
     )
 
     if not results.empty:
         #csv_path = os.path.join(OUTPUT_CSV)
         export_results(results, OUTPUT_CSV, file_prefix=f"{START.split('T')[0]}_{END.split('T')[0]}")
-        plot_dlr_summary(results, static_rating=900.0, output_dir=OUTPUT_PLOTS, file_prefix=f"{START.split('T')[0]}_{END.split('T')[0]}")
+        plot_dlr_summary(results, static_rating=config.DEFAULT_STATIC_RATING, output_dir=OUTPUT_PLOTS, file_prefix=f"{START.split('T')[0]}_{END.split('T')[0]}")

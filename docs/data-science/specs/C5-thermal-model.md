@@ -1,12 +1,12 @@
 # C5 — Thermal Model (IEEE 738)
 
-**Phase:** 2 (Core Consolidation) · **Effort:** M · **Status:** Implemented and correct in structure; not packaged as an independently importable module (currently entangled with `src/dlr_pipeline.py`'s ingestion/orchestration code and `__main__` side effects).
+**Phase:** 2 (Core Consolidation) · **Effort:** M · **Status:** Implemented and correct in structure; not packaged as an independently importable module (currently entangled with `backend/dlr_pipeline.py`'s ingestion/orchestration code and `__main__` side effects).
 
-**Responsibility:** Compute steady-state IEEE 738 conductor ampacity from weather inputs and conductor properties. This is the physics core every other component (C7, C8, C9) should call rather than reimplement — the current biggest structural problem in the repo is that `src/DLRSafetyMonitor.py` reimplements a *different, wrong* version of this instead of calling it.
+**Responsibility:** Compute steady-state IEEE 738 conductor ampacity from weather inputs and conductor properties. This is the physics core every other component (C7, C8, C9) should call rather than reimplement — the current biggest structural problem in the repo is that `backend/DLRSafetyMonitor.py` reimplements a *different, wrong* version of this instead of calling it.
 
 ## Current Implementation
 
-All in `src/dlr_pipeline.py`:
+All in `backend/dlr_pipeline.py`:
 
 - `ConductorConfig` (lines 210–233) — physical conductor parameters. Defaults model 795 kcmil Drake ACSR: diameter 0.02814 m, AC resistance 0.0726 Ω/km @ 25°C, resistance temp coefficient 0.00404/°C, emissivity/absorptivity 0.8, max temp 75°C, line azimuth 90°, elevation 300 m.
 - `perpendicular_wind(wind_speed_ms, wind_dir_deg, line_azimuth_deg) -> np.ndarray` (line 170) — projects wind onto the line-perpendicular axis; below 20° incidence, floors at `ws * sin(20°)` to avoid instability in the natural-convection regime.
@@ -17,7 +17,7 @@ All in `src/dlr_pipeline.py`:
 
 Inputs: `T_amb_c` (degC), `wind_perp_ms` (m/s), `ghi_wm2` (W/m²), a `ConductorConfig`, `solar_altitude_deg` (deg). Output: ampacity in Amperes, matching `PIPELINE_SCHEMA`'s `dlr_amps` (range 100–4000 A).
 
-**Target design:** extract `ConductorConfig`, `perpendicular_wind`, `ieee738_ampacity`, and the three `_air_*`/`_thermal_*` helpers into a module with no ingestion dependencies and no `__main__` side effects, so `import` alone doesn't require a Synoptic token or trigger a pipeline run. `src/dlr_pipeline.py::run_pipeline` becomes a caller of this module rather than the module itself.
+**Target design:** extract `ConductorConfig`, `perpendicular_wind`, `ieee738_ampacity`, and the three `_air_*`/`_thermal_*` helpers into a module with no ingestion dependencies and no `__main__` side effects, so `import` alone doesn't require a Synoptic token or trigger a pipeline run. `backend/dlr_pipeline.py::run_pipeline` becomes a caller of this module rather than the module itself.
 
 ## Modeling Assumptions Worth Documenting Explicitly
 
@@ -37,11 +37,11 @@ Inputs: `T_amb_c` (degC), `wind_perp_ms` (m/s), `ghi_wm2` (W/m²), a `ConductorC
 
 ## Parallel-safe with
 
-C4, C6 (all Phase 2) — the extraction work here touches only `src/dlr_pipeline.py`'s internals, not the ingestion or ERCOT-merge code paths.
+C4, C6 (all Phase 2) — the extraction work here touches only `backend/dlr_pipeline.py`'s internals, not the ingestion or ERCOT-merge code paths.
 
 ## Known Issues
 
-- Entangled with ingestion: currently, calling `ieee738_ampacity` in isolation is fine (it's a pure function), but the module it lives in (`src/dlr_pipeline.py`) has a `__main__` block with real side effects, so "just import the thermal model" pulls in an entire file whose top-level structure assumes it's being run as a script.
+- Entangled with ingestion: currently, calling `ieee738_ampacity` in isolation is fine (it's a pure function), but the module it lives in (`backend/dlr_pipeline.py`) has a `__main__` block with real side effects, so "just import the thermal model" pulls in an entire file whose top-level structure assumes it's being run as a script.
 - No reference/regression test exists comparing `ieee738_ampacity`'s output against a known historical or published ampacity value — the acceptance criterion below is not yet met.
 
 ## Acceptance Criteria
@@ -53,4 +53,4 @@ C4, C6 (all Phase 2) — the extraction work here touches only `src/dlr_pipeline
 ## Open Questions
 
 - Should `solar_altitude_deg` be computed from timestamp + location (proper solar position) rather than passed as a fixed run-level parameter? Flagged as a modeling assumption above, not decided here.
-- Where does the extracted module live — a new `thermal_model.py`, or does `src/dlr_pipeline.py` get split into `thermal_model.py` + `pipeline.py`?
+- Where does the extracted module live — a new `thermal_model.py`, or does `backend/dlr_pipeline.py` get split into `thermal_model.py` + `pipeline.py`?

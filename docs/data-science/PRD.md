@@ -60,8 +60,8 @@ Status reflects what's actually implemented in this repo, not what's planned. Ea
 | DS-F2 | Fetch time-series weather observations (temp, wind speed/direction, solar, humidity) for target stations | Implemented | C4 |
 | DS-F3 | Compute wind component perpendicular to the line for forced-convection cooling | Implemented | C5 |
 | DS-F4 | Compute steady-state IEEE 738 ampacity from weather + conductor properties | Implemented | C5 |
-| DS-F5 | Compare DLR against a static rating and flag uplift/headroom | Implemented (single scalar static rating only) | C1, C5 |
-| DS-F6 | Validate units and physical ranges across pipeline data | Implemented as a library, not enforced at any boundary | C2 |
+| DS-F5 | Compare DLR against a static rating and flag uplift/headroom | Implemented — per-location lookup (`backend/config.py::STATIC_RATINGS`, 5 TX cities) with a uniform fallback; not yet wired to select a location per run | C1, C5 |
+| DS-F6 | Validate units and physical ranges across pipeline data | Implemented and enforced — `run_pipeline` validates every output row against `PIPELINE_SCHEMA` before returning (non-strict, logged) | C2 |
 | DS-F7 | Detect unreliable/anomalous inputs and fall back to SLR | Partial — deterministic threshold gates only, disagrees with the real thermal model | C7 |
 | DS-F8 | Merge DLR output with real ERCOT grid load for a holistic capacity-vs-demand view | Implemented | C6 |
 | DS-F9 | Export results to CSV and produce summary plots | Implemented | C3 |
@@ -105,8 +105,8 @@ Places where `System Design Report.md` describes DS subsystem work that does not
 | SDR Claim | Location | Actual Repo State |
 |---|---|---|
 | Team evaluated and selected NOAA + NSRDB over Synoptic for weather ingestion | §3.1 Design Concept | All working ingestion code uses Synoptic/WTM. No NOAA or NSRDB integration exists. See Open Decisions §7.1 — this was not actually settled. |
-| A spatial pipeline discretizes transmission corridors into multiple points, computes ampacity at each, and takes the corridor-level minimum as the true bottleneck | §3.2 Risk Reduction ("Weather Data and Transmission Corridor Mapping") | No such pipeline exists yet — this is C8, Phase 3, not started. `src/station_explorer.py::CORRIDORS` is five hardcoded lat/lon pairs used to rank station proximity, not to discretize a line for per-point ampacity. |
-| An ML anomaly-detection model is "currently being trained and tuned on historical ambient weather and operating datasets" | §3.2 Risk Reduction ("Data Integrity") | No model, training script, or training dataset exists anywhere in the repo — this is C10, Phase 4, not started. `src/DLRSafetyMonitor.py` is entirely deterministic threshold/range gating (G1–G5), not a trained model. |
+| A spatial pipeline discretizes transmission corridors into multiple points, computes ampacity at each, and takes the corridor-level minimum as the true bottleneck | §3.2 Risk Reduction ("Weather Data and Transmission Corridor Mapping") | No such pipeline exists yet — this is C8, Phase 3, not started. `backend/station_explorer.py::CORRIDORS` is five hardcoded lat/lon pairs used to rank station proximity, not to discretize a line for per-point ampacity. |
+| An ML anomaly-detection model is "currently being trained and tuned on historical ambient weather and operating datasets" | §3.2 Risk Reduction ("Data Integrity") | No model, training script, or training dataset exists anywhere in the repo — this is C10, Phase 4, not started. `backend/DLRSafetyMonitor.py` is entirely deterministic threshold/range gating (G1–G5), not a trained model. |
 | Solar irradiance sourced from NSRDB | §3.2 Risk Reduction | Solar irradiance comes from Synoptic's `solar_radiation` field. |
 
 ## 10. References

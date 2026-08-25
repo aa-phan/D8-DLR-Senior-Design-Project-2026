@@ -15,7 +15,7 @@ Synoptic Data API
   └── WTM network (~168 stations, 5-min obs)
         │
         ▼
-src/dlr_pipeline.py
+backend/dlr_pipeline.py
   ├── 1. Fetch timeseries  (air_temp, wind_speed, wind_dir, solar_rad, RH)
   ├── 2. Perpendicular wind component  (line azimuth projection)
   ├── 3. IEEE 738 heat balance  → ampacity (A)
@@ -44,23 +44,37 @@ export SYNOPTIC_TOKEN=your_token_here
 ### 3 — Discover stations near your corridors
 
 ```bash
-python src/station_explorer.py
+python backend/station_explorer.py
 # → writes data/wtm_stations_austin.csv with nearest-corridor ranking
 ```
 
 ### 4 — Run the DLR pipeline
 
-Edit the bottom of `src/dlr_pipeline.py` to set:
+Edit the bottom of `backend/dlr_pipeline.py` to set:
 - `TARGET_STATIONS`  — stids from the explorer output
 - `START` / `END`    — analysis window (ISO-8601 UTC)
 - `ConductorConfig`  — your actual conductor specs
 
 ```bash
-python src/dlr_pipeline.py
+python backend/dlr_pipeline.py
 # → writes outputs/station_data/*.csv + outputs/station_plots/*.png
 ```
 
 All commands are run from the repo root.
+
+---
+
+## Repository Layout
+
+```
+backend/    Data Science subsystem (this pipeline) — see docs/data-science/
+  tests/    pytest suite + a standalone validation script (see docs/data-science/specs/C2-data-contract.md)
+frontend/   UI dashboard — not started, see frontend/README.md
+api/        Backend-for-frontend layer — not started, see api/README.md
+data/       Checked-in reference inputs (station metadata)
+outputs/    Generated pipeline output (gitignored)
+docs/       data-science/ (PRD, roadmap, component specs) and frontend/ (placeholder)
+```
 
 ---
 
