@@ -31,12 +31,13 @@ C1, C2 (all Phase 1).
 
 - ~~The exported schema exists only as the `cols` list...~~ **Fixed** — see `docs/data-science/schema/pipeline_output_v1.md`.
 - Filenames still encode the date window and station ID (`{prefix}_{stid}.csv`) with no versioning — a schema change (new/renamed column) is still not distinguishable from an old export by filename alone. Not addressed this pass (see Open Questions — versioning strategy is still undecided).
+- **Newly found via live verification**: when a requested station returns zero observation rows from the API entirely (as opposed to rows with some NaN columns), it is silently absent from `run_pipeline`'s output — no warning is logged that a specifically-requested station contributed nothing. `profile_missing_data`'s dead-station detection (`missing_pct[col] == 100`) only fires for stations that have rows with 100%-NaN columns; a station with zero rows never enters the groupby at all, so it's invisible to that check too. Confirmed with a real station (`MOFWL`, access-restricted under the current Synoptic token — see C4's Known Issues) run alongside a working station (`KAUS`): output silently contained only `KAUS`, with no log line calling out `MOFWL`'s absence.
 
 ## Acceptance Criteria
 
 - ✅ A documented, versioned schema for the exported CSV exists independent of the `export_results` source code, and matches `PIPELINE_SCHEMA` for every overlapping column: `docs/data-science/schema/pipeline_output_v1.md`.
 - ✅ A sample fixture CSV with realistic values exists so the Software sub-team can build/test the dashboard without needing to run the full pipeline or hold a Synoptic token: `data/fixtures/sample_pipeline_output.csv` (10 rows, one station, 5-minute cadence, round-trips through `validate_pipeline_row` with zero violations).
-- ⚠️ Given a full `run_pipeline` output DataFrame, `export_results` and `plot_dlr_summary` run without error on all target stations, including edge cases (a station with all-missing data). **Not verified this pass** — no live Synoptic token available in this environment to generate a full real `run_pipeline` output; the fixture above is hand-constructed, not pipeline-generated. Still open.
+- ✅ **Now verified against a real, live pipeline run** (2026-08-25): `run_pipeline(['KAUS'], ...)` against live Synoptic data → `export_results` and `plot_dlr_summary` both completed with zero exceptions on real output (75 rows, one 6-hour window). C2's `validate_pipeline_output` also ran automatically and found 0 violations against live data — the first time C2 has been exercised against anything other than synthetic/hand-built rows. The specific "all-missing-data station" edge case was also tested (a zero-row station run alongside a working one) — export/plot succeeded without error, but see the new Known Issue above: the dead station is silently dropped rather than flagged, which is real behavior worth fixing, not just an untested edge case.
 
 ## Open Questions
 

@@ -108,7 +108,7 @@ if __name__ == "__main__":
 
     stations = rank_by_corridor(stations)
     stations.to_csv("data/wtm_stations_austin.csv", index=False)
-    print("  → Saved to wtm_stations.csv")
+    print("  → Saved to data/wtm_stations_austin.csv")
 
     print("\nTop 15 stations by proximity to DLR-relevant corridors:")
     print(

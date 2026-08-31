@@ -1,6 +1,6 @@
 # C4 — Weather Ingestion
 
-**Phase:** 2 (Core Consolidation) · **Effort:** M · **Status:** Implemented against Synoptic/WTM; provider-locked (no adapter boundary yet).
+**Phase:** 2 (Core Consolidation) · **Effort:** M · **Status:** Implemented — provider-agnostic adapter now exists (`backend/weather_provider.py`); only Synoptic is behind it, by design (see below).
 
 **Responsibility:** Discover weather stations near target corridors and fetch time-series observations (temp, wind speed/direction, solar, humidity) for them, behind an interface that doesn't hardcode which provider is behind it — because the provider decision is explicitly unresolved (see `PRD.md` §7.1).
 
@@ -15,7 +15,7 @@
 
 Output rows conform to the weather-observation subset of `PIPELINE_SCHEMA` (C2): `air_temp` (degC), `wind_speed` (m/s), `wind_direction` (deg), `solar_radiation` (W/m²), `relative_humidity` (%), indexed by `(stid, datetime_utc)`.
 
-**Target design (not yet built):** a provider-agnostic interface — something like `fetch_weather(stids, start, end, provider="synoptic") -> pd.DataFrame` — where `fetch_timeseries`'s current Synoptic-specific logic becomes one implementation behind that interface. This is what lets C8 and later components stay unaffected by the still-open provider decision.
+**Implemented:** `backend/weather_provider.py::fetch_weather(stids, start, end, provider="synoptic") -> pd.DataFrame`. For `provider="synoptic"`, delegates straight through to `dlr_pipeline.fetch_timeseries` unchanged — no logic duplicated, no behavior change to the underlying fetch. Any other `provider` value raises `ValueError`. This module does **not** implement a second provider (e.g. NOAA) — deliberately, since doing so would resolve the still-open provider decision (`PRD.md` §7.1) rather than just insulating callers from it. `dlr_pipeline.py` itself was intentionally not edited by this change (see Known Issues — the duplicate station-metadata fetchers inside it are still there).
 
 ## Blocked by
 
@@ -35,17 +35,20 @@ C5, C6 (all Phase 2) — no shared files or functions.
 ## Known Issues
 
 - `backend/station_explorer.py` and `backend/dlr_pipeline.py` each implement their own station-metadata fetch (`get_all_stations` vs. `get_wtm_stations`) with different filtering (corridor-proximity vs. bounding box) and different output columns (`elev_ft` vs. `elevation_m`) — duplicated logic that should consolidate into one.
-- `network_id = 152` is hardcoded in `backend/station_explorer.py:99`, with the shortname-lookup path (`get_network_id`) commented out — brittle if the network ID changes.
-- Output file is written as `data/wtm_stations_austin.csv` (`backend/station_explorer.py:110`) but the log line claims `data/wtm_stations.csv` (`backend/station_explorer.py:111`).
-- Missing `solar_radiation` is filled with a hardcoded `1000` W/m² (`backend/dlr_pipeline.py:348`) rather than being flagged — happens to be conservative for ampacity (more assumed solar → lower computed rating) but is an undocumented magic number, not a named constant.
-- Debug `print()` calls inside `fetch_timeseries` (`backend/dlr_pipeline.py:138-143`) alongside the module's proper `logging` calls elsewhere.
-- No retry/backoff or rate-limit handling on the Synoptic requests — relevant given the free-tier constraints noted in `PRD.md` §7.1.
+- `network_id = 152` is hardcoded in `backend/station_explorer.py:99`, with the shortname-lookup path (`get_network_id`) commented out — brittle if the network ID changes. **Still open** — explicitly out of scope for this pass per the Open Questions below.
+- ~~Output file/log-message mismatch...~~ **Fixed** — `station_explorer.py`'s log line now correctly reports `data/wtm_stations_austin.csv`.
+- Missing `solar_radiation` is filled with a hardcoded `1000` W/m² (`backend/dlr_pipeline.py:348`) rather than being flagged — happens to be conservative for ampacity (more assumed solar → lower computed rating) but is an undocumented magic number, not a named constant. **Still open** — `dlr_pipeline.py` was deliberately not touched this pass (see Interface & Data Contract above), to keep C4 and C5's concurrent work non-overlapping.
+- Debug `print()` calls inside `fetch_timeseries` (`backend/dlr_pipeline.py:138-143`) alongside the module's proper `logging` calls elsewhere. **Still open**, same reason.
+- No retry/backoff or rate-limit handling on the Synoptic requests — relevant given the free-tier constraints noted in `PRD.md` §7.1. **Still open.**
+- **Still duplicated**: `backend/station_explorer.py::get_all_stations` and `backend/dlr_pipeline.py::get_wtm_stations` remain two separate station-metadata fetchers — consolidating them was explicitly out of scope (see Open Questions).
+- **Newly found via live verification (2026-08-25)**: `data/wtm_stations_austin.csv` — the file `config.DEFAULT_STATION_SOURCE` points at, i.e. the pipeline's own default station list — contains only 2 real stations (`MOFWL`, `MOLOK`), and **both return zero observation rows** under the currently-configured Synoptic token. Station *metadata* access works for both (they show up in `/stations/metadata`), but the `/stations/latest` endpoint returns `RESPONSE_CODE: 2, "No stations found... or your account does not have access"` for them — a real account/tier restriction, not a code bug. This means `dlr_pipeline.py`'s `__main__` block, run as-is today with default config, would silently produce an empty result. A different station (`KAUS`, Austin-Bergstrom Airport) confirmed full data access and was used for all the live verification below. Worth fixing the default station source before anyone relies on `python backend/dlr_pipeline.py` producing real output.
+- **Newly found**: stations that lack Synoptic's `solar_radiation` field entirely (confirmed true for both `KAUS` and the two `wtm_stations_austin.csv` stations) mean the `dlr_pipeline.py:348` hardcoded `1000` W/m² fallback (see above) isn't an edge case — it's the *normal* path for airport/METAR-style stations. This raises the priority of turning it into a named, documented constant.
 
 ## Acceptance Criteria
 
-- `fetch_timeseries` (or its successor) returns data for a known station/date range matching expected row counts (5-minute cadence) and no unit violations against `PIPELINE_SCHEMA`.
-- Missing-data profiling (`profile_missing_data`) correctly identifies a station with intentionally all-missing data in a test fixture.
-- A provider swap (Synoptic → mock/alternate) requires changes only inside the ingestion module, with zero changes to C5, C7, or C8 call sites.
+- ✅ A provider swap (Synoptic → mock/alternate) requires changes only inside the ingestion module, with zero changes to C5, C7, or C8 call sites. Verified: `weather_provider.py` is the only file with provider-specific logic; an unsupported provider name raises a clear `ValueError` before any Synoptic-specific code runs.
+- ✅ Importable without a `SYNOPTIC_TOKEN` env var. Verified directly (`env -u SYNOPTIC_TOKEN python -c "import weather_provider"` succeeds).
+- ✅ **Now verified live (2026-08-25)**: `fetch_timeseries`/`weather_provider.fetch_weather` confirmed against real Synoptic data — `KAUS`, 6-hour window, 79 real observation rows retrieved, fed successfully through the full pipeline (C5's `ieee738_ampacity`, C2's validation, C3's export/plot — see those specs). Missing-data profiling correctly identified `KAUS`'s missing `solar_radiation` field (`WARNING | Stations completely missing 'solar_radiation': KAUS`). The stricter "a station with intentionally ALL fields missing" case was also tested (a zero-row station alongside a working one) — see C3's new Known Issue: that station is silently dropped rather than flagged, which is real, now-documented behavior rather than an untested criterion.
 
 ## Open Questions
 

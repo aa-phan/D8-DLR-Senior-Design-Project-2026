@@ -40,9 +40,11 @@ def pull_ercot_data(start: str=".", end: str="."):
     # Clean up the final dataframe for the merger script
     final_df = summer_df[[time_col, "ercot_west_load_mw"]].rename(columns={time_col: "datetime_utc"})
     
-    # Save it 
+    # Save it
     os.makedirs("outputs/ercot_data", exist_ok=True)
-    out_path = "outputs/ercot_data/ercot_west_load_july2025.csv"
+    start_tag = str(start).replace(":", "").replace(" ", "_")
+    end_tag = str(end).replace(":", "").replace(" ", "_")
+    out_path = f"outputs/ercot_data/ercot_west_load_{start_tag}_{end_tag}.csv"
     final_df.to_csv(out_path, index=False)
     
     print(f"Success! Saved {len(final_df)} hourly records to {out_path}")

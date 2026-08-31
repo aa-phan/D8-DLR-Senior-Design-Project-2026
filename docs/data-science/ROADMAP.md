@@ -19,9 +19,9 @@ That fact drives the whole roadmap: **formalizing the implicit contract is the c
 | C1 | Configuration & Parameterization | 1 | S | Implemented (`backend/config.py`) |
 | C2 | Pipeline Data Contract | 1 | S | Implemented and integrated — `run_pipeline` validates every row against `PIPELINE_SCHEMA` |
 | C3 | Export & Visualization | 1 | S | Implemented — schema now documented at `docs/data-science/schema/pipeline_output_v1.md`, with a fixture at `data/fixtures/sample_pipeline_output.csv` |
-| C4 | Weather Ingestion | 2 | M | Implemented (Synoptic), provider-locked |
-| C5 | Thermal Model (IEEE 738) | 2 | M | Implemented, not importable as a clean module |
-| C6 | Grid Load Integration (ERCOT) | 2 | M | Implemented |
+| C4 | Weather Ingestion | 2 | M | Implemented — provider-agnostic adapter (`backend/weather_provider.py`); still only Synoptic behind it |
+| C5 | Thermal Model (IEEE 738) | 2 | M | Implemented as `backend/thermal_model.py`; validated against IEEE 738's own published worked example. A real bug (erroneous π factor, ~69% ampacity overestimate) was found and fixed in the process — see `PRD.md` §9 |
+| C6 | Grid Load Integration (ERCOT) | 2 | M | Implemented, with new test coverage for the three previously-unverified acceptance criteria |
 | C7 | Safety Monitor & Fallback | 3 | M | Partial (placeholder ampacity formula) |
 | C8 | Corridor Spatial Discretization | 3 | L | Not started |
 | C9 | Ampacity Forecasting | 4 | L | Not started |

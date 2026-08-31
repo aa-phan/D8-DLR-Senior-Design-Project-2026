@@ -27,6 +27,7 @@ import matplotlib.dates as mdates
 from typing import Union
 
 from units_def import validate_pipeline_row
+import thermal_model
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
 log = logging.getLogger(__name__)
@@ -166,149 +167,12 @@ def fetch_timeseries(
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 2.  PERPENDICULAR WIND COMPONENT
+# 2.  PERPENDICULAR WIND COMPONENT / 3. IEEE 738 THERMAL MODEL
 # ──────────────────────────────────────────────────────────────────────────────
-
-def perpendicular_wind(
-    wind_speed_ms: Union[float,np.ndarray],
-    wind_dir_deg: Union[float, np.ndarray],
-    line_azimuth_deg: float,
-) -> np.ndarray:
-    """
-    Compute the wind speed component perpendicular to the transmission line.
-
-    IEEE 738 uses effective cooling wind; the perpendicular component is
-    what drives forced convection.  For angles < 20° use minimum value 
-    to avoid instability in natural convection regime.
-
-    Args:
-        wind_speed_ms:   Measured wind speed (m/s)
-        wind_dir_deg:    Meteorological wind direction (degrees from North,
-                         direction wind is coming FROM)
-        line_azimuth_deg: Compass bearing of the transmission line (0–360°)
-
-    Returns:
-        Effective perpendicular wind component (m/s), shape matching inputs
-    """
-    ws  = np.asarray(wind_speed_ms, dtype=float)
-    wd  = np.asarray(wind_dir_deg,  dtype=float)
-    # Wind flow direction = opposite of met convention
-    flow_dir = (wd + 180) % 360
-    # Angle between wind flow and line
-    delta = np.abs(flow_dir - line_azimuth_deg) % 180
-    # Convert angles > 90° to acute angle
-    delta = np.where(delta > 90, 180 - delta, delta)
-    # Perpendicular component
-    perp = ws * np.sin(np.radians(delta))
-    # IEEE 738: below ~20° treat as low-wind / natural convection dominates
-    perp = np.where(delta < 20, ws * np.sin(np.radians(20)), perp)
-    return perp
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# 3.  IEEE 738 THERMAL MODEL
-# ──────────────────────────────────────────────────────────────────────────────
-
-class ConductorConfig:
-    """
-    Physical properties of the ACSR conductor.
-    Defaults match a typical 795 kcmil Drake ACSR used on ERCOT 345 kV lines.
-    """
-    def __init__(
-        self,
-        diameter_m:    float = 0.02814,   # outer diameter (m)
-        resistance_ac: float = 0.0726,    # AC resistance at 25°C (Ω/km)
-        resist_temp_coef: float = 0.00404, # per °C (aluminum)
-        emissivity:    float = 0.8,        # conductor surface emissivity
-        absorptivity:  float = 0.8,        # solar absorptivity
-        max_temp_c:    float = 75.0,       # maximum allowable conductor temp (°C)
-        line_azimuth:  float = 90.0,       # compass bearing of line (°)
-        elevation_m:   float = 300.0,      # average elevation for air density
-    ):
-        self.D    = diameter_m
-        self.R25  = resistance_ac / 1000   # Ω/m
-        self.alpha_r = resist_temp_coef
-        self.eps  = emissivity
-        self.alpha_s = absorptivity
-        self.T_max = max_temp_c
-        self.line_az = line_azimuth
-        self.elev = elevation_m
-
-
-def _air_density(elevation_m: float) -> float:
-    """Approximate air density (kg/m³) at elevation."""
-    return 1.225 * math.exp(-elevation_m / 8435)
-
-
-def _dynamic_viscosity(T_film_c: float) -> float:
-    """Air dynamic viscosity (Pa·s) at film temperature."""
-    T_k = T_film_c + 273.15
-    return 1.458e-6 * T_k**1.5 / (T_k + 110.4)
-
-
-def _thermal_conductivity(T_film_c: float) -> float:
-    """Air thermal conductivity (W/m·K) at film temperature."""
-    return 2.42e-2 + 7.2e-5 * T_film_c
-
-
-def ieee738_ampacity(
-    T_amb_c: Union[float, np.ndarray],
-    wind_perp_ms: Union[float, np.ndarray],
-    ghi_wm2: Union[float, np.ndarray],
-    conductor: ConductorConfig,
-    solar_altitude_deg: float = 45.0,
-) -> np.ndarray:
-    """
-    IEEE 738 steady-state ampacity (A) given weather conditions.
-
-    Returns current rating in Amperes for each observation.
-    """
-    T_a  = np.asarray(T_amb_c,     dtype=float)
-    Vw   = np.asarray(wind_perp_ms, dtype=float)
-    Q_s  = np.asarray(ghi_wm2,     dtype=float)
-
-    T_c  = conductor.T_max
-    T_f  = (T_c + T_a) / 2          # film temperature
-
-    # Air properties at film temp (vectorized approximation)
-    rho_f = _air_density(conductor.elev)
-    mu_f  = 1.458e-6 * (T_f + 273.15)**1.5 / (T_f + 110.4 + 273.15)
-    k_f   = 2.42e-2 + 7.2e-5 * T_f
-
-    # Reynolds number
-    N_Re = conductor.D * Vw * rho_f / mu_f
-
-    # Forced convection (IEEE 738 eq. 3a / 3b)
-    Q_cf = np.where(
-        N_Re < 1000,
-        k_f * (1.01 + 1.347 * N_Re**0.52) * np.pi * (T_c - T_a),
-        k_f * 0.754 * N_Re**0.6 * np.pi * (T_c - T_a)
-    )
-
-    # Natural convection (when wind is very low, use max of forced/natural)
-    Q_cn = 3.645 * rho_f**0.5 * conductor.D**0.75 * (T_c - T_a)**1.25
-
-    Q_conv = np.maximum(Q_cf, Q_cn)
-
-    # Radiated heat loss (Stefan–Boltzmann linearized)
-    T_c_k = T_c + 273.15
-    T_a_k = T_a + 273.15
-    Q_rad = 17.8 * conductor.D * conductor.eps * (
-        ((T_c_k / 100)**4) - ((T_a_k / 100)**4)
-    )
-
-    # Solar heat gain — use a simplified angle factor
-    sin_alt = math.sin(math.radians(solar_altitude_deg))
-    Q_solar = conductor.alpha_s * Q_s * conductor.D * sin_alt
-
-    # Resistance at conductor temperature
-    R_Tc = conductor.R25 * (1 + conductor.alpha_r * (T_c - 25))
-
-    # Solve for I:  I² * R_Tc = Q_conv + Q_rad - Q_solar
-    heat_balance = Q_conv + Q_rad - Q_solar
-    heat_balance = np.maximum(heat_balance, 0)   # cannot be negative
-    I = np.sqrt(heat_balance / R_Tc)
-    return I
+# ConductorConfig, perpendicular_wind, and ieee738_ampacity (C5) now live in
+# thermal_model.py — a pure module with no ingestion dependencies and no
+# __main__ side effects. See thermal_model.ConductorConfig,
+# thermal_model.perpendicular_wind, thermal_model.ieee738_ampacity.
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -319,7 +183,7 @@ def run_pipeline(
     stids:          list[str],
     start:          str,
     end:            str,
-    conductor:      ConductorConfig,
+    conductor:      thermal_model.ConductorConfig,
     static_rating:  float = 900.0,    # A — conventional static rating for comparison
     solar_alt_deg:  float = 45.0,
 ) -> pd.DataFrame:
@@ -329,7 +193,7 @@ def run_pipeline(
     Args:
         stids:          List of WTM station IDs
         start / end:    ISO-8601 UTC strings
-        conductor:      ConductorConfig instance
+        conductor:      thermal_model.ConductorConfig instance
         static_rating:  Conventional static rating in Amps (for headroom calc)
         solar_alt_deg:  Representative solar altitude for the analysis period
 
@@ -350,14 +214,14 @@ def run_pipeline(
     obs["solar_radiation"] = obs["solar_radiation"].fillna(1000)
 
     # Step 3 — Perpendicular wind
-    obs["wind_perp_ms"] = perpendicular_wind(
+    obs["wind_perp_ms"] = thermal_model.perpendicular_wind(
         obs["wind_speed"].values,
         obs["wind_direction"].values,
         conductor.line_az,
     )
 
     # Step 4 — IEEE 738 dynamic rating
-    obs["dlr_amps"] = ieee738_ampacity(
+    obs["dlr_amps"] = thermal_model.ieee738_ampacity(
         T_amb_c      = obs["air_temp"].values,
         wind_perp_ms = obs["wind_perp_ms"].values,
         ghi_wm2      = obs["solar_radiation"].values,
@@ -559,7 +423,7 @@ if __name__ == "__main__":
     # ── Transmission line config ──────────────────────────────────────────────
     # Example: West Texas 345 kV line running roughly E–W (azimuth ~90°)
     # through the Permian Basin wind corridor
-    conductor = ConductorConfig(**config.DEFAULT_CONDUCTOR_CONFIG_KWARGS)
+    conductor = thermal_model.ConductorConfig(**config.DEFAULT_CONDUCTOR_CONFIG_KWARGS)
 
     # ── Target stations ───────────────────────────────────────────────────────
     # WTM stations near high-wind West Texas corridors.

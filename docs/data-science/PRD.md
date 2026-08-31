@@ -57,9 +57,9 @@ Status reflects what's actually implemented in this repo, not what's planned. Ea
 | ID | Requirement | Status | Owning Component |
 |---|---|---|---|
 | DS-F1 | Discover weather stations near defined transmission corridors | Implemented | C4 |
-| DS-F2 | Fetch time-series weather observations (temp, wind speed/direction, solar, humidity) for target stations | Implemented | C4 |
-| DS-F3 | Compute wind component perpendicular to the line for forced-convection cooling | Implemented | C5 |
-| DS-F4 | Compute steady-state IEEE 738 ampacity from weather + conductor properties | Implemented | C5 |
+| DS-F2 | Fetch time-series weather observations (temp, wind speed/direction, solar, humidity) for target stations | Implemented — now behind a provider-agnostic adapter (`backend/weather_provider.py`) | C4 |
+| DS-F3 | Compute wind component perpendicular to the line for forced-convection cooling | Implemented — extracted to `backend/thermal_model.py` | C5 |
+| DS-F4 | Compute steady-state IEEE 738 ampacity from weather + conductor properties | Implemented and now validated against a published reference — see §9 below for a real bug found and fixed during that validation | C5 |
 | DS-F5 | Compare DLR against a static rating and flag uplift/headroom | Implemented — per-location lookup (`backend/config.py::STATIC_RATINGS`, 5 TX cities) with a uniform fallback; not yet wired to select a location per run | C1, C5 |
 | DS-F6 | Validate units and physical ranges across pipeline data | Implemented and enforced — `run_pipeline` validates every output row against `PIPELINE_SCHEMA` before returning (non-strict, logged) | C2 |
 | DS-F7 | Detect unreliable/anomalous inputs and fall back to SLR | Partial — deterministic threshold gates only, disagrees with the real thermal model | C7 |
@@ -98,21 +98,32 @@ These appear in the System Design Report's risk-reduction section as work in pro
 - **ML-based ampacity forecasting** (C9) — regression or neural-network model to forecast ahead of real time, per IEEE Trans. Smart Grid prior art (`Prior Art Report.md`).
 - **Trained anomaly detection** (C10) — replace/augment `DLRSafetyMonitor`'s deterministic gates with a model trained on historical baselines per variable (wind, temp, solar, load).
 
-## 9. Documentation Discrepancies
+## 9. Critical Bug Found and Fixed: IEEE 738 Forced-Convection Formula
+
+While validating `ieee738_ampacity` (C5) against the published IEEE Std 738-2023 worked example (§4.6.1, 795 kcmil Drake ACSR — the exact conductor this project defaults to), the forced-convection term was found to have an erroneous extra `* np.pi` factor with no basis in the standard. Neither of the standard's actual equations (Eq. 9: `qc1 = Kangle × [1.01 + 1.35 × NRe^0.52] × kf × (Ts − Ta)`; Eq. 10: `qc2 = Kangle × 0.754 × NRe^0.6 × kf × (Ts − Ta)`) contains a π term.
+
+**Impact of the bug (now fixed):** for the standard's own worked-example inputs (40°C ambient, 0.61 m/s perpendicular wind, 100°C conductor limit), the buggy formula computed **~1728 A** against a published correct answer of **1025 A** — a **~69% overestimate** of line capacity. Since ampacity scales with `sqrt(heat_balance)`, this error did not cancel out anywhere downstream. This is the precise failure mode the project's own ethical-considerations section (`Project Definition.md`) warns against: a DLR system silently overstating how much current a line can safely carry.
+
+**Status:** fixed in `backend/thermal_model.py::ieee738_ampacity` (see C5's spec and the module's own inline comments for the fix). The corrected formula now reproduces the published worked example within 0.95% (see `backend/tests/thermal_model_test.py` for the full derivation of that tolerance — it is not an arbitrarily loose bound). This is why the C5 acceptance criterion "no known-value validation exists" mattered enough to be treated as a real gap rather than a formality — it caught a real, previously-undetected defect in the pipeline's core safety-relevant calculation.
+
+No prior documentation (course deliverables or the DS specs) claimed this bug didn't exist — this wasn't a discrepancy between docs and code, it was undetected because no reference-value validation had been done until this pass. Flagged here at the PRD level, not just in C5's spec, because of its severity.
+
+## 10. Documentation Discrepancies
 
 Places where `System Design Report.md` describes DS subsystem work that does not match what's in this repository. Flagged so the team can correct the record in the next course submission rather than let the gap compound.
 
 | SDR Claim | Location | Actual Repo State |
 |---|---|---|
-| Team evaluated and selected NOAA + NSRDB over Synoptic for weather ingestion | §3.1 Design Concept | All working ingestion code uses Synoptic/WTM. No NOAA or NSRDB integration exists. See Open Decisions §7.1 — this was not actually settled. |
+| Team evaluated and selected NOAA + NSRDB over Synoptic for weather ingestion | §3.1 Design Concept | All working ingestion code uses Synoptic/WTM, now behind a provider-agnostic adapter (`backend/weather_provider.py`). No NOAA or NSRDB integration exists. See Open Decisions §7.1 — this was not actually settled. |
 | A spatial pipeline discretizes transmission corridors into multiple points, computes ampacity at each, and takes the corridor-level minimum as the true bottleneck | §3.2 Risk Reduction ("Weather Data and Transmission Corridor Mapping") | No such pipeline exists yet — this is C8, Phase 3, not started. `backend/station_explorer.py::CORRIDORS` is five hardcoded lat/lon pairs used to rank station proximity, not to discretize a line for per-point ampacity. |
 | An ML anomaly-detection model is "currently being trained and tuned on historical ambient weather and operating datasets" | §3.2 Risk Reduction ("Data Integrity") | No model, training script, or training dataset exists anywhere in the repo — this is C10, Phase 4, not started. `backend/DLRSafetyMonitor.py` is entirely deterministic threshold/range gating (G1–G5), not a trained model. |
 | Solar irradiance sourced from NSRDB | §3.2 Risk Reduction | Solar irradiance comes from Synoptic's `solar_radiation` field. |
 
-## 10. References
+## 11. References
 
 - `ROADMAP.md` (this directory) — phase order, dependency graph, blocker analysis
 - `specs/` (this directory) — per-component technical specs
+- `citations.md` (this directory) — full bibliography for AI-assisted research used in this subsystem (static line ratings, IEEE 738 worked-example validation), with per-source used/excluded status and a verification checklist
 - `System Design Report.md` §2.0–3.3 (design concept, risk reduction, test plan)
 - `Project Definition.md` (I/O specification table, ethical fail-safe commitment)
-- IEEE Std 738-2023 — Calculating the Current-Temperature Relationship of Bare Overhead Conductors
+- IEEE Std 738-2023 — Calculating the Current-Temperature Relationship of Bare Overhead Conductors (see `citations.md` §2 for the specific clause used in C5's validation)

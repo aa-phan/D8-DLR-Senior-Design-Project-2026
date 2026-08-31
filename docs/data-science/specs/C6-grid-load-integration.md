@@ -1,6 +1,6 @@
 # C6 — Grid Load Integration (ERCOT)
 
-**Phase:** 2 (Core Consolidation) · **Effort:** M · **Status:** Implemented.
+**Phase:** 2 (Core Consolidation) · **Effort:** M · **Status:** Implemented and now covered by real tests for the three previously-unverified acceptance criteria.
 
 **Responsibility:** Pull real ERCOT hourly load data, resample DLR output to hourly worst-case, convert ampacity to MW, and merge the two for the economic/reliability comparison (DLR vs. static capacity vs. actual grid demand). This is the component feeding the research paper deliverable.
 
@@ -30,16 +30,17 @@ C4, C5 (all Phase 2) — fully isolated, no shared files or functions with eithe
 
 ## Known Issues
 
-- `static_capacity_mw` is computed from a hardcoded `900.0` A (`backend/ercot_dlr_merger.py:42`) — this is the **second** of the two independent `900.0` literals flagged in C1; must be unified there, not fixed locally here.
-- `pull_ercot_data`'s output filename (`ercot_west_load_july2025.csv`) is hardcoded regardless of the `start`/`end` arguments passed in — running it for a different date range silently overwrites the July 2025 file with mismatched content.
-- The "stress %" metric (`ercot_west_load_mw / dlr_capacity_mw`) treats total ERCOT western-zone load as if it all flows across the single modeled line — explicitly labeled a "simplified metric for visual correlation" in-code. Fine for illustrative plots; should not be read as an actual utilization number in the research paper without real power-flow allocation (that's Power Systems sub-team territory, out of DS scope).
-- `resample("1H")` uses the deprecated pandas alias `"1H"` rather than `"1h"` — works today but will warn/break on a future pandas major version.
+- ~~`static_capacity_mw` computed from a hardcoded `900.0` A...~~ **Fixed in C1** — now reads `config.DEFAULT_STATIC_RATING`.
+- ~~`pull_ercot_data`'s output filename hardcoded...~~ **Fixed** — now `outputs/ercot_data/ercot_west_load_{start}_{end}.csv`, with colons/spaces sanitized out of the date strings. `ercot_dlr_merger.py`'s `__main__` block updated to match.
+- The "stress %" metric (`ercot_west_load_mw / dlr_capacity_mw`) treats total ERCOT western-zone load as if it all flows across the single modeled line — explicitly labeled a "simplified metric for visual correlation" in-code. **Still open** — not addressed this pass; fine for illustrative plots, should not be read as an actual utilization number in the research paper without real power-flow allocation (Power Systems sub-team territory, out of DS scope).
+- ~~`resample("1H")` deprecated alias...~~ **Fixed** — now `resample("1h")`.
+- **Newly found via live verification (2026-08-25)**: `pull_ercot_data` reaches ERCOT successfully (connects, begins downloading the "2026 historical load archive") but fails deterministically with `Error: Bad CRC-32 for file 'Native_Load_2026.xlsx'` → `ValueError: No objects to concatenate`. Reproduced twice, consistently. This is in the `gridstatus` library's own download/decompression of ERCOT's published archive, not this project's code — but it means **C6's live ERCOT path is currently non-functional**, independent of anything in this repo. Worth a follow-up to determine if this is a transient ERCOT-side archive issue, a `gridstatus` version incompatibility, or something fixable on our end (e.g. pinning a different `gridstatus` version, or fetching the current year differently than the historical-archive endpoint this function uses).
 
 ## Acceptance Criteria
 
-- Hourly ampacity reflects the true minimum within each hour — verified by construction (`.resample().min()`), but worth a test with a synthetic dip to confirm the worst-case value survives resampling.
-- `amps_to_mw` output matches hand-calculated values for known (A, kV, PF) triples.
-- Merge produces no row loss/duplication for overlapping timestamps between DLR and ERCOT data (`pd.merge(..., how="inner")` — confirm this is the intended join type, not `"left"`, since an inner join silently drops any hour missing from either source).
+- ✅ Hourly ampacity reflects the true minimum within each hour. Verified with a synthetic dip test (`backend/tests/ercot_dlr_merger_test.py::test_hourly_resample_uses_min_not_mean`) — confirms `.min()` behavior specifically, not just coincidentally matching mean/first/last.
+- ✅ `amps_to_mw` output matches hand-calculated values for known (A, kV, PF) triples. Verified against independently hand-computed expected values (not re-derived from the same formula) for 3 triples plus a simple round-number sanity check.
+- ✅ Merge produces no row loss/duplication for overlapping timestamps between DLR and ERCOT data. Verified: `pd.merge(..., how="inner")` confirmed to keep only the overlap with no duplicates, and to correctly drop non-overlapping hours from either source — this is documented, current, intentional behavior (see Open Questions below for whether it should stay that way).
 
 ## Open Questions
 
