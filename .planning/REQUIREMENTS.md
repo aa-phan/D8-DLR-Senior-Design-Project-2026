@@ -29,9 +29,10 @@ functional and non-functional requirement it lists is part of this subsystem's c
 - [x] **DS-F4**: Compute steady-state IEEE 738 ampacity from weather + conductor properties,
       validated against a published reference — owned by C5
 - [ ] **DS-F5**: Compare DLR against a static rating and flag uplift/headroom — owned by C1, C5.
-      Partial: per-location lookup table exists (`config.py::STATIC_RATINGS`, 5 TX cities) but is
-      not yet wired to select a location per run (uses a uniform fallback). Completing this is
-      blocked on the open geographic/corridor scope decision (see PROJECT.md Key Decisions).
+      Partial: per-location lookup table exists (`config.py::STATIC_RATINGS`, now the 4 documented
+      TX cities per `docs/data-science/decisions/geographic_scope.md`) but is not yet wired to
+      select a location per run (uses a uniform fallback). The scope decision that previously
+      blocked this is resolved; remaining work is pure wiring, not a decision gap.
 
 ### Data Contract & Validation
 

@@ -438,11 +438,6 @@ if __name__ == "__main__":
     OUTPUT_CSV = "outputs/station_data"
     os.makedirs(OUTPUT_CSV, exist_ok=True)
     OUTPUT_PLOTS = "outputs/station_plots"
-    STATIC_RATINGS = {
-        "AUSTIN": None,
-        "EL_PASO": None,
-        "MIDLAND": None
-    }
     stations_df = pd.read_csv(config.DEFAULT_STATION_SOURCE)
 
     TARGET_STATIONS = stations_df["stid"].tolist()

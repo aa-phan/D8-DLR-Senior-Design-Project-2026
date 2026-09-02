@@ -54,7 +54,7 @@ Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
 - Adopted the existing 4-phase structure from `docs/data-science/ROADMAP.md`/`PRD.md` §4 (Foundation → Core Consolidation → Safety & Spatial → Predictive) as this project's ROADMAP.md — already validated by two completed phases.
-- Geographic/corridor scope is an OPEN decision (4 cities vs. 5 cities vs. 5 West-Texas corridors) — not silently resolved; must be settled before/during Phase 3 planning.
+- Geographic/corridor scope RESOLVED (2026-09-02): adopted the 4-city scope (Austin, Corpus Christi, Midland, El Paso) — see `docs/data-science/decisions/geographic_scope.md` and PROJECT.md Key Decisions. City→corridor endpoint mapping for C8 remains a separate open design question.
 - Weather data provider (Synoptic vs. NOAA vs. hybrid) is an OPEN decision per PRD §7.1 — explicitly must not block Phase 3 work.
 
 ### Pending Todos
@@ -63,8 +63,8 @@ None yet.
 
 ### Blockers/Concerns
 
-- **[Phase 3 planning input]** Geographic/corridor scope conflict must be resolved explicitly before `/gsd-plan-phase 3` — three same-tier SPEC docs define three inconsistent location models (see `.planning/INGEST-CONFLICTS.md`, PROJECT.md Key Decisions).
-- **[Phase 2 carryover]** DS-F5 (static-vs-DLR comparison) is not wired to per-location selection — blocked on the scope decision above.
+- **[Phase 3 scope]** City→corridor endpoint mapping is still undecided (see `docs/data-science/decisions/geographic_scope.md` Open Questions) — the 4-city scope itself is resolved, but which two cities/substations define each corridor C8 discretizes is not. Needs a decision before or during `/gsd-plan-phase 3`.
+- **[Phase 2 carryover]** DS-F5 (static-vs-DLR comparison) still needs per-location selection wired into `run_pipeline`/`plot_dlr_summary` — the scope-decision blocker is cleared, but the wiring itself is unimplemented.
 - **[Phase 3 scope]** C7 (`DLRSafetyMonitor`) currently uses a placeholder linear ampacity formula that disagrees with the real IEEE 738 thermal model (C5) — the fail-safe commitment (DS-NF5) isn't fully realized until Phase 3 unifies them.
 - **[Phase 3 scope]** Known test contradiction in `backend/tests/SafetyMonitor_TestSuite.py::test_gate_2_fails_when_link_status_not_ok` (asserts `status == "ok"` and `fallback is True` simultaneously) — needs a semantics decision before C7 rework.
 - **[External dependency]** `ercot_data_retriever.py::pull_ercot_data`'s live path currently fails with a deterministic `Bad CRC-32` error inside the third-party `gridstatus` library — not this project's code, but blocks live ERCOT pulls until upstream fixes it or a workaround is added.

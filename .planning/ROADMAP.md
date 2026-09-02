@@ -63,7 +63,7 @@ built and committed; Phases 3 and 4 are what's ahead.
   4. The geographic/corridor scope used across station discovery, static ratings, and corridor discretization is one explicitly chosen model — not three mutually inconsistent ones.
 **Plans**: TBD
 
-**Before planning this phase**: the geographic/corridor scope conflict (4 cities vs. 5 cities vs. 5 West-Texas corridors — see `.planning/INGEST-CONFLICTS.md` and PROJECT.md Key Decisions) should be resolved explicitly, since C8's corridor definition depends on knowing which location model is authoritative.
+**Before planning this phase**: the 4-city geographic scope conflict is resolved (see `docs/data-science/decisions/geographic_scope.md` and PROJECT.md Key Decisions). One related item remains open and should be settled during this phase's planning: how the 4 cities map to actual corridor endpoints for C8's line discretization — `geographic_scope.md` Open Questions has the detail.
 
 ### Phase 4: Predictive
 **Goal**: Move from reactive, current-conditions ratings to forward-looking, learned intelligence layered on top of the Phase 3 safety-validated foundation.

@@ -21,37 +21,32 @@ no pipeline execution) — it is safe to import without triggering any of
 # ──────────────────────────────────────────────────────────────────────────────
 # Per-location static line ratings (Amps)
 # ──────────────────────────────────────────────────────────────────────────────
-# These four cities (Houston, Austin, Dallas, Fort Worth) do not have a source
-# that differentiates a per-city static rating — two independent research
-# passes across ERCOT filings, utility (transmission owner) filings, PUCT
-# dockets, and FERC filings turned up nothing city-specific for them. 900 A is
-# the commonly-cited nominal normal rating for a single 795 kcmil "Drake" ACSR
-# conductor at 138 kV, which also matches this project's own
-# `ConductorConfig` defaults (see `backend/dlr_pipeline.py`'s `ConductorConfig`,
-# diameter_m=0.02814 — Drake ACSR). This is flagged explicitly as an honest
-# uniform baseline, NOT as city-differentiated evidence — consistent with how
-# this project's docs (see `docs/data-science/PRD.md`, "Documentation
-# Discrepancies" section) always flag approximations rather than presenting
-# them as verified.
+# Re-keyed to the four cities in `docs/Project Definition.md`'s I/O
+# Specification Table (Austin, Corpus Christi, Midland, El Paso) — the
+# project's actual documented/graded scope. This replaces an earlier 5-city
+# table (Houston, Austin, Dallas, Fort Worth, San Antonio) that predated this
+# decision and only overlapped the real spec on Austin — see
+# `docs/data-science/decisions/geographic_scope.md` for the full evidence
+# trail and rationale.
 #
-# Note on Dallas/Fort Worth specifically: a real sourced number DOES exist
-# (the Oncor Wilmer 345/138kV project, per an ERCOT filing), but it describes
-# a modern-rebuild TARGET spec using 3200A/5000A-class HTLS conductor — not
-# representative of this project's typical-existing-conductor assumption — so
-# it was deliberately excluded here rather than used.
+# Each value is the MIDPOINT of Project Definition.md's documented
+# "Worst Case Static Limit (I) [A]" range for that city (lines 79-86 of that
+# file) — an honest, clearly-labeled derivation from the team's own graded
+# deliverable, NOT an independently sourced single-point citation the way
+# e.g. a prior SAN_ANTONIO entry (ERCOT Board Item 11.2) was. If the team
+# wants a more precise per-city value later, re-running the kind of
+# ERCOT/PUCT/FERC citation research the original 5-city table used — but
+# targeted at these four cities — is the natural next step (see
+# `geographic_scope.md` Open Questions).
 STATIC_RATINGS: dict[str, float] = {
-    "SAN_ANTONIO": 1761.0,  # ERCOT Board Item 11.2 (Aug 2023), "CPS Energy - San
-    # Antonio South Reliability RPG Project": existing single-circuit 345kV
-    # J.K. Spruce-Pawnee path, 1,051 MVA normal capacity => ~1,761 A at 345kV.
-    # https://www.ercot.com/files/docs/2023/08/24/11.2%20CPS%20Energy%20San%20Antonio%20South%20Reliability%20Regional%20Planning%20Group%20Project%20(Template)%20v3.pdf
-    "HOUSTON": 900.0,
-    "AUSTIN": 900.0,
-    "DALLAS": 900.0,
-    "FORT_WORTH": 900.0,
+    "AUSTIN": 1900.0,          # midpoint of documented 800-3000 A range
+    "CORPUS_CHRISTI": 3000.0,  # midpoint of documented 1000-5000 A range
+    "MIDLAND": 1800.0,         # midpoint of documented 600-3000 A range
+    "EL_PASO": 1450.0,         # midpoint of documented 600-2300 A range
 }
 
 # Fallback static rating (Amps) for any location not present in
-# STATIC_RATINGS. Preserves current behavior for stations outside the five
+# STATIC_RATINGS. Preserves current behavior for stations outside the four
 # cities above.
 DEFAULT_STATIC_RATING: float = 900.0
 

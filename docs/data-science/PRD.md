@@ -110,14 +110,15 @@ No prior documentation (course deliverables or the DS specs) claimed this bug di
 
 ## 10. Documentation Discrepancies
 
-Places where `System Design Report.md` describes DS subsystem work that does not match what's in this repository. Flagged so the team can correct the record in the next course submission rather than let the gap compound.
+Places where `System Design Report.md` (or, for the row below, `Project Definition.md`) describes DS subsystem work or scope that does not match what's in this repository. Flagged so the team can correct the record in the next course submission rather than let the gap compound.
 
-| SDR Claim | Location | Actual Repo State |
+| Course Deliverable Claim | Location | Actual Repo State |
 |---|---|---|
-| Team evaluated and selected NOAA + NSRDB over Synoptic for weather ingestion | §3.1 Design Concept | All working ingestion code uses Synoptic/WTM, now behind a provider-agnostic adapter (`backend/weather_provider.py`). No NOAA or NSRDB integration exists. See Open Decisions §7.1 — this was not actually settled. |
-| A spatial pipeline discretizes transmission corridors into multiple points, computes ampacity at each, and takes the corridor-level minimum as the true bottleneck | §3.2 Risk Reduction ("Weather Data and Transmission Corridor Mapping") | No such pipeline exists yet — this is C8, Phase 3, not started. `backend/station_explorer.py::CORRIDORS` is five hardcoded lat/lon pairs used to rank station proximity, not to discretize a line for per-point ampacity. |
-| An ML anomaly-detection model is "currently being trained and tuned on historical ambient weather and operating datasets" | §3.2 Risk Reduction ("Data Integrity") | No model, training script, or training dataset exists anywhere in the repo — this is C10, Phase 4, not started. `backend/DLRSafetyMonitor.py` is entirely deterministic threshold/range gating (G1–G5), not a trained model. |
-| Solar irradiance sourced from NSRDB | §3.2 Risk Reduction | Solar irradiance comes from Synoptic's `solar_radiation` field. |
+| Team evaluated and selected NOAA + NSRDB over Synoptic for weather ingestion | SDR §3.1 Design Concept | All working ingestion code uses Synoptic/WTM, now behind a provider-agnostic adapter (`backend/weather_provider.py`). No NOAA or NSRDB integration exists. See Open Decisions §7.1 — this was not actually settled. |
+| A spatial pipeline discretizes transmission corridors into multiple points, computes ampacity at each, and takes the corridor-level minimum as the true bottleneck | SDR §3.2 Risk Reduction ("Weather Data and Transmission Corridor Mapping") | No such pipeline exists yet — this is C8, Phase 3, not started. `backend/station_explorer.py::CORRIDORS` is five hardcoded lat/lon pairs used to rank station proximity, not to discretize a line for per-point ampacity. |
+| An ML anomaly-detection model is "currently being trained and tuned on historical ambient weather and operating datasets" | SDR §3.2 Risk Reduction ("Data Integrity") | No model, training script, or training dataset exists anywhere in the repo — this is C10, Phase 4, not started. `backend/DLRSafetyMonitor.py` is entirely deterministic threshold/range gating (G1–G5), not a trained model. |
+| Solar irradiance sourced from NSRDB | SDR §3.2 Risk Reduction | Solar irradiance comes from Synoptic's `solar_radiation` field. |
+| ~~The system targets **four** specific cities — Austin, Corpus Christi, Midland, El Paso — each with its own documented input-range and static-rating bounds~~ **RESOLVED** | Project Definition.md §"Input/Output Specifications" (lines 79-86) | Previously, no code implemented this four-city list, and three different, mutually inconsistent location sets existed instead (`config.py`'s old 5-city table, `station_explorer.py`'s 5 West-Texas corridors, and a dead-code stub in `dlr_pipeline.py`). Resolved per `docs/data-science/decisions/geographic_scope.md`: `config.py::STATIC_RATINGS` is now re-keyed to the real four-city scope (Austin, Corpus Christi, Midland, El Paso), and the dead-code stub was deleted. `station_explorer.py::CORRIDORS`' West-Texas corridors remain unchanged — the open question of how these four cities map to actual corridor endpoints for C8 is tracked separately in `geographic_scope.md`'s Open Questions, not yet resolved. |
 
 ## 11. References
 
