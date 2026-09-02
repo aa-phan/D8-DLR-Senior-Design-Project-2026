@@ -1,0 +1,29 @@
+{
+  "source_path": "/Users/aphan/Documents/Senior_Design/docs/data-science/specs/README.md",
+  "type": "DOC",
+  "confidence": "medium",
+  "manifest_override": false,
+  "title": "Component Specs \u2014 Index",
+  "summary": "Index of ten Data Science component specs, their phases, statuses, and the shared spec template/consistency rules.",
+  "scope": [
+    "Data Science subsystem",
+    "component specs",
+    "spec template",
+    "dependency graph consistency"
+  ],
+  "cross_refs": [
+    "C1-configuration.md",
+    "C2-data-contract.md",
+    "C3-export-visualization.md",
+    "C4-weather-ingestion.md",
+    "C5-thermal-model.md",
+    "C6-grid-load-integration.md",
+    "C7-safety-monitor.md",
+    "C8-corridor-discretization.md",
+    "C9-ampacity-forecasting.md",
+    "C10-anomaly-detection.md"
+  ],
+  "locked": false,
+  "precedence": null,
+  "notes": "This is an index/README describing a template and listing links to individual component specs (C1-C10), not itself a technical spec with endpoint/schema content. Classified DOC; individual C*.md files should be classified separately as SPEC if warranted."
+}

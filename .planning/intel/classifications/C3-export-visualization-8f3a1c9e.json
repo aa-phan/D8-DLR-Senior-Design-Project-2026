@@ -1,0 +1,22 @@
+{
+  "source_path": "/Users/aphan/Documents/Senior_Design/docs/data-science/specs/C3-export-visualization.md",
+  "type": "SPEC",
+  "confidence": "high",
+  "manifest_override": false,
+  "title": "C3 \u2014 Export & Visualization",
+  "summary": "Defines the CSV export schema, data contract, and visualization outputs for pipeline results consumed by C6 and the dashboard.",
+  "scope": [
+    "CSV export",
+    "pipeline output schema",
+    "visualization plots",
+    "DS-to-dashboard data contract",
+    "PIPELINE_SCHEMA"
+  ],
+  "cross_refs": [
+    "docs/data-science/schema/pipeline_output_v1.md",
+    "data/fixtures/sample_pipeline_output.csv"
+  ],
+  "locked": false,
+  "precedence": null,
+  "notes": ""
+}

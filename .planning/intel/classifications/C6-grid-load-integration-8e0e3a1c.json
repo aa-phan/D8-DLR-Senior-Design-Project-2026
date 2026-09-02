@@ -1,0 +1,25 @@
+{
+  "source_path": "/Users/aphan/Documents/Senior_Design/docs/data-science/specs/C6-grid-load-integration.md",
+  "type": "SPEC",
+  "confidence": "high",
+  "manifest_override": false,
+  "title": "C6 \u2014 Grid Load Integration (ERCOT)",
+  "summary": "Technical spec for pulling ERCOT load data, converting DLR ampacity to MW, and merging with grid load for comparison.",
+  "scope": [
+    "ERCOT",
+    "grid load",
+    "DLR",
+    "ampacity",
+    "gridstatus library",
+    "pipeline schema",
+    "data merge"
+  ],
+  "cross_refs": [
+    "backend/ercot_data_retriever.py",
+    "backend/ercot_dlr_merger.py",
+    "backend/tests/ercot_dlr_merger_test.py"
+  ],
+  "locked": false,
+  "precedence": null,
+  "notes": ""
+}

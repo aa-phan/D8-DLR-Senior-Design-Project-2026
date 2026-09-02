@@ -1,0 +1,25 @@
+{
+  "source_path": "/Users/aphan/Documents/Senior_Design/docs/data-science/specs/C5-thermal-model.md",
+  "type": "SPEC",
+  "confidence": "high",
+  "manifest_override": false,
+  "title": "C5 \u2014 Thermal Model (IEEE 738)",
+  "summary": "Technical spec for backend/thermal_model.py computing IEEE 738 steady-state conductor ampacity, its interface contract, and validation results.",
+  "scope": [
+    "thermal model",
+    "IEEE 738",
+    "ampacity",
+    "conductor config",
+    "dlr_pipeline",
+    "DLRSafetyMonitor"
+  ],
+  "cross_refs": [
+    "backend/thermal_model.py",
+    "backend/dlr_pipeline.py",
+    "backend/DLRSafetyMonitor.py",
+    "backend/tests/thermal_model_test.py"
+  ],
+  "locked": false,
+  "precedence": null,
+  "notes": ""
+}

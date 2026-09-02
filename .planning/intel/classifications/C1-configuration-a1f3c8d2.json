@@ -1,0 +1,13 @@
+{
+  "source_path": "/Users/aphan/Documents/Senior_Design/docs/data-science/specs/C1-configuration.md",
+  "type": "SPEC",
+  "confidence": "high",
+  "manifest_override": false,
+  "title": "C1 — Configuration & Parameterization",
+  "summary": "Technical spec for a config module centralizing station source, date window, static ratings, and conductor properties.",
+  "scope": ["configuration", "backend/config.py", "static ratings", "conductor properties", "date window", "ERCOT"],
+  "cross_refs": ["C2", "C3", "C4", "C5", "C6", "C7"],
+  "locked": false,
+  "precedence": null,
+  "notes": ""
+}

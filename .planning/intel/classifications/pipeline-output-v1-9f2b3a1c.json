@@ -1,0 +1,26 @@
+{
+  "source_path": "/Users/aphan/Documents/Senior_Design/docs/data-science/schema/pipeline_output_v1.md",
+  "type": "SPEC",
+  "confidence": "high",
+  "manifest_override": false,
+  "title": "Pipeline Output Schema \u2014 v1",
+  "summary": "Defines the CSV column schema, units, and validation rules exported by the DLR pipeline's export_results function.",
+  "scope": [
+    "dlr_pipeline",
+    "export_results",
+    "PIPELINE_SCHEMA",
+    "CSV export",
+    "column schema",
+    "validation"
+  ],
+  "cross_refs": [
+    "backend/dlr_pipeline.py",
+    "backend/units_def.py",
+    "backend/ercot_dlr_merger.py",
+    "backend/config.py",
+    "data/fixtures/sample_pipeline_output.csv"
+  ],
+  "locked": false,
+  "precedence": null,
+  "notes": ""
+}

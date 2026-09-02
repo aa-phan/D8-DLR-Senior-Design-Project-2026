@@ -1,0 +1,25 @@
+{
+  "source_path": "/Users/aphan/Documents/Senior_Design/docs/data-science/specs/C2-data-contract.md",
+  "type": "SPEC",
+  "confidence": "high",
+  "manifest_override": false,
+  "title": "C2 \u2014 Pipeline Data Contract",
+  "summary": "Defines the canonical schema, units, and validation functions for every column flowing through the DS pipeline.",
+  "scope": [
+    "PIPELINE_SCHEMA",
+    "units_def.py",
+    "dlr_pipeline.py",
+    "data contract",
+    "unit validation"
+  ],
+  "cross_refs": [
+    "backend/units_def.py",
+    "backend/tests/units_def_test.py",
+    "backend/dlr_pipeline.py",
+    "backend/DLRSafetyMonitor.py",
+    "backend/ercot_dlr_merger.py"
+  ],
+  "locked": false,
+  "precedence": null,
+  "notes": ""
+}

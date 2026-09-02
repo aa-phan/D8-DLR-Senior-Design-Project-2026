@@ -1,0 +1,13 @@
+{
+  "source_path": "/Users/aphan/Documents/Senior_Design/docs/Project Definition.md",
+  "type": "SPEC",
+  "confidence": "medium",
+  "manifest_override": false,
+  "title": "A Design Project Definition for Grid Enhancement Technology: Maximizing Transmission Power Delivery via Dynamic Line Rating",
+  "summary": "Project definition for a Dynamic Line Rating system replacing static transmission line ratings, covering standards, UI, and I/O specifications.",
+  "scope": ["Dynamic Line Rating", "Static Line Rating", "UI dashboard", "transmission line", "IEEE standards", "N-1 contingency", "weather data", "research paper"],
+  "cross_refs": [],
+  "locked": false,
+  "precedence": null,
+  "notes": "No ADR frontmatter/status or Decision/Consequences sections; no PRD-style user stories or acceptance criteria. Dominant signals are technical specifications: UI Specifications, Operating Environment Specifications, Performance Specifications, and an Input/Output Specification table with concrete ranges, plus applicable IEEE/NERC standards. Also contains PRD-like 'Project Deliverables' and DOC-like team organization/policy sections, but per precedence rule (SPEC > PRD > DOC) and the strength/specificity of the I/O and technical spec content, classified as SPEC."
+}

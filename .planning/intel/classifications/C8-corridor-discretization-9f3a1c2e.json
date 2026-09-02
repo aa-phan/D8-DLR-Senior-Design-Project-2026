@@ -1,0 +1,22 @@
+{
+  "source_path": "/Users/aphan/Documents/Senior_Design/docs/data-science/specs/C8-corridor-discretization.md",
+  "type": "SPEC",
+  "confidence": "medium",
+  "manifest_override": false,
+  "title": "C8 \u2014 Corridor Spatial Discretization",
+  "summary": "Technical spec for discretizing a transmission corridor into points, computing per-point ampacity, and reducing to a minimum corridor rating.",
+  "scope": [
+    "transmission corridor",
+    "spatial discretization",
+    "ampacity computation",
+    "weather ingestion",
+    "IEEE 738 calculator"
+  ],
+  "cross_refs": [
+    "backend/station_explorer.py",
+    "backend/ercot_dlr_merger.py"
+  ],
+  "locked": false,
+  "precedence": null,
+  "notes": "No frontmatter or status field; classified via content signals (Interface & Data Contract, Acceptance Criteria, Blocked by/Blocks sections typical of a technical spec/roadmap component doc) rather than a formal SPEC template. Contains roadmap-style fields (Phase, Effort, Status) not covered by the taxonomy."
+}
