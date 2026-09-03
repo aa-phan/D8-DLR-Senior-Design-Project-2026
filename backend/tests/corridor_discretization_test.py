@@ -405,3 +405,182 @@ def test_usable_observation_maps_schema_correctly():
         "wind": 5.0,
         "solar": 500.0,
     }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Task 1 (03-03): resolve_point_observation -- D-08 nearest-5-then-10 probe
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def probe_stations() -> pd.DataFrame:
+    """
+    10 candidate stations, strictly ordered nearest-to-farthest from
+    (0.0, 0.0) by construction (increasing longitude offset), so probe
+    order is fully predictable: C01 is always candidate 1, C10 is always
+    candidate 10.
+    """
+    return pd.DataFrame(
+        [
+            {"stid": f"C{i:02d}", "name": f"c{i}", "lat": 0.0, "lon": 0.01 * i}
+            for i in range(1, 11)
+        ]
+    )
+
+
+def _empty_weather_frame() -> pd.DataFrame:
+    return pd.DataFrame(columns=["stid", "air_temp", "wind_speed", "solar_radiation"])
+
+
+def _probe_fetcher(usable_stids: set, calls: list):
+    def fetch(stids, start, end):
+        stid = stids[0]
+        calls.append(stid)
+        if stid in usable_stids:
+            return _weather_frame(stid, wind=5.0)
+        return _empty_weather_frame()
+
+    return fetch
+
+
+def test_probe_first_candidate_succeeds_calls_fetcher_once(probe_stations):
+    calls = []
+    fetch = _probe_fetcher({"C01"}, calls)
+
+    obs, stid, trail = cd.resolve_point_observation(
+        0.0, 0.0, "2025-01-01", "2025-01-02", probe_stations, fetch
+    )
+
+    assert calls == ["C01"]
+    assert stid == "C01"
+    assert obs is not None
+    assert len(trail) == 1
+    assert trail[0]["outcome"] == "usable"
+
+
+def test_probe_fifth_candidate_succeeds_stays_in_first_batch(probe_stations):
+    calls = []
+    fetch = _probe_fetcher({"C05"}, calls)
+
+    obs, stid, trail = cd.resolve_point_observation(
+        0.0, 0.0, "2025-01-01", "2025-01-02", probe_stations, fetch
+    )
+
+    assert calls == ["C01", "C02", "C03", "C04", "C05"]
+    assert stid == "C05"
+    assert len(trail) == 5
+
+
+def test_probe_seventh_candidate_succeeds_expands_to_second_batch(probe_stations):
+    calls = []
+    fetch = _probe_fetcher({"C07"}, calls)
+
+    obs, stid, trail = cd.resolve_point_observation(
+        0.0, 0.0, "2025-01-01", "2025-01-02", probe_stations, fetch
+    )
+
+    assert calls == ["C01", "C02", "C03", "C04", "C05", "C06", "C07"]
+    # The 6th call is the 6th-nearest station -- the expansion probes the
+    # next 5 nearest, never re-probing batch 1.
+    assert calls[5] == "C06"
+    assert stid == "C07"
+    assert len(trail) == 7
+
+
+def test_probe_all_ten_candidates_unusable_stops_at_ten(probe_stations):
+    calls = []
+    fetch = _probe_fetcher(set(), calls)
+
+    obs, stid, trail = cd.resolve_point_observation(
+        0.0, 0.0, "2025-01-01", "2025-01-02", probe_stations, fetch
+    )
+
+    assert len(calls) == 10
+    assert calls == [f"C{i:02d}" for i in range(1, 11)]
+    assert obs is None
+    assert stid is None
+    assert len(trail) == 10
+    assert all(entry["outcome"] == "unusable" for entry in trail)
+
+
+def test_probe_unusable_frame_variants_are_all_skipped(probe_stations):
+    calls = []
+
+    def fetch(stids, start, end):
+        stid = stids[0]
+        calls.append(stid)
+        if stid == "C01":
+            return _empty_weather_frame()  # empty frame
+        if stid == "C02":
+            return pd.DataFrame(
+                [{"stid": "OTHER", "air_temp": 25.0, "wind_speed": 5.0, "solar_radiation": 500.0}]
+            )  # frame missing the requested station
+        if stid == "C03":
+            return pd.DataFrame(
+                [{"stid": "C03", "air_temp": None, "wind_speed": 5.0, "solar_radiation": 500.0}]
+            )  # null in a required variable
+        return _weather_frame(stid, wind=5.0)
+
+    obs, stid, trail = cd.resolve_point_observation(
+        0.0, 0.0, "2025-01-01", "2025-01-02", probe_stations, fetch
+    )
+
+    assert calls == ["C01", "C02", "C03", "C04"]
+    assert stid == "C04"
+    assert obs is not None
+
+
+def test_probe_trail_has_no_credential_or_request_parameter_material(probe_stations):
+    calls = []
+    fetch = _probe_fetcher({"C03"}, calls)
+
+    obs, stid, trail = cd.resolve_point_observation(
+        0.0, 0.0, "2025-01-01", "2025-01-02", probe_stations, fetch
+    )
+
+    assert len(trail) == 3
+    trail_text = str(trail).lower()
+    for forbidden in ("token", "key", "params"):
+        assert forbidden not in trail_text, (forbidden, trail)
+
+    for entry in trail:
+        assert set(entry.keys()) == {"stid", "lat", "lon", "distance_km", "outcome"}
+
+
+def test_probe_equidistant_candidates_probed_in_same_order_across_runs():
+    stations = pd.DataFrame(
+        [
+            {"stid": "B", "name": "b", "lat": 0.0, "lon": 0.01},
+            {"stid": "A", "name": "a", "lat": 0.0, "lon": -0.01},
+        ]
+    )
+
+    calls1 = []
+    cd.resolve_point_observation(
+        0.0, 0.0, "2025-01-01", "2025-01-02", stations,
+        _probe_fetcher(set(), calls1), max_candidates=2,
+    )
+
+    calls2 = []
+    cd.resolve_point_observation(
+        0.0, 0.0, "2025-01-01", "2025-01-02", stations,
+        _probe_fetcher(set(), calls2), max_candidates=2,
+    )
+
+    assert calls1 == calls2 == ["A", "B"]
+
+
+def test_probe_discover_corridor_stations_uses_unrestricted_network(monkeypatch):
+    captured = {}
+
+    def fake_get_all_stations(token, network_id=None):
+        captured["token"] = token
+        captured["network_id"] = network_id
+        return pd.DataFrame()
+
+    monkeypatch.setattr(se, "get_all_stations", fake_get_all_stations)
+
+    cd.discover_corridor_stations("fake-token")
+
+    assert captured["network_id"] is None
+    assert captured["token"] == "fake-token"

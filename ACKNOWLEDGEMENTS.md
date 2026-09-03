@@ -176,6 +176,20 @@ Team members should independently spot-check the final `CITY_COORDINATES` values
 
 All work happened on the executor's assigned isolated worktree branch, one commit per task. To keep Task 1's commit scope limited to its own stated files despite both tasks sharing `config.py`/`corridor_discretization.py`, Task 2's `station_explorer.py` change and the test file's Task-2 sections were temporarily held aside (`git checkout -- backend/station_explorer.py` on a file whose full diff content had already been captured, then re-applied after the Task 1 commit) rather than folded into Task 1's commit.
 
+### Session: 2026-09-03 (continued), conducted by Aaron Phan — Phase 3 Plan 03-03 execution (C8 candidate-probe fallback + bottleneck proof)
+
+Claude Code was used, via the GSD (`/gsd-execute-phase`) toolset running as an isolated worktree executor agent, to execute `.planning/phases/03-safety-spatial/03-03-PLAN.md` end to end (3 tasks, all autonomous, no checkpoints). Logged incrementally per task, matching this project's established convention (03-01, 03-02).
+
+**Task 1** (`backend/station_explorer.py`, `backend/corridor_discretization.py`, `backend/tests/corridor_discretization_test.py`):
+
+1. Discovered the assigned worktree's branch was again stale (missing the phase-3 plan-creation commit and both prior plans' execution commits that had already landed on `main`). Verified zero divergence from `main` before a plain fast-forward merge (`git merge --ff-only main`) — same non-destructive pattern used by the 03-01/03-02 executors.
+2. Retired `station_explorer.py`'s hardcoded `network_id = 152` (WTM-only) in favor of an unrestricted `network_id=None` query (D-06) — the function already supported omitting the restriction, so this was a call-site change plus deleting the commented-out toggle alternatives, not a signature change.
+3. Added `corridor_discretization.py::discover_corridor_stations` (a single call site for the broadened-query decision) and `resolve_point_observation` — D-08's bounded candidate probe: rank up to 10 nearest stations to a point once, probe in batches of 5, stop at the first usable reading, never probe an 11th candidate. Rewired `rate_corridor`'s per-point loop to call it instead of 03-02's single-nearest lookup, recording each point's resolved station id, candidate count, and probe trail.
+4. Probe logging carries only station id, latitude, longitude, distance, and a usable/unusable outcome word — a caught fetch exception's message text only, never its full repr or any params/token material (T-03-02). Verified with a dedicated test asserting the joined probe trail text contains none of `token`, `key`, `params`, plus a repo-wide grep gate.
+5. Verified via the plan's own automated checks: `-k probe` (8 new tests) and the full suite (70 passed, 0 failed, up from 03-02's 62); `grep` confirms `network_id = 152` is fully retired and no credential-bearing log statement exists in `corridor_discretization.py`.
+
+All work happened on the executor's assigned isolated worktree branch, one commit per task.
+
 ## Keeping This Updated
 
 This file should be reviewed and updated to reflect new AI-assisted work **before any significant commit** — i.e., before committing new features, substantial documentation, or non-trivial refactors produced with AI assistance. A commit is "significant" for this purpose if it would need describing in a standup/status update; trivial fixes (typos, formatting) don't require an update here.
