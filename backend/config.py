@@ -113,6 +113,56 @@ def conductor_kwargs_for(line_azimuth: float) -> dict:
     return kwargs
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Corridor geographic model (C8, Plan 03-02)
+# ──────────────────────────────────────────────────────────────────────────────
+# City-center lat/lon for the four D-00 cities, keyed identically to
+# STATIC_RATINGS so this dict — together with STATIC_RATINGS and
+# RATING_BOUNDS_BY_LOCATION — forms one consistent geographic model (ROADMAP
+# Success Criterion 4). 03-RESEARCH.md's Assumptions Log (A2) flagged
+# Corpus Christi/Midland/El Paso as LOW-confidence WebSearch values (Austin
+# was already CITED via a live API call, see data_provider.md:166). Per
+# 03-02-PLAN.md Task 1, all four were re-verified this session (2026-09-03)
+# against two live, independently-queried authoritative sources:
+#   1. US Census Bureau 2023 Gazetteer Files (Places, Texas) -- the plan's
+#      recommended source -- retrieved from
+#      https://www2.census.gov/geo/docs/maps-data/data/gazetteer/2023_Gazetteer/2023_gaz_place_48.txt
+#      (INTPTLAT/INTPTLONG columns, "<City> city" rows). This matched
+#      closely for AUSTIN (30.2986,-97.7541) and MIDLAND (32.0246,
+#      -102.1135), confirming methodology, but diverged materially for
+#      CORPUS_CHRISTI (27.7543,-97.1734, ~22km east of downtown) and
+#      EL_PASO (31.8478,-106.4311, ~10km north of downtown) -- both cities
+#      have large, irregularly-shaped incorporated limits (Corpus Christi's
+#      city limits include ~329 sq mi of bay/gulf water vs only 162 sq mi
+#      of land; El Paso's stretch north into the Franklin Mountains), which
+#      skews the Gazetteer's polygon-internal-point algorithm away from the
+#      conventional "city center" this project's other 3 corridors imply.
+#   2. OpenStreetMap Nominatim administrative-boundary centroid (live query,
+#      https://nominatim.openstreetmap.org/search, 2026-09-03), used as the
+#      final value below because it agrees with the Census Gazetteer for
+#      AUSTIN/MIDLAND (cross-validating both sources) while giving the
+#      conventional downtown-centered point for CORPUS_CHRISTI/EL_PASO that
+#      D-02's "city-center lat/lon" intent calls for.
+# No UNVERIFIED values remain; all four are independently source-cited above.
+CITY_COORDINATES: dict[str, tuple[float, float]] = {
+    "AUSTIN": (30.2711, -97.7437),          # OSM Nominatim admin centroid, cross-checked vs Census Gazetteer (30.2986,-97.7541)
+    "CORPUS_CHRISTI": (27.7635, -97.4033),  # OSM Nominatim admin centroid; Census Gazetteer internal point (27.7543,-97.1734) rejected as bay-skewed
+    "MIDLAND": (31.9974, -102.0779),        # OSM Nominatim admin centroid, cross-checked vs Census Gazetteer (32.0246,-102.1135)
+    "EL_PASO": (31.7601, -106.4870),        # OSM Nominatim admin centroid; Census Gazetteer internal point (31.8478,-106.4311) rejected as mountain-skewed
+}
+
+# The two D-01 corridors: south-central (Austin<->Corpus Christi) and West
+# Texas (Midland<->El Paso), chosen over a full 6-pair mesh or a single
+# 4-city chain. Values are city *keys* into CITY_COORDINATES/STATIC_RATINGS/
+# RATING_BOUNDS_BY_LOCATION, not raw coordinates, so a corridor cannot drift
+# out of agreement with those tables. This dict — not the legacy
+# station_explorer.CORRIDORS five-point proximity list — is the authoritative
+# corridor model per docs/data-science/decisions/geographic_scope.md.
+CORRIDOR_ENDPOINTS: dict[str, tuple[str, str]] = {
+    "AUSTIN_CORPUS_CHRISTI": ("AUSTIN", "CORPUS_CHRISTI"),
+    "MIDLAND_EL_PASO": ("MIDLAND", "EL_PASO"),
+}
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Analysis window & station source
 # ──────────────────────────────────────────────────────────────────────────────
 # Today's hardcoded __main__ values from backend/dlr_pipeline.py, moved here
