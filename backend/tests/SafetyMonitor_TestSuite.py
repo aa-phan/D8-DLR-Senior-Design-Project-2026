@@ -7,8 +7,14 @@ from DLRSafetyMonitor import DLRSafetyMonitor  # replace with actual module name
 
 @pytest.fixture
 def monitor():
+    # static_rating is close to (but not exactly) valid_data's real IEEE 738
+    # ampacity (~1686.8 A) rather than the old placeholder-era 1000 A: with
+    # G5 now a real fallback gate (Task 3), a cold-start last_good_rating far
+    # from the first real reading would spuriously trip G5 on every test's
+    # first "successful" check, before that test ever reaches the gate it's
+    # actually exercising.
     return DLRSafetyMonitor(
-        static_rating=1000,
+        static_rating=1690.0,
         conductor=thermal_model.ConductorConfig(**config.DEFAULT_CONDUCTOR_CONFIG_KWARGS),
         logger=lambda msg: None,
     )
@@ -40,13 +46,7 @@ def test_run_check_success_returns_ok(monitor, valid_data):
     assert result["fallback"] is False
     assert result["rating"] == expected_rating
     assert type(result["rating"]) is float
-    # Not asserting alerts == [] here: under real IEEE 738 physics, this
-    # fixture's cold-start last_good_rating (== static_rating, 1000) is far
-    # from the real ampacity these inputs compute (~1686.8 A), so the
-    # still-flat G5 delta check legitimately fires on the very first call —
-    # a cold-start interaction the placeholder formula happened to mask
-    # (it coincidentally output ~1005 A for these same inputs). G5's own
-    # semantics are covered by the dedicated G5 tests below.
+    assert result["alerts"] == []
     assert monitor.last_good_rating == expected_rating
 
 
@@ -78,7 +78,7 @@ def test_gate_2_fails_when_link_status_not_ok(monitor, valid_data):
 
     result = monitor.run_check(valid_data)
 
-    assert result["status"] == "ok"
+    assert result["status"] == "fallback"
     assert result["fallback"] is True
     assert result["rating"] == monitor.static_rating
     assert "G2 FAIL" in result["alerts"][0]
@@ -147,68 +147,54 @@ def test_gate_4_fails_when_rating_is_implausibly_high(monitor, valid_data):
     assert "implausible" in result["alerts"][0]
 
 
-@pytest.fixture
-def wide_bounds_monitor():
-    # G5 tests need G4 kept out of the way (real IEEE 738 ratings for these
-    # inputs, ~1686-2277 A, exceed the default (400, 1800) upper bound), so
-    # these two tests get their own monitor with widened rating_bounds.
-    return DLRSafetyMonitor(
-        static_rating=1000,
-        conductor=thermal_model.ConductorConfig(**config.DEFAULT_CONDUCTOR_CONFIG_KWARGS),
-        rating_bounds=(400.0, 5000.0),
-        logger=lambda msg: None,
-    )
+def test_gate_5_no_alert_when_delta_equals_threshold(monitor, valid_data):
+    # static_rating=1690.0, delta_fraction defaults to config.DELTA_FRACTION
+    # (0.15) -> threshold = 253.5 A. Set last_good_rating so the delta lands
+    # exactly on the threshold: inclusive boundary, matching _gate_plausible/
+    # _gate_range's inclusive convention (a delta exactly equal to the
+    # threshold is not a swing).
+    threshold = monitor.delta_fraction * monitor.static_rating
+    monitor.last_good_rating = 1000.0
+    monitor._compute_ampacity = lambda d: 1000.0 + threshold
 
-
-def test_gate_5_adds_alert_when_delta_exceeds_threshold(wide_bounds_monitor):
-    first_data = {
-        "sensor_status": "ok",
-        "link_status": "ok",
-        "wind": 5,
-        "temp": 25,
-        "solar": 500,
-    }
-    second_data = {
-        "sensor_status": "ok",
-        "link_status": "ok",
-        "wind": 12,
-        "temp": 20,
-        "solar": 100,
-    }
-
-    first_result = wide_bounds_monitor.run_check(first_data)
-    second_result = wide_bounds_monitor.run_check(second_data)
-
-    assert first_result["status"] == "ok"
-    assert second_result["status"] == "ok"
-    assert len(second_result["alerts"]) == 1
-    assert "exceeds threshold" in second_result["alerts"][0]
-
-
-def test_gate_5_no_alert_when_delta_equals_threshold(wide_bounds_monitor):
-    data = {
-        "sensor_status": "ok",
-        "link_status": "ok",
-        "wind": 10,
-        "temp": 20,
-        "solar": 0,
-    }
-    computed_rating = float(thermal_model.ieee738_ampacity(
-        T_amb_c=data["temp"],
-        wind_perp_ms=data["wind"],
-        ghi_wm2=data["solar"],
-        conductor=wide_bounds_monitor.conductor,
-        solar_altitude_deg=wide_bounds_monitor.solar_altitude_deg,
-    ))
-    # Set last_good_rating so the delta lands exactly on the threshold —
-    # boundary is inclusive (a delta exactly equal to the threshold is not a
-    # swing), matching the existing >-not->= comparison in the G5 check.
-    wide_bounds_monitor.last_good_rating = computed_rating - wide_bounds_monitor.DELTA_THRESH
-
-    result = wide_bounds_monitor.run_check(data)
+    result = monitor.run_check(valid_data)
 
     assert result["status"] == "ok"
+    assert result["fallback"] is False
     assert len(result["alerts"]) == 0
+    assert monitor.last_good_rating == 1000.0 + threshold
+
+
+def test_gate_5_fallback_when_delta_exceeds_threshold(monitor, valid_data):
+    monitor.static_rating = 1000.0
+    monitor.last_good_rating = 1000.0
+    monitor._compute_ampacity = lambda d: 1150.01  # 150.01 A above last_good; 0.15 * 1000 = 150.0
+
+    result = monitor.run_check(valid_data)
+
+    assert result["status"] == "fallback"
+    assert result["fallback"] is True
+    assert "G5" in result["alerts"][0]
+    assert result["rating"] == min(1150.01, monitor.static_rating)
+    # last_good_rating updates to the freshly computed value even on a G5
+    # fallback, so a genuine sustained weather change resolves in one cycle
+    # rather than latching the monitor in permanent fallback.
+    assert monitor.last_good_rating == 1150.01
+
+
+def test_gate_5_does_not_latch_after_fallback(monitor, valid_data):
+    monitor.static_rating = 1000.0
+    monitor.last_good_rating = 1000.0
+    monitor._compute_ampacity = lambda d: 1150.01
+
+    first_result = monitor.run_check(valid_data)
+    assert first_result["status"] == "fallback"
+
+    # Same reading repeated: last_good_rating was updated to 1150.01 by the
+    # fallback above, so this second, identical check has a delta of 0 and
+    # resolves ok — the monitor does not stay latched in fallback.
+    second_result = monitor.run_check(valid_data)
+    assert second_result["status"] == "ok"
 
 
 def test_last_good_rating_not_updated_on_fallback(monitor, valid_data):
@@ -224,9 +210,9 @@ def test_last_good_rating_not_updated_on_fallback(monitor, valid_data):
     assert monitor.last_good_rating == previous_good
 
 
-def test_gate_1_fallback_uses_last_good_rating_after_prior_success(monitor, valid_data):
-    first_result = monitor.run_check(valid_data)
-    good_rating = first_result["rating"]
+def test_gate_1_fallback_uses_static_rating_not_last_good(monitor, valid_data):
+    monitor.run_check(valid_data)
+    assert monitor.last_good_rating != monitor.static_rating
 
     bad_data = valid_data.copy()
     bad_data["sensor_status"] = "fail"
@@ -234,13 +220,13 @@ def test_gate_1_fallback_uses_last_good_rating_after_prior_success(monitor, vali
     result = monitor.run_check(bad_data)
 
     assert result["status"] == "fallback"
-    assert result["rating"] == good_rating
+    assert result["rating"] == monitor.static_rating
     assert "G1 FAIL" in result["alerts"][0]
 
 
-def test_gate_2_fallback_uses_last_good_rating_after_prior_success(monitor, valid_data):
-    first_result = monitor.run_check(valid_data)
-    good_rating = first_result["rating"]
+def test_gate_2_fallback_uses_static_rating_not_last_good(monitor, valid_data):
+    monitor.run_check(valid_data)
+    assert monitor.last_good_rating != monitor.static_rating
 
     bad_data = valid_data.copy()
     bad_data["link_status"] = "fail"
@@ -248,7 +234,7 @@ def test_gate_2_fallback_uses_last_good_rating_after_prior_success(monitor, vali
     result = monitor.run_check(bad_data)
 
     assert result["status"] == "fallback"
-    assert result["rating"] == good_rating
+    assert result["rating"] == monitor.static_rating
     assert "G2 FAIL" in result["alerts"][0]
 
 
@@ -327,6 +313,21 @@ def test_rating_bounds_cover_every_city_static_rating():
         assert city in config.RATING_BOUNDS_BY_LOCATION, city
         lo, hi = config.RATING_BOUNDS_BY_LOCATION[city]
         assert lo <= static_rating <= hi, (city, static_rating, lo, hi)
+
+
+def test_gate_order_short_circuits_at_lowest_failing_gate(monitor, valid_data):
+    # sensor_status="fail" fails G1; temp=100 (out of TEMP_BOUNDS) fails G3.
+    # The gate chain evaluates G1 -> G2 -> G3 -> G4 -> G5 in that fixed
+    # order and short-circuits at the first failure, so the reported alert
+    # must name G1, never G3 (DS-NF5 ordering edge).
+    valid_data["sensor_status"] = "fail"
+    valid_data["temp"] = 100
+
+    result = monitor.run_check(valid_data)
+
+    assert result["status"] == "fallback"
+    assert "G1 FAIL" in result["alerts"][0]
+    assert "G3" not in result["alerts"][0]
 
 
 def test_compute_ampacity_is_wired_to_thermal_model():

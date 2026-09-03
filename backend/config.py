@@ -73,6 +73,16 @@ RATING_BOUNDS_BY_LOCATION: dict[str, tuple[float, float]] = {
 DEFAULT_RATING_BOUNDS: tuple[float, float] = (400.0, 1800.0)
 
 # ──────────────────────────────────────────────────────────────────────────────
+# G5 large-swing threshold
+# ──────────────────────────────────────────────────────────────────────────────
+# Expressed as a fraction of the location's static rating (not a flat Amp
+# value) so it scales across the four D-00 cities, whose static ratings span
+# 1450-3000 A. At a 1000 A static rating (the existing test fixture's value)
+# 0.15 * 1000 = 150.0 A, reproducing the previous flat DELTA_THRESH constant
+# exactly. Decided at the 03-01-PLAN.md Task 2 checkpoint (option-a).
+DELTA_FRACTION: float = 0.15
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Conductor properties
 # ──────────────────────────────────────────────────────────────────────────────
 # Exact kwargs previously hardcoded in `backend/dlr_pipeline.py`'s __main__
