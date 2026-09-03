@@ -61,7 +61,12 @@ built and committed; Phases 3 and 4 are what's ahead.
   2. Any missing sensor, broken communication link, out-of-range reading, implausible computed rating, or large rating swing causes the reported rating to fall back toward the static rating, never toward an optimistic guess.
   3. Given a defined transmission corridor, the system discretizes it into multiple geographic points and reports the minimum ampacity across those points as the corridor-level rating.
   4. The geographic/corridor scope used across station discovery, static ratings, and corridor discretization is one explicitly chosen model — not three mutually inconsistent ones.
-**Plans**: TBD
+**Plans**: 3 plans
+
+Plans:
+- [ ] 03-01-PLAN.md — Wire `DLRSafetyMonitor` to the real IEEE 738 model, recalibrate the G4 plausibility band per location, and make every gate (G1–G5) resolve toward the static rating
+- [ ] 03-02-PLAN.md — Define the two corridors in config, discretize each into 5 geodesic points, and rate a corridor as the minimum across independently-fetched per-point ampacities
+- [ ] 03-03-PLAN.md — Broaden station discovery past the WTM network, probe candidates nearest-5-then-10 per point, fall back to the static rating on exhaustion, and prove the bottleneck
 
 **Before planning this phase**: the 4-city geographic scope conflict is resolved (see `docs/data-science/decisions/geographic_scope.md` and PROJECT.md Key Decisions). One related item remains open and should be settled during this phase's planning: how the 4 cities map to actual corridor endpoints for C8's line discretization — `geographic_scope.md` Open Questions has the detail.
 
@@ -87,5 +92,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 |-------|----------------|--------|-----------|
 | 1. Foundation & Data Contract | Pre-GSD (C1–C3 implemented) | Complete | 2026-08-24 |
 | 2. Core Consolidation | Pre-GSD (C4–C6 implemented) | Complete | 2026-08-31 |
-| 3. Safety & Spatial | 0/TBD | Not started | - |
+| 3. Safety & Spatial | 0/3 | Planned | - |
 | 4. Predictive | 0/TBD | Not started | - |
