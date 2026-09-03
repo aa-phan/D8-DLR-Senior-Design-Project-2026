@@ -1,3 +1,7 @@
+import config
+import thermal_model
+
+
 class DLRSafetyMonitor:
     """
     Encapsulates all 5 pipeline safety gates for DLR data validation.
@@ -7,11 +11,15 @@ class DLRSafetyMonitor:
     WIND_BOUNDS   = (0, 50)     # m/s, per IEEE 738
     TEMP_BOUNDS   = (-20, 60)   # °C
     SOLAR_BOUNDS  = (0, 1400)   # W/m²
-    RATING_BOUNDS = (400, 1800) # A — plausibility check
-    DELTA_THRESH  = 150         # A — alert threshold
 
-    def __init__(self, static_rating: float, logger=None):
+    def __init__(self, static_rating: float, conductor=None, solar_altitude_deg: float = 45.0,
+                 rating_bounds=None, delta_fraction=None, logger=None):
         self.static_rating   = static_rating
+        self.conductor        = conductor if conductor is not None else thermal_model.ConductorConfig(
+            **config.DEFAULT_CONDUCTOR_CONFIG_KWARGS)
+        self.solar_altitude_deg = solar_altitude_deg
+        self.rating_bounds    = rating_bounds if rating_bounds is not None else config.DEFAULT_RATING_BOUNDS
+        self.delta_fraction   = delta_fraction if delta_fraction is not None else config.DELTA_FRACTION
         self.last_good_rating = static_rating
         self.logger           = logger or print
 
@@ -20,11 +28,11 @@ class DLRSafetyMonitor:
 
         # G1 — Sensor availability
         if not self._gate_sensor(raw_data):
-            return self._fallback(result, "G1", "sensor timeout", self.last_good_rating)
+            return self._fallback(result, "G1", "sensor timeout", self.static_rating)
 
         # G2 — Communication link
         if not self._gate_link(raw_data):
-            return self._fallback(result, "G2", "link lost", self.last_good_rating)
+            return self._fallback(result, "G2", "link lost", self.static_rating)
 
         # G3 — Range validation
         if not self._gate_range(raw_data):
@@ -35,10 +43,18 @@ class DLRSafetyMonitor:
         if not self._gate_plausible(rating):
             return self._fallback(result, "G4", f"implausible ({rating:.0f} A)", self.static_rating)
 
-        # G5 — Delta check
-        delta = abs(rating - self.last_good_rating)
-        if delta > self.DELTA_THRESH:
-            result["alerts"].append(f"Rating change {delta:.0f} A exceeds threshold")
+        # G5 — Delta check. A large swing is a fail-safe fallback (DS-NF5),
+        # never an optimistic guess: report min(computed, static_rating), and
+        # update last_good_rating to the freshly computed value first so a
+        # genuine sustained weather change resolves in one cycle rather than
+        # latching the monitor in permanent fallback (T-03-05).
+        if not self._gate_delta(rating):
+            previous = self.last_good_rating
+            self.last_good_rating = rating
+            return self._fallback(
+                result, "G5", f"rating swing {abs(rating - previous):.0f} A",
+                min(rating, self.static_rating),
+            )
 
         self.last_good_rating  = rating
         result["status"]       = "ok"
@@ -57,11 +73,22 @@ class DLRSafetyMonitor:
                 self.SOLAR_BOUNDS[0] <= d["solar"] <= self.SOLAR_BOUNDS[1])
 
     def _gate_plausible(self, rating):
-        return self.RATING_BOUNDS[0] <= rating <= self.RATING_BOUNDS[1]
+        return self.rating_bounds[0] <= rating <= self.rating_bounds[1]
+
+    def _gate_delta(self, rating) -> bool:
+        # Inclusive boundary, matching _gate_plausible/_gate_range's
+        # inclusive convention: a delta exactly equal to the threshold is
+        # not a swing.
+        return abs(rating - self.last_good_rating) <= self.delta_fraction * self.static_rating
 
     def _compute_ampacity(self, d):
-        # Simplified IEEE 738 — replace with your full thermal model
-        return 900 + d["wind"] * 30 - (d["temp"] - 20) * 4 - d["solar"] * 0.05
+        return float(thermal_model.ieee738_ampacity(
+            T_amb_c=d["temp"],
+            wind_perp_ms=d["wind"],
+            ghi_wm2=d["solar"],
+            conductor=self.conductor,
+            solar_altitude_deg=self.solar_altitude_deg,
+        ))
 
     def _fallback(self, result, gate, reason, rating):
         msg = f"{gate} FAIL ({reason}) — fallback rating {rating:.0f} A"
