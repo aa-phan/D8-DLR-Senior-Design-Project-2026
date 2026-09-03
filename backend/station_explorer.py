@@ -72,6 +72,32 @@ def get_all_stations(token: str, network_id: Optional[str] = None) -> pd.DataFra
         })
     return pd.DataFrame(rows)
 
+def nearest_stations(stations: pd.DataFrame, lat: float, lon: float, n: int = 5) -> pd.DataFrame:
+    """
+    Generalization of `rank_by_corridor` from the fixed five-point
+    `CORRIDORS` dict to an arbitrary (lat, lon) point (D-07's station-
+    resolution layer, consumed by `corridor_discretization.py`, C8).
+
+    Returns at most `n` rows of `stations`, sorted ascending by a
+    `km_to_point` column this function adds, with ties broken by `stid`
+    ascending so equal-distance stations resolve deterministically and
+    reproducibly (DS-NF2) rather than depending on Synoptic's row order.
+
+    Unlike `rank_by_corridor`, this function does NOT mutate its argument:
+    it copies `stations` before adding `km_to_point`, so the caller's frame
+    is unchanged after the call.
+    """
+    if stations.empty:
+        return stations
+
+    stations = stations.copy()
+    stations["km_to_point"] = stations.apply(
+        lambda r: haversine_km(r["lat"], r["lon"], lat, lon),
+        axis=1,
+    )
+    return stations.sort_values(["km_to_point", "stid"]).head(n).reset_index(drop=True)
+
+
 def rank_by_corridor(stations: pd.DataFrame) -> pd.DataFrame:
     if stations.empty:
         return stations

@@ -59,10 +59,12 @@ functional and non-functional requirement it lists is part of this subsystem's c
 
 ### Spatial (Corridor Discretization)
 
-- [ ] **DS-F10**: Discretize a transmission corridor into multiple geographic points and take the
-      minimum ampacity as the corridor-level rating — owned by C8. Not started. The only existing
-      artifact (`station_explorer.py::CORRIDORS`) ranks station proximity to five fixed points —
-      no notion of a line, route, or per-point ampacity reduction exists yet.
+- [x] **DS-F10**: Discretize a transmission corridor into multiple geographic points and take the
+      minimum ampacity as the corridor-level rating — owned by C8. Implemented in Phase 3 Plan 02:
+      `corridor_discretization.py` discretizes each of the two D-01 corridors into 5 evenly-spaced
+      geodesic points, resolves each to a nearby station, gates each independently through
+      `DLRSafetyMonitor`, and reduces to the corridor rating via `min()` with the bottleneck point
+      identified. See `.planning/phases/03-safety-spatial/03-02-SUMMARY.md`.
 
 ### Predictive (Forecasting & Learned Anomaly Detection)
 
@@ -123,7 +125,7 @@ Which phases cover which requirements. Phase numbers match `.planning/ROADMAP.md
 | DS-F5 | Phase 2 | In Progress (partial — see note above) |
 | DS-F8 | Phase 2 | Complete |
 | DS-F7 | Phase 3 | Pending |
-| DS-F10 | Phase 3 | Pending |
+| DS-F10 | Phase 3 | Complete |
 | DS-NF5 | Phase 3 | In Progress (partial — see note above) |
 | DS-F11 | Phase 4 | Pending |
 | DS-F12 | Phase 4 | Pending |
