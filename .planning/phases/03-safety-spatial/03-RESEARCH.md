@@ -436,14 +436,14 @@ See "Architecture Patterns" above for the four load-bearing code examples (C7 wi
 | A4 | `ConductorConfig`/`solar_altitude_deg` should be passed into `DLRSafetyMonitor.__init__` (one instance per location/corridor) rather than computed globally | "C7 Wiring" Pattern 1 | If the team prefers a single global monitor instance with per-call location parameters instead, the constructor shape changes; either resolves the underlying gap (C7 spec's own open question on where `ConductorConfig` comes from), but the two are not code-compatible without a rewrite, so the planner should pick one before task-writing. |
 | A5 | New `CORRIDOR_ENDPOINTS`-style structure belongs in `config.py` (C1 convention) rather than `station_explorer.py` | "Anti-Patterns to Avoid" | Low risk either way — `station_explorer.py` is also defensible (it currently owns `CORRIDORS`). Recommendation follows the C1 config-centralization pattern already established by the codebase and flagged as an "Established Pattern" in CONTEXT.md. |
 
-## Open Questions
+## Open Questions (RESOLVED — see 03-01-PLAN.md)
 
-1. **Should `RATING_BOUNDS` be a single global band or per-city?**
+1. **RESOLVED (PD-A3, 03-01-PLAN.md): Should `RATING_BOUNDS` be a single global band or per-city?**
    - What we know: the current single global band (400-1800 A) is incompatible with 3 of 4 cities' static ratings.
    - What's unclear: whether the team wants the simplicity of one wider band or the precision of per-city bands, given `DLRSafetyMonitor` will likely already be instantiated per-location for the `ConductorConfig` reason above.
    - Recommendation: default to per-location (marginal cost is low once per-location instantiation exists anyway), but confirm with the user before locking — see A3/A4.
 
-2. **Should the G5 `DELTA_THRESH` (150 A) also scale per-city?**
+2. **RESOLVED (Task 2 checkpoint:decision, option-a, 03-01-PLAN.md): Should the G5 `DELTA_THRESH` (150 A) also scale per-city?**
    - What we know: `DELTA_THRESH` is a flat 150 A alert threshold across all locations; the 4 cities' static ratings span 1450-3000 A, a >2x range.
    - What's unclear: whether a flat absolute threshold or a relative (%-of-rating) threshold better serves DS-NF5's "large rating swing" language.
    - Recommendation: out of this phase's explicit scope (not named in Phase 3's Success Criteria, which mentions the delta check generically) — flag for the planner to decide whether to touch it now (small, same-file change) or defer.
