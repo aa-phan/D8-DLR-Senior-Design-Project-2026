@@ -74,10 +74,20 @@ MAX_PROBE_CANDIDATES = 10
 # unspaced requests at the provider (RESEARCH.md Pitfall 3: 5 points x 2
 # corridors x 10 candidates = 100 station-level fetch attempts per run,
 # against C4's own still-open "no retry/backoff or rate-limit handling"
-# issue). Defined here, alongside the other probe-tuning constants, so
-# Task 3's pacing has exactly one call site; the actual `sleep()` call is
-# wired into `resolve_point_observation` in Task 3.
+# issue). Defined here, alongside the other probe-tuning constants, so the
+# pacing has exactly one call site; wired into `resolve_point_observation`'s
+# `sleep()` call between probe batches.
 PROBE_BATCH_PAUSE_S = 0.2
+
+# Call-volume arithmetic, named explicitly so it's a pinned fact rather
+# than something rediscovered against a live rate limit (RESEARCH.md
+# Pitfall 3): DEFAULT_POINTS_PER_CORRIDOR (5) point lookups per corridor,
+# times 2 corridors in config.CORRIDOR_ENDPOINTS, is 10 point lookups per
+# full run; each point lookup expands to at most MAX_PROBE_CANDIDATES (10)
+# station-level fetch attempts before falling back (D-09). Worst case:
+# 5 * 2 * 10 = 100 station-level attempts per run. Asserted in
+# backend/tests/corridor_discretization_test.py so this ceiling is a test,
+# not a surprise.
 
 
 def initial_bearing_deg(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -346,6 +356,7 @@ def resolve_point_observation(
     batch_size: int = PROBE_BATCH_SIZE,
     max_candidates: int = MAX_PROBE_CANDIDATES,
     logger=None,
+    sleep=time.sleep,
 ):
     """
     D-08's bounded candidate probe for one corridor point: rank up to
@@ -354,6 +365,15 @@ def resolve_point_observation(
     batch), then probe them in order, `batch_size` at a time, stopping at
     the first usable reading. Never probes an (`max_candidates` + 1)-th
     candidate.
+
+    Between batch 1 exhausting and batch 2 beginning, sleeps
+    `PROBE_BATCH_PAUSE_S` -- never between candidates within a batch, and
+    never after the final batch -- so a full two-corridor run (up to 100
+    station-level attempts, RESEARCH.md Pitfall 3) doesn't burst unspaced
+    requests at a provider whose own spec still documents no rate-limit
+    handling (`docs/data-science/specs/C4-weather-ingestion.md`). `sleep`
+    is injectable (defaults to `time.sleep`) so tests can record pause
+    calls without actually waiting.
 
     Each candidate's `fetch_weather` result is converted through
     `_usable_observation` -- an empty frame, a frame missing the station, or
@@ -398,6 +418,7 @@ def resolve_point_observation(
     n = min(len(candidates), max_candidates)
     for batch_start in range(0, n, batch_size):
         if batch_start > 0:
+            sleep(PROBE_BATCH_PAUSE_S)
             log_.info(
                 f"corridor probe: point=({lat:.4f},{lon:.4f}) "
                 f"batch boundary at candidate {batch_start + 1}"
@@ -455,6 +476,7 @@ def rate_corridor(
     fetch_weather=None,
     n_points: int = DEFAULT_POINTS_PER_CORRIDOR,
     logger=None,
+    sleep=time.sleep,
 ) -> dict:
     """
     Rate a named corridor end to end: for each of its `n_points` geodesic
@@ -481,6 +503,8 @@ def rate_corridor(
             on `dlr_pipeline` directly (D-07).
         n_points: Points per corridor (default `DEFAULT_POINTS_PER_CORRIDOR`).
         logger: Forwarded to `resolve_point_observation`'s probe logging.
+        sleep: Forwarded to `resolve_point_observation`'s batch-pause call
+            (defaults to `time.sleep`; tests inject a no-op/recorder).
 
     Returns:
         A dict with keys `corridor`, `bearing_deg`, `points` (one entry per
@@ -517,7 +541,7 @@ def rate_corridor(
     point_results = []
     for idx, (lat, lon) in enumerate(geometry.points):
         observation, stid, trail = resolve_point_observation(
-            lat, lon, start, end, stations, fetch_weather, logger=logger,
+            lat, lon, start, end, stations, fetch_weather, logger=logger, sleep=sleep,
         )
 
         if observation is None:

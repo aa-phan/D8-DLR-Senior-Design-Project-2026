@@ -736,3 +736,173 @@ def test_exhaust_single_usable_cool_point_is_bottleneck(synthetic_corridor):
     assert result["bottleneck_index"] == 2
     assert result["fallback"] is True
     assert result["exhausted_points"] == 4
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Task 3 (03-03): bottleneck proof (C8's own acceptance criterion) + pacing
+# ──────────────────────────────────────────────────────────────────────────────
+
+# wind=6.5 -> ~1814.6 A ("typical"), wind=4.0 -> ~1586.3 A ("cooled"), both
+# inside the synthetic fixture's 253.5 A (15% of 1690 A) G5 delta window
+# from any prior last_good_rating in this sequence -- so no point's status
+# ever falls back here, keeping every reported rating equal to its raw
+# computed ampacity (no min(computed, static) clamping to reason about).
+_TYPICAL_WIND = 6.5
+_COOLED_WIND = 4.0
+
+
+def _five_point_stations() -> pd.DataFrame:
+    return pd.DataFrame(
+        [{"stid": f"S{i}", "name": f"s{i}", "lat": 0.0, "lon": float(i)} for i in range(5)]
+    )
+
+
+def test_bottleneck_cooled_point_at_index_2_is_identified(synthetic_corridor):
+    stations = _five_point_stations()
+    winds = {f"S{i}": _TYPICAL_WIND for i in range(5)}
+    winds["S2"] = _COOLED_WIND
+
+    def fake_fetch(stids, start, end):
+        return _weather_frame(stids[0], wind=winds[stids[0]])
+
+    result = cd.rate_corridor(
+        synthetic_corridor, "2025-01-01", "2025-01-02", stations, fetch_weather=fake_fetch
+    )
+
+    assert result["bottleneck_index"] == 2
+    assert result["rating"] == result["points"][2]["rating"]
+    for i, p in enumerate(result["points"]):
+        if i != 2:
+            assert result["rating"] < p["rating"]
+
+
+def test_bottleneck_cooled_point_at_index_0_is_identified(synthetic_corridor):
+    # Moving the cooled point to a different index proves the reduction
+    # isn't accidentally returning a fixed position.
+    stations = _five_point_stations()
+    winds = {f"S{i}": _TYPICAL_WIND for i in range(5)}
+    winds["S0"] = _COOLED_WIND
+
+    def fake_fetch(stids, start, end):
+        return _weather_frame(stids[0], wind=winds[stids[0]])
+
+    result = cd.rate_corridor(
+        synthetic_corridor, "2025-01-01", "2025-01-02", stations, fetch_weather=fake_fetch
+    )
+
+    assert result["bottleneck_index"] == 0
+    assert result["rating"] == result["points"][0]["rating"]
+    for i, p in enumerate(result["points"]):
+        if i != 0:
+            assert result["rating"] < p["rating"]
+
+
+def test_bottleneck_tie_breaks_toward_lower_index_deterministically(synthetic_corridor):
+    stations = _five_point_stations()
+    # Points 1 and 3 both cooled identically -- exact tie for the minimum.
+    winds = {f"S{i}": _TYPICAL_WIND for i in range(5)}
+    winds["S1"] = _COOLED_WIND
+    winds["S3"] = _COOLED_WIND
+
+    def fake_fetch(stids, start, end):
+        return _weather_frame(stids[0], wind=winds[stids[0]])
+
+    result1 = cd.rate_corridor(
+        synthetic_corridor, "2025-01-01", "2025-01-02", stations, fetch_weather=fake_fetch
+    )
+    result2 = cd.rate_corridor(
+        synthetic_corridor, "2025-01-01", "2025-01-02", stations, fetch_weather=fake_fetch
+    )
+
+    assert result1["points"][1]["rating"] == result1["points"][3]["rating"]
+    assert result1["bottleneck_index"] == 1
+    assert result2["bottleneck_index"] == 1
+
+
+def test_both_corridors_rate_successfully_with_different_bearings():
+    geometries = {
+        name: cd.corridor_geometry(name) for name in config.CORRIDOR_ENDPOINTS
+    }
+    rows = []
+    for cname, geom in geometries.items():
+        for i, (lat, lon) in enumerate(geom.points):
+            rows.append({"stid": f"{cname}_{i}", "name": f"{cname}_{i}", "lat": lat, "lon": lon})
+    stations = pd.DataFrame(rows)
+
+    def fake_fetch(stids, start, end):
+        return _weather_frame(stids[0], wind=_TYPICAL_WIND)
+
+    results = {
+        name: cd.rate_corridor(name, "2025-01-01", "2025-01-02", stations, fetch_weather=fake_fetch)
+        for name in config.CORRIDOR_ENDPOINTS
+    }
+
+    assert len(results) == 2
+    bearings = {r["bearing_deg"] for r in results.values()}
+    assert len(bearings) == 2, "the two corridors must produce different bearings"
+    for r in results.values():
+        assert r["rating"] is not None
+        assert len(r["points"]) == 5
+
+
+def test_probe_pause_only_between_batches_never_within_or_after(probe_stations):
+    pauses = []
+
+    def fetch_expand(stids, start, end):
+        stid = stids[0]
+        if stid == "C07":
+            return _weather_frame(stid, wind=5.0)
+        return _empty_weather_frame()
+
+    cd.resolve_point_observation(
+        0.0, 0.0, "2025-01-01", "2025-01-02", probe_stations, fetch_expand,
+        sleep=lambda s: pauses.append(s),
+    )
+
+    assert len(pauses) == 1
+    assert pauses[0] == cd.PROBE_BATCH_PAUSE_S
+
+    pauses.clear()
+
+    def fetch_first(stids, start, end):
+        return _weather_frame(stids[0], wind=5.0)
+
+    cd.resolve_point_observation(
+        0.0, 0.0, "2025-01-01", "2025-01-02", probe_stations, fetch_first,
+        sleep=lambda s: pauses.append(s),
+    )
+
+    assert pauses == []
+
+
+def test_worst_case_two_corridor_all_unusable_probe_count_is_100():
+    geometries = {
+        name: cd.corridor_geometry(name) for name in config.CORRIDOR_ENDPOINTS
+    }
+    rows = []
+    for cname, geom in geometries.items():
+        for i, (lat, lon) in enumerate(geom.points):
+            for j in range(10):
+                rows.append(
+                    {
+                        "stid": f"{cname}_{i}_{j}",
+                        "name": f"{cname}_{i}_{j}",
+                        "lat": lat,
+                        "lon": lon + 0.001 * j,
+                    }
+                )
+    stations = pd.DataFrame(rows)
+
+    call_count = {"n": 0}
+
+    def fake_fetch(stids, start, end):
+        call_count["n"] += 1
+        return _empty_weather_frame()
+
+    for cname in config.CORRIDOR_ENDPOINTS:
+        cd.rate_corridor(
+            cname, "2025-01-01", "2025-01-02", stations, fetch_weather=fake_fetch,
+            sleep=lambda s: None,
+        )
+
+    assert call_count["n"] == 100
