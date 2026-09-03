@@ -484,16 +484,24 @@ def rate_corridor(
 
     Returns:
         A dict with keys `corridor`, `bearing_deg`, `points` (one entry per
-        point, in point order, each holding its coordinates, resolved
-        station id, candidate probe count/trail, and gated
+        point, in point order -- always exactly `n_points` entries, never
+        shortened, since an exhausted point still contributes a fallback
+        record -- each holding its coordinates, resolved station id (`None`
+        when exhausted), candidate probe count/trail, and gated
         rating/status/fallback/alerts), `rating` (the minimum per-point
-        rating), and `bottleneck_index` (the index of the point that
-        produced it; ties broken toward the lowest index).
+        rating), `bottleneck_index` (the index of the point that produced
+        it; ties broken toward the lowest index), `fallback` (true whenever
+        any point fell back -- gate failure or candidate exhaustion alike),
+        and `exhausted_points` (how many points exhausted their candidate
+        probe, D-09).
 
     Note:
-        This plan's Task 1 still raises `RuntimeError` when a point
-        exhausts every candidate with no usable observation -- Task 2
-        replaces that with the D-09 static-rating fallback.
+        A point whose candidate probe exhausts every candidate with no
+        usable observation resolves to the corridor's static rating (D-09)
+        -- the same terminal target every other data-loss gate in this
+        system uses (`DLRSafetyMonitor._fallback`'s G1-G5) -- rather than
+        raising, being dropped, or being interpolated from a neighbour
+        (T-03-01).
     """
     if fetch_weather is None:
         fetch_weather = weather_provider.fetch_weather
@@ -511,12 +519,33 @@ def rate_corridor(
         observation, stid, trail = resolve_point_observation(
             lat, lon, start, end, stations, fetch_weather, logger=logger,
         )
+
         if observation is None:
-            raise RuntimeError(
-                f"rate_corridor({corridor_name!r}): no usable weather observation "
-                f"for point {idx} ({lat}, {lon}) after exhausting {len(trail)} "
-                "candidates -- graceful fallback lands in Plan 03-03 Task 2"
+            # D-09: an exhausted point resolves to the corridor static
+            # rating -- never omitted from `points`, never interpolated
+            # from a neighbour, and still counted in the min() reduction
+            # below, exactly like any other data-loss gate (T-03-01).
+            # Message shape mirrors DLRSafetyMonitor._fallback's own
+            # "{gate} FAIL ({reason}) -- fallback rating {rating:.0f} A"
+            # convention rather than inventing a second alert vocabulary.
+            msg = (
+                f"EXHAUSTED FAIL (point {idx}: {len(trail)} candidates "
+                f"exhausted) — fallback rating {geometry.static_rating:.0f} A"
             )
+            point_results.append(
+                {
+                    "lat": lat,
+                    "lon": lon,
+                    "stid": None,
+                    "candidates_probed": len(trail),
+                    "probe_trail": trail,
+                    "rating": geometry.static_rating,
+                    "status": "fallback",
+                    "fallback": True,
+                    "alerts": [msg],
+                }
+            )
+            continue
 
         result = monitor.run_check(observation)
         point_results.append(
@@ -533,6 +562,16 @@ def rate_corridor(
             }
         )
 
+    # Every point contributes exactly one record above -- either a gated
+    # rating or the D-09 static-rating fallback -- so this list can never
+    # be shorter than geometry.points and min() below can never see an
+    # empty sequence. Asserted explicitly so that invariant is structural,
+    # not incidental (DS-NF5 empty-sequence edge).
+    assert len(point_results) == len(geometry.points), (
+        "rate_corridor: point_results length diverged from geometry.points "
+        "-- every point must contribute exactly one record"
+    )
+
     ratings = [p["rating"] for p in point_results]
     min_rating = min(ratings)
     # Tie-break toward the lowest index: index() already returns the first
@@ -540,10 +579,15 @@ def rate_corridor(
     # for readability.
     bottleneck_index = ratings.index(min_rating)
 
+    corridor_fallback = any(p["fallback"] for p in point_results)
+    exhausted_points = sum(1 for p in point_results if p["stid"] is None)
+
     return {
         "corridor": corridor_name,
         "bearing_deg": geometry.bearing_deg,
         "points": point_results,
         "rating": min_rating,
         "bottleneck_index": bottleneck_index,
+        "fallback": corridor_fallback,
+        "exhausted_points": exhausted_points,
     }

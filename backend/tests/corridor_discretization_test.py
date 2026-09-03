@@ -315,7 +315,10 @@ def test_rate_corridor_returns_expected_keys_and_min_reduction(synthetic_corrido
         synthetic_corridor, "2025-01-01", "2025-01-02", stations, fetch_weather=fake_fetch
     )
 
-    assert set(result.keys()) == {"corridor", "bearing_deg", "points", "rating", "bottleneck_index"}
+    assert set(result.keys()) == {
+        "corridor", "bearing_deg", "points", "rating", "bottleneck_index",
+        "fallback", "exhausted_points",
+    }
     assert len(result["points"]) == 5
     assert result["bottleneck_index"] == 2
     assert result["rating"] == result["points"][2]["rating"]
@@ -324,6 +327,16 @@ def test_rate_corridor_returns_expected_keys_and_min_reduction(synthetic_corrido
     for i, p in enumerate(result["points"]):
         if i != 2:
             assert p["rating"] > result["rating"]
+    # Every point resolved its own dedicated station on the first probe --
+    # no candidate exhaustion here. Point 2's deliberately low wind (and,
+    # via the shared monitor's sequentially-updating last_good_rating, one
+    # neighbouring point too) genuinely trips G5's delta gate against this
+    # fixture's static_rating, so the corridor-level `fallback` flag is
+    # correctly True from that real gate failure -- `fallback` reflects any
+    # point falling back, gate-level or exhaustion-level alike, not only
+    # D-09's exhaustion path.
+    assert result["exhausted_points"] == 0
+    assert result["fallback"] is True
 
 
 def test_rate_corridor_never_calls_network_with_injected_fetcher(synthetic_corridor):
@@ -584,3 +597,142 @@ def test_probe_discover_corridor_stations_uses_unrestricted_network(monkeypatch)
 
     assert captured["network_id"] is None
     assert captured["token"] == "fake-token"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Task 2 (03-03): exhausted-point fallback to the corridor static rating (D-09)
+# ──────────────────────────────────────────────────────────────────────────────
+
+_SYNTHETIC_STATIC_RATING = 1690.0  # matches synthetic_corridor's fixture value
+
+
+def _bad_cluster_near(lon_center: float, prefix: str, n: int = 10) -> list[dict]:
+    """
+    `n` distinct station rows clustered tightly around `lon_center` (within
+    +/-0.05 degrees), always strictly closer to a point at that longitude
+    than any station placed a full degree of longitude away -- so a probe
+    for that point sees exactly this cluster as its 10 nearest candidates,
+    with no interference from a neighbouring point's own station.
+    """
+    return [
+        {
+            "stid": f"{prefix}{j}",
+            "name": f"{prefix}{j}",
+            "lat": 0.0,
+            "lon": lon_center + 0.01 * (j - n // 2),
+        }
+        for j in range(n)
+    ]
+
+
+def _all_unusable_fetch(stids, start, end):
+    return pd.DataFrame(columns=["stid", "air_temp", "wind_speed", "solar_radiation"])
+
+
+def test_exhaust_single_point_falls_back_to_static_others_succeed(synthetic_corridor):
+    # Points 0, 1, 2, 4 each have a dedicated station exactly at their
+    # coordinates (distance 0, always the first candidate probed); point 3
+    # has none -- only a 10-station cluster that is all unusable.
+    good = [{"stid": f"S{i}", "name": f"s{i}", "lat": 0.0, "lon": float(i)} for i in [0, 1, 2, 4]]
+    bad = _bad_cluster_near(3.0, prefix="BAD3_")
+    stations = pd.DataFrame(good + bad)
+
+    def fake_fetch(stids, start, end):
+        stid = stids[0]
+        if stid.startswith("BAD"):
+            return _all_unusable_fetch(stids, start, end)
+        return _weather_frame(stid, wind=6.5)  # ampacity ~1814.6 A -- above static
+        # (1690 A) but within G5's 15%-of-static delta window from the
+        # cold-start last_good_rating, so this doesn't itself trip G5.
+
+    result = cd.rate_corridor(
+        synthetic_corridor, "2025-01-01", "2025-01-02", stations, fetch_weather=fake_fetch
+    )
+
+    point3 = result["points"][3]
+    assert point3["fallback"] is True
+    assert point3["status"] == "fallback"
+    assert point3["stid"] is None
+    assert point3["rating"] == _SYNTHETIC_STATIC_RATING
+    assert "3" in point3["alerts"][0]
+    assert "10" in point3["alerts"][0]
+
+    assert len(result["points"]) == 5
+    assert result["rating"] == min(p["rating"] for p in result["points"])
+    assert result["rating"] == _SYNTHETIC_STATIC_RATING
+    assert result["bottleneck_index"] == 3
+    assert result["fallback"] is True
+    assert result["exhausted_points"] == 1
+
+
+def test_exhaust_all_points_exhausted_reports_static_no_exception(synthetic_corridor):
+    stations = pd.DataFrame(
+        [row for i in range(5) for row in _bad_cluster_near(float(i), prefix=f"BAD{i}_")]
+    )
+
+    result = cd.rate_corridor(
+        synthetic_corridor, "2025-01-01", "2025-01-02", stations, fetch_weather=_all_unusable_fetch
+    )
+
+    assert len(result["points"]) == 5
+    assert all(p["fallback"] for p in result["points"])
+    assert all(p["stid"] is None for p in result["points"])
+    assert result["rating"] == _SYNTHETIC_STATIC_RATING
+    assert result["fallback"] is True
+    assert result["exhausted_points"] == 5
+
+
+def test_exhaust_single_usable_hot_point_cannot_raise_corridor(synthetic_corridor):
+    # Only point 1 has a real station; it rates well above the static
+    # rating (hot) -- the corridor rating must still be the static rating,
+    # not the hot point's own higher number.
+    rows = [{"stid": "S1", "name": "s1", "lat": 0.0, "lon": 1.0}]
+    for i in [0, 2, 3, 4]:
+        rows += _bad_cluster_near(float(i), prefix=f"BAD{i}_")
+    stations = pd.DataFrame(rows)
+
+    def fake_fetch(stids, start, end):
+        stid = stids[0]
+        if stid == "S1":
+            return _weather_frame(stid, wind=6.5)  # ampacity ~1814.6 A, above static
+            # but still inside G5's cold-start delta window (see note above)
+        return _all_unusable_fetch(stids, start, end)
+
+    result = cd.rate_corridor(
+        synthetic_corridor, "2025-01-01", "2025-01-02", stations, fetch_weather=fake_fetch
+    )
+
+    assert len(result["points"]) == 5
+    assert result["points"][1]["fallback"] is False
+    assert result["points"][1]["rating"] > _SYNTHETIC_STATIC_RATING
+    assert result["rating"] == _SYNTHETIC_STATIC_RATING
+    assert result["exhausted_points"] == 4
+    assert result["fallback"] is True
+
+
+def test_exhaust_single_usable_cool_point_is_bottleneck(synthetic_corridor):
+    # Only point 2 has a real station; it rates well below the static
+    # rating (cool) -- a single cool point can still be the bottleneck.
+    rows = [{"stid": "S2", "name": "s2", "lat": 0.0, "lon": 2.0}]
+    for i in [0, 1, 3, 4]:
+        rows += _bad_cluster_near(float(i), prefix=f"BAD{i}_")
+    stations = pd.DataFrame(rows)
+
+    def fake_fetch(stids, start, end):
+        stid = stids[0]
+        if stid == "S2":
+            return _weather_frame(stid, wind=3.0)  # ampacity ~1467.1 A, below static
+            # but still inside G5's cold-start delta window (see note above)
+        return _all_unusable_fetch(stids, start, end)
+
+    result = cd.rate_corridor(
+        synthetic_corridor, "2025-01-01", "2025-01-02", stations, fetch_weather=fake_fetch
+    )
+
+    assert len(result["points"]) == 5
+    assert result["points"][2]["fallback"] is False
+    assert result["points"][2]["rating"] < _SYNTHETIC_STATIC_RATING
+    assert result["rating"] == result["points"][2]["rating"]
+    assert result["bottleneck_index"] == 2
+    assert result["fallback"] is True
+    assert result["exhausted_points"] == 4
