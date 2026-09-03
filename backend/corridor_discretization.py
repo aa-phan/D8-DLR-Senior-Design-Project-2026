@@ -29,13 +29,21 @@ and needs no `SYNOPTIC_TOKEN` -- all weather access happens lazily inside
 through the Synoptic-only fetch function on `dlr_pipeline` directly.
 """
 
+import logging
 import math
+import time
 
 import config
 import station_explorer
 import thermal_model
 import weather_provider
 from DLRSafetyMonitor import DLRSafetyMonitor
+
+# Module logger, matching the convention `dlr_pipeline.py` already uses
+# (`log = logging.getLogger(__name__)`, called as `log.info(...)`) --
+# `resolve_point_observation`'s probe logging defaults to this when no
+# `logger` is injected.
+log = logging.getLogger(__name__)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Discretization density
@@ -47,6 +55,39 @@ from DLRSafetyMonitor import DLRSafetyMonitor
 # corridors = 10 fetches/run today, before D-08's candidate-probe fallback
 # (Plan 03-03) can multiply that further.
 DEFAULT_POINTS_PER_CORRIDOR = 5
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Candidate-probe tuning (D-08, Plan 03-03)
+# ──────────────────────────────────────────────────────────────────────────────
+# D-06's live access check found Synoptic returns a usable (non-null)
+# observation for only 25-75% of candidate stations depending on the city
+# (Austin 75%, Corpus Christi 25%, Midland 25%, El Paso 38%, across 8 probed
+# stations per city -- .planning/phases/03-safety-spatial/03-CONTEXT.md
+# D-06). A single-nearest-station lookup would leave Corpus Christi/Midland
+# corridors dark most of the time, so each point probes its nearest 5
+# candidates first and, only if all 5 are unusable, expands to the next 5
+# nearest (10 total) before giving up (D-08/D-09).
+PROBE_BATCH_SIZE = 5
+MAX_PROBE_CANDIDATES = 10
+
+# Small pause between probe batches so a worst-case run doesn't burst
+# unspaced requests at the provider (RESEARCH.md Pitfall 3: 5 points x 2
+# corridors x 10 candidates = 100 station-level fetch attempts per run,
+# against C4's own still-open "no retry/backoff or rate-limit handling"
+# issue). Defined here, alongside the other probe-tuning constants, so the
+# pacing has exactly one call site; wired into `resolve_point_observation`'s
+# `sleep()` call between probe batches.
+PROBE_BATCH_PAUSE_S = 0.2
+
+# Call-volume arithmetic, named explicitly so it's a pinned fact rather
+# than something rediscovered against a live rate limit (RESEARCH.md
+# Pitfall 3): DEFAULT_POINTS_PER_CORRIDOR (5) point lookups per corridor,
+# times 2 corridors in config.CORRIDOR_ENDPOINTS, is 10 point lookups per
+# full run; each point lookup expands to at most MAX_PROBE_CANDIDATES (10)
+# station-level fetch attempts before falling back (D-09). Worst case:
+# 5 * 2 * 10 = 100 station-level attempts per run. Asserted in
+# backend/tests/corridor_discretization_test.py so this ceiling is a test,
+# not a surprise.
 
 
 def initial_bearing_deg(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -283,6 +324,150 @@ def _usable_observation(frame, stid: str) -> dict | None:
     return reading
 
 
+def discover_corridor_stations(token: str, state: str = "TX"):
+    """
+    D-06's broadened, unrestricted-network station discovery: delegates to
+    `station_explorer.get_all_stations` with no network restriction, so this
+    module has exactly one call site for the "don't restrict to WTM"
+    decision rather than each caller re-deriving it.
+
+    D-06 reverses the WTM-only restriction that `station_explorer.py`'s
+    `__main__` block previously hardcoded (`network_id = 152`): a live
+    access check found that restriction admitted just 2 stations (both
+    zero-data), where the unrestricted query resolves to hundreds of
+    solar-tagged candidates per city (Austin 628, Corpus Christi 64,
+    Midland 30, El Paso 94 within 50km, per
+    `.planning/phases/03-safety-spatial/03-CONTEXT.md` D-06). `state` is
+    accepted for interface symmetry with a future per-state discovery need,
+    but `station_explorer.get_all_stations` itself always queries `state=TX`
+    today (left untouched per this plan's own prohibition on widening that
+    function's scope).
+    """
+    return station_explorer.get_all_stations(token, network_id=None)
+
+
+def resolve_point_observation(
+    lat: float,
+    lon: float,
+    start: str,
+    end: str,
+    stations,
+    fetch_weather,
+    batch_size: int = PROBE_BATCH_SIZE,
+    max_candidates: int = MAX_PROBE_CANDIDATES,
+    logger=None,
+    sleep=time.sleep,
+):
+    """
+    D-08's bounded candidate probe for one corridor point: rank up to
+    `max_candidates` nearest stations to (lat, lon) once (so a later batch
+    is genuinely the next-nearest stations, never a re-probe of an earlier
+    batch), then probe them in order, `batch_size` at a time, stopping at
+    the first usable reading. Never probes an (`max_candidates` + 1)-th
+    candidate.
+
+    Between batch 1 exhausting and batch 2 beginning, sleeps
+    `PROBE_BATCH_PAUSE_S` -- never between candidates within a batch, and
+    never after the final batch -- so a full two-corridor run (up to 100
+    station-level attempts, RESEARCH.md Pitfall 3) doesn't burst unspaced
+    requests at a provider whose own spec still documents no rate-limit
+    handling (`docs/data-science/specs/C4-weather-ingestion.md`). `sleep`
+    is injectable (defaults to `time.sleep`) so tests can record pause
+    calls without actually waiting.
+
+    Each candidate's `fetch_weather` result is converted through
+    `_usable_observation` -- an empty frame, a frame missing the station, or
+    a frame with any of the three required variables null is all treated as
+    unusable, exactly like the single-nearest-station lookup 03-02 shipped.
+    A `fetch_weather` call that itself raises is also treated as unusable
+    (the probe moves to the next candidate rather than propagating the
+    exception); only the exception's message text is logged, never its full
+    repr (T-03-02 -- a full repr could echo request/params state).
+
+    Args:
+        lat, lon: The corridor point's coordinates.
+        start, end: The weather-fetch date window, passed through unchanged.
+        stations: A station metadata DataFrame (`station_explorer`'s shape).
+        fetch_weather: `(stids, start, end) -> DataFrame`, called once per
+            candidate with a single-element `stids` list -- never a batch
+            fetch across candidates (D-05's per-point independence extends
+            to per-candidate independence within a point).
+        batch_size: Candidates probed per batch before pausing/expanding.
+        max_candidates: Hard ceiling on candidates probed for this point.
+        logger: Injectable `logging.Logger`-like object (must support
+            `.info(...)`), defaulting to this module's own logger --
+            matches `dlr_pipeline`'s `log = logging.getLogger(__name__)`
+            convention. Every log line here carries only a station id,
+            latitude, longitude, distance in km, and a usable/unusable
+            outcome word -- never a params dict, grouped fetch arguments, or
+            a caught exception's full repr (T-03-02).
+
+    Returns:
+        `(observation, stid, trail)`. On success, `observation` is the
+        usable reading dict and `stid` is the station id that produced it.
+        On exhaustion, both are `None`. `trail` is always the ordered list
+        of every candidate probed so far, each entry a dict with `stid`,
+        `lat`, `lon`, `distance_km`, and `outcome` -- and nothing else, so
+        no key or value here can ever name a token, key, or request
+        parameter mapping.
+    """
+    log_ = logger or log
+    candidates = station_explorer.nearest_stations(stations, lat, lon, n=max_candidates)
+
+    trail: list = []
+    n = min(len(candidates), max_candidates)
+    for batch_start in range(0, n, batch_size):
+        if batch_start > 0:
+            sleep(PROBE_BATCH_PAUSE_S)
+            log_.info(
+                f"corridor probe: point=({lat:.4f},{lon:.4f}) "
+                f"batch boundary at candidate {batch_start + 1}"
+            )
+
+        batch = candidates.iloc[batch_start: batch_start + batch_size]
+        for _, row in batch.iterrows():
+            stid = row["stid"]
+            entry = {
+                "stid": stid,
+                "lat": row["lat"],
+                "lon": row["lon"],
+                "distance_km": row["km_to_point"],
+            }
+
+            try:
+                frame = fetch_weather([stid], start, end)
+            except Exception as exc:
+                entry["outcome"] = "unusable"
+                trail.append(entry)
+                log_.info(
+                    f"corridor probe candidate stid={stid} lat={row['lat']:.4f} "
+                    f"lon={row['lon']:.4f} dist_km={row['km_to_point']:.2f} "
+                    f"outcome=unusable ({exc})"
+                )
+                continue
+
+            observation = _usable_observation(frame, stid)
+            if observation is not None:
+                entry["outcome"] = "usable"
+                trail.append(entry)
+                log_.info(
+                    f"corridor probe candidate stid={stid} lat={row['lat']:.4f} "
+                    f"lon={row['lon']:.4f} dist_km={row['km_to_point']:.2f} "
+                    "outcome=usable"
+                )
+                return observation, stid, trail
+
+            entry["outcome"] = "unusable"
+            trail.append(entry)
+            log_.info(
+                f"corridor probe candidate stid={stid} lat={row['lat']:.4f} "
+                f"lon={row['lon']:.4f} dist_km={row['km_to_point']:.2f} "
+                "outcome=unusable"
+            )
+
+    return None, None, trail
+
+
 def rate_corridor(
     corridor_name: str,
     start: str,
@@ -290,17 +475,20 @@ def rate_corridor(
     stations,
     fetch_weather=None,
     n_points: int = DEFAULT_POINTS_PER_CORRIDOR,
+    logger=None,
+    sleep=time.sleep,
 ) -> dict:
     """
     Rate a named corridor end to end: for each of its `n_points` geodesic
-    points, resolve the nearest weather station, fetch that point's own
-    weather (D-05 -- one independent fetch per point, never shared or
-    batched across points even when two points resolve to the same station
-    id), run it through the corridor's `DLRSafetyMonitor` (which is wired to
-    the real thermal model's ampacity function, C7), then reduce the
-    per-point ratings to a single corridor-level rating via `min()` -- mirroring
-    `ercot_dlr_merger.process_dlr_to_hourly`'s `.min()` weakest-link
-    reduction, on the space axis instead of the time axis.
+    points, independently probe up to `MAX_PROBE_CANDIDATES` nearest
+    stations via `resolve_point_observation` (D-08 -- nearest-5-then-10,
+    D-05's per-point independence: a station id already probed for an
+    earlier point is probed again for this one, never shared or cached),
+    run any usable reading through the corridor's `DLRSafetyMonitor` (wired
+    to the real thermal model's ampacity function, C7), then reduce the
+    per-point ratings to a single corridor-level rating via `min()` --
+    mirroring `ercot_dlr_merger.process_dlr_to_hourly`'s `.min()`
+    weakest-link reduction, on the space axis instead of the time axis.
 
     Args:
         corridor_name: A key in `config.CORRIDOR_ENDPOINTS`.
@@ -314,22 +502,30 @@ def rate_corridor(
             `None` -- never bypasses into the Synoptic-only fetch function
             on `dlr_pipeline` directly (D-07).
         n_points: Points per corridor (default `DEFAULT_POINTS_PER_CORRIDOR`).
+        logger: Forwarded to `resolve_point_observation`'s probe logging.
+        sleep: Forwarded to `resolve_point_observation`'s batch-pause call
+            (defaults to `time.sleep`; tests inject a no-op/recorder).
 
     Returns:
         A dict with keys `corridor`, `bearing_deg`, `points` (one entry per
-        point, in point order, each holding its coordinates, resolved
-        station id, and gated rating/status/fallback/alerts), `rating`
-        (the minimum per-point rating), and `bottleneck_index` (the index
-        of the point that produced it; ties broken toward the lowest
-        index).
+        point, in point order -- always exactly `n_points` entries, never
+        shortened, since an exhausted point still contributes a fallback
+        record -- each holding its coordinates, resolved station id (`None`
+        when exhausted), candidate probe count/trail, and gated
+        rating/status/fallback/alerts), `rating` (the minimum per-point
+        rating), `bottleneck_index` (the index of the point that produced
+        it; ties broken toward the lowest index), `fallback` (true whenever
+        any point fell back -- gate failure or candidate exhaustion alike),
+        and `exhausted_points` (how many points exhausted their candidate
+        probe, D-09).
 
     Note:
-        This task assumes every point yields a usable observation. When
-        `_usable_observation` returns `None` for a point (no data, or a
-        partially-null reading), this raises `RuntimeError` naming the
-        point -- Plan 03-03's D-08 candidate probe and D-09 exhaustion
-        fallback replace this with a graceful station-retry-then-fallback
-        path; this plan does not implement that path.
+        A point whose candidate probe exhausts every candidate with no
+        usable observation resolves to the corridor's static rating (D-09)
+        -- the same terminal target every other data-loss gate in this
+        system uses (`DLRSafetyMonitor._fallback`'s G1-G5) -- rather than
+        raising, being dropped, or being interpolated from a neighbour
+        (T-03-01).
     """
     if fetch_weather is None:
         fetch_weather = weather_provider.fetch_weather
@@ -343,24 +539,37 @@ def rate_corridor(
     )
 
     point_results = []
-    for lat, lon in geometry.points:
-        nearest = station_explorer.nearest_stations(stations, lat, lon, n=1)
-        if nearest.empty:
-            raise RuntimeError(
-                f"rate_corridor({corridor_name!r}): no candidate station found "
-                f"for point ({lat}, {lon}) -- no stations available"
-            )
-        stid = nearest.iloc[0]["stid"]
+    for idx, (lat, lon) in enumerate(geometry.points):
+        observation, stid, trail = resolve_point_observation(
+            lat, lon, start, end, stations, fetch_weather, logger=logger, sleep=sleep,
+        )
 
-        frame = fetch_weather([stid], start, end)
-        observation = _usable_observation(frame, stid)
         if observation is None:
-            raise RuntimeError(
-                f"rate_corridor({corridor_name!r}): no usable weather observation "
-                f"for point ({lat}, {lon}) resolved to station {stid!r} -- "
-                "candidate-probe fallback (D-08/D-09) is Plan 03-03's scope, "
-                "not this plan's"
+            # D-09: an exhausted point resolves to the corridor static
+            # rating -- never omitted from `points`, never interpolated
+            # from a neighbour, and still counted in the min() reduction
+            # below, exactly like any other data-loss gate (T-03-01).
+            # Message shape mirrors DLRSafetyMonitor._fallback's own
+            # "{gate} FAIL ({reason}) -- fallback rating {rating:.0f} A"
+            # convention rather than inventing a second alert vocabulary.
+            msg = (
+                f"EXHAUSTED FAIL (point {idx}: {len(trail)} candidates "
+                f"exhausted) — fallback rating {geometry.static_rating:.0f} A"
             )
+            point_results.append(
+                {
+                    "lat": lat,
+                    "lon": lon,
+                    "stid": None,
+                    "candidates_probed": len(trail),
+                    "probe_trail": trail,
+                    "rating": geometry.static_rating,
+                    "status": "fallback",
+                    "fallback": True,
+                    "alerts": [msg],
+                }
+            )
+            continue
 
         result = monitor.run_check(observation)
         point_results.append(
@@ -368,12 +577,24 @@ def rate_corridor(
                 "lat": lat,
                 "lon": lon,
                 "stid": stid,
+                "candidates_probed": len(trail),
+                "probe_trail": trail,
                 "rating": result["rating"],
                 "status": result["status"],
                 "fallback": result["fallback"],
                 "alerts": result["alerts"],
             }
         )
+
+    # Every point contributes exactly one record above -- either a gated
+    # rating or the D-09 static-rating fallback -- so this list can never
+    # be shorter than geometry.points and min() below can never see an
+    # empty sequence. Asserted explicitly so that invariant is structural,
+    # not incidental (DS-NF5 empty-sequence edge).
+    assert len(point_results) == len(geometry.points), (
+        "rate_corridor: point_results length diverged from geometry.points "
+        "-- every point must contribute exactly one record"
+    )
 
     ratings = [p["rating"] for p in point_results]
     min_rating = min(ratings)
@@ -382,10 +603,15 @@ def rate_corridor(
     # for readability.
     bottleneck_index = ratings.index(min_rating)
 
+    corridor_fallback = any(p["fallback"] for p in point_results)
+    exhausted_points = sum(1 for p in point_results if p["stid"] is None)
+
     return {
         "corridor": corridor_name,
         "bearing_deg": geometry.bearing_deg,
         "points": point_results,
         "rating": min_rating,
         "bottleneck_index": bottleneck_index,
+        "fallback": corridor_fallback,
+        "exhausted_points": exhausted_points,
     }

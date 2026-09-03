@@ -315,7 +315,10 @@ def test_rate_corridor_returns_expected_keys_and_min_reduction(synthetic_corrido
         synthetic_corridor, "2025-01-01", "2025-01-02", stations, fetch_weather=fake_fetch
     )
 
-    assert set(result.keys()) == {"corridor", "bearing_deg", "points", "rating", "bottleneck_index"}
+    assert set(result.keys()) == {
+        "corridor", "bearing_deg", "points", "rating", "bottleneck_index",
+        "fallback", "exhausted_points",
+    }
     assert len(result["points"]) == 5
     assert result["bottleneck_index"] == 2
     assert result["rating"] == result["points"][2]["rating"]
@@ -324,6 +327,16 @@ def test_rate_corridor_returns_expected_keys_and_min_reduction(synthetic_corrido
     for i, p in enumerate(result["points"]):
         if i != 2:
             assert p["rating"] > result["rating"]
+    # Every point resolved its own dedicated station on the first probe --
+    # no candidate exhaustion here. Point 2's deliberately low wind (and,
+    # via the shared monitor's sequentially-updating last_good_rating, one
+    # neighbouring point too) genuinely trips G5's delta gate against this
+    # fixture's static_rating, so the corridor-level `fallback` flag is
+    # correctly True from that real gate failure -- `fallback` reflects any
+    # point falling back, gate-level or exhaustion-level alike, not only
+    # D-09's exhaustion path.
+    assert result["exhausted_points"] == 0
+    assert result["fallback"] is True
 
 
 def test_rate_corridor_never_calls_network_with_injected_fetcher(synthetic_corridor):
@@ -405,3 +418,491 @@ def test_usable_observation_maps_schema_correctly():
         "wind": 5.0,
         "solar": 500.0,
     }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Task 1 (03-03): resolve_point_observation -- D-08 nearest-5-then-10 probe
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def probe_stations() -> pd.DataFrame:
+    """
+    10 candidate stations, strictly ordered nearest-to-farthest from
+    (0.0, 0.0) by construction (increasing longitude offset), so probe
+    order is fully predictable: C01 is always candidate 1, C10 is always
+    candidate 10.
+    """
+    return pd.DataFrame(
+        [
+            {"stid": f"C{i:02d}", "name": f"c{i}", "lat": 0.0, "lon": 0.01 * i}
+            for i in range(1, 11)
+        ]
+    )
+
+
+def _empty_weather_frame() -> pd.DataFrame:
+    return pd.DataFrame(columns=["stid", "air_temp", "wind_speed", "solar_radiation"])
+
+
+def _probe_fetcher(usable_stids: set, calls: list):
+    def fetch(stids, start, end):
+        stid = stids[0]
+        calls.append(stid)
+        if stid in usable_stids:
+            return _weather_frame(stid, wind=5.0)
+        return _empty_weather_frame()
+
+    return fetch
+
+
+def test_probe_first_candidate_succeeds_calls_fetcher_once(probe_stations):
+    calls = []
+    fetch = _probe_fetcher({"C01"}, calls)
+
+    obs, stid, trail = cd.resolve_point_observation(
+        0.0, 0.0, "2025-01-01", "2025-01-02", probe_stations, fetch
+    )
+
+    assert calls == ["C01"]
+    assert stid == "C01"
+    assert obs is not None
+    assert len(trail) == 1
+    assert trail[0]["outcome"] == "usable"
+
+
+def test_probe_fifth_candidate_succeeds_stays_in_first_batch(probe_stations):
+    calls = []
+    fetch = _probe_fetcher({"C05"}, calls)
+
+    obs, stid, trail = cd.resolve_point_observation(
+        0.0, 0.0, "2025-01-01", "2025-01-02", probe_stations, fetch
+    )
+
+    assert calls == ["C01", "C02", "C03", "C04", "C05"]
+    assert stid == "C05"
+    assert len(trail) == 5
+
+
+def test_probe_seventh_candidate_succeeds_expands_to_second_batch(probe_stations):
+    calls = []
+    fetch = _probe_fetcher({"C07"}, calls)
+
+    obs, stid, trail = cd.resolve_point_observation(
+        0.0, 0.0, "2025-01-01", "2025-01-02", probe_stations, fetch
+    )
+
+    assert calls == ["C01", "C02", "C03", "C04", "C05", "C06", "C07"]
+    # The 6th call is the 6th-nearest station -- the expansion probes the
+    # next 5 nearest, never re-probing batch 1.
+    assert calls[5] == "C06"
+    assert stid == "C07"
+    assert len(trail) == 7
+
+
+def test_probe_all_ten_candidates_unusable_stops_at_ten(probe_stations):
+    calls = []
+    fetch = _probe_fetcher(set(), calls)
+
+    obs, stid, trail = cd.resolve_point_observation(
+        0.0, 0.0, "2025-01-01", "2025-01-02", probe_stations, fetch
+    )
+
+    assert len(calls) == 10
+    assert calls == [f"C{i:02d}" for i in range(1, 11)]
+    assert obs is None
+    assert stid is None
+    assert len(trail) == 10
+    assert all(entry["outcome"] == "unusable" for entry in trail)
+
+
+def test_probe_unusable_frame_variants_are_all_skipped(probe_stations):
+    calls = []
+
+    def fetch(stids, start, end):
+        stid = stids[0]
+        calls.append(stid)
+        if stid == "C01":
+            return _empty_weather_frame()  # empty frame
+        if stid == "C02":
+            return pd.DataFrame(
+                [{"stid": "OTHER", "air_temp": 25.0, "wind_speed": 5.0, "solar_radiation": 500.0}]
+            )  # frame missing the requested station
+        if stid == "C03":
+            return pd.DataFrame(
+                [{"stid": "C03", "air_temp": None, "wind_speed": 5.0, "solar_radiation": 500.0}]
+            )  # null in a required variable
+        return _weather_frame(stid, wind=5.0)
+
+    obs, stid, trail = cd.resolve_point_observation(
+        0.0, 0.0, "2025-01-01", "2025-01-02", probe_stations, fetch
+    )
+
+    assert calls == ["C01", "C02", "C03", "C04"]
+    assert stid == "C04"
+    assert obs is not None
+
+
+def test_probe_trail_has_no_credential_or_request_parameter_material(probe_stations):
+    calls = []
+    fetch = _probe_fetcher({"C03"}, calls)
+
+    obs, stid, trail = cd.resolve_point_observation(
+        0.0, 0.0, "2025-01-01", "2025-01-02", probe_stations, fetch
+    )
+
+    assert len(trail) == 3
+    trail_text = str(trail).lower()
+    for forbidden in ("token", "key", "params"):
+        assert forbidden not in trail_text, (forbidden, trail)
+
+    for entry in trail:
+        assert set(entry.keys()) == {"stid", "lat", "lon", "distance_km", "outcome"}
+
+
+def test_probe_equidistant_candidates_probed_in_same_order_across_runs():
+    stations = pd.DataFrame(
+        [
+            {"stid": "B", "name": "b", "lat": 0.0, "lon": 0.01},
+            {"stid": "A", "name": "a", "lat": 0.0, "lon": -0.01},
+        ]
+    )
+
+    calls1 = []
+    cd.resolve_point_observation(
+        0.0, 0.0, "2025-01-01", "2025-01-02", stations,
+        _probe_fetcher(set(), calls1), max_candidates=2,
+    )
+
+    calls2 = []
+    cd.resolve_point_observation(
+        0.0, 0.0, "2025-01-01", "2025-01-02", stations,
+        _probe_fetcher(set(), calls2), max_candidates=2,
+    )
+
+    assert calls1 == calls2 == ["A", "B"]
+
+
+def test_probe_discover_corridor_stations_uses_unrestricted_network(monkeypatch):
+    captured = {}
+
+    def fake_get_all_stations(token, network_id=None):
+        captured["token"] = token
+        captured["network_id"] = network_id
+        return pd.DataFrame()
+
+    monkeypatch.setattr(se, "get_all_stations", fake_get_all_stations)
+
+    cd.discover_corridor_stations("fake-token")
+
+    assert captured["network_id"] is None
+    assert captured["token"] == "fake-token"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Task 2 (03-03): exhausted-point fallback to the corridor static rating (D-09)
+# ──────────────────────────────────────────────────────────────────────────────
+
+_SYNTHETIC_STATIC_RATING = 1690.0  # matches synthetic_corridor's fixture value
+
+
+def _bad_cluster_near(lon_center: float, prefix: str, n: int = 10) -> list[dict]:
+    """
+    `n` distinct station rows clustered tightly around `lon_center` (within
+    +/-0.05 degrees), always strictly closer to a point at that longitude
+    than any station placed a full degree of longitude away -- so a probe
+    for that point sees exactly this cluster as its 10 nearest candidates,
+    with no interference from a neighbouring point's own station.
+    """
+    return [
+        {
+            "stid": f"{prefix}{j}",
+            "name": f"{prefix}{j}",
+            "lat": 0.0,
+            "lon": lon_center + 0.01 * (j - n // 2),
+        }
+        for j in range(n)
+    ]
+
+
+def _all_unusable_fetch(stids, start, end):
+    return pd.DataFrame(columns=["stid", "air_temp", "wind_speed", "solar_radiation"])
+
+
+def test_exhaust_single_point_falls_back_to_static_others_succeed(synthetic_corridor):
+    # Points 0, 1, 2, 4 each have a dedicated station exactly at their
+    # coordinates (distance 0, always the first candidate probed); point 3
+    # has none -- only a 10-station cluster that is all unusable.
+    good = [{"stid": f"S{i}", "name": f"s{i}", "lat": 0.0, "lon": float(i)} for i in [0, 1, 2, 4]]
+    bad = _bad_cluster_near(3.0, prefix="BAD3_")
+    stations = pd.DataFrame(good + bad)
+
+    def fake_fetch(stids, start, end):
+        stid = stids[0]
+        if stid.startswith("BAD"):
+            return _all_unusable_fetch(stids, start, end)
+        return _weather_frame(stid, wind=6.5)  # ampacity ~1814.6 A -- above static
+        # (1690 A) but within G5's 15%-of-static delta window from the
+        # cold-start last_good_rating, so this doesn't itself trip G5.
+
+    result = cd.rate_corridor(
+        synthetic_corridor, "2025-01-01", "2025-01-02", stations, fetch_weather=fake_fetch
+    )
+
+    point3 = result["points"][3]
+    assert point3["fallback"] is True
+    assert point3["status"] == "fallback"
+    assert point3["stid"] is None
+    assert point3["rating"] == _SYNTHETIC_STATIC_RATING
+    assert "3" in point3["alerts"][0]
+    assert "10" in point3["alerts"][0]
+
+    assert len(result["points"]) == 5
+    assert result["rating"] == min(p["rating"] for p in result["points"])
+    assert result["rating"] == _SYNTHETIC_STATIC_RATING
+    assert result["bottleneck_index"] == 3
+    assert result["fallback"] is True
+    assert result["exhausted_points"] == 1
+
+
+def test_exhaust_all_points_exhausted_reports_static_no_exception(synthetic_corridor):
+    stations = pd.DataFrame(
+        [row for i in range(5) for row in _bad_cluster_near(float(i), prefix=f"BAD{i}_")]
+    )
+
+    result = cd.rate_corridor(
+        synthetic_corridor, "2025-01-01", "2025-01-02", stations, fetch_weather=_all_unusable_fetch
+    )
+
+    assert len(result["points"]) == 5
+    assert all(p["fallback"] for p in result["points"])
+    assert all(p["stid"] is None for p in result["points"])
+    assert result["rating"] == _SYNTHETIC_STATIC_RATING
+    assert result["fallback"] is True
+    assert result["exhausted_points"] == 5
+
+
+def test_exhaust_single_usable_hot_point_cannot_raise_corridor(synthetic_corridor):
+    # Only point 1 has a real station; it rates well above the static
+    # rating (hot) -- the corridor rating must still be the static rating,
+    # not the hot point's own higher number.
+    rows = [{"stid": "S1", "name": "s1", "lat": 0.0, "lon": 1.0}]
+    for i in [0, 2, 3, 4]:
+        rows += _bad_cluster_near(float(i), prefix=f"BAD{i}_")
+    stations = pd.DataFrame(rows)
+
+    def fake_fetch(stids, start, end):
+        stid = stids[0]
+        if stid == "S1":
+            return _weather_frame(stid, wind=6.5)  # ampacity ~1814.6 A, above static
+            # but still inside G5's cold-start delta window (see note above)
+        return _all_unusable_fetch(stids, start, end)
+
+    result = cd.rate_corridor(
+        synthetic_corridor, "2025-01-01", "2025-01-02", stations, fetch_weather=fake_fetch
+    )
+
+    assert len(result["points"]) == 5
+    assert result["points"][1]["fallback"] is False
+    assert result["points"][1]["rating"] > _SYNTHETIC_STATIC_RATING
+    assert result["rating"] == _SYNTHETIC_STATIC_RATING
+    assert result["exhausted_points"] == 4
+    assert result["fallback"] is True
+
+
+def test_exhaust_single_usable_cool_point_is_bottleneck(synthetic_corridor):
+    # Only point 2 has a real station; it rates well below the static
+    # rating (cool) -- a single cool point can still be the bottleneck.
+    rows = [{"stid": "S2", "name": "s2", "lat": 0.0, "lon": 2.0}]
+    for i in [0, 1, 3, 4]:
+        rows += _bad_cluster_near(float(i), prefix=f"BAD{i}_")
+    stations = pd.DataFrame(rows)
+
+    def fake_fetch(stids, start, end):
+        stid = stids[0]
+        if stid == "S2":
+            return _weather_frame(stid, wind=3.0)  # ampacity ~1467.1 A, below static
+            # but still inside G5's cold-start delta window (see note above)
+        return _all_unusable_fetch(stids, start, end)
+
+    result = cd.rate_corridor(
+        synthetic_corridor, "2025-01-01", "2025-01-02", stations, fetch_weather=fake_fetch
+    )
+
+    assert len(result["points"]) == 5
+    assert result["points"][2]["fallback"] is False
+    assert result["points"][2]["rating"] < _SYNTHETIC_STATIC_RATING
+    assert result["rating"] == result["points"][2]["rating"]
+    assert result["bottleneck_index"] == 2
+    assert result["fallback"] is True
+    assert result["exhausted_points"] == 4
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Task 3 (03-03): bottleneck proof (C8's own acceptance criterion) + pacing
+# ──────────────────────────────────────────────────────────────────────────────
+
+# wind=6.5 -> ~1814.6 A ("typical"), wind=4.0 -> ~1586.3 A ("cooled"), both
+# inside the synthetic fixture's 253.5 A (15% of 1690 A) G5 delta window
+# from any prior last_good_rating in this sequence -- so no point's status
+# ever falls back here, keeping every reported rating equal to its raw
+# computed ampacity (no min(computed, static) clamping to reason about).
+_TYPICAL_WIND = 6.5
+_COOLED_WIND = 4.0
+
+
+def _five_point_stations() -> pd.DataFrame:
+    return pd.DataFrame(
+        [{"stid": f"S{i}", "name": f"s{i}", "lat": 0.0, "lon": float(i)} for i in range(5)]
+    )
+
+
+def test_bottleneck_cooled_point_at_index_2_is_identified(synthetic_corridor):
+    stations = _five_point_stations()
+    winds = {f"S{i}": _TYPICAL_WIND for i in range(5)}
+    winds["S2"] = _COOLED_WIND
+
+    def fake_fetch(stids, start, end):
+        return _weather_frame(stids[0], wind=winds[stids[0]])
+
+    result = cd.rate_corridor(
+        synthetic_corridor, "2025-01-01", "2025-01-02", stations, fetch_weather=fake_fetch
+    )
+
+    assert result["bottleneck_index"] == 2
+    assert result["rating"] == result["points"][2]["rating"]
+    for i, p in enumerate(result["points"]):
+        if i != 2:
+            assert result["rating"] < p["rating"]
+
+
+def test_bottleneck_cooled_point_at_index_0_is_identified(synthetic_corridor):
+    # Moving the cooled point to a different index proves the reduction
+    # isn't accidentally returning a fixed position.
+    stations = _five_point_stations()
+    winds = {f"S{i}": _TYPICAL_WIND for i in range(5)}
+    winds["S0"] = _COOLED_WIND
+
+    def fake_fetch(stids, start, end):
+        return _weather_frame(stids[0], wind=winds[stids[0]])
+
+    result = cd.rate_corridor(
+        synthetic_corridor, "2025-01-01", "2025-01-02", stations, fetch_weather=fake_fetch
+    )
+
+    assert result["bottleneck_index"] == 0
+    assert result["rating"] == result["points"][0]["rating"]
+    for i, p in enumerate(result["points"]):
+        if i != 0:
+            assert result["rating"] < p["rating"]
+
+
+def test_bottleneck_tie_breaks_toward_lower_index_deterministically(synthetic_corridor):
+    stations = _five_point_stations()
+    # Points 1 and 3 both cooled identically -- exact tie for the minimum.
+    winds = {f"S{i}": _TYPICAL_WIND for i in range(5)}
+    winds["S1"] = _COOLED_WIND
+    winds["S3"] = _COOLED_WIND
+
+    def fake_fetch(stids, start, end):
+        return _weather_frame(stids[0], wind=winds[stids[0]])
+
+    result1 = cd.rate_corridor(
+        synthetic_corridor, "2025-01-01", "2025-01-02", stations, fetch_weather=fake_fetch
+    )
+    result2 = cd.rate_corridor(
+        synthetic_corridor, "2025-01-01", "2025-01-02", stations, fetch_weather=fake_fetch
+    )
+
+    assert result1["points"][1]["rating"] == result1["points"][3]["rating"]
+    assert result1["bottleneck_index"] == 1
+    assert result2["bottleneck_index"] == 1
+
+
+def test_both_corridors_rate_successfully_with_different_bearings():
+    geometries = {
+        name: cd.corridor_geometry(name) for name in config.CORRIDOR_ENDPOINTS
+    }
+    rows = []
+    for cname, geom in geometries.items():
+        for i, (lat, lon) in enumerate(geom.points):
+            rows.append({"stid": f"{cname}_{i}", "name": f"{cname}_{i}", "lat": lat, "lon": lon})
+    stations = pd.DataFrame(rows)
+
+    def fake_fetch(stids, start, end):
+        return _weather_frame(stids[0], wind=_TYPICAL_WIND)
+
+    results = {
+        name: cd.rate_corridor(name, "2025-01-01", "2025-01-02", stations, fetch_weather=fake_fetch)
+        for name in config.CORRIDOR_ENDPOINTS
+    }
+
+    assert len(results) == 2
+    bearings = {r["bearing_deg"] for r in results.values()}
+    assert len(bearings) == 2, "the two corridors must produce different bearings"
+    for r in results.values():
+        assert r["rating"] is not None
+        assert len(r["points"]) == 5
+
+
+def test_probe_pause_only_between_batches_never_within_or_after(probe_stations):
+    pauses = []
+
+    def fetch_expand(stids, start, end):
+        stid = stids[0]
+        if stid == "C07":
+            return _weather_frame(stid, wind=5.0)
+        return _empty_weather_frame()
+
+    cd.resolve_point_observation(
+        0.0, 0.0, "2025-01-01", "2025-01-02", probe_stations, fetch_expand,
+        sleep=lambda s: pauses.append(s),
+    )
+
+    assert len(pauses) == 1
+    assert pauses[0] == cd.PROBE_BATCH_PAUSE_S
+
+    pauses.clear()
+
+    def fetch_first(stids, start, end):
+        return _weather_frame(stids[0], wind=5.0)
+
+    cd.resolve_point_observation(
+        0.0, 0.0, "2025-01-01", "2025-01-02", probe_stations, fetch_first,
+        sleep=lambda s: pauses.append(s),
+    )
+
+    assert pauses == []
+
+
+def test_worst_case_two_corridor_all_unusable_probe_count_is_100():
+    geometries = {
+        name: cd.corridor_geometry(name) for name in config.CORRIDOR_ENDPOINTS
+    }
+    rows = []
+    for cname, geom in geometries.items():
+        for i, (lat, lon) in enumerate(geom.points):
+            for j in range(10):
+                rows.append(
+                    {
+                        "stid": f"{cname}_{i}_{j}",
+                        "name": f"{cname}_{i}_{j}",
+                        "lat": lat,
+                        "lon": lon + 0.001 * j,
+                    }
+                )
+    stations = pd.DataFrame(rows)
+
+    call_count = {"n": 0}
+
+    def fake_fetch(stids, start, end):
+        call_count["n"] += 1
+        return _empty_weather_frame()
+
+    for cname in config.CORRIDOR_ENDPOINTS:
+        cd.rate_corridor(
+            cname, "2025-01-01", "2025-01-02", stations, fetch_weather=fake_fetch,
+            sleep=lambda s: None,
+        )
+
+    assert call_count["n"] == 100

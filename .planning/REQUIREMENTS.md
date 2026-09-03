@@ -84,11 +84,15 @@ functional and non-functional requirement it lists is part of this subsystem's c
       `.env` is gitignored
 - [x] **DS-NF4**: Modularity — components remain independently workable; no component requires
       another dev's in-progress, uncommitted changes to compile or run
-- [ ] **DS-NF5**: Fail-safe by default — any missing sensor, broken link, out-of-range reading,
+- [x] **DS-NF5**: Fail-safe by default — any missing sensor, broken link, out-of-range reading,
       implausible rating, or large rating swing must resolve toward the static rating, never an
-      optimistic guess. Structurally present (C7's gates exist), but not fully realized until C7
-      is unified with the real thermal model (Phase 3) — a gated value can currently disagree with
-      what IEEE 738 would actually compute for the same inputs.
+      optimistic guess. Fully realized as of Phase 3: Plan 01 unified `DLRSafetyMonitor` with the
+      real IEEE 738 model and made every gate (G1-G5) resolve toward `static_rating`; Plan 03
+      extends the same guarantee to the corridor path — a point that exhausts its candidate-station
+      probe (D-08) resolves to the corridor's static rating (D-09) rather than raising, being
+      dropped, or being interpolated from a neighbour. See
+      `.planning/phases/03-safety-spatial/03-01-SUMMARY.md` and
+      `.planning/phases/03-safety-spatial/03-03-SUMMARY.md`.
 
 ## v2 Requirements
 
@@ -126,7 +130,7 @@ Which phases cover which requirements. Phase numbers match `.planning/ROADMAP.md
 | DS-F8 | Phase 2 | Complete |
 | DS-F7 | Phase 3 | Pending |
 | DS-F10 | Phase 3 | Complete |
-| DS-NF5 | Phase 3 | In Progress (partial — see note above) |
+| DS-NF5 | Phase 3 | Complete |
 | DS-F11 | Phase 4 | Pending |
 | DS-F12 | Phase 4 | Pending |
 

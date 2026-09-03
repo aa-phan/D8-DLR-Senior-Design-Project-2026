@@ -119,13 +119,15 @@ if __name__ == "__main__":
         print("ERROR: Set SYNOPTIC_TOKEN env var first.")
         raise SystemExit(1)
 
-    # Comment this out if you want all Texas stations instead
-    # network_id = get_network_id(token, "wtm")
-    #network_id = get_network_id(token, "WTEXAS")
-    network_id = 152
-    # network_id = None
-    print("Fetching stations in Texas …")
-    stations = get_all_stations(token, network_id)
+    # D-06: unrestricted-network query -- no network_id restriction. The
+    # prior hardcoded WTM-only network_id=152 admitted just 2 stations (both
+    # zero-data per C4's Known Issues); the broadened query resolves to
+    # hundreds of solar-tagged candidates per city (see
+    # .planning/phases/03-safety-spatial/03-CONTEXT.md D-06's live-verified
+    # counts). get_all_stations already supports omitting the network
+    # restriction via network_id=None.
+    print("Fetching all Texas stations (unrestricted network, per D-06) …")
+    stations = get_all_stations(token, network_id=None)
     print(f"  Found {len(stations)} stations")
 
     if stations.empty:
@@ -133,8 +135,8 @@ if __name__ == "__main__":
         raise SystemExit(1)
 
     stations = rank_by_corridor(stations)
-    stations.to_csv("data/wtm_stations_austin.csv", index=False)
-    print("  → Saved to data/wtm_stations_austin.csv")
+    stations.to_csv("data/tx_stations_unrestricted.csv", index=False)
+    print("  → Saved to data/tx_stations_unrestricted.csv")
 
     print("\nTop 15 stations by proximity to DLR-relevant corridors:")
     print(
