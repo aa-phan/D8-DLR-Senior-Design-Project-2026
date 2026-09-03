@@ -22,7 +22,7 @@ built and committed; Phases 3 and 4 are what's ahead.
 
 - [x] **Phase 1: Foundation & Data Contract** - Centralize config, define one canonical pipeline data contract, and make export/visualization work end-to-end
 - [x] **Phase 2: Core Consolidation** - Package weather ingestion, IEEE 738 thermal modeling, and ERCOT grid integration into provider-agnostic, validated modules that produce a real ampacity value
-- [ ] **Phase 3: Safety & Spatial** - Unify the safety monitor with the real thermal model and extend ratings from single stations to full transmission corridors
+- [x] **Phase 3: Safety & Spatial** - Unify the safety monitor with the real thermal model and extend ratings from single stations to full transmission corridors (completed 2026-09-03)
 - [ ] **Phase 4: Predictive** - Add ampacity forecasting and learned anomaly detection on top of the Phase 3 safety foundation
 
 ## Phase Details
@@ -71,20 +71,20 @@ built and committed; Phases 3 and 4 are what's ahead.
   3. Given a defined transmission corridor, the system discretizes it into multiple geographic points and reports the minimum ampacity across those points as the corridor-level rating.
   4. The geographic/corridor scope used across station discovery, static ratings, and corridor discretization is one explicitly chosen model — not three mutually inconsistent ones.
 
-**Plans**: 3 plans
+**Plans**: 3/3 plans complete
 
 Plans:
 **Wave 1**
 
-- [ ] 03-01-PLAN.md — Wire `DLRSafetyMonitor` to the real IEEE 738 model, recalibrate the G4 plausibility band per location, and make every gate (G1–G5) resolve toward the static rating
+- [x] 03-01-PLAN.md — Wire `DLRSafetyMonitor` to the real IEEE 738 model, recalibrate the G4 plausibility band per location, and make every gate (G1–G5) resolve toward the static rating
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 03-02-PLAN.md — Define the two corridors in config, discretize each into 5 geodesic points, and rate a corridor as the minimum across independently-fetched per-point ampacities
+- [x] 03-02-PLAN.md — Define the two corridors in config, discretize each into 5 geodesic points, and rate a corridor as the minimum across independently-fetched per-point ampacities
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 03-03-PLAN.md — Broaden station discovery past the WTM network, probe candidates nearest-5-then-10 per point, fall back to the static rating on exhaustion, and prove the bottleneck
+- [x] 03-03-PLAN.md — Broaden station discovery past the WTM network, probe candidates nearest-5-then-10 per point, fall back to the static rating on exhaustion, and prove the bottleneck
 
 **Cross-cutting constraints:**
 
@@ -117,5 +117,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 |-------|----------------|--------|-----------|
 | 1. Foundation & Data Contract | Pre-GSD (C1–C3 implemented) | Complete | 2026-08-24 |
 | 2. Core Consolidation | Pre-GSD (C4–C6 implemented) | Complete | 2026-08-31 |
-| 3. Safety & Spatial | 0/3 | Planned | - |
+| 3. Safety & Spatial | 3/3 | Complete   | 2026-09-03 |
 | 4. Predictive | 0/TBD | Not started | - |

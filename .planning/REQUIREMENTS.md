@@ -41,7 +41,7 @@ functional and non-functional requirement it lists is part of this subsystem's c
 
 ### Safety & Fallback
 
-- [ ] **DS-F7**: Detect unreliable/anomalous inputs and fall back to SLR (Static Line Rating) —
+- [x] **DS-F7**: Detect unreliable/anomalous inputs and fall back to SLR (Static Line Rating) —
       owned by C7. Partial: deterministic threshold gates (G1–G5) exist, but the gated ampacity
       value is computed with a placeholder formula that disagrees with the real thermal model
       (C5 not yet wired into C7).
@@ -128,13 +128,14 @@ Which phases cover which requirements. Phase numbers match `.planning/ROADMAP.md
 | DS-F4 | Phase 2 | Complete |
 | DS-F5 | Phase 2 | In Progress (partial — see note above) |
 | DS-F8 | Phase 2 | Complete |
-| DS-F7 | Phase 3 | Pending |
+| DS-F7 | Phase 3 | Complete |
 | DS-F10 | Phase 3 | Complete |
 | DS-NF5 | Phase 3 | Complete |
 | DS-F11 | Phase 4 | Pending |
 | DS-F12 | Phase 4 | Pending |
 
 **Coverage:**
+
 - v1 requirements: 17 total
 - Mapped to phases: 17
 - Unmapped: 0 ✓
