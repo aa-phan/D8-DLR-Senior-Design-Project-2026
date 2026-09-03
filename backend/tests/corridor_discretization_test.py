@@ -12,6 +12,7 @@ offline; weather/station functions use fakes, never live network calls).
 
 import sys
 
+import pandas as pd
 import pytest
 
 import config
@@ -153,3 +154,254 @@ def test_module_importable_with_no_synoptic_token_and_no_network(monkeypatch):
     import importlib
 
     importlib.reload(cd)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Task 2a: station_explorer.nearest_stations (D-07 station-resolution layer)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def fake_stations() -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {"stid": "N1", "name": "north", "lat": 31.0, "lon": -97.0},
+            {"stid": "N2", "name": "north2", "lat": 31.5, "lon": -97.0},
+            {"stid": "S1", "name": "south", "lat": 28.0, "lon": -97.4},
+        ]
+    )
+
+
+def test_nearest_stations_sorted_ascending_no_mutation(fake_stations):
+    original_columns = list(fake_stations.columns)
+
+    result = se.nearest_stations(fake_stations, 30.0, -97.2, n=5)
+
+    assert list(result.columns[: len(original_columns)]) == original_columns
+    assert "km_to_point" in result.columns
+    assert "km_to_point" not in fake_stations.columns
+    distances = list(result["km_to_point"])
+    assert distances == sorted(distances)
+
+
+def test_nearest_stations_empty_dataframe_returns_empty():
+    empty = pd.DataFrame(columns=["stid", "name", "lat", "lon"])
+    result = se.nearest_stations(empty, 30.0, -97.0, n=5)
+    assert result.empty
+
+
+def test_nearest_stations_fewer_than_n_returns_all(fake_stations):
+    result = se.nearest_stations(fake_stations, 30.0, -97.0, n=10)
+    assert len(result) == len(fake_stations)
+
+
+def test_nearest_stations_ties_broken_by_stid_ascending():
+    df = pd.DataFrame(
+        [
+            {"stid": "B", "name": "b", "lat": 30.0, "lon": -97.0},
+            {"stid": "A", "name": "a", "lat": 30.0, "lon": -97.0},
+        ]
+    )
+    result = se.nearest_stations(df, 30.0, -97.0, n=2)
+    assert list(result["stid"]) == ["A", "B"]
+
+    # Deterministic across repeated calls.
+    result2 = se.nearest_stations(df, 30.0, -97.0, n=2)
+    assert list(result2["stid"]) == ["A", "B"]
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Task 2b: rate_corridor -- per-point weather -> per-point ampacity -> minimum
+# ──────────────────────────────────────────────────────────────────────────────
+
+_TEST_CITY_A = "TEST_CITY_A"
+_TEST_CITY_B = "TEST_CITY_B"
+_TEST_CORRIDOR = "TEST_CORRIDOR"
+
+
+@pytest.fixture
+def synthetic_corridor(monkeypatch):
+    """
+    A synthetic corridor along the equator (both endpoints at lat=0) so
+    great-circle interpolation lands on round, easy-to-reason-about
+    coordinates: discretize_corridor(0,0, 0,4, n_points=5) yields exactly
+    (0,0), (0,1), (0,2), (0,3), (0,4).
+    """
+    monkeypatch.setitem(config.CITY_COORDINATES, _TEST_CITY_A, (0.0, 0.0))
+    monkeypatch.setitem(config.CITY_COORDINATES, _TEST_CITY_B, (0.0, 4.0))
+    monkeypatch.setitem(config.STATIC_RATINGS, _TEST_CITY_A, 1690.0)
+    monkeypatch.setitem(config.STATIC_RATINGS, _TEST_CITY_B, 1690.0)
+    monkeypatch.setitem(config.RATING_BOUNDS_BY_LOCATION, _TEST_CITY_A, (100.0, 5000.0))
+    monkeypatch.setitem(config.RATING_BOUNDS_BY_LOCATION, _TEST_CITY_B, (100.0, 5000.0))
+    monkeypatch.setitem(
+        config.CORRIDOR_ENDPOINTS, _TEST_CORRIDOR, (_TEST_CITY_A, _TEST_CITY_B)
+    )
+    return _TEST_CORRIDOR
+
+
+def _weather_frame(stid: str, wind: float, temp: float = 25.0, solar: float = 500.0) -> pd.DataFrame:
+    return pd.DataFrame(
+        [{"stid": stid, "air_temp": temp, "wind_speed": wind, "solar_radiation": solar}]
+    )
+
+
+def test_rate_corridor_calls_fetcher_once_per_point_even_with_shared_station(
+    synthetic_corridor,
+):
+    # Points 2 and 3 ((0,2) and (0,3)) both resolve to the same nearest
+    # station "S23" -- no dedicated station is placed near point 3, and S4
+    # is pushed out to lon=5.0 (2 degrees from point 3, vs S23's 1 degree),
+    # so S23 (placed exactly at point 2) is unambiguously the closest
+    # available candidate for both points 2 and 3 (D-05, explicitly not
+    # deduplicated), while S4 remains nearest for point 4 (1 degree away
+    # vs S23's 3 degrees).
+    stations = pd.DataFrame(
+        [
+            {"stid": "S0", "name": "s0", "lat": 0.0, "lon": 0.0},
+            {"stid": "S1", "name": "s1", "lat": 0.0, "lon": 1.0},
+            {"stid": "S23", "name": "s23", "lat": 0.0, "lon": 2.0},
+            {"stid": "S4", "name": "s4", "lat": 0.0, "lon": 5.0},
+        ]
+    )
+
+    calls = []
+
+    def fake_fetch(stids, start, end):
+        calls.append(tuple(stids))
+        return _weather_frame(stids[0], wind=5.0)
+
+    result = cd.rate_corridor(
+        synthetic_corridor, "2025-01-01", "2025-01-02", stations, fetch_weather=fake_fetch
+    )
+
+    assert len(calls) == 5
+    # Points 2 and 3 both resolved to S23 -- two independent calls for the
+    # same station id, not deduplicated or shared.
+    assert calls.count(("S23",)) == 2
+    assert result["points"][2]["stid"] == "S23"
+    assert result["points"][3]["stid"] == "S23"
+
+
+def test_rate_corridor_default_fetcher_is_weather_provider_fetch_weather():
+    import inspect
+
+    sig = inspect.signature(cd.rate_corridor)
+    assert sig.parameters["fetch_weather"].default is None
+    # Verify the module-level fallback wiring by source inspection rather
+    # than calling it (which would require network/SYNOPTIC_TOKEN).
+    src = inspect.getsource(cd.rate_corridor)
+    assert "weather_provider.fetch_weather" in src
+
+
+def test_rate_corridor_returns_expected_keys_and_min_reduction(synthetic_corridor):
+    stations = pd.DataFrame(
+        [
+            {"stid": "S0", "name": "s0", "lat": 0.0, "lon": 0.0},
+            {"stid": "S1", "name": "s1", "lat": 0.0, "lon": 1.0},
+            {"stid": "S2", "name": "s2", "lat": 0.0, "lon": 2.0},
+            {"stid": "S3", "name": "s3", "lat": 0.0, "lon": 3.0},
+            {"stid": "S4", "name": "s4", "lat": 0.0, "lon": 4.0},
+        ]
+    )
+
+    # Point index 2 gets a deliberately low wind speed -> lowest ampacity.
+    winds_by_stid = {"S0": 5.0, "S1": 5.0, "S2": 1.0, "S3": 5.0, "S4": 5.0}
+
+    def fake_fetch(stids, start, end):
+        stid = stids[0]
+        return _weather_frame(stid, wind=winds_by_stid[stid])
+
+    result = cd.rate_corridor(
+        synthetic_corridor, "2025-01-01", "2025-01-02", stations, fetch_weather=fake_fetch
+    )
+
+    assert set(result.keys()) == {"corridor", "bearing_deg", "points", "rating", "bottleneck_index"}
+    assert len(result["points"]) == 5
+    assert result["bottleneck_index"] == 2
+    assert result["rating"] == result["points"][2]["rating"]
+    assert result["rating"] == min(p["rating"] for p in result["points"])
+    # The bottleneck point's rating is strictly the lowest.
+    for i, p in enumerate(result["points"]):
+        if i != 2:
+            assert p["rating"] > result["rating"]
+
+
+def test_rate_corridor_never_calls_network_with_injected_fetcher(synthetic_corridor):
+    stations = pd.DataFrame(
+        [{"stid": "S0", "name": "s0", "lat": 0.0, "lon": 0.0}]
+        + [
+            {"stid": f"S{i}", "name": f"s{i}", "lat": 0.0, "lon": float(i)}
+            for i in range(1, 5)
+        ]
+    )
+
+    call_count = {"n": 0}
+
+    def fake_fetch(stids, start, end):
+        call_count["n"] += 1
+        return _weather_frame(stids[0], wind=5.0)
+
+    cd.rate_corridor(
+        synthetic_corridor, "2025-01-01", "2025-01-02", stations, fetch_weather=fake_fetch
+    )
+
+    # 5 points -> exactly 5 fetcher calls, all through the injected fake
+    # (no requests/network module involved at all).
+    assert call_count["n"] == 5
+
+
+def test_rate_corridor_per_point_rating_comes_from_run_check_gate_failure(synthetic_corridor):
+    """
+    A point whose observation fails a gate (here: temp far outside
+    TEMP_BOUNDS, tripping G3) still contributes a fallback rating (the
+    corridor's static_rating) rather than an ungated number or a crash.
+    """
+    stations = pd.DataFrame(
+        [
+            {"stid": f"S{i}", "name": f"s{i}", "lat": 0.0, "lon": float(i)}
+            for i in range(5)
+        ]
+    )
+
+    def fake_fetch(stids, start, end):
+        stid = stids[0]
+        if stid == "S2":
+            return _weather_frame(stid, wind=5.0, temp=999.0)  # out of TEMP_BOUNDS -> G3
+        return _weather_frame(stid, wind=5.0)
+
+    result = cd.rate_corridor(
+        synthetic_corridor, "2025-01-01", "2025-01-02", stations, fetch_weather=fake_fetch
+    )
+
+    point2 = result["points"][2]
+    assert point2["status"] == "fallback"
+    assert point2["fallback"] is True
+    assert point2["rating"] == 1690.0  # the synthetic corridor's static_rating
+    assert "G3" in point2["alerts"][0]
+
+
+def test_usable_observation_none_when_data_missing():
+    empty = pd.DataFrame(columns=["stid", "air_temp", "wind_speed", "solar_radiation"])
+    assert cd._usable_observation(empty, "S0") is None
+
+    frame = pd.DataFrame([{"stid": "S0", "air_temp": None, "wind_speed": 5.0, "solar_radiation": 500.0}])
+    assert cd._usable_observation(frame, "S0") is None
+
+    frame_missing_station = pd.DataFrame(
+        [{"stid": "S1", "air_temp": 25.0, "wind_speed": 5.0, "solar_radiation": 500.0}]
+    )
+    assert cd._usable_observation(frame_missing_station, "S0") is None
+
+
+def test_usable_observation_maps_schema_correctly():
+    frame = pd.DataFrame(
+        [{"stid": "S0", "air_temp": 25.0, "wind_speed": 5.0, "solar_radiation": 500.0}]
+    )
+    obs = cd._usable_observation(frame, "S0")
+    assert obs == {
+        "sensor_status": "ok",
+        "link_status": "ok",
+        "temp": 25.0,
+        "wind": 5.0,
+        "solar": 500.0,
+    }
