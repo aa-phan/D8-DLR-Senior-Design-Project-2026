@@ -1,3 +1,7 @@
+import config
+import thermal_model
+
+
 class DLRSafetyMonitor:
     """
     Encapsulates all 5 pipeline safety gates for DLR data validation.
@@ -7,11 +11,16 @@ class DLRSafetyMonitor:
     WIND_BOUNDS   = (0, 50)     # m/s, per IEEE 738
     TEMP_BOUNDS   = (-20, 60)   # °C
     SOLAR_BOUNDS  = (0, 1400)   # W/m²
-    RATING_BOUNDS = (400, 1800) # A — plausibility check
-    DELTA_THRESH  = 150         # A — alert threshold
+    DELTA_THRESH  = 150         # A — alert threshold (unused once Task 3 gives self.delta_fraction meaning)
 
-    def __init__(self, static_rating: float, logger=None):
+    def __init__(self, static_rating: float, conductor=None, solar_altitude_deg: float = 45.0,
+                 rating_bounds=None, delta_fraction=None, logger=None):
         self.static_rating   = static_rating
+        self.conductor        = conductor if conductor is not None else thermal_model.ConductorConfig(
+            **config.DEFAULT_CONDUCTOR_CONFIG_KWARGS)
+        self.solar_altitude_deg = solar_altitude_deg
+        self.rating_bounds    = rating_bounds if rating_bounds is not None else config.DEFAULT_RATING_BOUNDS
+        self.delta_fraction   = delta_fraction
         self.last_good_rating = static_rating
         self.logger           = logger or print
 
@@ -57,11 +66,16 @@ class DLRSafetyMonitor:
                 self.SOLAR_BOUNDS[0] <= d["solar"] <= self.SOLAR_BOUNDS[1])
 
     def _gate_plausible(self, rating):
-        return self.RATING_BOUNDS[0] <= rating <= self.RATING_BOUNDS[1]
+        return self.rating_bounds[0] <= rating <= self.rating_bounds[1]
 
     def _compute_ampacity(self, d):
-        # Simplified IEEE 738 — replace with your full thermal model
-        return 900 + d["wind"] * 30 - (d["temp"] - 20) * 4 - d["solar"] * 0.05
+        return float(thermal_model.ieee738_ampacity(
+            T_amb_c=d["temp"],
+            wind_perp_ms=d["wind"],
+            ghi_wm2=d["solar"],
+            conductor=self.conductor,
+            solar_altitude_deg=self.solar_altitude_deg,
+        ))
 
     def _fallback(self, result, gate, reason, rating):
         msg = f"{gate} FAIL ({reason}) — fallback rating {rating:.0f} A"

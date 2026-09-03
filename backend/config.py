@@ -51,6 +51,28 @@ STATIC_RATINGS: dict[str, float] = {
 DEFAULT_STATIC_RATING: float = 900.0
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Per-location G4 plausibility bounds (Amps)
+# ──────────────────────────────────────────────────────────────────────────────
+# Each city's documented "Worst Case Static Limit (I) [A]" range from
+# `docs/Project Definition.md` (the same source STATIC_RATINGS' midpoints are
+# derived from). Per-location, not one widened global band (PD-A3,
+# `.planning/phases/03-safety-spatial/03-01-PLAN.md`): a single band spanning
+# all four cities (600, 5000) would pass a 4450 A reading for EL_PASO, whose
+# own static rating is 1450 A and documented range only extends to 2300 A —
+# a 67x-headroom overstatement, exactly the failure DS-NF5 exists to prevent.
+RATING_BOUNDS_BY_LOCATION: dict[str, tuple[float, float]] = {
+    "AUSTIN": (800.0, 3000.0),
+    "CORPUS_CHRISTI": (1000.0, 5000.0),
+    "MIDLAND": (600.0, 3000.0),
+    "EL_PASO": (600.0, 2300.0),
+}
+
+# Fallback plausibility bounds (Amps) for a monitor constructed without a
+# location. Matches the pre-existing class-level default so callers that
+# don't pass rating_bounds keep their current behavior.
+DEFAULT_RATING_BOUNDS: tuple[float, float] = (400.0, 1800.0)
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Conductor properties
 # ──────────────────────────────────────────────────────────────────────────────
 # Exact kwargs previously hardcoded in `backend/dlr_pipeline.py`'s __main__
@@ -66,6 +88,19 @@ DEFAULT_CONDUCTOR_CONFIG_KWARGS: dict = {
     "line_azimuth": 90.0,       # set to actual line bearing
     "elevation_m": 900.0,       # West Texas Permian Basin avg elevation
 }
+
+
+def conductor_kwargs_for(line_azimuth: float) -> dict:
+    """
+    `DEFAULT_CONDUCTOR_CONFIG_KWARGS` with `line_azimuth` overridden to a
+    specific corridor's computed bearing. The module-level default of 90.0
+    stays as the documented default for callers with no corridor (e.g. this
+    module's own DEFAULT_CONDUCTOR_CONFIG_KWARGS, still valid standalone).
+    Consumed by Plan 03-02's per-corridor construction, one call per corridor.
+    """
+    kwargs = dict(DEFAULT_CONDUCTOR_CONFIG_KWARGS)
+    kwargs["line_azimuth"] = line_azimuth
+    return kwargs
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Analysis window & station source
