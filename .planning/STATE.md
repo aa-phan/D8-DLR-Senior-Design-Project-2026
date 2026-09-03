@@ -1,12 +1,19 @@
 ---
-gsd_state_version: '1.0'
+gsd_state_version: 1.0
+current_phase: 3
+current_phase_name: Safety & Spatial
 status: planning
+stopped_at: Phase 3 context gathered
+last_updated: "2026-09-03T05:18:37.347Z"
+last_activity: 2026-09-02
+last_activity_desc: Doc-ingest synthesis; PROJECT.md, REQUIREMENTS.md, ROADMAP.md, STATE.md initialized from existing PRD/specs/codebase map
+state_head: 1a17b997a532f4ad089e41b8e6082fb0456bf731
 progress:
   total_phases: 4
-  completed_phases: 2
+  completed_phases: 0
   total_plans: 0
   completed_plans: 0
-  percent: 50
+  percent: 0
 ---
 
 # Project State
@@ -30,6 +37,7 @@ Progress: [█████░░░░░] 50% (2/4 phases complete; percent is 
 ## Performance Metrics
 
 **Velocity:**
+
 - Total plans completed: 0 (Phases 1–2 were built pre-GSD; no PLAN.md velocity data exists)
 - Average duration: N/A
 - Total execution time: N/A
@@ -41,6 +49,7 @@ Progress: [█████░░░░░] 50% (2/4 phases complete; percent is 
 | - | - | - | - |
 
 **Recent Trend:**
+
 - Last 5 plans: N/A
 - Trend: N/A (no GSD-tracked plans executed yet)
 
@@ -54,8 +63,9 @@ Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
 - Adopted the existing 4-phase structure from `docs/data-science/ROADMAP.md`/`PRD.md` §4 (Foundation → Core Consolidation → Safety & Spatial → Predictive) as this project's ROADMAP.md — already validated by two completed phases.
-- Geographic/corridor scope RESOLVED (2026-09-02): adopted the 4-city scope (Austin, Corpus Christi, Midland, El Paso) — see `docs/data-science/decisions/geographic_scope.md` and PROJECT.md Key Decisions. City→corridor endpoint mapping for C8 remains a separate open design question.
-- Weather data provider (Synoptic vs. NOAA vs. hybrid) is an OPEN decision per PRD §7.1 — explicitly must not block Phase 3 work.
+- Geographic/corridor scope RESOLVED (2026-09-02): adopted the 4-city scope (Austin, Corpus Christi, Midland, El Paso) — see `docs/data-science/decisions/geographic_scope.md` and PROJECT.md Key Decisions.
+- City→corridor endpoint mapping RESOLVED (2026-09-03, Phase 3 discuss): pair cities into 2 corridors (Austin↔Corpus Christi, Midland↔El Paso), city-center coords, 5-point synthetic straight-line discretization — see `.planning/phases/03-safety-spatial/03-CONTEXT.md` D-01–D-05.
+- Weather data provider RESOLVED for Phase 3 (2026-09-03, Phase 3 discuss): broadened Synoptic query (not WTM-restricted) with a nearest-5-then-10 candidate-probe fallback, falling back to static rating if exhausted — see `03-CONTEXT.md` D-06–D-09. Decided after a live access check against the team's Synoptic token confirmed real but per-station-inconsistent (25–75%) access across the 4 cities. `data_provider.md`'s full multi-provider composition (TCEQ+NSRDB+ASOS+Open-Meteo) is deferred, not adopted — likely Phase 4.
 
 ### Pending Todos
 
@@ -63,7 +73,6 @@ None yet.
 
 ### Blockers/Concerns
 
-- **[Phase 3 scope]** City→corridor endpoint mapping is still undecided (see `docs/data-science/decisions/geographic_scope.md` Open Questions) — the 4-city scope itself is resolved, but which two cities/substations define each corridor C8 discretizes is not. Needs a decision before or during `/gsd-plan-phase 3`.
 - **[Phase 2 carryover]** DS-F5 (static-vs-DLR comparison) still needs per-location selection wired into `run_pipeline`/`plot_dlr_summary` — the scope-decision blocker is cleared, but the wiring itself is unimplemented.
 - **[Phase 3 scope]** C7 (`DLRSafetyMonitor`) currently uses a placeholder linear ampacity formula that disagrees with the real IEEE 738 thermal model (C5) — the fail-safe commitment (DS-NF5) isn't fully realized until Phase 3 unifies them.
 - **[Phase 3 scope]** Known test contradiction in `backend/tests/SafetyMonitor_TestSuite.py::test_gate_2_fails_when_link_status_not_ok` (asserts `status == "ok"` and `fallback is True` simultaneously) — needs a semantics decision before C7 rework.
@@ -80,6 +89,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-02
-Stopped at: Initial `.planning/` setup complete from doc-ingest synthesis (PROJECT.md, REQUIREMENTS.md, ROADMAP.md, STATE.md written). Next step: resolve the geographic/corridor scope decision, then run `/gsd-plan-phase 3`.
-Resume file: None
+Last session: 2026-09-03T05:18:37.339Z
+Stopped at: Phase 3 context gathered
+Resume file: .planning/phases/03-safety-spatial/03-CONTEXT.md
