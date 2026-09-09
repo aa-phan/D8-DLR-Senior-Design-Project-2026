@@ -68,7 +68,7 @@ functional and non-functional requirement it lists is part of this subsystem's c
 
 ### Predictive (Forecasting & Learned Anomaly Detection)
 
-- [ ] **DS-F11**: Forecast ampacity ahead of real time (regression/ML) — owned by C9. Not started;
+- [x] **DS-F11**: Forecast ampacity ahead of real time (regression/ML) — owned by C9. Not started;
       blocked by accumulated historical data volume as well as by phase ordering.
 - [ ] **DS-F12**: Anomaly detection via a model trained on historical baselines, additive to (not
       a replacement of) C7's fallback path — owned by C10. Not started; hard-blocked by C7 (needs
@@ -131,7 +131,7 @@ Which phases cover which requirements. Phase numbers match `.planning/ROADMAP.md
 | DS-F7 | Phase 3 | Complete |
 | DS-F10 | Phase 3 | Complete |
 | DS-NF5 | Phase 3 | Complete |
-| DS-F11 | Phase 4 | Pending |
+| DS-F11 | Phase 4 | Complete |
 | DS-F12 | Phase 4 | Pending |
 
 **Coverage:**
