@@ -179,3 +179,64 @@ DEFAULT_END: str = "2025-07-04T23:55:00Z"
 # C1's job.
 LINE_VOLTAGE_KV: float = 345.0  # ERCOT West Texas standard backbone
 POWER_FACTOR: float = 0.95      # Standard conservative assumption for grid power
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Predictive layer (C9 ampacity forecasting, C10 learned anomaly detection)
+# ──────────────────────────────────────────────────────────────────────────────
+# Phase 4. Every tunable the forecast/anomaly modules read lives here so
+# C1's centralization discipline (this file's own module docstring) extends
+# into the two new learned layers, not just the physics/config layer.
+
+# D-01: forecast horizon, 1 hour ahead — matches the pipeline's existing
+# hourly analysis cadence and keeps the walk-forward backtest tractable
+# against a near-zero starting historical archive.
+FORECAST_HORIZON_MINUTES: float = 60.0
+
+# The cold-start floor below which no forecast is emitted at all. Below
+# this many archived rows, a fitted band would be confidently wrong rather
+# than honestly absent (RESEARCH.md Pitfall 1 — near-zero starting data
+# volume). Also doubles as the planner's discretionary backtest window
+# floor: 04-RESEARCH.md's Open Questions left the exact window size
+# unspecified pending real archive volume.
+FORECAST_MIN_HISTORY_ROWS: int = 12
+
+# D-03: empirical residual quantiles for the confidence band — deliberately
+# not a mean-plus-k-sigma normal-distribution band, since the residual
+# distribution of a naive/EWM forecast on physical ampacity data has no
+# guarantee of normality this early.
+FORECAST_BACKTEST_QUANTILES: tuple[float, float] = (0.05, 0.95)
+
+# Half-life (minutes) for Plan 04-02's EWM smoothing method. Centralized
+# here now, even though Task 2's tracer only implements the "naive"
+# method, so config.py is edited once this phase rather than again when
+# 04-02 lands.
+FORECAST_EWM_HALFLIFE_MIN: float = 180.0
+
+# D-09: append-only CSV, unbounded retention this phase. Path is relative
+# to the process working directory, matching DEFAULT_STATION_SOURCE's own
+# convention above.
+HISTORICAL_ARCHIVE_PATH: str = "data/historical/ampacity_history.csv"
+
+# D-06: the anomaly control limit is a per-location dict, not one global
+# scalar — a single global band is the exact shape of the historical
+# RATING_BOUNDS bug documented in
+# .planning/phases/03-safety-spatial/03-PATTERNS.md (a band that passed
+# for 3 of 4 STATIC_RATINGS). The multiplier is deliberately wide (favors
+# fewer false trips over higher sensitivity): per D-06, a learned signal
+# that trips too eagerly erodes trust faster than one that occasionally
+# misses a subtle anomaly, since G1-G5's deterministic gates already catch
+# the clear-cut failure modes. All four values start equal at 4.0 and are
+# expected to diverge as each corridor accumulates its own history — it is
+# the per-location structure, not these initial numbers, that D-06
+# requires.
+ANOMALY_CONTROL_LIMIT_K_BY_LOCATION: dict[str, float] = {
+    "AUSTIN": 4.0,
+    "CORPUS_CHRISTI": 4.0,
+    "MIDLAND": 4.0,
+    "EL_PASO": 4.0,
+}
+
+# Fallback control-limit multiplier for a detector built without a
+# location, mirroring how DEFAULT_RATING_BOUNDS backs
+# RATING_BOUNDS_BY_LOCATION above.
+DEFAULT_ANOMALY_CONTROL_LIMIT_K: float = 4.0

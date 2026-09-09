@@ -4,7 +4,7 @@ import thermal_model
 
 class DLRSafetyMonitor:
     """
-    Encapsulates all 5 pipeline safety gates for DLR data validation.
+    Encapsulates all 6 pipeline safety gates for DLR data validation.
     Call run_check() each measurement cycle; it returns a SafetyResult.
     """
 
@@ -13,13 +13,16 @@ class DLRSafetyMonitor:
     SOLAR_BOUNDS  = (0, 1400)   # W/m²
 
     def __init__(self, static_rating: float, conductor=None, solar_altitude_deg: float = 45.0,
-                 rating_bounds=None, delta_fraction=None, logger=None):
+                 rating_bounds=None, delta_fraction=None, anomaly_detector=None, logger=None):
         self.static_rating   = static_rating
         self.conductor        = conductor if conductor is not None else thermal_model.ConductorConfig(
             **config.DEFAULT_CONDUCTOR_CONFIG_KWARGS)
         self.solar_altitude_deg = solar_altitude_deg
         self.rating_bounds    = rating_bounds if rating_bounds is not None else config.DEFAULT_RATING_BOUNDS
         self.delta_fraction   = delta_fraction if delta_fraction is not None else config.DELTA_FRACTION
+        # None = C10 (learned anomaly detection) disabled, G1-G5 untouched
+        # (D-05). An injected detector is evaluated as G6, additive.
+        self.anomaly_detector = anomaly_detector
         self.last_good_rating = static_rating
         self.logger           = logger or print
 
@@ -59,6 +62,23 @@ class DLRSafetyMonitor:
         self.last_good_rating  = rating
         result["status"]       = "ok"
         result["rating"]       = rating
+
+        # G6 — learned anomaly signal (C10), additive: never runs if no
+        # detector injected. last_good_rating is deliberately already
+        # updated above before G6 runs, the same non-latching rationale
+        # recorded for G5 above: an anomalous-looking but genuine
+        # sustained shift must resolve in one cycle rather than pinning
+        # the monitor in permanent fallback.
+        if self.anomaly_detector is not None:
+            try:
+                is_anomalous, reason = self.anomaly_detector.check(raw_data, rating)
+            except Exception as exc:
+                # A broken learned signal must fail safe, not fail open
+                # (T-04-02, DS-NF5).
+                return self._fallback(result, "G6", f"detector error ({exc})", self.static_rating)
+            if is_anomalous:
+                return self._fallback(result, "G6", reason, self.static_rating)
+
         return result
 
     def _gate_sensor(self, d):
