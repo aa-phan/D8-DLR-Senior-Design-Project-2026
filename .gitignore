@@ -1,5 +1,9 @@
 .venv
 /outputs
+# The accumulating historical archive (Phase 4) is generated data like
+# outputs/, not source -- keeps the append-only file from being committed
+# run-by-run.
+/data/historical/
 .env
 __pycache__/
 *.pyc

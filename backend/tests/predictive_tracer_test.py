@@ -6,8 +6,10 @@ helper. Per-layer unit coverage lives in the three per-module test files
 Plans 04-02 and 04-03 add.
 """
 
+import os
 from datetime import datetime, timedelta
 
+import pandas as pd
 import pytest
 
 import config
@@ -15,6 +17,30 @@ import historical_archive
 from ampacity_forecast import forecast_ampacity
 from anomaly_detector import AnomalyDetector
 from DLRSafetyMonitor import DLRSafetyMonitor
+
+
+class _RaisingDetector:
+    """Stub detector whose check() always raises, for the fail-safe test."""
+
+    def check(self, raw_data, rating):
+        raise RuntimeError("synthetic detector failure")
+
+
+def _valid_archive_row(datetime_utc="2026-01-01T00:00:00", air_temp=25.0,
+                        corridor="AUSTIN_CORPUS_CHRISTI"):
+    return {
+        "datetime_utc": datetime_utc,
+        "corridor": corridor,
+        "air_temp": air_temp,
+        "wind_speed": 5.0,
+        "solar_radiation": 500.0,
+        "dlr_amps": 1200.0,
+        "static_rating": 1200.0,
+        "status": "ok",
+        "fallback": False,
+        "bottleneck_index": 0,
+        "schema_version": historical_archive.ARCHIVE_SCHEMA_VERSION,
+    }
 
 
 def _seed_archive(path, n=24, corridor="AUSTIN_CORPUS_CHRISTI"):
@@ -121,3 +147,83 @@ def test_forecast_returns_none_below_min_history_rows(tmp_path):
     forecast = forecast_ampacity(history)
 
     assert forecast is None
+
+
+def test_detector_raising_falls_back_to_static_rating(valid_data):
+    monitor = DLRSafetyMonitor(
+        static_rating=1200.0,
+        rating_bounds=(800.0, 3000.0),
+        logger=lambda msg: None,
+        anomaly_detector=_RaisingDetector(),
+    )
+    monitor._compute_ampacity = lambda d: 1210.0
+
+    result = monitor.run_check(valid_data)
+
+    assert result["status"] == "fallback"
+    assert result["rating"] == monitor.static_rating
+    assert result["alerts"][0].startswith("G6 FAIL")
+
+
+def test_append_observation_returns_false_when_parent_is_a_regular_file(tmp_path):
+    blocker = tmp_path / "blocker"
+    blocker.write_text("not a directory")
+    bad_path = blocker / "ampacity_history.csv"
+
+    result = historical_archive.append_observation(_valid_archive_row(), path=str(bad_path))
+
+    assert result is False
+
+
+def test_append_observation_rejects_out_of_range_row_and_creates_no_file(tmp_path):
+    path = tmp_path / "ampacity_history.csv"
+    row = _valid_archive_row(air_temp=999.0)  # outside PIPELINE_SCHEMA's (-20.0, 60.0)
+
+    result = historical_archive.append_observation(row, path=str(path))
+
+    assert result is False
+    assert not os.path.exists(path)
+
+
+def test_two_appends_produce_one_header_line_and_two_data_lines(tmp_path):
+    path = tmp_path / "ampacity_history.csv"
+
+    assert historical_archive.append_observation(_valid_archive_row(), path=str(path)) is True
+    assert historical_archive.append_observation(_valid_archive_row(), path=str(path)) is True
+
+    lines = path.read_text().splitlines()
+    assert len(lines) == 3  # one header + two data lines
+    assert lines.count(lines[0]) == 1
+
+
+def test_two_appends_read_history_returns_two_rows(tmp_path):
+    path = tmp_path / "ampacity_history.csv"
+
+    assert historical_archive.append_observation(_valid_archive_row(), path=str(path)) is True
+    assert historical_archive.append_observation(_valid_archive_row(), path=str(path)) is True
+
+    df = historical_archive.read_history(path=str(path))
+    assert len(df) == 2
+
+
+def test_read_history_on_nonexistent_path_returns_empty_archive_columns_frame(tmp_path):
+    path = tmp_path / "does_not_exist.csv"
+
+    df = historical_archive.read_history(path=str(path))
+
+    assert list(df.columns) == historical_archive.ARCHIVE_COLUMNS
+    assert len(df) == 0
+
+
+def test_read_history_orders_ascending_even_when_appended_descending(tmp_path):
+    path = tmp_path / "ampacity_history.csv"
+    base_dt = datetime(2026, 1, 1, 0, 0, 0)
+
+    for i in (2, 1, 0):
+        row = _valid_archive_row(datetime_utc=(base_dt + timedelta(hours=i)).isoformat())
+        assert historical_archive.append_observation(row, path=str(path)) is True
+
+    df = historical_archive.read_history(path=str(path))
+    timestamps = pd.to_datetime(df["datetime_utc"]).tolist()
+
+    assert timestamps == sorted(timestamps)

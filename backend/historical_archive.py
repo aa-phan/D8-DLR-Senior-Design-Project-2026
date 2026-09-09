@@ -107,6 +107,11 @@ def append_observation(row: dict, path: str = None) -> bool:
     if path is None:
         path = config.HISTORICAL_ARCHIVE_PATH
 
+    # RESEARCH.md Pitfall 6 / T-04-03: archival is best-effort, the rating
+    # path is not. The whole body -- validation, makedirs, and the write
+    # itself -- lives inside this one try/except so a disk problem
+    # degrades to "not archived this cycle," never to "no rating this
+    # cycle."
     try:
         # PIPELINE_SCHEMA marks wind_direction required=True, but the
         # archive row (ARCHIVE_COLUMNS) deliberately has no direction

@@ -345,3 +345,28 @@ def test_compute_ampacity_is_wired_to_thermal_model():
             T_amb_c=temp, wind_perp_ms=wind, ghi_wm2=solar, conductor=conductor,
         ))
         assert m._compute_ampacity(d) == direct
+
+
+def test_g6_is_inert_when_no_detector_is_injected():
+    # No anomaly_detector argument at all -- proves G6 is inert by default
+    # (D-05), not merely inert because a test happened to pass None.
+    m = DLRSafetyMonitor(
+        static_rating=1000,
+        conductor=thermal_model.ConductorConfig(**config.DEFAULT_CONDUCTOR_CONFIG_KWARGS),
+        logger=lambda msg: None,
+    )
+    assert m.anomaly_detector is None
+
+    valid_data = {
+        "sensor_status": "ok", "link_status": "ok",
+        "wind": 5.0, "temp": 25.0, "solar": 500.0,
+    }
+    # 1050.0 is inside DEFAULT_RATING_BOUNDS (400.0, 1800.0) and within
+    # G5's threshold of the cold-start last_good_rating (0.15 * 1000 = 150.0
+    # A away from 1000.0), so the reading clears G1-G5 cleanly.
+    m._compute_ampacity = lambda d: 1050.0
+
+    result = m.run_check(valid_data)
+
+    assert result["status"] == "ok"
+    assert result["fallback"] is False
