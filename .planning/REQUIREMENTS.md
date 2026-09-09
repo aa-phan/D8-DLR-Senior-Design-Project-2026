@@ -70,9 +70,13 @@ functional and non-functional requirement it lists is part of this subsystem's c
 
 - [ ] **DS-F11**: Forecast ampacity ahead of real time (regression/ML) — owned by C9. Not started;
       blocked by accumulated historical data volume as well as by phase ordering.
-- [ ] **DS-F12**: Anomaly detection via a model trained on historical baselines, additive to (not
-      a replacement of) C7's fallback path — owned by C10. Not started; hard-blocked by C7 (needs
-      the gating framework and a correct ampacity computation to detect anomalies against).
+- [x] **DS-F12**: Anomaly detection via a model trained on historical baselines, additive to (not
+      a replacement of) C7's fallback path — owned by C10. Complete as of Phase 4: `AnomalyDetector`
+      checks a live rating against C9's forecast residual band (or a rolling mean ± k·std baseline
+      before a forecast exists), resolving per-location control limits, and is wired into
+      `DLRSafetyMonitor` as an additive G6 gate that resolves only through the existing `_fallback`
+      helper. See `.planning/phases/04-predictive/04-01-SUMMARY.md` and
+      `.planning/phases/04-predictive/04-03-SUMMARY.md`.
 
 ### Non-Functional Requirements
 
@@ -132,7 +136,7 @@ Which phases cover which requirements. Phase numbers match `.planning/ROADMAP.md
 | DS-F10 | Phase 3 | Complete |
 | DS-NF5 | Phase 3 | Complete |
 | DS-F11 | Phase 4 | Pending |
-| DS-F12 | Phase 4 | Pending |
+| DS-F12 | Phase 4 | Complete |
 
 **Coverage:**
 
