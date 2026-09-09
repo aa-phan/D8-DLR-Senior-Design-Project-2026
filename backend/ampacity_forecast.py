@@ -254,3 +254,31 @@ def forecast_ampacity(history: pd.DataFrame, horizon_min=None, method="naive",
         method=method,
         n_residuals=n_residuals,
     )
+
+
+def forecast_columns(result) -> dict:
+    """
+    Map a `ForecastResult` onto exactly the four forecast
+    `units_def.PIPELINE_SCHEMA` v2 keys. This is the ONLY place a
+    `ForecastResult` becomes pipeline output — the key spellings are
+    owned by `units_def.PIPELINE_SCHEMA`, not duplicated here as a second
+    schema object (RESEARCH.md Pitfall 3); no caller may assemble these
+    keys itself. `units_def` is deliberately not imported here — the
+    mapping below is a literal dict of four key names, and
+    `ampacity_forecast_test.py::test_forecast_columns_keys_all_exist_in_pipeline_schema`
+    is what keeps it in agreement with the schema, catching a rename on
+    either side.
+
+    Returns `{}` when `result` is `None`, so a cold-start run (no
+    forecast yet) emits no forecast columns at all rather than nulls or
+    zeros that could be mistaken for a real forecast.
+    """
+    if result is None:
+        return {}
+
+    return {
+        "forecast_horizon_min": float(result.horizon_min),
+        "forecast_amps": float(result.amps),
+        "forecast_ci_lower_amps": float(result.ci_lower_amps),
+        "forecast_ci_upper_amps": float(result.ci_upper_amps),
+    }

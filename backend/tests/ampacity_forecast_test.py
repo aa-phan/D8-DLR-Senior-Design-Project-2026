@@ -184,3 +184,35 @@ def test_band_contains_point_forecast_and_types_are_native(method):
     assert type(result.ci_upper_amps) is float
     assert type(result.n_observations) is int
     assert type(result.n_residuals) is int
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# forecast_columns <-> units_def.PIPELINE_SCHEMA v2 agreement (Plan 04-02 Task 2)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_forecast_columns_keys_all_exist_in_pipeline_schema():
+    history = _synthetic_history(n_rows=672)
+    result = amp_forecast.forecast_ampacity(history)
+
+    assert result is not None
+    for key in amp_forecast.forecast_columns(result):
+        assert key in units_def.PIPELINE_SCHEMA
+
+
+def test_forecast_columns_round_trip_validates():
+    history = _synthetic_history(n_rows=672)
+    result = amp_forecast.forecast_ampacity(history)
+
+    row = {
+        "air_temp": 25.0,
+        "wind_speed": 5.0,
+        "wind_direction": 180.0,
+    }
+    row.update(amp_forecast.forecast_columns(result))
+
+    errors = units_def.validate_pipeline_row(row, strict=False)
+    assert errors == []
+
+
+def test_forecast_columns_of_none_is_empty():
+    assert amp_forecast.forecast_columns(None) == {}

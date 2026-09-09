@@ -321,6 +321,14 @@ def expect_dimension(q: Q, expected_dim: str) -> Q:
 # Wraps the key values from one row of the DLR pipeline output.
 # ──────────────────────────────────────────────────────────────────────────────
 
+# PIPELINE_SCHEMA_VERSION: version 1 is the Phase 1-3 baseline (the ten
+# columns below, unchanged). Version 2 adds five Phase 4 (C9/C10) columns.
+# The rule this version exists to enforce: keys are only ever ADDED, always
+# with "required": False, and no existing key's name, unit or range is ever
+# changed. Downstream consumers that only know v1 keep working unmodified
+# against a v2-produced row — see RESEARCH.md Pattern 1, ROADMAP SC2.
+PIPELINE_SCHEMA_VERSION: int = 2
+
 PIPELINE_SCHEMA: Dict[str, Dict] = {
     "air_temp": {
         "unit":      "degC",
@@ -370,6 +378,33 @@ PIPELINE_SCHEMA: Dict[str, Dict] = {
     "ercot_west_load_mw": {
         "unit":      "MW",
         "range":     (0.0, 30_000.0),
+        "required":  False,
+    },
+
+    # --- v2 additions (Phase 4 / C9 forecasting, C10 anomaly detection) ---
+    "forecast_horizon_min": {
+        "unit":      "min",
+        "range":     (0.0, 1440.0),
+        "required":  False,
+    },
+    "forecast_amps": {
+        "unit":      "A",
+        "range":     (100.0, 4000.0),  # matches dlr_amps -- same physical plausibility
+        "required":  False,
+    },
+    "forecast_ci_lower_amps": {
+        "unit":      "A",
+        "range":     (0.0, 4000.0),  # floor at 0: a lower band edge may legitimately sit under dlr_amps' floor
+        "required":  False,
+    },
+    "forecast_ci_upper_amps": {
+        "unit":      "A",
+        "range":     (0.0, 8000.0),  # ceiling widened so a genuinely uncertain band is recorded, not clipped
+        "required":  False,
+    },
+    "anomaly_score": {
+        "unit":      "pu",  # dimensionless
+        "range":     (0.0, 1000.0),
         "required":  False,
     },
 }

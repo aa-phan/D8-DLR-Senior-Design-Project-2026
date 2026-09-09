@@ -405,3 +405,87 @@ if __name__ == "__main__":
     section_range_checks()
 
     print_summary()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# PYTEST SECTION — Plan 04-02 Task 2 (C9): PIPELINE_SCHEMA v2 additive extension
+# ──────────────────────────────────────────────────────────────────────────────
+# Everything above this line is the pre-existing standalone harness (run only
+# via `if __name__ == "__main__"` — it is never collected by pytest, since its
+# test functions are nested closures inside `section_*` functions rather than
+# top-level `test_*` names; confirmed live, see the 2026-08-31
+# ACKNOWLEDGEMENTS.md entry documenting this gap). The tests below are real
+# top-level `test_*` functions so pytest actually collects and runs them,
+# following backend/tests/corridor_discretization_test.py's convention
+# (module-level imports, plain asserts, no classes).
+
+import units_def as _units_def_module  # noqa: E402  (see note above on section placement)
+
+# Frozen snapshot of every pre-Phase-4 (v1) PIPELINE_SCHEMA entry, duplicated
+# here rather than derived from the module at import time -- a test that
+# reads the value it is checking proves nothing.
+_V1_SCHEMA_SNAPSHOT = {
+    "air_temp": {"unit": "degC", "range": (-20.0, 60.0), "required": True},
+    "wind_speed": {"unit": "m/s", "range": (0.0, 50.0), "required": True},
+    "wind_direction": {"unit": "deg", "range": (0.0, 360.0), "required": True},
+    "wind_perp_ms": {"unit": "m/s", "range": (0.0, 50.0), "required": False},
+    "solar_radiation": {"unit": "W/m²", "range": (0.0, 1400.0), "required": False},
+    "relative_humidity": {"unit": "%", "range": (0.0, 100.0), "required": False},
+    "dlr_amps": {"unit": "A", "range": (100.0, 4000.0), "required": False},
+    "dlr_capacity_mw": {"unit": "MW", "range": (50.0, 2500.0), "required": False},
+    "static_capacity_mw": {"unit": "MW", "range": (50.0, 2500.0), "required": False},
+    "ercot_west_load_mw": {"unit": "MW", "range": (0.0, 30_000.0), "required": False},
+}
+
+
+def test_schema_version_bumped_and_v1_columns_are_byte_identical():
+    assert _units_def_module.PIPELINE_SCHEMA_VERSION == 2
+    for name, spec in _V1_SCHEMA_SNAPSHOT.items():
+        assert _units_def_module.PIPELINE_SCHEMA[name] == spec
+
+
+def test_v2_columns_are_all_optional():
+    v2_keys = set(_units_def_module.PIPELINE_SCHEMA) - set(_V1_SCHEMA_SNAPSHOT)
+    assert v2_keys == {
+        "forecast_horizon_min", "forecast_amps", "forecast_ci_lower_amps",
+        "forecast_ci_upper_amps", "anomaly_score",
+    }
+    for key in v2_keys:
+        assert _units_def_module.PIPELINE_SCHEMA[key]["required"] is False
+
+
+def test_pre_phase4_row_still_validates():
+    row = {
+        "air_temp": 25.0,
+        "wind_speed": 5.0,
+        "wind_direction": 180.0,
+    }
+    errors = validate_pipeline_row(row, strict=False)
+    assert errors == []
+
+
+def test_row_with_valid_forecast_columns_validates():
+    row = {
+        "air_temp": 25.0,
+        "wind_speed": 5.0,
+        "wind_direction": 180.0,
+        "forecast_horizon_min": 60.0,
+        "forecast_amps": 1200.0,
+        "forecast_ci_lower_amps": 1100.0,
+        "forecast_ci_upper_amps": 1300.0,
+        "anomaly_score": 0.5,
+    }
+    errors = validate_pipeline_row(row, strict=False)
+    assert errors == []
+
+
+def test_forecast_amps_out_of_range_produces_one_error_naming_column():
+    row = {
+        "air_temp": 25.0,
+        "wind_speed": 5.0,
+        "wind_direction": 180.0,
+        "forecast_amps": 50.0,  # below the (100.0, 4000.0) floor
+    }
+    errors = validate_pipeline_row(row, strict=False)
+    assert len(errors) == 1
+    assert "forecast_amps" in errors[0]
