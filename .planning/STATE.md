@@ -69,6 +69,10 @@ Recent decisions affecting current work:
 - G5 large-swing gate RESOLVED (2026-09-08, Phase 3 execute checkpoint): relative threshold (`config.DELTA_FRACTION = 0.15`) with conservative `min(computed, static_rating)` fallback under `status="fallback"`; `last_good_rating` still updates on a G5 event so it doesn't latch — see `.planning/phases/03-safety-spatial/03-01-SUMMARY.md`.
 - Phase 3 fully closed out 2026-09-08: 3/3 plans executed and merged to `main`, independent `gsd-verifier` pass (goal achieved, 0 gaps), UAT (17/17 auto-covered by passing tests, user-confirmed), security review (`03-SECURITY.md`, threats_open: 0, 18 threats from plan-time STRIDE registers all closed).
 
+### Roadmap Evolution
+
+- Phase 5 added: Close gap: DS-F5 — wire per-location static ratings into dlr_pipeline.py and ercot_dlr_merger.py (per v1.0 milestone audit, `.planning/v1.0-MILESTONE-AUDIT.md`)
+
 ### Pending Todos
 
 None yet.

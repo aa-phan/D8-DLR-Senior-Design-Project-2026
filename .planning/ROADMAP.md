@@ -134,3 +134,14 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 | 2. Core Consolidation | Pre-GSD (C4–C6 implemented) | Complete | 2026-08-31 |
 | 3. Safety & Spatial | 3/3 | Complete    | 2026-09-03 |
 | 4. Predictive | 3/3 | Complete    | 2026-09-09 |
+
+### Phase 5: DS-F5 Wiring: Per-Location Static Ratings
+
+**Goal:** Close the confirmed DS-F5 gap from the v1.0 milestone audit — wire per-location static ratings (`config.STATIC_RATINGS`) into `backend/dlr_pipeline.py` and `backend/ercot_dlr_merger.py`, which currently both hardcode `config.DEFAULT_STATIC_RATING` regardless of station/city.
+**Requirements**: DS-F5
+**Depends on:** Phase 4
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd-plan-phase 5 to break down)
