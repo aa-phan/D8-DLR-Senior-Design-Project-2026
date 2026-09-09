@@ -284,6 +284,19 @@ Claude Code was used, via the GSD (`/gsd-phase`, `/gsd-discuss-phase 5`) toolset
 
 No engineering code was written this session — this was phase setup and context-gathering only, feeding into a not-yet-created PLAN.md.
 
+### Session: 2026-09-09 (continued), conducted by Aaron Phan — Phase 5 plan-phase (GSD)
+
+Claude Code was used, via the GSD (`/gsd-plan-phase 5`) toolset running as a planner agent, to turn `05-CONTEXT.md`'s nine decisions into an executable `.planning/phases/05-ds-f5-wiring-per-location-static-ratings/05-01-PLAN.md` (2 tasks, autonomous, no checkpoints).
+
+1. Read the two target files, `backend/config.py`, `backend/tests/ercot_dlr_merger_test.py`, and `05-PATTERNS.md` directly rather than planning from the CONTEXT.md summary alone. This corrected two line-number drifts CONTEXT.md/PATTERNS.md carried (`ercot_dlr_merger.py`'s `TARGET_STATION` is at line 121 and its `process_dlr_to_hourly` call at 129, not the cited ~119/~128), so the plan anchors on file text rather than line numbers.
+2. Confirmed by repo-wide grep that no caller of `run_pipeline`/`plot_dlr_summary` exists outside `backend/dlr_pipeline.py` itself plus one `README.md` documentation row — which bounds the blast radius of D-01's `costly` signature change and added the README row to the plan's scope, since leaving it would document a parameter that no longer exists.
+3. Ran every one of the plan's automated verify gates against the current, unmodified codebase in this session to establish their real before-values (e.g. the stale-parameter grep returns 4 today and must return 0; the resolution-expression grep returns 0 today and must return 2), rather than emitting plausible-looking gates. One candidate gate was discarded after this check showed it would have been brittle against a type-annotated local variable, and replaced with an `inspect.signature`-based contract check.
+4. Prototyped the plan's proposed test approach against the real code in a throwaway script (since deleted) to confirm the plan's stated numbers are measured, not assumed: synthetic weather of 35 °C / 3.0 m/s / 1000 W/m² yields a real IEEE 738 ampacity of 1252.99 A, which sits strictly between the 900 A fallback and Austin's 1900 A rating — so `dlr_uplift_flag` genuinely flips from `True` to `False` purely by supplying `city="AUSTIN"`. That flip is the plan's central DS-F5 acceptance criterion, and it was verified reachable before being written down.
+5. Identified and pinned a safety invariant not stated in any source artifact: `config.DEFAULT_STATIC_RATING` (900 A) is strictly below every value in `config.STATIC_RATINGS` (lowest 1450 A), which is what makes D-02's *silent* fallback fail-safe — a mistyped city understates a line's capacity rather than overstating it. The plan adds a regression test and a runnable gate for it so a future config edit that inverts the relationship fails loudly.
+6. Noted a tooling limitation for the team: GSD's `check.decision-coverage-plan` gate could not parse `05-CONTEXT.md`'s decision bullets (reported `could-not-parse`, extracting 0 of 9), despite the bullets using the canonical `- **D-NN:** ...` form. Coverage of D-01 through D-09 was therefore verified by hand instead of by the gate; each decision ID is cited between 5 and 14 times in the plan.
+
+No engineering code was written this session — this was planning only. The plan itself has not been executed.
+
 ## Keeping This Updated
 
 This file should be reviewed and updated to reflect new AI-assisted work **before any significant commit** — i.e., before committing new features, substantial documentation, or non-trivial refactors produced with AI assistance. A commit is "significant" for this purpose if it would need describing in a standup/status update; trivial fixes (typos, formatting) don't require an update here.
