@@ -370,12 +370,12 @@ gbr_upper  = GradientBoostingRegressor(loss="quantile", alpha=0.95, **common_par
 
 **If this table is empty:** N/A — see entries above; all are flagged for confirmation before being treated as locked decisions.
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Forecast horizon** — see Assumption A1. Recommendation: confirm with user/stakeholder during `/gsd-discuss-phase` before locking feature/target windowing.
-2. **C9→C10 coupling** — see Assumption A2. Recommendation: confirm whether C10 should be fully independent of C9's forecast.
-3. **Was the historical archive job started anywhere not found by this session's grep?** A repo-wide search for `archive`/`historical`/`schema_version` across `backend/` and `.planning/phases/03-safety-spatial/` found no implementation. Recommendation: confirm with the user before assuming Phase 4 must build this from scratch as Wave 0 — the Roadmap's phrasing implies it should already exist.
-4. **Per-corridor vs. per-station/point granularity** for C9/C10 — Phase 3 operates `DLRSafetyMonitor` once per corridor (`corridor_discretization.py:535-539`) but resolves per-point observations independently. Neither C9 nor C10's spec states which granularity the learned models should target. Recommendation: default to per-corridor (matches the existing one-monitor-per-corridor instantiation) unless the user specifies otherwise.
+1. **Forecast horizon** — see Assumption A1. Recommendation: confirm with user/stakeholder during `/gsd-discuss-phase` before locking feature/target windowing. RESOLVED: see CONTEXT.md D-01.
+2. **C9→C10 coupling** — see Assumption A2. Recommendation: confirm whether C10 should be fully independent of C9's forecast. RESOLVED: see CONTEXT.md D-04.
+3. **Was the historical archive job started anywhere not found by this session's grep?** A repo-wide search for `archive`/`historical`/`schema_version` across `backend/` and `.planning/phases/03-safety-spatial/` found no implementation. Recommendation: confirm with the user before assuming Phase 4 must build this from scratch as Wave 0 — the Roadmap's phrasing implies it should already exist. RESOLVED: see CONTEXT.md D-07 — built from scratch in Phase 4, Wave 0/04-01.
+4. **Per-corridor vs. per-station/point granularity** for C9/C10 — Phase 3 operates `DLRSafetyMonitor` once per corridor (`corridor_discretization.py:535-539`) but resolves per-point observations independently. Neither C9 nor C10's spec states which granularity the learned models should target. Recommendation: default to per-corridor (matches the existing one-monitor-per-corridor instantiation) unless the user specifies otherwise. RESOLVED: see CONTEXT.md D-08.
 
 ## Environment Availability
 
