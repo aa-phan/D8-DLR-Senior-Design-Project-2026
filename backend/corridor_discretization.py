@@ -34,6 +34,7 @@ import math
 import time
 
 import config
+import historical_archive
 import station_explorer
 import thermal_model
 import weather_provider
@@ -468,6 +469,60 @@ def resolve_point_observation(
     return None, None, trail
 
 
+def _archive_corridor_result(
+    geometry,
+    corridor_name,
+    point_results,
+    min_rating,
+    bottleneck_index,
+    datetime_utc,
+    archive_path,
+) -> bool:
+    """
+    Build and append one archive row for this `rate_corridor` call (D-08:
+    one row per corridor per run). The archived weather is the bottleneck
+    point's own observation -- the point whose rating the corridor
+    actually reports -- so the archived weather is always the weather
+    that produced the archived rating, never another point's (T-04-13).
+
+    If the bottleneck point exhausted its candidate probe and therefore
+    has no observation, returns `False` without writing: there is no
+    weather to archive, and a row of nulls would poison the baseline the
+    detector later builds from this file (T-04-13).
+
+    This function must not raise. `historical_archive.append_observation`
+    is already exception-wrapped (T-04-03), and the row assembly here is
+    wrapped the same way so an archive-write failure can never reach --
+    let alone alter -- the rating `rate_corridor` already computed and is
+    about to return (RESEARCH.md Pitfall 6).
+    """
+    try:
+        bottleneck = point_results[bottleneck_index]
+        observation = bottleneck.get("observation")
+        if observation is None:
+            return False
+
+        check_result = {
+            "status": bottleneck["status"],
+            "rating": min_rating,
+            "fallback": bottleneck["fallback"],
+        }
+        row = historical_archive.build_archive_row(
+            corridor=corridor_name,
+            datetime_utc=datetime_utc,
+            observation=observation,
+            check_result=check_result,
+            static_rating=geometry.static_rating,
+            bottleneck_index=bottleneck_index,
+        )
+        return historical_archive.append_observation(row, path=archive_path)
+    except Exception as exc:
+        # str(exc) only, never repr -- matches the T-03-02 precedent above
+        # in resolve_point_observation.
+        log.warning("corridor archive row assembly failed (non-fatal): %s", str(exc))
+        return False
+
+
 def rate_corridor(
     corridor_name: str,
     start: str,
@@ -477,6 +532,9 @@ def rate_corridor(
     n_points: int = DEFAULT_POINTS_PER_CORRIDOR,
     logger=None,
     sleep=time.sleep,
+    anomaly_detector=None,
+    archive=True,
+    archive_path=None,
 ) -> dict:
     """
     Rate a named corridor end to end: for each of its `n_points` geodesic
@@ -505,19 +563,33 @@ def rate_corridor(
         logger: Forwarded to `resolve_point_observation`'s probe logging.
         sleep: Forwarded to `resolve_point_observation`'s batch-pause call
             (defaults to `time.sleep`; tests inject a no-op/recorder).
+        anomaly_detector: Forwarded to `DLRSafetyMonitor` as its G6
+            constructor-injected learned signal (C10, D-05). `None` (the
+            default) means the monitor behaves exactly as it did in
+            Phase 3 -- G1-G5 only, untouched.
+        archive: When true (the default), write one archive row for this
+            call via `_archive_corridor_result` (D-08). When false, no
+            file is touched and the returned `archived` key is `False`.
+        archive_path: Forwarded to `historical_archive.append_observation`
+            (defaults to `config.HISTORICAL_ARCHIVE_PATH` when `None`).
 
     Returns:
         A dict with keys `corridor`, `bearing_deg`, `points` (one entry per
         point, in point order -- always exactly `n_points` entries, never
         shortened, since an exhausted point still contributes a fallback
         record -- each holding its coordinates, resolved station id (`None`
-        when exhausted), candidate probe count/trail, and gated
-        rating/status/fallback/alerts), `rating` (the minimum per-point
-        rating), `bottleneck_index` (the index of the point that produced
-        it; ties broken toward the lowest index), `fallback` (true whenever
-        any point fell back -- gate failure or candidate exhaustion alike),
-        and `exhausted_points` (how many points exhausted their candidate
-        probe, D-09).
+        when exhausted), candidate probe count/trail, gated
+        rating/status/fallback/alerts, and `observation` -- the resolved
+        reading dict for a usable point or `None` for an exhausted one),
+        `rating` (the minimum per-point rating), `bottleneck_index` (the
+        index of the point that produced it; ties broken toward the
+        lowest index), `fallback` (true whenever any point fell back --
+        gate failure or candidate exhaustion alike), `exhausted_points`
+        (how many points exhausted their candidate probe, D-09), and
+        `archived` (whether `_archive_corridor_result` wrote a row this
+        call -- `False` whenever `archive` is false, the bottleneck point
+        has no observation, or the write itself failed; per T-04-03 a
+        failed or skipped write never changes any other key in this dict).
 
     Note:
         A point whose candidate probe exhausts every candidate with no
@@ -536,6 +608,7 @@ def rate_corridor(
         static_rating=geometry.static_rating,
         conductor=geometry.conductor,
         rating_bounds=geometry.rating_bounds,
+        anomaly_detector=anomaly_detector,
     )
 
     point_results = []
@@ -567,6 +640,7 @@ def rate_corridor(
                     "status": "fallback",
                     "fallback": True,
                     "alerts": [msg],
+                    "observation": None,
                 }
             )
             continue
@@ -583,6 +657,7 @@ def rate_corridor(
                 "status": result["status"],
                 "fallback": result["fallback"],
                 "alerts": result["alerts"],
+                "observation": observation,
             }
         )
 
@@ -606,6 +681,19 @@ def rate_corridor(
     corridor_fallback = any(p["fallback"] for p in point_results)
     exhausted_points = sum(1 for p in point_results if p["stid"] is None)
 
+    archived = False
+    if archive:
+        # `datetime_utc` comes from `end` -- the analysis window's own
+        # boundary, already an ISO 8601 string, already deterministic --
+        # never from a clock. DS-NF2 forbids wall-clock-dependent output:
+        # two runs over the same window must produce identical archive
+        # rows, which a `datetime.now()`/`time.time()` timestamp could
+        # never guarantee. Do not "improve" this into a live timestamp.
+        archived = _archive_corridor_result(
+            geometry, corridor_name, point_results, min_rating, bottleneck_index,
+            datetime_utc=end, archive_path=archive_path,
+        )
+
     return {
         "corridor": corridor_name,
         "bearing_deg": geometry.bearing_deg,
@@ -614,4 +702,5 @@ def rate_corridor(
         "bottleneck_index": bottleneck_index,
         "fallback": corridor_fallback,
         "exhausted_points": exhausted_points,
+        "archived": archived,
     }

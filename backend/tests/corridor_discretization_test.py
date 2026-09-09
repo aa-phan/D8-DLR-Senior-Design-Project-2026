@@ -20,6 +20,21 @@ import corridor_discretization as cd
 import station_explorer as se
 
 
+@pytest.fixture(autouse=True)
+def _isolate_historical_archive(tmp_path, monkeypatch):
+    """
+    Plan 04-03: `rate_corridor` now defaults `archive=True` (D-08). Without
+    this fixture, every `rate_corridor` call in this file -- including the
+    many synthetic/test corridor fixtures below -- would append real rows
+    to `config.HISTORICAL_ARCHIVE_PATH`, the same file production runs
+    read from, on every test session. Redirect the default path to a
+    `tmp_path`-scoped file for every test in this module (autouse, no
+    individual test body touched) so no test can ever poison the real
+    historical archive.
+    """
+    monkeypatch.setattr(config, "HISTORICAL_ARCHIVE_PATH", str(tmp_path / "test_archive.csv"))
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Task 1: geometry -- discretize_corridor / initial_bearing_deg / corridor_geometry
 # ──────────────────────────────────────────────────────────────────────────────
@@ -315,9 +330,12 @@ def test_rate_corridor_returns_expected_keys_and_min_reduction(synthetic_corrido
         synthetic_corridor, "2025-01-01", "2025-01-02", stations, fetch_weather=fake_fetch
     )
 
+    # "archived" added by Plan 04-03 (D-08) -- additive, the other seven
+    # Phase 3 keys below are unchanged in name, order-independence, and
+    # meaning.
     assert set(result.keys()) == {
         "corridor", "bearing_deg", "points", "rating", "bottleneck_index",
-        "fallback", "exhausted_points",
+        "fallback", "exhausted_points", "archived",
     }
     assert len(result["points"]) == 5
     assert result["bottleneck_index"] == 2
@@ -906,3 +924,180 @@ def test_worst_case_two_corridor_all_unusable_probe_count_is_100():
         )
 
     assert call_count["n"] == 100
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Task 2 (04-03): anomaly_detector injection + one archive write per call (D-05, D-08)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def _five_synthetic_stations() -> pd.DataFrame:
+    return pd.DataFrame(
+        [{"stid": f"S{i}", "name": f"s{i}", "lat": 0.0, "lon": float(i)} for i in range(5)]
+    )
+
+
+class _AlwaysTripDetector:
+    """A detector test-double that always reports an anomaly, regardless of input."""
+
+    def check(self, raw_data, rating):
+        return True, "synthetic always-trip detector (test double)"
+
+
+def test_rate_corridor_archives_one_row_per_call(synthetic_corridor, tmp_path):
+    stations = _five_synthetic_stations()
+    archive_path = tmp_path / "archive.csv"
+
+    def fake_fetch(stids, start, end):
+        return _weather_frame(stids[0], wind=6.5)
+
+    cd.rate_corridor(
+        synthetic_corridor, "2025-01-01", "2025-01-02", stations,
+        fetch_weather=fake_fetch, archive_path=str(archive_path),
+    )
+
+    lines = archive_path.read_text().strip("\n").split("\n")
+    assert len(lines) == 2  # one header line, one data line
+
+
+def test_rate_corridor_archived_row_matches_rating_and_corridor(synthetic_corridor, tmp_path):
+    stations = _five_synthetic_stations()
+    archive_path = tmp_path / "archive.csv"
+
+    def fake_fetch(stids, start, end):
+        return _weather_frame(stids[0], wind=6.5)
+
+    result = cd.rate_corridor(
+        synthetic_corridor, "2025-01-01", "2025-01-02", stations,
+        fetch_weather=fake_fetch, archive_path=str(archive_path),
+    )
+
+    df = pd.read_csv(archive_path)
+    assert len(df) == 1
+    assert df.iloc[0]["dlr_amps"] == result["rating"]
+    assert df.iloc[0]["corridor"] == synthetic_corridor
+    assert result["archived"] is True
+
+
+def test_rate_corridor_archived_datetime_equals_end_and_two_calls_are_identical(
+    synthetic_corridor, tmp_path
+):
+    stations = _five_synthetic_stations()
+
+    def fake_fetch(stids, start, end):
+        return _weather_frame(stids[0], wind=6.5)
+
+    path1 = tmp_path / "archive1.csv"
+    cd.rate_corridor(
+        synthetic_corridor, "2025-01-01", "2025-06-15T00:00:00Z", stations,
+        fetch_weather=fake_fetch, archive_path=str(path1),
+    )
+    df1 = pd.read_csv(path1)
+    assert df1.iloc[0]["datetime_utc"] == "2025-06-15T00:00:00Z"
+
+    path2 = tmp_path / "archive2.csv"
+    cd.rate_corridor(
+        synthetic_corridor, "2025-01-01", "2025-06-15T00:00:00Z", stations,
+        fetch_weather=fake_fetch, archive_path=str(path2),
+    )
+
+    # Byte-identical data files across two independent calls with
+    # identical arguments (DS-NF2 reproducibility) -- datetime_utc comes
+    # from `end`, never a clock, so nothing here can vary between calls.
+    assert path1.read_text() == path2.read_text()
+
+
+def test_rate_corridor_archive_false_writes_no_file_and_returns_archived_false(
+    synthetic_corridor, tmp_path
+):
+    stations = _five_synthetic_stations()
+    archive_path = tmp_path / "should_not_exist.csv"
+
+    def fake_fetch(stids, start, end):
+        return _weather_frame(stids[0], wind=6.5)
+
+    result = cd.rate_corridor(
+        synthetic_corridor, "2025-01-01", "2025-01-02", stations,
+        fetch_weather=fake_fetch, archive=False, archive_path=str(archive_path),
+    )
+
+    assert not archive_path.exists()
+    assert result["archived"] is False
+
+
+def test_rate_corridor_unwritable_archive_path_leaves_rest_of_dict_unchanged(
+    synthetic_corridor, tmp_path
+):
+    stations = _five_synthetic_stations()
+
+    def fake_fetch(stids, start, end):
+        return _weather_frame(stids[0], wind=6.5)
+
+    # A regular file standing where the archive's parent directory would
+    # need to be created makes os.makedirs fail inside
+    # historical_archive.append_observation -- the same unwritable-parent
+    # shape Plan 04-01's own archive tests already use.
+    blocker = tmp_path / "blocker"
+    blocker.write_text("not a directory")
+    unwritable_path = blocker / "archive.csv"
+
+    result_unwritable = cd.rate_corridor(
+        synthetic_corridor, "2025-01-01", "2025-01-02", stations,
+        fetch_weather=fake_fetch, archive_path=str(unwritable_path),
+    )
+    result_no_archive = cd.rate_corridor(
+        synthetic_corridor, "2025-01-01", "2025-01-02", stations,
+        fetch_weather=fake_fetch, archive=False,
+    )
+
+    assert result_unwritable["archived"] is False
+    for key in ("corridor", "bearing_deg", "rating", "bottleneck_index", "fallback", "exhausted_points"):
+        assert result_unwritable[key] == result_no_archive[key]
+    # "points" carries nested dicts (including probe_trail lists of
+    # dicts) -- compare the fields that matter structurally rather than
+    # relying on whole-dict `==` across nested pandas/py-native mixed
+    # types.
+    assert len(result_unwritable["points"]) == len(result_no_archive["points"])
+    for p1, p2 in zip(result_unwritable["points"], result_no_archive["points"]):
+        assert p1["rating"] == p2["rating"]
+        assert p1["status"] == p2["status"]
+        assert p1["fallback"] == p2["fallback"]
+        assert p1["stid"] == p2["stid"]
+
+
+def test_rate_corridor_injected_detector_that_always_trips_forces_fallback_at_static_rating(
+    synthetic_corridor,
+):
+    stations = _five_synthetic_stations()
+
+    def fake_fetch(stids, start, end):
+        return _weather_frame(stids[0], wind=6.5)
+
+    result = cd.rate_corridor(
+        synthetic_corridor, "2025-01-01", "2025-01-02", stations,
+        fetch_weather=fake_fetch, anomaly_detector=_AlwaysTripDetector(),
+    )
+
+    for p in result["points"]:
+        assert p["status"] == "fallback"
+        assert p["rating"] == _SYNTHETIC_STATIC_RATING
+    assert result["rating"] == _SYNTHETIC_STATIC_RATING
+
+
+def test_rate_corridor_anomaly_detector_unset_leaves_phase3_keys_unchanged(synthetic_corridor):
+    stations = _five_synthetic_stations()
+
+    def fake_fetch(stids, start, end):
+        return _weather_frame(stids[0], wind=6.5)
+
+    result = cd.rate_corridor(
+        synthetic_corridor, "2025-01-01", "2025-01-02", stations, fetch_weather=fake_fetch,
+    )
+
+    for key in (
+        "corridor", "bearing_deg", "points", "rating", "bottleneck_index",
+        "fallback", "exhausted_points",
+    ):
+        assert key in result
+    assert result["fallback"] is False
+    assert all(p["status"] == "ok" for p in result["points"])
