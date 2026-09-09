@@ -104,9 +104,24 @@ Plans:
   3. A learned anomaly-detection signal augments — not replaces — C7's fallback path: it can trigger the same fallback, through the same `{status, rating, fallback, alerts}` result shape.
   4. Given synthetic/injected anomalous conditions, the system falls back to the static rating rather than propagating a bad reading.
 
-**Plans**: TBD
+**Plans**: 3 plans
 
-**Note**: historical data accumulation for C9/C10 has its own lead time distinct from phase ordering — starting a background historical weather/ampacity archive job during Phase 3 (rather than waiting until Phase 4 begins) avoids Phase 4 idling on data volume.
+Plans:
+**Wave 1**
+
+- [ ] 04-01-PLAN.md — Tracer: one anomalous reading travels archive → forecast → detector → G6 → static-rating fallback, with every Phase 4 config constant centralized and the archive row schema locked at a decision checkpoint
+
+**Wave 2** *(blocked on Wave 1 completion; 04-02 and 04-03 run in parallel — zero file overlap)*
+
+- [ ] 04-02-PLAN.md — C9: expanding-window walk-forward backtest for the confidence band, both Tier 1 forecast methods behind one signature, `PIPELINE_SCHEMA` v2 additive extension, and validate-before-training on archive reads
+- [ ] 04-03-PLAN.md — C10: rolling-baseline cold start, per-location control limits resolved per corridor, detector + one archive write wired into `rate_corridor`, and `requirements.txt`
+
+**Cross-cutting constraints:**
+
+- `.venv/bin/python -m pytest -q` reports 0 failed.
+- No new package is installed — Tier 2 modelling is out of scope (D-10) and both candidate libraries carry unresolved legitimacy flags.
+
+**Note**: historical data accumulation for C9/C10 has its own lead time distinct from phase ordering — starting a background historical weather/ampacity archive job during Phase 3 (rather than waiting until Phase 4 begins) avoids Phase 4 idling on data volume. Confirmed absent from the repo during Phase 4 research (D-07); building it is Plan 04-01's scope, not an assumed precondition.
 
 ## Progress
 
@@ -118,4 +133,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 | 1. Foundation & Data Contract | Pre-GSD (C1–C3 implemented) | Complete | 2026-08-24 |
 | 2. Core Consolidation | Pre-GSD (C4–C6 implemented) | Complete | 2026-08-31 |
 | 3. Safety & Spatial | 3/3 | Complete    | 2026-09-03 |
-| 4. Predictive | 0/TBD | Not started | - |
+| 4. Predictive | 0/3 | Planned | - |
