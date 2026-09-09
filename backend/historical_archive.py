@@ -89,6 +89,21 @@ def build_archive_row(
     return {col: row[col] for col in ARCHIVE_COLUMNS}
 
 
+def _validation_row(row: dict) -> dict:
+    """
+    Build a validation-only copy of an archive row with a placeholder
+    `wind_direction`, satisfying `units_def.PIPELINE_SCHEMA`'s
+    required-column check for a column this archive never stores or
+    reads (corridor observations only ever carry the already-resolved
+    perpendicular wind component, `wind_speed`, never a raw direction).
+    Shared by `append_observation` and `read_history` so the placeholder
+    has exactly one definition.
+    """
+    validation_row = dict(row)
+    validation_row.setdefault("wind_direction", 0.0)
+    return validation_row
+
+
 def append_observation(row: dict, path: str = None) -> bool:
     """
     Append one archive row to the CSV at `path` (defaults to
@@ -115,15 +130,9 @@ def append_observation(row: dict, path: str = None) -> bool:
     try:
         # PIPELINE_SCHEMA marks wind_direction required=True, but the
         # archive row (ARCHIVE_COLUMNS) deliberately has no direction
-        # column at all -- corridor observations only carry the already-
-        # resolved perpendicular wind component (`wind_speed` here), never
-        # a raw direction. Supply a fixed, in-range placeholder solely so
-        # validate_pipeline_row's required-column check doesn't reject
-        # every archive row for a column this archive never stores or
-        # reads; it is never added to the persisted row itself.
-        validation_row = dict(row)
-        validation_row.setdefault("wind_direction", 0.0)
-        violations = units_def.validate_pipeline_row(validation_row, strict=False)
+        # column at all -- see _validation_row's docstring. The placeholder
+        # it adds is never persisted to the actual archive row.
+        violations = units_def.validate_pipeline_row(_validation_row(row), strict=False)
         if violations:
             corridor = row.get("corridor", "<unknown corridor>")
             for msg in violations:
@@ -146,7 +155,7 @@ def append_observation(row: dict, path: str = None) -> bool:
         return False
 
 
-def read_history(path: str = None, corridor: str = None) -> pd.DataFrame:
+def read_history(path: str = None, corridor: str = None, validate: bool = True) -> pd.DataFrame:
     """
     Read the archive back as a DataFrame, sorted ascending by
     `datetime_utc` so downstream time-series code never depends on file
@@ -155,6 +164,20 @@ def read_history(path: str = None, corridor: str = None) -> pd.DataFrame:
     Returns an empty `ARCHIVE_COLUMNS`-shaped frame (not a raised error)
     when `path` does not exist, so a cold-start caller needs no special
     case.
+
+    `validate` defaults to `True`: every loaded row is run through
+    `units_def.validate_pipeline_row(row, strict=False)` (via the same
+    `_validation_row` placeholder `append_observation` uses) and rows
+    with any error are dropped before the frame is returned. This closes
+    the training-side half of the archive-poisoning threat (T-04-07,
+    RESEARCH.md Security Domain: validate both before persisting and
+    before training) -- `append_observation` already covers the write
+    side, but this covers a file edited or corrupted outside the
+    pipeline after it was written. If any rows are dropped, one
+    warning-level log line names the count, the path and the first
+    offending message -- one line per call, not one per row, so a
+    corrupted file cannot flood the log. `validate=False` returns the
+    frame unfiltered, preserving an escape hatch for forensic inspection.
     """
     if path is None:
         path = config.HISTORICAL_ARCHIVE_PATH
@@ -163,6 +186,23 @@ def read_history(path: str = None, corridor: str = None) -> pd.DataFrame:
         return pd.DataFrame(columns=ARCHIVE_COLUMNS)
 
     df = pd.read_csv(path)
+
+    if validate and len(df) > 0:
+        row_dicts = df.to_dict(orient="records")
+        error_lists = [
+            units_def.validate_pipeline_row(_validation_row(r), strict=False)
+            for r in row_dicts
+        ]
+        keep_mask = pd.Series([len(errs) == 0 for errs in error_lists], index=df.index)
+        dropped = int((~keep_mask).sum())
+        if dropped:
+            first_bad_pos = next(i for i, errs in enumerate(error_lists) if errs)
+            logger.warning(
+                "historical_archive dropped %d invalid row(s) reading %s: %s",
+                dropped, path, error_lists[first_bad_pos][0],
+            )
+        df = df[keep_mask]
+
     if corridor is not None and "corridor" in df.columns:
         df = df[df["corridor"] == corridor]
 
