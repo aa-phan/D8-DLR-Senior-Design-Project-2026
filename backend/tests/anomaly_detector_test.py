@@ -1,0 +1,224 @@
+"""
+Tests for backend/anomaly_detector.py (C10 -- Learned Anomaly Detection,
+requirement DS-F12).
+
+Covers the detector in isolation: the D-04 forecast-residual primary
+signal, the D-04 rolling-baseline cold-start fallback, the D-06
+per-location control-limit resolution via `for_corridor`, and the D-05
+guarantee that a trip resolves only through `DLRSafetyMonitor`'s existing
+`_fallback` helper -- never a second, competing result shape.
+`backend/tests/predictive_tracer_test.py` covers this detector's path
+through the monitor end to end; this file covers the detector's own
+decision logic.
+
+Structure follows `backend/tests/SafetyMonitor_TestSuite.py`'s convention:
+module-level imports, `@pytest.fixture`, one `test_*` per behavior, plain
+asserts, no classes.
+"""
+
+import numpy as np
+import pandas as pd
+import pytest
+
+import config
+import thermal_model
+from ampacity_forecast import ForecastResult
+from anomaly_detector import ROLLING_BASELINE_MIN_ROWS, AnomalyDetector
+from DLRSafetyMonitor import DLRSafetyMonitor
+
+
+def _forecast(amps=1000.0, ci_lower_amps=900.0, ci_upper_amps=1100.0):
+    return ForecastResult(
+        horizon_min=60.0,
+        amps=amps,
+        ci_lower_amps=ci_lower_amps,
+        ci_upper_amps=ci_upper_amps,
+        n_observations=50,
+        method="naive",
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Forecast-residual branch (D-04 primary signal)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_forecast_far_outside_band_trips_and_names_limits():
+    detector = AnomalyDetector(forecast=_forecast(), k=1.0)
+
+    is_anomalous, reason = detector.check({}, 2000.0)
+
+    assert is_anomalous is True
+    assert "900.0" in reason
+    assert "1100.0" in reason
+    assert detector.signal == "forecast_residual"
+
+
+def test_forecast_inclusive_boundary_not_anomalous():
+    detector = AnomalyDetector(forecast=_forecast(), k=1.0)
+
+    lower_is_anomalous, _ = detector.check({}, 900.0)
+    upper_is_anomalous, _ = detector.check({}, 1100.0)
+
+    assert lower_is_anomalous is False
+    assert upper_is_anomalous is False
+    assert detector.signal == "forecast_residual"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Rolling-baseline branch (D-04 cold-start path)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_rolling_baseline_trips_far_from_mean():
+    rng = np.random.default_rng(42)
+    series = rng.normal(1700.0, 50.0, size=500)
+    history = pd.DataFrame({"dlr_amps": series})
+    detector = AnomalyDetector(history=history, k=config.DEFAULT_ANOMALY_CONTROL_LIMIT_K)
+
+    mean = float(history["dlr_amps"].mean())
+    std = float(history["dlr_amps"].std())
+    far_rating = mean + 10 * std
+
+    is_anomalous, reason = detector.check({}, far_rating)
+
+    assert is_anomalous is True
+    assert detector.signal == "rolling_baseline"
+    assert "rolling" in reason.lower()
+
+
+def test_rolling_baseline_cold_start_below_min_rows():
+    history = pd.DataFrame({"dlr_amps": [1700.0, 1690.0, 1710.0, 1705.0, 1695.0]})
+    detector = AnomalyDetector(history=history)
+
+    is_anomalous, reason = detector.check({}, 5000.0)
+
+    assert is_anomalous is False
+    assert "cold start" in reason.lower()
+    assert detector.signal == "cold_start"
+
+
+def test_rolling_baseline_constant_history_returns_false_not_zero_division():
+    history = pd.DataFrame({"dlr_amps": [1700.0] * ROLLING_BASELINE_MIN_ROWS})
+    detector = AnomalyDetector(history=history)
+
+    is_anomalous, reason = detector.check({}, 5000.0)
+
+    assert is_anomalous is False
+    assert detector.signal == "rolling_baseline"
+
+
+def test_clean_data_no_false_positive():
+    # Baseline history and the checked series are drawn from the same
+    # generator/distribution but are independent samples (baseline is not
+    # simply re-checked against itself), covering a full four-week
+    # (672 hourly observations) synthetic series with zero false trips.
+    rng = np.random.default_rng(7)
+    baseline = rng.normal(1700.0, 50.0, size=500)
+    history = pd.DataFrame({"dlr_amps": baseline})
+    detector = AnomalyDetector(history=history, k=config.DEFAULT_ANOMALY_CONTROL_LIMIT_K)
+
+    four_weeks_hourly = 4 * 7 * 24
+    test_series = rng.normal(1700.0, 50.0, size=four_weeks_hourly)
+
+    for rating in test_series:
+        is_anomalous, _ = detector.check({}, float(rating))
+        assert is_anomalous is False
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Dispatcher edge cases
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_non_finite_rating_defers_to_g3_g4():
+    detector = AnomalyDetector(forecast=_forecast())
+
+    is_anomalous, reason = detector.check({}, float("nan"))
+
+    assert is_anomalous is False
+    assert "non-finite" in reason
+    assert detector.signal == "non_finite_guard"
+
+
+def test_check_dispatch_prefers_forecast_over_history_when_both_present():
+    # Forecast band [900, 1100] (k=1) would not trip at 1700; a rolling
+    # baseline built from a tight 1700-centered history would trip at
+    # 1700 too, so this only distinguishes branches if the forecast branch
+    # actually wins -- assert via detector.signal, not just the outcome.
+    history = pd.DataFrame({"dlr_amps": [1700.0] * (ROLLING_BASELINE_MIN_ROWS + 10)})
+    detector = AnomalyDetector(forecast=_forecast(), history=history, k=1.0)
+
+    detector.check({}, 1000.0)
+
+    assert detector.signal == "forecast_residual"
+
+
+def test_signal_starts_not_yet_evaluated():
+    detector = AnomalyDetector()
+    assert detector.signal == "not_yet_evaluated"
+
+
+def test_check_always_returns_two_tuple_of_bool_and_str():
+    detector = AnomalyDetector()
+    result = detector.check({}, 1000.0)
+
+    assert isinstance(result, tuple)
+    assert len(result) == 2
+    assert isinstance(result[0], bool)
+    assert isinstance(result[1], str)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# for_corridor (D-06 per-location control limit)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_corridor_k_is_the_wider_of_two_endpoints():
+    detector = AnomalyDetector.for_corridor("MIDLAND_EL_PASO")
+
+    expected = max(
+        config.ANOMALY_CONTROL_LIMIT_K_BY_LOCATION["MIDLAND"],
+        config.ANOMALY_CONTROL_LIMIT_K_BY_LOCATION["EL_PASO"],
+    )
+    assert detector.k == expected
+
+
+def test_for_corridor_unknown_corridor_raises_key_error():
+    with pytest.raises(KeyError) as exc_info:
+        AnomalyDetector.for_corridor("NOT_A_CORRIDOR")
+
+    assert "AUSTIN_CORPUS_CHRISTI" in str(exc_info.value)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# D-05: a trip resolves only through DLRSafetyMonitor._fallback
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_anomaly_resolves_through_existing_fallback_contract():
+    # A tight forecast band the overridden computed rating clears G1-G5
+    # cleanly but deviates far from, so the trip is attributable to G6
+    # alone.
+    detector = AnomalyDetector(forecast=_forecast(amps=1000.0, ci_lower_amps=990.0, ci_upper_amps=1010.0), k=1.0)
+
+    monitor = DLRSafetyMonitor(
+        static_rating=1690.0,
+        conductor=thermal_model.ConductorConfig(**config.DEFAULT_CONDUCTOR_CONFIG_KWARGS),
+        anomaly_detector=detector,
+        logger=lambda msg: None,
+    )
+    monitor._compute_ampacity = lambda d: 1700.0  # clears G4/G5, deviates from the tight forecast band above
+
+    valid_data = {
+        "sensor_status": "ok", "link_status": "ok",
+        "wind": 5.0, "temp": 25.0, "solar": 500.0,
+    }
+
+    result = monitor.run_check(valid_data)
+
+    assert sorted(result.keys()) == ["alerts", "fallback", "rating", "status"]
+    assert result["status"] == "fallback"
+    assert result["fallback"] is True
+    assert result["rating"] == monitor.static_rating
+    assert result["alerts"][0].startswith("G6 FAIL")
