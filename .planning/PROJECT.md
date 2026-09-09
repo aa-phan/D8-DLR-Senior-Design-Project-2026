@@ -30,15 +30,19 @@ ethical commitment, not a nice-to-have).
 - ✓ ERCOT West-zone grid load merge + Amps→MW conversion (`backend/ercot_dlr_merger.py`) — Phase 2
 - ✓ CSV export + 4-panel summary plots per station (`backend/dlr_pipeline.py`) — Phase 1
 
+### Validated
+
+- ✓ DS-F7: Safety monitor unified with the real IEEE 738 thermal model (`DLRSafetyMonitor._compute_ampacity` calls `thermal_model.ieee738_ampacity` directly); every gate (G1-G5) resolves toward the static rating, never an optimistic guess — Phase 3
+- ✓ DS-F10: Corridor spatial discretization — `corridor_discretization.py` discretizes each corridor into 5 great-circle points and takes the minimum per-point ampacity as the corridor-level rating, with the bottleneck point identified — Phase 3
+- ✓ DS-NF5: Fail-safe by default, extended to corridors — a candidate-probe exhaustion (no usable station data for a point) resolves to the corridor's static rating rather than dropping the point, raising, or interpolating — Phase 3
+
 ### Active
 
 <!-- Current scope. Building toward these. -->
 
-- [ ] DS-F5: Wire static-vs-DLR comparison to select the correct per-run location (currently uses a uniform fallback rating) — blocked on the open geographic scope decision below
-- [ ] DS-F7: Unify the safety monitor's ampacity check with the real IEEE 738 thermal model (currently a disagreeing placeholder formula)
-- [ ] DS-F10: Corridor spatial discretization — discretize a corridor into points, take the minimum ampacity as the corridor-level rating
+- [ ] DS-F5: Wire static-vs-DLR comparison to select the correct per-run location (currently uses a uniform fallback rating) — the corridor-endpoint mapping this was blocked on is now resolved by Phase 3's `config.CORRIDOR_ENDPOINTS`
 - [ ] DS-F11: Ampacity forecasting ahead of real time (regression/ML)
-- [ ] DS-F12: Learned anomaly detection trained on historical baselines, additive to the C7 fallback path
+- [ ] DS-F12: Learned anomaly detection trained on historical baselines, additive to the C7 fallback path — now has a real fallback shape to trigger through (Phase 3's G5 `min(computed, static_rating)` semantics)
 
 ### Out of Scope
 
@@ -110,9 +114,11 @@ ethical commitment, not a nice-to-have).
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
 | Adopt the existing 4-phase structure from `docs/data-science/ROADMAP.md`/`PRD.md` §4 (Foundation → Core Consolidation → Safety & Spatial → Predictive) as this project's ROADMAP.md | Already derived from the real component dependency graph (C1→{C4,C5,C6}→{C7,C8}→{C9,C10}); two of the four phases are already delivered against it | ✓ Good — validated by two completed phases |
-| **RESOLVED — Geographic/corridor scope**: adopted `Project Definition.md`'s 4-city scope (Austin, Corpus Christi, Midland, El Paso) as authoritative for `config.py::STATIC_RATINGS`, replacing the previous mismatched 5-city table. See `docs/data-science/decisions/geographic_scope.md` for full evidence and rationale. | `PRD.md` §10 and `data_provider.md` already implicitly treated the 4-city spec as ground truth; this makes it official. `config.py::STATIC_RATINGS` re-keyed to the 4 cities (midpoint of each city's documented static-limit range); `dlr_pipeline.py`'s redundant dead-code stub deleted. | ✓ Resolved 2026-09-02. **Still open** (tracked in `geographic_scope.md`): how the 4 cities map to corridor endpoints for C8 — `station_explorer.py::CORRIDORS`' West-Texas corridors were deliberately left unchanged pending that separate design question. |
+| **RESOLVED — Geographic/corridor scope**: adopted `Project Definition.md`'s 4-city scope (Austin, Corpus Christi, Midland, El Paso) as authoritative for `config.py::STATIC_RATINGS`, replacing the previous mismatched 5-city table. See `docs/data-science/decisions/geographic_scope.md` for full evidence and rationale. | `PRD.md` §10 and `data_provider.md` already implicitly treated the 4-city spec as ground truth; this makes it official. `config.py::STATIC_RATINGS` re-keyed to the 4 cities (midpoint of each city's documented static-limit range); `dlr_pipeline.py`'s redundant dead-code stub deleted. | ✓ Resolved 2026-09-02. Corridor-endpoint mapping (previously open) resolved 2026-09-08 — see next row. |
+| **RESOLVED — Corridor endpoints for C8**: `config.CORRIDOR_ENDPOINTS` defines exactly two corridors (Austin↔Corpus Christi, Midland↔El Paso / D-01), each endpoint resolving into `CITY_COORDINATES`/`STATIC_RATINGS`/`RATING_BOUNDS_BY_LOCATION` — one consistent geographic model across station discovery, static ratings, and discretization. Legacy `station_explorer.py::CORRIDORS` left untouched, not read by the new module. | Closed the gap `geographic_scope.md` flagged as still open. City coordinates for Corpus Christi/El Paso needed live re-verification against OpenStreetMap Nominatim (US Census Gazetteer diverged materially due to those cities' irregular incorporated-limits shapes). | ✓ Resolved 2026-09-08 — Phase 3 (03-02) |
 | **OPEN — Weather data provider** (Synoptic vs. NOAA vs. hybrid) | Genuinely unresolved per `PRD.md` §7.1; Synoptic/WTM is what works today behind `weather_provider.py`'s adapter, but has real research-tier scaling limits; NOAA has no code written against it yet and doesn't provide solar (would need NSRDB too) | — Pending. Explicitly must not block Phase 2/3 work (`PRD.md` §7.1) |
-| C7 (`DLRSafetyMonitor`) currently computes ampacity with a placeholder linear formula, not the real IEEE 738 model in C5 | Historical: C7 was written before C5's thermal model was extracted into its own module | ⚠️ Revisit — scheduled to be fixed by unifying them in Phase 3 |
+| C7 (`DLRSafetyMonitor`) currently computes ampacity with a placeholder linear formula, not the real IEEE 738 model in C5 | Historical: C7 was written before C5's thermal model was extracted into its own module | ✓ Resolved 2026-09-08 — Phase 3 (03-01) unified `_compute_ampacity` with `thermal_model.ieee738_ampacity` |
+| G5 ("large rating swing") large-swing checkpoint: flat vs. relative threshold shape, and whether it should fall back at all | Checkpoint decision required during 03-01 execution — old flat 150A threshold was calibrated against the placeholder formula's output range, not real IEEE 738 magnitudes (~1700-2300A) | ✓ Resolved 2026-09-08 — chose relative threshold (`config.DELTA_FRACTION = 0.15`) with conservative `min(computed, static_rating)` fallback under `status="fallback"`; `last_good_rating` still updates so a genuine sustained weather change resolves in one cycle |
 
 ---
-*Last updated: 2026-09-02 after initial project setup (doc-ingest synthesis)*
+*Last updated: 2026-09-08 after Phase 3 (Safety & Spatial)*

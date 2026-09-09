@@ -117,5 +117,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 |-------|----------------|--------|-----------|
 | 1. Foundation & Data Contract | Pre-GSD (C1–C3 implemented) | Complete | 2026-08-24 |
 | 2. Core Consolidation | Pre-GSD (C4–C6 implemented) | Complete | 2026-08-31 |
-| 3. Safety & Spatial | 3/3 | Complete   | 2026-09-03 |
+| 3. Safety & Spatial | 3/3 | Complete    | 2026-09-03 |
 | 4. Predictive | 0/TBD | Not started | - |

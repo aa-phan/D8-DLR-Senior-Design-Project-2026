@@ -1,44 +1,44 @@
 ---
 gsd_state_version: 1.0
-current_phase: 03
-status: executing
-stopped_at: Phase 3 context gathered
-last_updated: "2026-09-03T07:34:37.874Z"
-last_activity: 2026-09-03
-last_activity_desc: Phase 03 marked complete
-state_head: 6c50e57b7021c13ed9cf9faf0e9d2af7bd42bca5
+current_phase: 4
+current_phase_name: Predictive
+status: planning
+stopped_at: Phase 03 complete, ready to plan Phase 4
+last_updated: "2026-09-09T00:03:29.477Z"
+last_activity: 2026-09-08
+last_activity_desc: Phase 03 complete, transitioned to Phase 4
+state_head: 760e8db187bd7e491b3e5149c2e317fe78c4c979
 progress:
   total_phases: 4
   completed_phases: 1
   total_plans: 3
   completed_plans: 3
   percent: 25
-current_phase_name: Safety & Spatial
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-09-02)
+See: .planning/PROJECT.md (updated 2026-09-08)
 
 **Core value:** The end-to-end pipeline produces valid ampacity forecasts — weather ingestion through thermal model through export — and runs without manual intervention, while never letting an unreliable input silently overstate what a line can safely carry.
-**Current focus:** Phase 03 — Safety & Spatial
+**Current focus:** Phase 04 — Predictive
 
 ## Current Position
 
-Phase: 03 — COMPLETE
-Plan: 1 of 3
-Status: Phase 03 complete
-Last activity: 2026-09-03 — Phase 03 marked complete
+Phase: 4 — Predictive
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-09-08 — Phase 03 complete, transitioned to Phase 4
 
-Progress: [█████░░░░░] 50% (2/4 phases complete; percent is phase-based — no GSD plans exist yet for any phase, including the completed ones, since Phases 1–2 predate GSD adoption on this repo)
+Progress: [███░░░░░░░] 25% (1/4 phases complete under GSD tracking; Phases 1–2 predate GSD adoption on this repo and are recorded complete without plan-level tracking)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 0 (Phases 1–2 were built pre-GSD; no PLAN.md velocity data exists)
+- Total plans completed: 3 (Phases 1–2 were built pre-GSD; no PLAN.md velocity data exists)
 - Average duration: N/A
 - Total execution time: N/A
 
@@ -46,7 +46,7 @@ Progress: [█████░░░░░] 50% (2/4 phases complete; percent is 
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| - | - | - | - |
+| 03 | 3 | - | - |
 
 **Recent Trend:**
 
@@ -66,6 +66,8 @@ Recent decisions affecting current work:
 - Geographic/corridor scope RESOLVED (2026-09-02): adopted the 4-city scope (Austin, Corpus Christi, Midland, El Paso) — see `docs/data-science/decisions/geographic_scope.md` and PROJECT.md Key Decisions.
 - City→corridor endpoint mapping RESOLVED (2026-09-03, Phase 3 discuss): pair cities into 2 corridors (Austin↔Corpus Christi, Midland↔El Paso), city-center coords, 5-point synthetic straight-line discretization — see `.planning/phases/03-safety-spatial/03-CONTEXT.md` D-01–D-05.
 - Weather data provider RESOLVED for Phase 3 (2026-09-03, Phase 3 discuss): broadened Synoptic query (not WTM-restricted) with a nearest-5-then-10 candidate-probe fallback, falling back to static rating if exhausted — see `03-CONTEXT.md` D-06–D-09. Decided after a live access check against the team's Synoptic token confirmed real but per-station-inconsistent (25–75%) access across the 4 cities. `data_provider.md`'s full multi-provider composition (TCEQ+NSRDB+ASOS+Open-Meteo) is deferred, not adopted — likely Phase 4.
+- G5 large-swing gate RESOLVED (2026-09-08, Phase 3 execute checkpoint): relative threshold (`config.DELTA_FRACTION = 0.15`) with conservative `min(computed, static_rating)` fallback under `status="fallback"`; `last_good_rating` still updates on a G5 event so it doesn't latch — see `.planning/phases/03-safety-spatial/03-01-SUMMARY.md`.
+- Phase 3 fully closed out 2026-09-08: 3/3 plans executed and merged to `main`, independent `gsd-verifier` pass (goal achieved, 0 gaps), UAT (17/17 auto-covered by passing tests, user-confirmed), security review (`03-SECURITY.md`, threats_open: 0, 18 threats from plan-time STRIDE registers all closed).
 
 ### Pending Todos
 
@@ -73,11 +75,10 @@ None yet.
 
 ### Blockers/Concerns
 
-- **[Phase 2 carryover]** DS-F5 (static-vs-DLR comparison) still needs per-location selection wired into `run_pipeline`/`plot_dlr_summary` — the scope-decision blocker is cleared, but the wiring itself is unimplemented.
-- **[Phase 3 scope]** C7 (`DLRSafetyMonitor`) currently uses a placeholder linear ampacity formula that disagrees with the real IEEE 738 thermal model (C5) — the fail-safe commitment (DS-NF5) isn't fully realized until Phase 3 unifies them.
-- **[Phase 3 scope]** Known test contradiction in `backend/tests/SafetyMonitor_TestSuite.py::test_gate_2_fails_when_link_status_not_ok` (asserts `status == "ok"` and `fallback is True` simultaneously) — needs a semantics decision before C7 rework.
+- **[Phase 2 carryover]** DS-F5 (static-vs-DLR comparison) still needs per-location selection wired into `run_pipeline`/`plot_dlr_summary` — the scope-decision blocker is cleared (corridor endpoints now exist), but the wiring itself is unimplemented.
 - **[External dependency]** `ercot_data_retriever.py::pull_ercot_data`'s live path currently fails with a deterministic `Bad CRC-32` error inside the third-party `gridstatus` library — not this project's code, but blocks live ERCOT pulls until upstream fixes it or a workaround is added.
 - **[Process]** ECE 464 requires updating `ACKNOWLEDGEMENTS.md` before any significant AI-assisted commit.
+- **[Process]** `main` is a protected branch and this project's `branching_strategy` is `none` — Phase 3 executed and committed directly on `main` (worktrees merged with `--no-ff`). Confirm this is the intended workflow before Phase 4, or switch to a phase-branch strategy.
 
 ## Deferred Items
 
@@ -89,6 +90,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-03T05:18:37.339Z
-Stopped at: Phase 3 context gathered
-Resume file: .planning/phases/03-safety-spatial/03-CONTEXT.md
+Last session: 2026-09-08
+Stopped at: Phase 03 complete, ready to plan Phase 4
+Resume file: None
