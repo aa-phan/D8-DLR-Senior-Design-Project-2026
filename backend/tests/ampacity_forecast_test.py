@@ -1,0 +1,186 @@
+"""
+Tests for backend/ampacity_forecast.py (C9 — Ampacity Forecasting, DS-F11).
+
+Fixtures are generated deterministically (`_synthetic_history`, seeded via
+`numpy.random.default_rng`) rather than committed as static data, so the
+suite stays reproducible under DS-NF2 with no binary or bulky data in the
+repo. Follows backend/tests/corridor_discretization_test.py's conventions:
+module-level imports, `@pytest.fixture`/`@pytest.mark.parametrize`, one
+`test_*` per behavior, plain asserts, no classes, no network.
+
+Also covers Plan 04-02 Task 2's `forecast_columns` <-> `units_def.PIPELINE_SCHEMA`
+agreement (the link that catches a key rename on either side).
+"""
+
+from datetime import datetime, timedelta
+
+import numpy as np
+import pandas as pd
+import pytest
+
+import ampacity_forecast as amp_forecast
+import config
+import historical_archive
+import units_def
+
+
+def _synthetic_history(n_rows=672, noise_amps=25.0, seed=20260908,
+                        base_amps=1200.0, trend_amps_per_row=0.0):
+    """
+    A deterministic, `historical_archive.ARCHIVE_COLUMNS`-compatible frame
+    with hourly `datetime_utc` strings and a `dlr_amps` series built from
+    `numpy.random.default_rng(seed)` so the same call always produces the
+    same frame. The default 672 rows is four weeks of hourly data — the
+    "larger synthetic fixture" RESEARCH.md's Wave 0 Gaps asked for, and
+    enough for a meaningful walk-forward backtest.
+    """
+    rng = np.random.default_rng(seed)
+    base_dt = datetime(2026, 1, 1, 0, 0, 0)
+    timestamps = [(base_dt + timedelta(hours=i)).isoformat() for i in range(n_rows)]
+    trend = trend_amps_per_row * np.arange(n_rows)
+    noise = rng.normal(loc=0.0, scale=noise_amps, size=n_rows) if noise_amps > 0 else np.zeros(n_rows)
+    dlr_amps = base_amps + trend + noise
+
+    return pd.DataFrame({
+        "datetime_utc": timestamps,
+        "corridor": ["AUSTIN_CORPUS_CHRISTI"] * n_rows,
+        "air_temp": [25.0] * n_rows,
+        "wind_speed": [5.0] * n_rows,
+        "solar_radiation": [500.0] * n_rows,
+        "dlr_amps": dlr_amps,
+        "static_rating": [1200.0] * n_rows,
+        "status": ["ok"] * n_rows,
+        "fallback": [False] * n_rows,
+        "bottleneck_index": [0] * n_rows,
+        "schema_version": [historical_archive.ARCHIVE_SCHEMA_VERSION] * n_rows,
+    })
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# backtest_residuals — the out-of-sample walk-forward backtest
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_backtest_residuals_all_zero_on_flat_series():
+    history = _synthetic_history(n_rows=100, noise_amps=0.0)
+    series = history["dlr_amps"]
+
+    residuals = amp_forecast.backtest_residuals(
+        series, method="naive", min_train_rows=config.FORECAST_MIN_HISTORY_ROWS
+    )
+
+    assert residuals.size > 0
+    assert np.allclose(residuals, 0.0)
+
+
+def test_backtest_residuals_centered_on_constant_step_for_trend():
+    step = 5.0
+    history = _synthetic_history(n_rows=100, noise_amps=0.0, trend_amps_per_row=step)
+    series = history["dlr_amps"]
+
+    residuals = amp_forecast.backtest_residuals(
+        series, method="naive", min_train_rows=config.FORECAST_MIN_HISTORY_ROWS
+    )
+
+    assert residuals.size > 0
+    assert np.allclose(residuals, step)
+
+
+def test_band_widens_with_noise():
+    narrow = _synthetic_history(n_rows=672, noise_amps=25.0)
+    wide = _synthetic_history(n_rows=672, noise_amps=200.0)
+
+    narrow_result = amp_forecast.forecast_ampacity(narrow, method="naive")
+    wide_result = amp_forecast.forecast_ampacity(wide, method="naive")
+
+    assert narrow_result is not None and wide_result is not None
+    narrow_width = narrow_result.ci_upper_amps - narrow_result.ci_lower_amps
+    wide_width = wide_result.ci_upper_amps - wide_result.ci_lower_amps
+    assert wide_width > narrow_width
+
+
+def test_backtest_residuals_order_dependent_on_reversed_tail():
+    history = _synthetic_history(n_rows=100, noise_amps=25.0)
+    series = history["dlr_amps"]
+    original_residuals = amp_forecast.backtest_residuals(
+        series, method="naive", min_train_rows=config.FORECAST_MIN_HISTORY_ROWS
+    )
+
+    reversed_series = series.copy()
+    q = len(series) // 4
+    reversed_series.iloc[-q:] = reversed_series.iloc[-q:].iloc[::-1].to_numpy()
+
+    reversed_residuals = amp_forecast.backtest_residuals(
+        reversed_series, method="naive", min_train_rows=config.FORECAST_MIN_HISTORY_ROWS
+    )
+
+    assert not np.array_equal(original_residuals, reversed_residuals)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Both Tier-1 methods share one signature (D-02, D-10)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_ewm_and_naive_agree_on_flat_series():
+    history = _synthetic_history(n_rows=100, noise_amps=0.0)
+
+    naive_result = amp_forecast.forecast_ampacity(history, method="naive")
+    ewm_result = amp_forecast.forecast_ampacity(history, method="ewm")
+
+    assert naive_result is not None and ewm_result is not None
+    assert naive_result.amps == pytest.approx(ewm_result.amps, abs=1e-6)
+
+
+def test_ewm_has_smaller_deviation_from_mean_than_naive_on_noisy_series():
+    history = _synthetic_history(n_rows=672, noise_amps=100.0)
+    series_mean = float(history["dlr_amps"].mean())
+
+    naive_result = amp_forecast.forecast_ampacity(history, method="naive")
+    ewm_result = amp_forecast.forecast_ampacity(history, method="ewm")
+
+    naive_deviation = abs(naive_result.amps - series_mean)
+    ewm_deviation = abs(ewm_result.amps - series_mean)
+
+    assert ewm_deviation < naive_deviation
+
+
+def test_forecast_ampacity_unknown_method_raises_value_error_naming_valid_methods():
+    history = _synthetic_history(n_rows=config.FORECAST_MIN_HISTORY_ROWS)
+
+    with pytest.raises(ValueError) as exc_info:
+        amp_forecast.forecast_ampacity(history, method="holt")
+
+    message = str(exc_info.value)
+    assert "naive" in message
+    assert "ewm" in message
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Cold-start floor (RESEARCH.md Pitfall 1)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_forecast_returns_none_below_min_history_rows_and_result_at_exactly_min_rows():
+    below = _synthetic_history(n_rows=config.FORECAST_MIN_HISTORY_ROWS - 1)
+    at_floor = _synthetic_history(n_rows=config.FORECAST_MIN_HISTORY_ROWS)
+
+    assert amp_forecast.forecast_ampacity(below) is None
+
+    result = amp_forecast.forecast_ampacity(at_floor)
+    assert isinstance(result, amp_forecast.ForecastResult)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Band ordering + boundary type discipline (RESEARCH.md Pitfall 2)
+# ──────────────────────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("method", amp_forecast.FORECAST_METHODS)
+def test_band_contains_point_forecast_and_types_are_native(method):
+    history = _synthetic_history(n_rows=672, noise_amps=50.0)
+    result = amp_forecast.forecast_ampacity(history, method=method)
+
+    assert result is not None
+    assert result.ci_lower_amps <= result.amps <= result.ci_upper_amps
+    assert type(result.amps) is float
+    assert type(result.ci_lower_amps) is float
+    assert type(result.ci_upper_amps) is float
+    assert type(result.n_observations) is int
+    assert type(result.n_residuals) is int
