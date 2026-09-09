@@ -1,0 +1,25 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Runtime dependencies (D-11, Phase 4 Plan 04-03)
+# ──────────────────────────────────────────────────────────────────────────────
+# This file is the single source of truth for this repo's runtime
+# dependencies and supersedes the prose `pip install ...` lines in
+# README.md:33 and backend/dlr_pipeline.py:8 -- neither should be treated
+# as authoritative going forward.
+#
+# It exists to serve DS-NF2 (reproducibility), a locked non-functional
+# requirement: an unpinned, undeclared dependency set works against it.
+#
+# Every version below was verified already installed in this project's
+# `.venv` (via `.venv/bin/python -m pip freeze`), not chosen from a
+# registry -- this file records the environment it was written from, it
+# does not change it.
+#
+# Tier 2 modelling libraries (scikit-learn, statsmodels) are deliberately
+# absent per D-10: there is no historical data yet to justify or validate
+# them against, and both carry unresolved [SUS] legitimacy verdicts in
+# 04-RESEARCH.md's Package Legitimacy Audit. Neither may be added without
+# the human legitimacy checkpoint that audit requires.
+pandas==2.3.3
+numpy==2.4.3
+scipy==1.17.1
+pytest==9.0.3
