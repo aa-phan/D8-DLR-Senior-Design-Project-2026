@@ -22,8 +22,17 @@ def amps_to_mw(amps: float, voltage_kv: float, pf: float) -> float:
 # ──────────────────────────────────────────────────────────────────────────────
 # 2. DATA PROCESSING
 # ──────────────────────────────────────────────────────────────────────────────
-def process_dlr_to_hourly(dlr_csv_path: str) -> pd.DataFrame:
-    """Loads 5-min DLR data and resamples to Hourly worst-case."""
+def process_dlr_to_hourly(dlr_csv_path: str, city: str = None) -> pd.DataFrame:
+    """Loads 5-min DLR data and resamples to Hourly worst-case.
+
+    Args:
+        dlr_csv_path: Path to the 5-minute DLR CSV to load.
+        city: Selects the per-location static rating from
+            `config.STATIC_RATINGS` (e.g. `"AUSTIN"`). An unrecognised or
+            omitted city falls back to `config.DEFAULT_STATIC_RATING`. One
+            call covers one station's CSV — one city, one resolved rating
+            per call.
+    """
     df = pd.read_csv(dlr_csv_path)
     
     # Convert string to true datetime and set as the dataframe index
@@ -41,7 +50,13 @@ def process_dlr_to_hourly(dlr_csv_path: str) -> pd.DataFrame:
     
     # Convert Amps to MW for ERCOT comparison
     hourly["dlr_capacity_mw"] = amps_to_mw(hourly["dlr_amps"], LINE_VOLTAGE_KV, POWER_FACTOR)
-    hourly["static_capacity_mw"] = amps_to_mw(config.DEFAULT_STATIC_RATING, LINE_VOLTAGE_KV, POWER_FACTOR)
+    # Resolve the per-location static rating once per call. An unrecognised
+    # or omitted city falls back to DEFAULT_STATIC_RATING, which is
+    # conservative by construction: it is strictly lower than every
+    # configured city rating, so a typo understates capacity rather than
+    # overstating it.
+    static_rating = config.STATIC_RATINGS.get(city, config.DEFAULT_STATIC_RATING)
+    hourly["static_capacity_mw"] = amps_to_mw(static_rating, LINE_VOLTAGE_KV, POWER_FACTOR)
     
     return hourly.reset_index()
 
@@ -126,7 +141,8 @@ if __name__ == "__main__":
     # Ensure the file exists before running
     if os.path.exists(DLR_FILE):
         print(f"Loading DLR Data for {TARGET_STATION}...")
-        dlr_hourly = process_dlr_to_hourly(DLR_FILE)
+        # TARGET_STATION "AN489" is an Austin-network WTM station (D-07).
+        dlr_hourly = process_dlr_to_hourly(DLR_FILE, city="AUSTIN")
         
         print("Loading ERCOT Data...")
         # Get start/end bounds from the actual DLR data to pull exact ERCOT matches

@@ -85,7 +85,7 @@ docs/       data-science/ (PRD, roadmap, component specs) and frontend/ (placeho
 | `line_azimuth` | `ConductorConfig` | Compass bearing of your line — critical for perpendicular wind |
 | `max_temp_c` | `ConductorConfig` | ERCOT emergency rating limit (often 75–100°C for ACSR) |
 | `resistance_ac` | `ConductorConfig` | From ACSR table at 25°C; look up by conductor code name |
-| `static_rating` | `run_pipeline()` | Conventional normal/emergency rating to compare against |
+| `city` | `run_pipeline()`, `plot_dlr_summary()` | Selects the per-city static rating from `config.STATIC_RATINGS` (e.g. `"AUSTIN"` at 1900 A); an omitted or unrecognised city falls back to `config.DEFAULT_STATIC_RATING` at 900 A |
 | `solar_alt_deg` | `run_pipeline()` | Use seasonal midday average for your latitude |
 
 ---
