@@ -56,20 +56,20 @@ Which phases cover which requirements. Phase numbers match `.planning/ROADMAP.md
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| WX-01 | TBD | Pending |
-| WX-02 | TBD | Pending |
-| WX-03 | TBD | Pending |
-| WX-04 | TBD | Pending |
-| WX-05 | TBD | Pending |
-| WX-06 | TBD | Pending |
-| WX-07 | TBD | Pending |
-| WX-08 | TBD | Pending |
+| WX-01 | Phase 9 (TCEQ CAMS Integration) | Pending |
+| WX-02 | Phase 7 (Trivial-Integration Providers) | Pending |
+| WX-03 | Phase 8 (NSRDB Solar Integration) | Pending |
+| WX-04 | Phase 7 (Trivial-Integration Providers) | Pending |
+| WX-05 | Phase 6 (Multi-Provider Adapter Foundation) | Pending |
+| WX-06 | Phase 10 (Fallback Wiring & Documentation Ratification) | Pending |
+| WX-07 | Phase 6 (Multi-Provider Adapter Foundation) | Pending |
+| WX-08 | Phase 10 (Fallback Wiring & Documentation Ratification) | Pending |
 
 **Coverage:**
 - v1.1 requirements: 8 total
-- Mapped to phases: 0 (filled by roadmap creation)
-- Unmapped: 8 ⚠️ (expected before roadmap step runs)
+- Mapped to phases: 8/8 ✓
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-09-10*
-*Last updated: 2026-09-10 after initial v1.1 definition*
+*Last updated: 2026-09-10 after v1.1 ROADMAP.md creation (Phases 6-10)*

@@ -3,6 +3,7 @@
 ## Milestones
 
 - ✅ **v1.0 MVP** — Phases 1-5 (shipped 2026-09-10)
+- 🚧 **v1.1 Multi-Provider Weather** — Phases 6-10 (in progress)
 
 ## Phases
 
@@ -19,6 +20,126 @@ Full phase details (goals, success criteria, plans, requirements): `.planning/mi
 
 </details>
 
----
+### 🚧 v1.1 Multi-Provider Weather (In Progress)
 
-*Next milestone not yet started — run `/gsd-new-milestone` to begin.*
+**Milestone Goal:** Resolve `PRD.md` §7.1 (the open weather-data-provider decision) by adopting
+and implementing the per-variable provider composition from `docs/data-science/decisions/data_provider.md`'s
+vetting log — TCEQ CAMS + ASOS for wind/temp/RH, NREL NSRDB for solar, Open-Meteo for historical
+backfill, Synoptic retained as fallback — with `PIPELINE_SCHEMA` provenance tracking so
+exports/plots can show which provider supplied which value, and the decision documents (`PRD.md`
+§7.1, `data_provider.md`) ratified to match.
+
+**Sequencing rationale:** `weather_provider.py::fetch_weather(stids, start, end, provider)` is
+station-ID-based today; NSRDB and Open-Meteo are lat/lon-based grid providers. `data_provider.md`'s
+closing section flags this as a real design consequence that needs deciding deliberately, not
+discovering mid-milestone — so the signature/schema work (Phase 6) comes first, before any new
+provider is wired in. The two trivial, no-auth integrations (ASOS, Open-Meteo) come next to prove
+the new design cheaply; NSRDB follows once its free API key is registered (external checkpoint);
+TCEQ — the highest-integration-effort candidate, with no REST API — comes after; Synoptic's
+fallback wiring and the documentation ratification close the milestone, once all primaries exist
+to fall back from.
+
+- [ ] **Phase 6: Multi-Provider Adapter Foundation** - Redesign `fetch_weather`'s signature and extend `PIPELINE_SCHEMA` with provenance columns so station-based and grid-based providers can be combined without breaking existing callers
+- [ ] **Phase 7: Trivial-Integration Providers** - Wire ASOS 1-minute (wind/temp supplement) and Open-Meteo (historical backfill) behind the new adapter to prove the design cheaply
+- [ ] **Phase 8: NSRDB Solar Integration** - Wire NREL NSRDB (PSM v4) as the primary solar-irradiance source, gated on a registered developer API key
+- [ ] **Phase 9: TCEQ CAMS Integration** - Wire TCEQ CAMS as the primary wind/temp/RH source for all four cities via HTML-report scraping
+- [ ] **Phase 10: Fallback Wiring & Documentation Ratification** - Wire Synoptic as the fallback behind the same adapter and ratify the provider-composition decision in `PRD.md`/`data_provider.md`
+
+## Phase Details
+
+### Phase 6: Multi-Provider Adapter Foundation
+
+**Goal**: Redesign the weather adapter so a station-based provider (TCEQ/ASOS/Synoptic) and a
+lat/lon-based grid provider (NSRDB/Open-Meteo) can both be combined into one row per timestamp
+against the existing `PIPELINE_SCHEMA` weather columns, with per-field provenance tracked — before
+any new provider is wired in, per `data_provider.md`'s own flagged design consequence.
+**Depends on**: Phase 5
+**Requirements**: WX-05, WX-07
+**Success Criteria** (what must be TRUE):
+  1. `fetch_weather` accepts either a station-ID-based request or a lat/lon-based (grid) request and returns one unified DataFrame conforming to `PIPELINE_SCHEMA`'s existing weather columns, regardless of which kind of provider services the request.
+  2. Existing callers (C5 thermal model, C7 safety monitor, C8 corridor discretization) run unchanged against the new signature — the currently-working Synoptic-only path requires no call-site changes.
+  3. `PIPELINE_SCHEMA` version increments with new per-field provenance columns (e.g. `wind_source`, `solar_source`) added as `required: False`, with no existing key's name, unit, or range changed.
+  4. A pre-existing v2-era row (no provenance data) still validates successfully against the extended schema.
+  5. `.venv/bin/python -m pytest -q` reports 0 failed after the interface change.
+**Plans**: TBD
+
+### Phase 7: Trivial-Integration Providers
+
+**Goal**: Prove the new adapter design cheaply by wiring the two no-auth, trivial-integration
+providers — ASOS 1-minute (Iowa Environmental Mesonet) as a wind/temp supplement, and Open-Meteo as
+a single-request historical backfill source — behind the Phase 6 interface.
+**Depends on**: Phase 6
+**Requirements**: WX-02, WX-04
+**Success Criteria** (what must be TRUE):
+  1. Given a target city, the system fetches higher-temporal-density wind/temp observations from ASOS 1-minute as a supplement to the primary wind/temp source, with units converted to `PIPELINE_SCHEMA` units (knots→m/s, °F→°C).
+  2. Given a target city and a historical date range, one Open-Meteo request returns the full weather variable set (temp, wind speed/direction, solar, RH) for that window, standardized to `PIPELINE_SCHEMA` columns, for use as C9/C10 training data.
+  3. Both providers' output rows carry the correct value in the Phase 6 provenance column(s).
+  4. Neither integration requires a new secret or `.env` entry, matching each provider's no-auth access model confirmed live in `data_provider.md`.
+**Plans**: TBD
+
+### Phase 8: NSRDB Solar Integration
+
+**Goal**: NREL NSRDB (PSM v4) becomes the primary solar-irradiance source for all four cities.
+**Depends on**: Phase 7
+**Requirements**: WX-03
+**Success Criteria** (what must be TRUE):
+  1. Given a target city and time window, the system fetches solar irradiance (GHI) from NSRDB for that city's lat/lon coordinates (`config.CITY_COORDINATES`), for all four cities.
+  2. The NREL developer API key is read only from `.env`/environment (never hardcoded or committed), matching the existing `SYNOPTIC_TOKEN` pattern.
+  3. NSRDB-sourced solar rows are tagged with the correct provenance value and pass `PIPELINE_SCHEMA` range validation for `solar_radiation`.
+  4. If the API key is absent or the NSRDB request fails, the adapter raises/surfaces a clear error rather than silently returning fabricated data (e.g. the legacy hardcoded 1000 W/m² constant).
+**Plans**: TBD
+
+**Checkpoint**: this phase is gated on a free NREL developer API key being registered
+(`developer.nrel.gov`) — noted as "being registered for this milestone" in PROJECT.md. Confirm the
+key is available before planning execution; if not yet issued, this phase can be planned but not
+executed, and Phase 9 (TCEQ) does not depend on it and may proceed independently if reordering is
+needed.
+
+### Phase 9: TCEQ CAMS Integration
+
+**Goal**: TCEQ CAMS becomes the primary real-station source for wind speed, wind direction, and
+temperature (RH where available) across all four cities, despite TCEQ exposing no REST API.
+**Depends on**: Phase 8
+**Requirements**: WX-01
+**Success Criteria** (what must be TRUE):
+  1. Given any of the four target cities (Austin, Corpus Christi, Midland, El Paso), the system retrieves current wind speed, wind direction, and temperature from a real TCEQ CAMS site for that city by parsing `daily_summary.pl` (or an equivalent TCEQ report endpoint).
+  2. Scraped values are converted into `PIPELINE_SCHEMA`-conformant units and pass range validation for `air_temp`, `wind_speed`, `wind_direction`.
+  3. TCEQ-sourced rows are tagged with the correct provenance value in the wind/temp provenance column(s).
+  4. If a targeted CAMS site's report is unreachable, malformed, or missing a needed field (e.g. no solar radiation at that site), the adapter fails clearly or falls through rather than silently fabricating a reading.
+**Plans**: TBD
+
+**Design note**: this is the highest-integration-effort provider in the milestone — HTML report
+scraping, not a JSON/REST client — per `data_provider.md`'s own assessment. Plan for a scraper
+module, not an API wrapper, and budget for it independently of Phase 7's trivial integrations.
+
+### Phase 10: Fallback Wiring & Documentation Ratification
+
+**Goal**: Synoptic is wired as the fallback provider behind the same adapter for any primary
+provider failure, and the ratified per-variable provider composition decision is recorded in the
+project's canonical docs.
+**Depends on**: Phase 9
+**Requirements**: WX-06, WX-08
+**Success Criteria** (what must be TRUE):
+  1. If TCEQ or NSRDB fails or returns no usable data for a request, the adapter automatically falls back to Synoptic for that request and still returns a usable row, rather than raising or returning an empty result.
+  2. The fallback is observable in provenance — a fallback-sourced row's provenance column records "synoptic", not the failed primary.
+  3. `docs/data-science/PRD.md` §7.1 and `docs/data-science/decisions/data_provider.md`'s status line are updated from "Pending"/"Open — vetting in progress" to record the ratified per-variable composition, matching what's actually implemented.
+  4. `.venv/bin/python -m pytest -q` reports 0 failed with the full multi-provider adapter (all four providers + fallback) in place.
+**Plans**: TBD
+
+## Progress
+
+**Execution Order:**
+Phases execute in numeric order: 6 → 7 → 8 → 9 → 10
+
+| Phase | Milestone | Plans Complete | Status | Completed |
+|-------|-----------|----------------|--------|-----------|
+| 1. Foundation & Data Contract | v1.0 | Pre-GSD (C1-C3) | Complete | 2026-08-24 |
+| 2. Core Consolidation | v1.0 | Pre-GSD (C4-C6) | Complete | 2026-08-31 |
+| 3. Safety & Spatial | v1.0 | 3/3 | Complete | 2026-09-03 |
+| 4. Predictive | v1.0 | 3/3 | Complete | 2026-09-09 |
+| 5. DS-F5 Wiring | v1.0 | 1/1 | Complete | 2026-09-10 |
+| 6. Multi-Provider Adapter Foundation | v1.1 | 0/TBD | Not started | - |
+| 7. Trivial-Integration Providers | v1.1 | 0/TBD | Not started | - |
+| 8. NSRDB Solar Integration | v1.1 | 0/TBD | Not started | - |
+| 9. TCEQ CAMS Integration | v1.1 | 0/TBD | Not started | - |
+| 10. Fallback Wiring & Documentation Ratification | v1.1 | 0/TBD | Not started | - |
