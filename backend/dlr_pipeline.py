@@ -28,6 +28,7 @@ from typing import Union
 
 from units_def import validate_pipeline_row
 import thermal_model
+import config
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
 log = logging.getLogger(__name__)
@@ -184,7 +185,7 @@ def run_pipeline(
     start:          str,
     end:            str,
     conductor:      thermal_model.ConductorConfig,
-    static_rating:  float = 900.0,    # A — conventional static rating for comparison
+    city:           str = None,      # e.g. "AUSTIN" — selects the per-city static rating
     solar_alt_deg:  float = 45.0,
 ) -> pd.DataFrame:
     """
@@ -194,7 +195,10 @@ def run_pipeline(
         stids:          List of WTM station IDs
         start / end:    ISO-8601 UTC strings
         conductor:      thermal_model.ConductorConfig instance
-        static_rating:  Conventional static rating in Amps (for headroom calc)
+        city:           Selects this station's per-city static rating from
+                        config.STATIC_RATINGS (e.g. "AUSTIN"); an
+                        unrecognised or omitted city falls back to
+                        config.DEFAULT_STATIC_RATING.
         solar_alt_deg:  Representative solar altitude for the analysis period
 
     Returns:
@@ -230,6 +234,7 @@ def run_pipeline(
     )
 
     # Step 5 — DLR headroom vs static rating
+    static_rating = config.STATIC_RATINGS.get(city, config.DEFAULT_STATIC_RATING)
     obs["dlr_headroom_pct"] = (obs["dlr_amps"] - static_rating) / static_rating * 100
     obs["dlr_uplift_flag"]  = obs["dlr_amps"] > static_rating
 
@@ -301,7 +306,10 @@ def profile_missing_data(df: pd.DataFrame):
         return
 
     # Calculate the percentage of missing data for each variable, grouped by station
-    missing_pct = df.groupby("stid").apply(lambda x: x.isna().mean() * 100)
+    # include_groups=False avoids a pandas FutureWarning (grouping columns
+    # will be excluded from apply() in a future version) and keeps this
+    # function warning-silent, which run_pipeline's callers rely on (D-02).
+    missing_pct = df.groupby("stid").apply(lambda x: x.isna().mean() * 100, include_groups=False)
     
     # Filter to only show our critical DLR variables
     cols_to_check = [c for c in DLR_VARS if c in missing_pct.columns]
@@ -321,14 +329,24 @@ def profile_missing_data(df: pd.DataFrame):
 # 5.  VISUALIZATION
 # ──────────────────────────────────────────────────────────────────────────────
 
-def plot_dlr_summary(df: pd.DataFrame, static_rating: float = 900.0, output_dir: str=".", file_prefix: str="dlr"):
+def plot_dlr_summary(df: pd.DataFrame, city: str = None, output_dir: str=".", file_prefix: str="dlr"):
     """
     4-panel summary plot:
       1. DLR time series vs static rating
       2. Wind speed & perpendicular component
       3. Ambient temperature
       4. DLR headroom distribution (histogram)
+
+    Args:
+        df:          Pipeline output DataFrame (see run_pipeline).
+        city:        Selects this station's per-city static rating from
+                     config.STATIC_RATINGS (e.g. "AUSTIN"); an
+                     unrecognised or omitted city falls back to
+                     config.DEFAULT_STATIC_RATING.
+        output_dir:  Directory to write PNGs to.
+        file_prefix: Filename prefix for each station's plot.
     """
+    static_rating = config.STATIC_RATINGS.get(city, config.DEFAULT_STATIC_RATING)
     stations = df["stid"].unique()
 
     for stid in stations:
@@ -418,8 +436,6 @@ def export_results(df: pd.DataFrame, output_path: str = ".", file_prefix: str=".
 # ──────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    import config
-
     # ── Transmission line config ──────────────────────────────────────────────
     # Example: West Texas 345 kV line running roughly E–W (azimuth ~90°)
     # through the Permian Basin wind corridor
@@ -446,16 +462,18 @@ if __name__ == "__main__":
     END   = config.DEFAULT_END
 
     # ── Run ───────────────────────────────────────────────────────────────────
+    # config.DEFAULT_STATION_SOURCE is "data/wtm_stations_austin.csv", so
+    # this demo run is unambiguously Austin data (D-06).
     results = run_pipeline(
         stids          = TARGET_STATIONS,
         start          = START,
         end            = END,
         conductor      = conductor,
-        static_rating  = config.DEFAULT_STATIC_RATING,
+        city           = "AUSTIN",
         solar_alt_deg  = 72.0,   # July midday sun in West Texas
     )
 
     if not results.empty:
         #csv_path = os.path.join(OUTPUT_CSV)
         export_results(results, OUTPUT_CSV, file_prefix=f"{START.split('T')[0]}_{END.split('T')[0]}")
-        plot_dlr_summary(results, static_rating=config.DEFAULT_STATIC_RATING, output_dir=OUTPUT_PLOTS, file_prefix=f"{START.split('T')[0]}_{END.split('T')[0]}")
+        plot_dlr_summary(results, city="AUSTIN", output_dir=OUTPUT_PLOTS, file_prefix=f"{START.split('T')[0]}_{END.split('T')[0]}")
