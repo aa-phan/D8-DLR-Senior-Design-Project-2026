@@ -10,9 +10,13 @@ docs/data-science/specs/C6-grid-load-integration.md:
 3. The inner join in ercot_dlr_merger.py's __main__ block behaves as
    documented: it keeps only overlapping datetime_utc timestamps, with no
    row loss/duplication among the overlap.
+
+Also covers DS-F5 (D-04, D-05): process_dlr_to_hourly's per-location static
+rating resolution via the new `city` parameter.
 """
 import math
 import sys
+import warnings
 from pathlib import Path
 
 import pandas as pd
@@ -21,6 +25,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ercot_dlr_merger import amps_to_mw, process_dlr_to_hourly
+import config
+from ercot_dlr_merger import LINE_VOLTAGE_KV, POWER_FACTOR
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -138,3 +144,74 @@ def test_inner_join_keeps_only_overlap_no_duplicates():
     # The 00:00 (DLR-only) and 04:00 (ERCOT-only) hours must be dropped.
     assert pd.Timestamp("2025-07-01T00:00:00Z") not in set(merged["datetime_utc"])
     assert pd.Timestamp("2025-07-01T04:00:00Z") not in set(merged["datetime_utc"])
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# 4. DS-F5 (D-04, D-05): per-location static rating resolution
+# ──────────────────────────────────────────────────────────────────────────
+@pytest.fixture
+def dlr_csv(tmp_path):
+    """Writes a small synthetic 5-minute DLR CSV and returns its path."""
+    timestamps = pd.date_range("2025-07-01T00:00:00Z", periods=12, freq="5min")
+    df = pd.DataFrame(
+        {
+            "datetime_utc": timestamps,
+            "dlr_amps": [800.0] * 12,
+            "wind_speed": [5.0] * 12,
+            "air_temp": [30.0] * 12,
+        }
+    )
+    csv_path = tmp_path / "dlr_synthetic_city.csv"
+    df.to_csv(csv_path, index=False)
+    return str(csv_path)
+
+
+def test_city_austin_uses_per_location_static_rating(dlr_csv):
+    hourly = process_dlr_to_hourly(dlr_csv, city="AUSTIN")
+    expected_austin = amps_to_mw(config.STATIC_RATINGS["AUSTIN"], LINE_VOLTAGE_KV, POWER_FACTOR)
+    expected_default = amps_to_mw(config.DEFAULT_STATIC_RATING, LINE_VOLTAGE_KV, POWER_FACTOR)
+    assert hourly["static_capacity_mw"].to_numpy() == pytest.approx(expected_austin)
+    # This is the assertion that would have caught the audit finding: the
+    # resolved value must NOT be the unconditional default-rating read.
+    assert hourly["static_capacity_mw"].to_numpy() != pytest.approx(expected_default)
+
+
+def test_omitted_city_preserves_default_static_rating(dlr_csv):
+    hourly = process_dlr_to_hourly(dlr_csv)
+    expected_default = amps_to_mw(config.DEFAULT_STATIC_RATING, LINE_VOLTAGE_KV, POWER_FACTOR)
+    assert hourly["static_capacity_mw"].to_numpy() == pytest.approx(expected_default)
+
+
+def test_explicit_none_city_matches_omitted_city(dlr_csv):
+    hourly_omitted = process_dlr_to_hourly(dlr_csv)
+    hourly_none = process_dlr_to_hourly(dlr_csv, city=None)
+    assert (hourly_omitted["static_capacity_mw"] == hourly_none["static_capacity_mw"]).all()
+
+
+def test_unknown_city_falls_back_silently(dlr_csv):
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        hourly = process_dlr_to_hourly(dlr_csv, city="NOT_A_CITY")
+    expected_default = amps_to_mw(config.DEFAULT_STATIC_RATING, LINE_VOLTAGE_KV, POWER_FACTOR)
+    assert hourly["static_capacity_mw"].to_numpy() == pytest.approx(expected_default)
+
+
+@pytest.mark.parametrize("city,amps", sorted(config.STATIC_RATINGS.items()))
+def test_every_configured_city_resolves_its_own_rating(dlr_csv, city, amps):
+    hourly = process_dlr_to_hourly(dlr_csv, city=city)
+    expected = amps_to_mw(amps, LINE_VOLTAGE_KV, POWER_FACTOR)
+    assert hourly["static_capacity_mw"].to_numpy() == pytest.approx(expected)
+
+
+def test_default_static_rating_is_below_every_configured_city():
+    assert min(config.STATIC_RATINGS.values()) > config.DEFAULT_STATIC_RATING
+
+
+def test_city_argument_changes_only_the_static_column(dlr_csv):
+    hourly_austin = process_dlr_to_hourly(dlr_csv, city="AUSTIN")
+    hourly_default = process_dlr_to_hourly(dlr_csv)
+
+    for col in ("dlr_amps", "dlr_capacity_mw", "wind_speed", "air_temp"):
+        assert hourly_austin[col].to_numpy() == pytest.approx(hourly_default[col].to_numpy())
+
+    assert hourly_austin["static_capacity_mw"].to_numpy() != pytest.approx(hourly_default["static_capacity_mw"].to_numpy())
