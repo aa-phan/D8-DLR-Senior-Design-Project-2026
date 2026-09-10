@@ -28,11 +28,12 @@ functional and non-functional requirement it lists is part of this subsystem's c
       owned by C5
 - [x] **DS-F4**: Compute steady-state IEEE 738 ampacity from weather + conductor properties,
       validated against a published reference — owned by C5
-- [ ] **DS-F5**: Compare DLR against a static rating and flag uplift/headroom — owned by C1, C5.
-      Partial: per-location lookup table exists (`config.py::STATIC_RATINGS`, now the 4 documented
-      TX cities per `docs/data-science/decisions/geographic_scope.md`) but is not yet wired to
-      select a location per run (uses a uniform fallback). The scope decision that previously
-      blocked this is resolved; remaining work is pure wiring, not a decision gap.
+- [x] **DS-F5**: Compare DLR against a static rating and flag uplift/headroom — owned by C1, C5.
+      Complete: `config.py::STATIC_RATINGS` (the 4 documented TX cities per
+      `docs/data-science/decisions/geographic_scope.md`) is now wired into
+      `process_dlr_to_hourly`, `run_pipeline`, and `plot_dlr_summary` via a `city` parameter
+      resolved through `config.STATIC_RATINGS.get(city, config.DEFAULT_STATIC_RATING)`
+      (Phase 5, Plan 05-01).
 
 ### Data Contract & Validation
 
@@ -132,7 +133,7 @@ Which phases cover which requirements. Phase numbers match `.planning/ROADMAP.md
 | DS-F2 | Phase 2 | Complete |
 | DS-F3 | Phase 2 | Complete |
 | DS-F4 | Phase 2 | Complete |
-| DS-F5 | Phase 2 | In Progress (partial — see note above) |
+| DS-F5 | Phase 2 (wired in Phase 5) | Complete |
 | DS-F8 | Phase 2 | Complete |
 | DS-F7 | Phase 3 | Complete |
 | DS-F10 | Phase 3 | Complete |
