@@ -19,10 +19,10 @@ current_phase: 05
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-09-08)
+See: .planning/PROJECT.md (updated 2026-09-10 after v1.0 milestone)
 
 **Core value:** The end-to-end pipeline produces valid ampacity forecasts — weather ingestion through thermal model through export — and runs without manual intervention, while never letting an unreliable input silently overstate what a line can safely carry.
-**Current focus:** Phase 04 — Predictive
+**Current focus:** Planning next milestone (run /gsd-new-milestone)
 
 ## Current Position
 
@@ -84,10 +84,9 @@ None yet.
 
 ### Blockers/Concerns
 
-- **[Phase 2 carryover]** DS-F5 (static-vs-DLR comparison) still needs per-location selection wired into `run_pipeline`/`plot_dlr_summary` — the scope-decision blocker is cleared (corridor endpoints now exist), but the wiring itself is unimplemented.
 - **[External dependency]** `ercot_data_retriever.py::pull_ercot_data`'s live path currently fails with a deterministic `Bad CRC-32` error inside the third-party `gridstatus` library — not this project's code, but blocks live ERCOT pulls until upstream fixes it or a workaround is added.
 - **[Process]** ECE 464 requires updating `ACKNOWLEDGEMENTS.md` before any significant AI-assisted commit.
-- **[Process]** `main` is a protected branch and this project's `branching_strategy` is `none` — Phase 3 executed and committed directly on `main` (worktrees merged with `--no-ff`). Confirm this is the intended workflow before Phase 4, or switch to a phase-branch strategy.
+- **[Carried into next milestone]** `ampacity_forecast.forecast_ampacity` and `anomaly_detector.AnomalyDetector` have no production caller — `api/`/`frontend/` remain not-started placeholders owned by the Software sub-team. See PROJECT.md "Current State" for detail.
 
 ## Deferred Items
 
