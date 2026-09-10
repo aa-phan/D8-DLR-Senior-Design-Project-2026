@@ -97,7 +97,8 @@ def plot_holistic_grid_view(merged_df: pd.DataFrame, stid: str):
     # Panel 1: Megawatts (Capacity vs Demand)
     ax1 = axes[0]
     ax1.plot(merged_df.index, merged_df["dlr_capacity_mw"], color="steelblue", lw=2, label="Dynamic Line Capacity (MW)")
-    ax1.axhline(merged_df["static_capacity_mw"].iloc[0], color="red", ls="--", lw=2, label="Static Limit (900 A / ~510 MW)")
+    static_capacity_mw = merged_df["static_capacity_mw"].iloc[0]
+    ax1.axhline(static_capacity_mw, color="red", ls="--", lw=2, label=f"Static Limit (~{static_capacity_mw:.0f} MW)")
     
     # Plot ERCOT Load. We fill the area underneath to show the "volume" of demand
     ax1.plot(merged_df.index, merged_df["ercot_west_load_mw"], color="darkorange", lw=2, label="ERCOT West Load Demand (MW)")
