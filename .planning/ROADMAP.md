@@ -140,7 +140,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 **Goal:** Close the confirmed DS-F5 gap from the v1.0 milestone audit — wire per-location static ratings (`config.STATIC_RATINGS`) into `backend/dlr_pipeline.py` and `backend/ercot_dlr_merger.py`, which currently both hardcode `config.DEFAULT_STATIC_RATING` regardless of station/city.
 **Requirements**: DS-F5
 **Depends on:** Phase 4
-**Plans:** 1/1 plans executed
+**Plans:** 1/1 plans complete
 
 Plans:
 
