@@ -56,12 +56,27 @@ any new provider is wired in, per `data_provider.md`'s own flagged design conseq
 **Depends on**: Phase 5
 **Requirements**: WX-05, WX-07
 **Success Criteria** (what must be TRUE):
+
   1. `fetch_weather` accepts either a station-ID-based request or a lat/lon-based (grid) request and returns one unified DataFrame conforming to `PIPELINE_SCHEMA`'s existing weather columns, regardless of which kind of provider services the request.
   2. Existing callers (C5 thermal model, C7 safety monitor, C8 corridor discretization) run unchanged against the new signature — the currently-working Synoptic-only path requires no call-site changes.
   3. `PIPELINE_SCHEMA` version increments with new per-field provenance columns (e.g. `wind_source`, `solar_source`) added as `required: False`, with no existing key's name, unit, or range changed.
   4. A pre-existing v2-era row (no provenance data) still validates successfully against the extended schema.
   5. `.venv/bin/python -m pytest -q` reports 0 failed after the interface change.
-**Plans**: TBD
+
+**Plans**: 3 plans
+
+Plans:
+**Wave 1**
+
+- [ ] 06-01-PLAN.md — `PIPELINE_SCHEMA` v3 provenance columns, categorical validation, and end-to-end provenance on the station path (WX-07)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 06-02-PLAN.md — type-dispatched `location` parameter and internal station→city resolution (WX-05)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 06-03-PLAN.md — city-keyed merge, synthetic grid provider proof, and C4 spec/acknowledgements sync (WX-05)
 
 ### Phase 7: Trivial-Integration Providers
 
@@ -71,10 +86,12 @@ a single-request historical backfill source — behind the Phase 6 interface.
 **Depends on**: Phase 6
 **Requirements**: WX-02, WX-04
 **Success Criteria** (what must be TRUE):
+
   1. Given a target city, the system fetches higher-temporal-density wind/temp observations from ASOS 1-minute as a supplement to the primary wind/temp source, with units converted to `PIPELINE_SCHEMA` units (knots→m/s, °F→°C).
   2. Given a target city and a historical date range, one Open-Meteo request returns the full weather variable set (temp, wind speed/direction, solar, RH) for that window, standardized to `PIPELINE_SCHEMA` columns, for use as C9/C10 training data.
   3. Both providers' output rows carry the correct value in the Phase 6 provenance column(s).
   4. Neither integration requires a new secret or `.env` entry, matching each provider's no-auth access model confirmed live in `data_provider.md`.
+
 **Plans**: TBD
 
 ### Phase 8: NSRDB Solar Integration
@@ -83,10 +100,12 @@ a single-request historical backfill source — behind the Phase 6 interface.
 **Depends on**: Phase 7
 **Requirements**: WX-03
 **Success Criteria** (what must be TRUE):
+
   1. Given a target city and time window, the system fetches solar irradiance (GHI) from NSRDB for that city's lat/lon coordinates (`config.CITY_COORDINATES`), for all four cities.
   2. The NREL developer API key is read only from `.env`/environment (never hardcoded or committed), matching the existing `SYNOPTIC_TOKEN` pattern.
   3. NSRDB-sourced solar rows are tagged with the correct provenance value and pass `PIPELINE_SCHEMA` range validation for `solar_radiation`.
   4. If the API key is absent or the NSRDB request fails, the adapter raises/surfaces a clear error rather than silently returning fabricated data (e.g. the legacy hardcoded 1000 W/m² constant).
+
 **Plans**: TBD
 
 **Checkpoint**: this phase is gated on a free NREL developer API key being registered
@@ -102,10 +121,12 @@ temperature (RH where available) across all four cities, despite TCEQ exposing n
 **Depends on**: Phase 8
 **Requirements**: WX-01
 **Success Criteria** (what must be TRUE):
+
   1. Given any of the four target cities (Austin, Corpus Christi, Midland, El Paso), the system retrieves current wind speed, wind direction, and temperature from a real TCEQ CAMS site for that city by parsing `daily_summary.pl` (or an equivalent TCEQ report endpoint).
   2. Scraped values are converted into `PIPELINE_SCHEMA`-conformant units and pass range validation for `air_temp`, `wind_speed`, `wind_direction`.
   3. TCEQ-sourced rows are tagged with the correct provenance value in the wind/temp provenance column(s).
   4. If a targeted CAMS site's report is unreachable, malformed, or missing a needed field (e.g. no solar radiation at that site), the adapter fails clearly or falls through rather than silently fabricating a reading.
+
 **Plans**: TBD
 
 **Design note**: this is the highest-integration-effort provider in the milestone — HTML report
@@ -120,10 +141,12 @@ project's canonical docs.
 **Depends on**: Phase 9
 **Requirements**: WX-06, WX-08
 **Success Criteria** (what must be TRUE):
+
   1. If TCEQ or NSRDB fails or returns no usable data for a request, the adapter automatically falls back to Synoptic for that request and still returns a usable row, rather than raising or returning an empty result.
   2. The fallback is observable in provenance — a fallback-sourced row's provenance column records "synoptic", not the failed primary.
   3. `docs/data-science/PRD.md` §7.1 and `docs/data-science/decisions/data_provider.md`'s status line are updated from "Pending"/"Open — vetting in progress" to record the ratified per-variable composition, matching what's actually implemented.
   4. `.venv/bin/python -m pytest -q` reports 0 failed with the full multi-provider adapter (all four providers + fallback) in place.
+
 **Plans**: TBD
 
 ## Progress
@@ -138,7 +161,7 @@ Phases execute in numeric order: 6 → 7 → 8 → 9 → 10
 | 3. Safety & Spatial | v1.0 | 3/3 | Complete | 2026-09-03 |
 | 4. Predictive | v1.0 | 3/3 | Complete | 2026-09-09 |
 | 5. DS-F5 Wiring | v1.0 | 1/1 | Complete | 2026-09-10 |
-| 6. Multi-Provider Adapter Foundation | v1.1 | 0/TBD | Not started | - |
+| 6. Multi-Provider Adapter Foundation | v1.1 | 0/3 | Planned | - |
 | 7. Trivial-Integration Providers | v1.1 | 0/TBD | Not started | - |
 | 8. NSRDB Solar Integration | v1.1 | 0/TBD | Not started | - |
 | 9. TCEQ CAMS Integration | v1.1 | 0/TBD | Not started | - |
