@@ -460,6 +460,84 @@ def test_merge_output_is_sorted_and_reproducible():
     assert merged_forward.index.is_monotonic_increasing
 
 
+def _mock_grid_provider(lat: float, lon: float, start: str, end: str) -> pd.DataFrame:
+    """
+    Phase 6 test scaffolding only (D-07) -- a synthetic grid-based weather
+    provider used to prove the merge path end to end before a real grid
+    provider exists. Never registered in weather_provider's provider
+    dispatch, never imported by any production module, and never
+    referenced from fetch_weather. Phase 7 replaces this with a real
+    Open-Meteo/ASOS adapter.
+
+    Returns a frame carrying only `datetime_utc` and `solar_radiation` --
+    the shape a real grid provider supplies, since NSRDB/Open-Meteo are the
+    solar/backfill sources in data_provider.md's composition.
+    """
+    times = pd.date_range(start, periods=2, freq="5min")
+    return pd.DataFrame(
+        {
+            "datetime_utc": times,
+            "solar_radiation": [500.0, 510.0],
+        }
+    )
+
+
+def _end_to_end_merged_frame(monkeypatch) -> pd.DataFrame:
+    """
+    Shared setup for the Task 2 end-to-end tests: a synthetic Austin
+    station frame (via a monkeypatched dlr_pipeline.fetch_timeseries) tagged
+    and city-attached through the real fetch_weather path, merged with
+    _mock_grid_provider's synthetic solar-bearing frame tagged and
+    city-attached the same way a real grid provider's output would be.
+    """
+    station_source = _synthetic_frame(
+        air_temp=[25.0, 26.0],
+        wind_speed=[5.0, 5.5],
+        wind_direction=[180.0, 190.0],
+        relative_humidity=[40.0, 41.0],
+        lat=[30.2711, 30.2711],
+        lon=[-97.7437, -97.7437],
+    )
+    monkeypatch.setattr(dlr_pipeline, "fetch_timeseries", lambda *a, **k: station_source)
+
+    station = weather_provider.fetch_weather(["KAUS"], _START, _END)
+    station = weather_provider.attach_city(station)
+
+    lat, lon = config.CITY_COORDINATES["AUSTIN"]
+    grid = _mock_grid_provider(lat, lon, _START, _END)
+    grid = weather_provider.attach_provenance(grid, "open_meteo")
+    grid = weather_provider.attach_city(grid, lat=lat, lon=lon)
+
+    return weather_provider.merge_observations(station, grid)
+
+
+def test_end_to_end_station_plus_mock_grid_produces_one_validated_row(monkeypatch):
+    merged = _end_to_end_merged_frame(monkeypatch)
+
+    assert len(merged) == 2
+    assert (merged["wind_source"] == "synoptic").all()
+    assert (merged["temp_source"] == "synoptic").all()
+    assert (merged["humidity_source"] == "synoptic").all()
+    assert (merged["solar_source"] == "open_meteo").all()
+
+    for _, row in merged.iterrows():
+        assert units_def.validate_pipeline_row(row.to_dict(), strict=False) == []
+
+
+def test_mock_grid_provider_is_not_registered_in_the_real_dispatch():
+    with pytest.raises(ValueError):
+        weather_provider.fetch_weather((30.2711, -97.7437), _START, _END)
+
+
+def test_merged_row_provenance_matches_its_values(monkeypatch):
+    merged = _end_to_end_merged_frame(monkeypatch)
+
+    for provenance_col, source_cols in weather_provider.PROVENANCE_FIELD_MAP.items():
+        present_source_cols = [c for c in source_cols if c in merged.columns]
+        has_value = merged[present_source_cols].notna().any(axis=1)
+        assert (merged[provenance_col].notna() == has_value).all()
+
+
 def test_attach_city_returns_literal_config_keys():
     times = pd.date_range("2025-07-01T00:00:00Z", periods=2, freq="5min")
     frame = pd.DataFrame(
