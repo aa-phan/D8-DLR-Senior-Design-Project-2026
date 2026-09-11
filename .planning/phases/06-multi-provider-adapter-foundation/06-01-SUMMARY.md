@@ -192,3 +192,12 @@ None — no external service configuration required.
 ---
 *Phase: 06-multi-provider-adapter-foundation*
 *Completed: 2026-09-10*
+
+## Self-Check: PASSED
+
+- FOUND: backend/units_def.py
+- FOUND: backend/weather_provider.py
+- FOUND: backend/tests/weather_provider_test.py
+- FOUND: backend/tests/units_def_test.py
+- FOUND: .planning/phases/06-multi-provider-adapter-foundation/06-01-SUMMARY.md
+- FOUND: d3d5be6, 45721f2, 247145d, 606bc21
