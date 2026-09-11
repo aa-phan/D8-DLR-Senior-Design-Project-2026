@@ -321,13 +321,28 @@ def expect_dimension(q: Q, expected_dim: str) -> Q:
 # Wraps the key values from one row of the DLR pipeline output.
 # ──────────────────────────────────────────────────────────────────────────────
 
+# KNOWN_PROVIDER_NAMES: the registry of legal provenance values a v3+
+# categorical provenance column may hold. A future weather provider
+# (Phases 7-10) is registered here, and nowhere else, so D-04 (per-field
+# provenance sourced from any registered provider) holds without a schema
+# change.
+KNOWN_PROVIDER_NAMES: frozenset[str] = frozenset({
+    "synoptic",
+    "tceq",
+    "asos",
+    "nsrdb",
+    "open_meteo",
+})
+
 # PIPELINE_SCHEMA_VERSION: version 1 is the Phase 1-3 baseline (the ten
 # columns below, unchanged). Version 2 adds five Phase 4 (C9/C10) columns.
-# The rule this version exists to enforce: keys are only ever ADDED, always
-# with "required": False, and no existing key's name, unit or range is ever
-# changed. Downstream consumers that only know v1 keep working unmodified
-# against a v2-produced row — see RESEARCH.md Pattern 1, ROADMAP SC2.
-PIPELINE_SCHEMA_VERSION: int = 2
+# Version 3 adds four Phase 6 (C4 multi-provider) provenance columns, same
+# additive-only rule. The rule this version exists to enforce: keys are
+# only ever ADDED, always with "required": False, and no existing key's
+# name, unit or range is ever changed. Downstream consumers that only know
+# v1 (or v2) keep working unmodified against a v3-produced row — see
+# RESEARCH.md Pattern 1, ROADMAP SC2.
+PIPELINE_SCHEMA_VERSION: int = 3
 
 PIPELINE_SCHEMA: Dict[str, Dict] = {
     "air_temp": {
@@ -407,6 +422,32 @@ PIPELINE_SCHEMA: Dict[str, Dict] = {
         "range":     (0.0, 1000.0),
         "required":  False,
     },
+
+    # --- v3 additions (Phase 6 / C4 provider provenance) ---
+    "wind_source": {
+        "unit":      "categorical",
+        "range":     None,
+        "required":  False,
+        "allowed_values": KNOWN_PROVIDER_NAMES,
+    },
+    "temp_source": {
+        "unit":      "categorical",
+        "range":     None,
+        "required":  False,
+        "allowed_values": KNOWN_PROVIDER_NAMES,
+    },
+    "humidity_source": {
+        "unit":      "categorical",
+        "range":     None,
+        "required":  False,
+        "allowed_values": KNOWN_PROVIDER_NAMES,
+    },
+    "solar_source": {
+        "unit":      "categorical",
+        "range":     None,
+        "required":  False,
+        "allowed_values": KNOWN_PROVIDER_NAMES,
+    },
 }
 
 
@@ -444,6 +485,17 @@ def validate_pipeline_row(row: Dict[str, Any], strict: bool = True) -> list[str]
             if strict:
                 raise UnitError(msg)
             errors.append(msg)
+            continue
+
+        if spec.get("unit") == "categorical":
+            if value not in spec["allowed_values"]:
+                msg = (
+                    f"UNKNOWN PROVIDER in '{col}': {value!r} not one of "
+                    f"{sorted(spec['allowed_values'])}"
+                )
+                if strict:
+                    raise UnitError(msg)
+                errors.append(msg)
             continue
 
         lo, hi = spec["range"]
