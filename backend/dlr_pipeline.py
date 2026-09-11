@@ -155,6 +155,16 @@ def fetch_timeseries(
         for var in DLR_VARS:
             key = f"{var}_set_1"
             row[var] = obs.get(key, [None] * len(times))
+        try:
+            lat = float(station.get("LATITUDE"))
+        except (TypeError, ValueError):
+            lat = None
+        try:
+            lon = float(station.get("LONGITUDE"))
+        except (TypeError, ValueError):
+            lon = None
+        row["lat"] = lat
+        row["lon"] = lon
         frames.append(pd.DataFrame(row))
 
     if not frames:
