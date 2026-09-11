@@ -373,17 +373,19 @@ def _fetch_station(stids: list[str], start: str, end: str, provider: str) -> pd.
 | A2 | A well-formed, zero-row ASOS response for a given window should NOT trigger D-05's "raise on failure" (only a malformed/erroring response should) | Common Pitfalls, Pitfall 2 | Medium — if the planner instead makes every empty ASOS response raise, `fetch_weather` for the station path would become flaky for any window with a real ASOS sensor gap even when Synoptic (primary) succeeded; recommend confirming this interpretation of D-05 at a plan checkpoint |
 | A3 | Resolving ASOS station codes and Open-Meteo lat/lon from `config.CITY_COORDINATES`/a new `config.ASOS_STATIONS` dict (rather than deriving from the caller's raw station-ID list) correctly identifies "the target city" for every real call shape this phase needs to support | Architecture Patterns, Code Examples | Low — matches the existing `resolve_station_city`/`attach_city` precedent from Phase 6; would only misfire if a single `fetch_weather` call mixed station IDs from more than one of the four cities, which no current caller does |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Does D-05's "raises rather than degrading silently" cover a well-formed-but-empty ASOS response, or only a malformed/erroring one?**
+1. **RESOLVED — Does D-05's "raises rather than degrading silently" cover a well-formed-but-empty ASOS response, or only a malformed/erroring one?**
    - What we know: ASOS 1-minute data has real, expected outage windows (Pitfall 2, live-confirmed for `ELP` on one specific date). Synoptic can succeed while ASOS returns nothing for the same window.
    - What's unclear: Whether "no ASOS data available for this specific window" should be treated as an acceptable partial result (return Synoptic-only) or as a failure requiring `fetch_weather` to raise, per D-05's literal wording.
    - Recommendation: Treat a well-formed empty ASOS response as non-fatal (don't raise, don't add rows) and reserve raising for HTTP errors and the "Unknown station provided"/malformed-body case (Pitfall 1) — flag this interpretation for explicit user confirmation at the plan's first checkpoint, since D-05 is a locked decision and this is a boundary case it doesn't explicitly resolve.
+   - **Resolution:** Escalated to 07-01-PLAN.md's blocking `checkpoint:decision` (Task 1, Q1) for explicit developer confirmation before implementation — the recommendation above is Q1's proposed default (option A).
 
-2. **Does Phase 7's ASOS wiring need to anticipate Phase 9's TCEQ-as-primary change?**
+2. **RESOLVED — Does Phase 7's ASOS wiring need to anticipate Phase 9's TCEQ-as-primary change?**
    - What we know: D-03 locks ASOS supplementation to `fetch_weather(..., provider="synoptic")` specifically. `WX-02`'s own requirement text says "as a supplement to TCEQ" (TCEQ is Phase 9's not-yet-built primary).
    - What's unclear: Whether Phase 7 should structure the ASOS-supplement call so it's trivially reattachable to a future `provider="tceq"` branch, or whether that's explicitly Phase 9's problem to solve when TCEQ lands.
    - Recommendation: Scope Phase 7 to `provider="synoptic"` only, per this phase's locked D-03 wording. Note for Phase 9's own research/planning that ASOS's supplement logic will need to be either duplicated or refactored into a shared helper at that point.
+   - **Resolution:** Plans 07-01/07-02/07-03 scope strictly to `provider="synoptic"` per this recommendation; no TCEQ-anticipation code was added. Phase 9 will need to revisit ASOS's supplement logic when TCEQ lands.
 
 ## Environment Availability
 
