@@ -10,8 +10,8 @@ only implementation behind `fetch_weather` is Synoptic, delegated straight
 through to `backend/dlr_pipeline.py::fetch_timeseries`. If/when the provider
 decision lands on something else (or a second provider needs to be
 supported), that change should be containable entirely within this file —
-callers keep calling `fetch_weather(stids, start, end)` and shouldn't need
-to change at all.
+callers keep calling `fetch_weather(location, start, end)` and shouldn't
+need to change at all.
 
 This module deliberately does NOT implement a second (e.g. NOAA) provider.
 Doing so would be resolving the open provider question, which is explicitly
@@ -92,22 +92,89 @@ def attach_provenance(
     return frame
 
 
+def _validate_location_shape(location) -> str:
+    """
+    Classify `location` as the literal string "station" or "grid", or raise
+    `ValueError` naming the received shape.
+
+    Returns "grid" only when `location` is a `tuple` of exactly length 2
+    whose members are both `isinstance(v, (int, float))` and not `bool`.
+    Returns "station" only when `location` is a non-empty `list` whose
+    members are all `str`. Every other shape -- including a `list` of two
+    numbers, which must not be silently read as coordinates -- raises.
+    """
+    if isinstance(location, tuple):
+        if (
+            len(location) == 2
+            and all(
+                isinstance(v, (int, float)) and not isinstance(v, bool)
+                for v in location
+            )
+        ):
+            return "grid"
+        length = len(location)
+        raise ValueError(
+            f"Ambiguous location shape: tuple of length {length} "
+            f"({type(location).__name__}). A grid request must be a "
+            "2-element tuple of (lat, lon) numbers."
+        )
+
+    if isinstance(location, list):
+        if location and all(isinstance(v, str) for v in location):
+            return "station"
+        length = len(location)
+        raise ValueError(
+            f"Ambiguous location shape: list of length {length} "
+            f"({type(location).__name__}). A station request must be a "
+            "non-empty list of station-id strings."
+        )
+
+    length = len(location) if hasattr(location, "__len__") else None
+    raise ValueError(
+        f"Ambiguous location shape: {type(location).__name__}"
+        + (f" of length {length}" if length is not None else "")
+        + ". Expected a list of station-id strings or a 2-element "
+        "(lat, lon) tuple of numbers."
+    )
+
+
+def _fetch_station(stids: list[str], start: str, end: str, provider: str) -> pd.DataFrame:
+    if provider == "synoptic":
+        return attach_provenance(dlr_pipeline.fetch_timeseries(stids, start, end), "synoptic")
+
+    raise ValueError(
+        f"Unknown weather provider: {provider!r}. Only 'synoptic' is "
+        "currently implemented."
+    )
+
+
+def _fetch_grid(lat: float, lon: float, start: str, end: str, provider: str) -> pd.DataFrame:
+    raise ValueError(
+        "No grid weather provider is registered yet -- the first one "
+        "(NSRDB or Open-Meteo) lands in Phase 7. A (lat, lon) grid request "
+        "cannot be served by any provider today."
+    )
+
+
 def fetch_weather(
-    stids: list[str],
+    location: list[str] | tuple[float, float],
     start: str,
     end: str,
     provider: str = "synoptic",
 ) -> pd.DataFrame:
     """
-    Fetch weather observations for the given stations and date window,
+    Fetch weather observations for the given location and date window,
     behind a provider-agnostic interface.
 
     Args:
-        stids: Station IDs to fetch observations for.
+        location: A list of station IDs to select the station-based path,
+            or a `(lat, lon)` tuple of two numbers to select the
+            grid-based path. Any other shape raises ValueError.
         start: Start of the date window (ISO 8601 string).
         end: End of the date window (ISO 8601 string).
         provider: Which weather provider to use. Only "synoptic" is
-            currently implemented; any other value raises ValueError.
+            currently implemented on the station path; any other value
+            raises ValueError.
 
     Returns:
         A DataFrame matching the weather-observation subset of
@@ -116,12 +183,14 @@ def fetch_weather(
         (stid, datetime_utc).
 
     Raises:
-        ValueError: If `provider` is not a supported provider name.
+        ValueError: If `location` is neither a valid station-ID list nor a
+            valid (lat, lon) tuple, or if `provider` is not a supported
+            provider name.
     """
-    if provider == "synoptic":
-        return attach_provenance(dlr_pipeline.fetch_timeseries(stids, start, end), "synoptic")
+    shape = _validate_location_shape(location)
 
-    raise ValueError(
-        f"Unknown weather provider: {provider!r}. Only 'synoptic' is "
-        "currently implemented."
-    )
+    if shape == "station":
+        return _fetch_station(location, start, end, provider)
+
+    lat, lon = location
+    return _fetch_grid(lat, lon, start, end, provider)
