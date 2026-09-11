@@ -26,6 +26,70 @@ via `dlr_pipeline.fetch_timeseries`'s own token lookup.
 import pandas as pd
 
 import dlr_pipeline
+import units_def
+
+# PROVENANCE_FIELD_MAP: which underlying data column(s) each per-field
+# provenance column (units_def.PIPELINE_SCHEMA v3) is derived from. A
+# provenance column is set to the supplying provider's name only where at
+# least one of its mapped source columns is present in the frame AND
+# non-null for that row -- never inferred, never carried across rows, and
+# never defaulted when the source is unknown (D-03/D-04, T-06-01).
+PROVENANCE_FIELD_MAP: dict[str, tuple[str, ...]] = {
+    "wind_source": ("wind_speed", "wind_direction"),
+    "temp_source": ("air_temp",),
+    "humidity_source": ("relative_humidity",),
+    "solar_source": ("solar_radiation",),
+}
+
+
+def attach_provenance(
+    frame: pd.DataFrame,
+    provider: str,
+    *,
+    field_map: dict[str, tuple[str, ...]] = PROVENANCE_FIELD_MAP,
+) -> pd.DataFrame:
+    """
+    Return a copy of `frame` with per-field provenance columns
+    (units_def.PIPELINE_SCHEMA v3) attached, recording `provider` as the
+    source of each field family it actually supplied.
+
+    Args:
+        frame: A weather-observation DataFrame (may be None or empty).
+        provider: The provider name to record. Must be a member of
+            `units_def.KNOWN_PROVIDER_NAMES`.
+        field_map: Maps each provenance column name to the tuple of
+            underlying data columns whose presence it tracks.
+
+    Returns:
+        A new DataFrame (the caller's `frame` is left unchanged). Each
+        provenance column is set to `provider` on rows where at least one
+        of its mapped source columns is present in the frame AND non-null
+        for that row, and to `None` everywhere else. `frame` is returned
+        unchanged (not copied) when it is `None` or empty.
+
+    Raises:
+        ValueError: If `provider` is not in `units_def.KNOWN_PROVIDER_NAMES`.
+    """
+    if provider not in units_def.KNOWN_PROVIDER_NAMES:
+        raise ValueError(
+            f"Unknown weather provider: {provider!r}. Must be one of "
+            f"{sorted(units_def.KNOWN_PROVIDER_NAMES)}."
+        )
+
+    if frame is None or frame.empty:
+        return frame
+
+    frame = frame.copy()
+    for provenance_col, source_cols in field_map.items():
+        present_source_cols = [c for c in source_cols if c in frame.columns]
+        if not present_source_cols:
+            frame[provenance_col] = None
+            continue
+        has_value = frame[present_source_cols].notna().any(axis=1)
+        frame[provenance_col] = pd.Series(
+            [provider if v else None for v in has_value], index=frame.index
+        )
+    return frame
 
 
 def fetch_weather(
@@ -55,7 +119,7 @@ def fetch_weather(
         ValueError: If `provider` is not a supported provider name.
     """
     if provider == "synoptic":
-        return dlr_pipeline.fetch_timeseries(stids, start, end)
+        return attach_provenance(dlr_pipeline.fetch_timeseries(stids, start, end), "synoptic")
 
     raise ValueError(
         f"Unknown weather provider: {provider!r}. Only 'synoptic' is "

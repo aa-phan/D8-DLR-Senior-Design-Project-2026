@@ -439,13 +439,25 @@ _V1_SCHEMA_SNAPSHOT = {
 
 
 def test_schema_version_bumped_and_v1_columns_are_byte_identical():
-    assert _units_def_module.PIPELINE_SCHEMA_VERSION == 2
+    # Updated for the Plan 06-01 (v3) version bump: the schema version has
+    # moved to 3, but the guarantee this test pins -- that the original v1
+    # columns stay byte-identical across every subsequent additive bump --
+    # is unchanged and still checked here. See
+    # test_schema_version_bumped_to_v3_and_v2_columns_are_byte_identical
+    # below for the v2-inclusive freeze added by Plan 06-01 Task 3.
+    assert _units_def_module.PIPELINE_SCHEMA_VERSION == 3
     for name, spec in _V1_SCHEMA_SNAPSHOT.items():
         assert _units_def_module.PIPELINE_SCHEMA[name] == spec
 
 
 def test_v2_columns_are_all_optional():
-    v2_keys = set(_units_def_module.PIPELINE_SCHEMA) - set(_V1_SCHEMA_SNAPSHOT)
+    # Updated for the Plan 06-01 (v3) version bump: v3 layered four more
+    # keys (wind_source, temp_source, humidity_source, solar_source) on
+    # top of the schema this test already knew about, so those are
+    # excluded here to keep checking specifically the original five v2
+    # (Phase 4) keys, not the v3 additions.
+    _v3_keys = {"wind_source", "temp_source", "humidity_source", "solar_source"}
+    v2_keys = set(_units_def_module.PIPELINE_SCHEMA) - set(_V1_SCHEMA_SNAPSHOT) - _v3_keys
     assert v2_keys == {
         "forecast_horizon_min", "forecast_amps", "forecast_ci_lower_amps",
         "forecast_ci_upper_amps", "anomaly_score",
