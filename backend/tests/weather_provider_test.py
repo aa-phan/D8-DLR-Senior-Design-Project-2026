@@ -17,6 +17,7 @@ import inspect
 import pandas as pd
 import pytest
 
+import config
 import dlr_pipeline
 import units_def
 import weather_provider
@@ -185,3 +186,105 @@ def test_dispatch_rejects_a_three_element_tuple():
 def test_dispatch_existing_positional_call_shape_still_works():
     params = list(inspect.signature(weather_provider.fetch_weather).parameters)
     assert params[:4] == ["location", "start", "end", "provider"]
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Task 2 (Plan 06-02): internal station -> city resolution
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def test_city_resolution_returns_a_literal_config_key():
+    city = weather_provider.resolve_station_city(30.2711, -97.7437)
+    assert city == "AUSTIN"
+    assert city in config.CITY_COORDINATES
+
+
+def test_city_resolution_covers_all_four_cities():
+    for city, (lat, lon) in config.CITY_COORDINATES.items():
+        assert weather_provider.resolve_station_city(lat, lon) == city
+
+
+def test_city_resolution_returns_none_for_missing_coordinates():
+    assert weather_provider.resolve_station_city(None, -97.74) is None
+    assert weather_provider.resolve_station_city(30.27, None) is None
+    assert weather_provider.resolve_station_city(float("nan"), -97.74) is None
+    assert weather_provider.resolve_station_city("x", "y") is None
+
+
+def test_city_resolution_never_defaults_to_a_city():
+    for lat, lon in (
+        (None, -97.74),
+        (30.27, None),
+        (float("nan"), -97.74),
+        ("x", "y"),
+    ):
+        result = weather_provider.resolve_station_city(lat, lon)
+        assert result not in config.CITY_COORDINATES
+
+
+def test_city_resolution_is_deterministic_for_an_equidistant_point():
+    austin_lat, austin_lon = config.CITY_COORDINATES["AUSTIN"]
+    cc_lat, cc_lon = config.CITY_COORDINATES["CORPUS_CHRISTI"]
+    mid_lat = (austin_lat + cc_lat) / 2
+    mid_lon = (austin_lon + cc_lon) / 2
+
+    first = weather_provider.resolve_station_city(mid_lat, mid_lon)
+    second = weather_provider.resolve_station_city(mid_lat, mid_lon)
+
+    assert first == second
+
+
+def _synthetic_synoptic_payload(include_coords: bool) -> dict:
+    station = {
+        "STID": "KAUS",
+        "OBSERVATIONS": {
+            "date_time": ["2025-07-01T00:00:00Z", "2025-07-01T00:05:00Z"],
+            "air_temp_set_1": [25.0, 26.0],
+        },
+    }
+    if include_coords:
+        station["LATITUDE"] = "30.2711"
+        station["LONGITUDE"] = "-97.7437"
+    return {"SUMMARY": {"RESPONSE_CODE": "1"}, "STATION": [station]}
+
+
+class _FakeResponse:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self._payload
+
+
+def test_fetch_timeseries_frame_carries_lat_and_lon(monkeypatch):
+    monkeypatch.setattr(dlr_pipeline, "_token", lambda: "fake-token")
+    monkeypatch.setattr(
+        dlr_pipeline.requests,
+        "get",
+        lambda *a, **k: _FakeResponse(_synthetic_synoptic_payload(include_coords=True)),
+    )
+
+    frame = dlr_pipeline.fetch_timeseries(["KAUS"], _START, _END)
+
+    assert list(frame.index.names) == ["stid", "datetime_utc"]
+    assert "lat" in frame.columns
+    assert "lon" in frame.columns
+    assert (frame["lat"] == 30.2711).all()
+    assert (frame["lon"] == -97.7437).all()
+
+
+def test_fetch_timeseries_tolerates_a_station_object_without_coordinates(monkeypatch):
+    monkeypatch.setattr(dlr_pipeline, "_token", lambda: "fake-token")
+    monkeypatch.setattr(
+        dlr_pipeline.requests,
+        "get",
+        lambda *a, **k: _FakeResponse(_synthetic_synoptic_payload(include_coords=False)),
+    )
+
+    frame = dlr_pipeline.fetch_timeseries(["KAUS"], _START, _END)
+
+    assert frame["lat"].isna().all()
+    assert frame["lon"].isna().all()
