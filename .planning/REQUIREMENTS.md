@@ -22,9 +22,9 @@ Requirements for the Multi-Provider Weather milestone. Each maps to roadmap phas
 
 ### Provider Composition & Fallback
 
-- [ ] **WX-05**: `weather_provider.py::fetch_weather` combines TCEQ/ASOS (station-based) and NSRDB/Open-Meteo (grid/lat-lon-based) into one row per timestamp against the existing `PIPELINE_SCHEMA` weather columns, without requiring callers (C5, C7, C8) to change.
+- [x] **WX-05**: `weather_provider.py::fetch_weather` combines TCEQ/ASOS (station-based) and NSRDB/Open-Meteo (grid/lat-lon-based) into one row per timestamp against the existing `PIPELINE_SCHEMA` weather columns, without requiring callers (C5, C7, C8) to change.
 - [ ] **WX-06**: If a primary provider (TCEQ or NSRDB) fails or returns no usable data for a request, the system falls back to Synoptic behind the same adapter interface, rather than raising or returning an empty result.
-- [ ] **WX-07**: `PIPELINE_SCHEMA` is extended with per-field provenance columns (e.g. `wind_source`, `solar_source`) recording which provider supplied each field's value for a given row, following the additive-only versioning rule already established for schema changes (new keys, `required: False`, no changes to existing keys).
+- [x] **WX-07**: `PIPELINE_SCHEMA` is extended with per-field provenance columns (e.g. `wind_source`, `solar_source`) recording which provider supplied each field's value for a given row, following the additive-only versioning rule already established for schema changes (new keys, `required: False`, no changes to existing keys).
 
 ### Documentation
 
@@ -60,12 +60,13 @@ Which phases cover which requirements. Phase numbers match `.planning/ROADMAP.md
 | WX-02 | Phase 7 (Trivial-Integration Providers) | Pending |
 | WX-03 | Phase 8 (NSRDB Solar Integration) | Pending |
 | WX-04 | Phase 7 (Trivial-Integration Providers) | Pending |
-| WX-05 | Phase 6 (Multi-Provider Adapter Foundation) | Pending |
+| WX-05 | Phase 6 (Multi-Provider Adapter Foundation) | Complete |
 | WX-06 | Phase 10 (Fallback Wiring & Documentation Ratification) | Pending |
-| WX-07 | Phase 6 (Multi-Provider Adapter Foundation) | Pending |
+| WX-07 | Phase 6 (Multi-Provider Adapter Foundation) | Complete |
 | WX-08 | Phase 10 (Fallback Wiring & Documentation Ratification) | Pending |
 
 **Coverage:**
+
 - v1.1 requirements: 8 total
 - Mapped to phases: 8/8 ✓
 - Unmapped: 0
