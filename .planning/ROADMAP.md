@@ -92,7 +92,20 @@ a single-request historical backfill source — behind the Phase 6 interface.
   3. Both providers' output rows carry the correct value in the Phase 6 provenance column(s).
   4. Neither integration requires a new secret or `.env` entry, matching each provider's no-auth access model confirmed live in `data_provider.md`.
 
-**Plans**: TBD
+**Plans**: 3 plans
+
+Plans:
+**Wave 1**
+
+- [ ] 07-01-PLAN.md — ASOS 1-minute supplement: `config.ASOS_STATIONS`, `asos_provider.fetch_asos_1min`, and the union-of-timestamps merge wired transparently into the station path (WX-02)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 07-02-PLAN.md — Open-Meteo Archive API as the grid path's first real provider: single-request full variable set, standardized to `PIPELINE_SCHEMA` (WX-04)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 07-03-PLAN.md — three-provider provenance proof, source-level no-new-secrets gate, C4 spec sync, and live-endpoint confirmation (WX-02, WX-04)
 
 ### Phase 8: NSRDB Solar Integration
 
