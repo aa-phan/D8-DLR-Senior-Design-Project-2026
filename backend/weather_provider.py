@@ -127,6 +127,163 @@ def resolve_station_city(lat, lon) -> str | None:
     )
 
 
+# MERGE_KEY: the literal (city, datetime_utc) pair merge_observations() keys
+# on (D-05). City was chosen over station ID or raw coordinates because
+# every request in this codebase already resolves to one of the four
+# config.CITY_COORDINATES entries -- keying on city keeps the merge
+# insensitive to which specific station or grid cell actually supplied a
+# given reading.
+MERGE_KEY: tuple[str, str] = ("city", "datetime_utc")
+
+
+def attach_city(
+    frame: pd.DataFrame,
+    *,
+    lat: float = None,
+    lon: float = None,
+) -> pd.DataFrame:
+    """
+    Return a copy of `frame` with a `city` column attached via
+    `resolve_station_city` -- never a default, inferred, or reformatted
+    city label.
+
+    Args:
+        frame: A weather-observation DataFrame (may be None or empty).
+        lat, lon: When both are supplied (the grid-request case, where the
+            coordinates came from the caller rather than from the data),
+            every row's `city` is set from this single coordinate pair.
+            When neither is supplied, `city` is derived per row from the
+            frame's own `lat`/`lon` columns.
+
+    Returns:
+        A new DataFrame (the caller's `frame` is left unchanged) carrying a
+        `city` column whose every non-null value is a literal
+        `config.CITY_COORDINATES` key. `frame` is returned unchanged (not
+        copied) when it is `None` or empty.
+
+    Raises:
+        ValueError: If `frame` is non-empty, `lat`/`lon` were not supplied,
+            and `frame` has no `lat` column -- a caller asking for city
+            attribution on a frame with nothing to attribute from is a bug,
+            not a null case.
+    """
+    if frame is None or frame.empty:
+        return frame
+
+    frame = frame.copy()
+
+    if lat is not None and lon is not None:
+        frame["city"] = resolve_station_city(lat, lon)
+        return frame
+
+    if "lat" not in frame.columns:
+        raise ValueError(
+            "attach_city: frame has no 'lat' column and no lat/lon keyword "
+            "arguments were supplied -- nothing to resolve a city from."
+        )
+
+    lon_values = (
+        frame["lon"] if "lon" in frame.columns else pd.Series([None] * len(frame), index=frame.index)
+    )
+    frame["city"] = [
+        resolve_station_city(row_lat, row_lon)
+        for row_lat, row_lon in zip(frame["lat"], lon_values)
+    ]
+    return frame
+
+
+def _prepare_merge_side(frame: pd.DataFrame, side_name: str) -> pd.DataFrame:
+    """
+    Normalize one side of a merge_observations() call: verify both MERGE_KEY
+    members are present (as a column or an index level), verify no row has
+    an unresolvable (null) city, then index the frame on MERGE_KEY.
+
+    Raises:
+        ValueError: If a MERGE_KEY member is missing from `frame`'s columns
+            and index levels, or if any row's `city` is null.
+    """
+    names_present = set(frame.columns) | {n for n in frame.index.names if n is not None}
+    missing = [k for k in MERGE_KEY if k not in names_present]
+    if missing:
+        raise ValueError(
+            f"merge_observations: {side_name} frame is missing required key "
+            f"column(s) {missing} -- both {MERGE_KEY} must be present as a "
+            "column or an index level."
+        )
+
+    if any(name is not None for name in frame.index.names):
+        frame = frame.reset_index()
+
+    null_city_count = int(frame["city"].isna().sum())
+    if null_city_count:
+        raise ValueError(
+            f"merge_observations: {null_city_count} row(s) in the "
+            f"{side_name} frame have an unresolvable (null) city and cannot "
+            "be merged -- resolving or dropping them is the caller's "
+            "responsibility, not a default this function may apply."
+        )
+
+    return frame.set_index(list(MERGE_KEY)).sort_index()
+
+
+def merge_observations(station_frame: pd.DataFrame, grid_frame: pd.DataFrame) -> pd.DataFrame:
+    """
+    Combine a station-sourced frame and a grid-sourced frame into one row
+    per (city, datetime_utc) key (D-05), with each field's value and
+    provenance drawn from whichever side actually supplied it.
+
+    `combine_first` is the primitive used rather than an outer `merge` plus
+    per-column `fillna`: it fills nulls column-by-column from the other
+    frame and unions both indexes, which is exactly D-05's semantics, and
+    the calling frame's non-null value winning is exactly
+    `data_provider.md`'s composition -- station-based wind/temp primary,
+    grid-based solar filling what stations lack. The station frame is
+    combined from the left for that reason.
+
+    The honesty of the merged provenance rests entirely on an invariant
+    `attach_provenance` already establishes: a provenance cell is non-null
+    exactly when its mapped data cell is non-null. Because `combine_first`
+    fills each column independently, that pairing is preserved automatically
+    -- no post-merge provenance rewriting, defaulting, or backfill step is
+    performed here, since doing so would re-introduce exactly the
+    false-provenance risk the column-wise fill avoids.
+
+    Args:
+        station_frame: A station-sourced weather frame (may be None or
+            empty), already carrying a `city` column (e.g. via
+            `attach_city`).
+        grid_frame: A grid-sourced weather frame (may be None or empty),
+            already carrying a `city` column.
+
+    Returns:
+        A DataFrame indexed by (city, datetime_utc), sorted ascending, with
+        every field's value and per-field provenance column drawn from
+        whichever side actually supplied it. Returns the other side
+        (re-indexed and sorted) when exactly one side is None/empty, and an
+        empty DataFrame when both are.
+
+    Raises:
+        ValueError: If a non-empty side is missing a MERGE_KEY column/index
+            level, or if any row's `city` is null -- merging an unresolvable
+            row would otherwise group it under a shared null key with every
+            other unresolvable row from both providers, fabricating a
+            single row stitched together from unrelated stations.
+    """
+    station_empty = station_frame is None or station_frame.empty
+    grid_empty = grid_frame is None or grid_frame.empty
+
+    if station_empty and grid_empty:
+        return pd.DataFrame()
+    if station_empty:
+        return _prepare_merge_side(grid_frame, "grid")
+    if grid_empty:
+        return _prepare_merge_side(station_frame, "station")
+
+    station_indexed = _prepare_merge_side(station_frame, "station")
+    grid_indexed = _prepare_merge_side(grid_frame, "grid")
+    return station_indexed.combine_first(grid_indexed).sort_index()
+
+
 def _validate_location_shape(location) -> str:
     """
     Classify `location` as the literal string "station" or "grid", or raise

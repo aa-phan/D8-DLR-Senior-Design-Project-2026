@@ -383,7 +383,14 @@ def test_merge_station_value_wins_when_both_sides_supply_a_field():
 
 
 def test_merge_leaves_a_field_neither_side_supplied_null_with_null_provenance():
-    station = _station_frame(air_temp=[25.0, 26.0])
+    # relative_humidity is included as an explicit null column on the
+    # station side -- matching the real shape dlr_pipeline.fetch_timeseries
+    # always returns (DLR_VARS columns exist even when a sensor is dead) --
+    # so the merge's job is proven to be "leave it null", not "the column
+    # never existed."
+    station = _station_frame(
+        air_temp=[25.0, 26.0], relative_humidity=[None, None]
+    )
     grid = _grid_frame(solar_radiation=[500.0, 510.0])
 
     merged = weather_provider.merge_observations(station, grid)
