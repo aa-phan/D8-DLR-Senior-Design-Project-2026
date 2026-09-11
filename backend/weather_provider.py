@@ -23,9 +23,13 @@ required when `fetch_weather(..., provider="synoptic")` is actually called,
 via `dlr_pipeline.fetch_timeseries`'s own token lookup.
 """
 
+import math
+
 import pandas as pd
 
+import config
 import dlr_pipeline
+import station_explorer
 import units_def
 
 # PROVENANCE_FIELD_MAP: which underlying data column(s) each per-field
@@ -90,6 +94,37 @@ def attach_provenance(
             [provider if v else None for v in has_value], index=frame.index
         )
     return frame
+
+
+def resolve_station_city(lat, lon) -> str | None:
+    """
+    Resolve a station's coordinates to the nearest of the four
+    `config.CITY_COORDINATES` cities, returning a literal dict key -- never
+    a reformatted, title-cased, or default city label.
+
+    Args:
+        lat, lon: The station's coordinates. Any type is accepted; only
+            finite, non-bool int/float values resolve to a city.
+
+    Returns:
+        The nearest city's exact `config.CITY_COORDINATES` key, or `None`
+        if `lat`/`lon` is absent, null, non-numeric, or non-finite. Never
+        falls back to a default or nearest-guess-regardless-of-validity
+        city -- an unresolved coordinate must not be silently attributed to
+        the wrong corridor's static rating.
+    """
+    for v in (lat, lon):
+        if not isinstance(v, (int, float)) or isinstance(v, bool):
+            return None
+        if not math.isfinite(float(v)):
+            return None
+
+    return min(
+        config.CITY_COORDINATES,
+        key=lambda city: station_explorer.haversine_km(
+            lat, lon, *config.CITY_COORDINATES[city]
+        ),
+    )
 
 
 def _validate_location_shape(location) -> str:
