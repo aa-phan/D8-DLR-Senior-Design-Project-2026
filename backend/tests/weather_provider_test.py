@@ -1,5 +1,6 @@
 """
-Tests for backend/weather_provider.py's provenance layer (C4 / Plan 06-01).
+Tests for backend/weather_provider.py's provenance layer (C4 / Plan 06-01)
+and dispatch/city-resolution layer (C4 / Plan 06-02).
 
 Proves the thin vertical slice end to end: schema layer (units_def.py v3)
 -> validator layer (validate_pipeline_row's categorical branch) -> adapter
@@ -10,6 +11,8 @@ imports, plain asserts, no test classes) and
 backend/tests/dlr_pipeline_test.py's `monkeypatch.setattr(dlr_pipeline,
 "fetch_timeseries", ...)` convention for avoiding a live network call.
 """
+
+import inspect
 
 import pandas as pd
 import pytest
@@ -115,3 +118,70 @@ def test_module_import_has_no_side_effects(monkeypatch):
     import importlib
 
     importlib.reload(weather_provider)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Task 1 (Plan 06-02): type-dispatched `location` parameter
+# ──────────────────────────────────────────────────────────────────────────
+
+_START = "2025-07-01T00:00:00Z"
+_END = "2025-07-01T01:00:00Z"
+
+
+def test_dispatch_station_list_routes_to_the_station_path(monkeypatch):
+    recorded = {}
+
+    def fake_fetch_timeseries(stids, start, end):
+        recorded["stids"] = stids
+        recorded["start"] = start
+        recorded["end"] = end
+        return pd.DataFrame()
+
+    monkeypatch.setattr(dlr_pipeline, "fetch_timeseries", fake_fetch_timeseries)
+
+    weather_provider.fetch_weather(["KAUS"], _START, _END)
+
+    assert recorded["stids"] == ["KAUS"]
+
+
+def test_dispatch_latlon_tuple_routes_to_the_grid_path(monkeypatch):
+    called = {"count": 0}
+
+    def fake_fetch_timeseries(*a, **k):
+        called["count"] += 1
+        return pd.DataFrame()
+
+    monkeypatch.setattr(dlr_pipeline, "fetch_timeseries", fake_fetch_timeseries)
+
+    with pytest.raises(ValueError) as excinfo:
+        weather_provider.fetch_weather((30.2711, -97.7437), _START, _END)
+
+    assert "grid" in str(excinfo.value)
+    assert called["count"] == 0
+
+
+def test_dispatch_rejects_a_two_element_list_of_numbers():
+    with pytest.raises(ValueError):
+        weather_provider.fetch_weather([30.27, -97.74], _START, _END)
+
+
+def test_dispatch_rejects_a_two_element_tuple_of_strings():
+    with pytest.raises(ValueError):
+        weather_provider.fetch_weather(("KAUS", "KDFW"), _START, _END)
+
+
+def test_dispatch_rejects_empty_location():
+    with pytest.raises(ValueError):
+        weather_provider.fetch_weather([], _START, _END)
+    with pytest.raises(ValueError):
+        weather_provider.fetch_weather((), _START, _END)
+
+
+def test_dispatch_rejects_a_three_element_tuple():
+    with pytest.raises(ValueError):
+        weather_provider.fetch_weather((1.0, 2.0, 3.0), _START, _END)
+
+
+def test_dispatch_existing_positional_call_shape_still_works():
+    params = list(inspect.signature(weather_provider.fetch_weather).parameters)
+    assert params[:4] == ["location", "start", "end", "provider"]
