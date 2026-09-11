@@ -501,3 +501,97 @@ def test_forecast_amps_out_of_range_produces_one_error_naming_column():
     errors = validate_pipeline_row(row, strict=False)
     assert len(errors) == 1
     assert "forecast_amps" in errors[0]
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# PYTEST SECTION — Plan 06-01 Task 3 (C4): PIPELINE_SCHEMA v3 additive extension
+# ──────────────────────────────────────────────────────────────────────────────
+# Follows the section above's own convention (top-level `import`, module-level
+# `test_*` functions, plain asserts, no classes) for the v2 -> v3 provenance
+# bump (Phase 6 / C4 multi-provider adapter foundation).
+
+# Frozen snapshot of every pre-Phase-6 (v1 + v2) PIPELINE_SCHEMA entry,
+# duplicated here rather than derived from the module at import time or by
+# unioning _V1_SCHEMA_SNAPSHOT with a derived set -- a test that reads the
+# value it is checking proves nothing, and that reasoning carries forward
+# verbatim from the section above.
+_V2_SCHEMA_SNAPSHOT = {
+    "air_temp": {"unit": "degC", "range": (-20.0, 60.0), "required": True},
+    "wind_speed": {"unit": "m/s", "range": (0.0, 50.0), "required": True},
+    "wind_direction": {"unit": "deg", "range": (0.0, 360.0), "required": True},
+    "wind_perp_ms": {"unit": "m/s", "range": (0.0, 50.0), "required": False},
+    "solar_radiation": {"unit": "W/m²", "range": (0.0, 1400.0), "required": False},
+    "relative_humidity": {"unit": "%", "range": (0.0, 100.0), "required": False},
+    "dlr_amps": {"unit": "A", "range": (100.0, 4000.0), "required": False},
+    "dlr_capacity_mw": {"unit": "MW", "range": (50.0, 2500.0), "required": False},
+    "static_capacity_mw": {"unit": "MW", "range": (50.0, 2500.0), "required": False},
+    "ercot_west_load_mw": {"unit": "MW", "range": (0.0, 30_000.0), "required": False},
+    "forecast_horizon_min": {"unit": "min", "range": (0.0, 1440.0), "required": False},
+    "forecast_amps": {"unit": "A", "range": (100.0, 4000.0), "required": False},
+    "forecast_ci_lower_amps": {"unit": "A", "range": (0.0, 4000.0), "required": False},
+    "forecast_ci_upper_amps": {"unit": "A", "range": (0.0, 8000.0), "required": False},
+    "anomaly_score": {"unit": "pu", "range": (0.0, 1000.0), "required": False},
+}
+
+
+def test_schema_version_bumped_to_v3_and_v2_columns_are_byte_identical():
+    assert _units_def_module.PIPELINE_SCHEMA_VERSION == 3
+    for name, spec in _V2_SCHEMA_SNAPSHOT.items():
+        assert _units_def_module.PIPELINE_SCHEMA[name] == spec
+
+
+def test_v3_columns_are_all_optional():
+    v3_keys = set(_units_def_module.PIPELINE_SCHEMA) - set(_V2_SCHEMA_SNAPSHOT)
+    assert v3_keys == {
+        "wind_source", "temp_source", "humidity_source", "solar_source",
+    }
+    for key in v3_keys:
+        assert _units_def_module.PIPELINE_SCHEMA[key]["required"] is False
+
+
+def test_pre_phase6_row_still_validates():
+    row = {
+        "air_temp": 25.0,
+        "wind_speed": 5.0,
+        "wind_direction": 180.0,
+    }
+    errors = validate_pipeline_row(row, strict=False)
+    assert errors == []
+
+
+def test_row_with_valid_provenance_columns_validates():
+    row = {
+        "air_temp": 25.0,
+        "wind_speed": 5.0,
+        "wind_direction": 180.0,
+        "wind_source": "synoptic",
+        "temp_source": "synoptic",
+        "humidity_source": "tceq",
+        "solar_source": "nsrdb",
+    }
+    errors = validate_pipeline_row(row, strict=False)
+    assert errors == []
+
+
+def test_unknown_provenance_value_produces_one_error_naming_the_column():
+    row = {
+        "air_temp": 25.0,
+        "wind_speed": 5.0,
+        "wind_direction": 180.0,
+        "wind_source": "synoptic",
+        "temp_source": "synoptic",
+        "humidity_source": "tceq",
+        "solar_source": "notaprovider",
+    }
+    errors = validate_pipeline_row(row, strict=False)
+    assert len(errors) == 1
+    assert "solar_source" in errors[0]
+
+
+def test_provenance_columns_declare_allowed_values_not_a_numeric_range():
+    for key in ("wind_source", "temp_source", "humidity_source", "solar_source"):
+        spec = _units_def_module.PIPELINE_SCHEMA[key]
+        assert spec["unit"] == "categorical"
+        assert spec["range"] is None
+        assert "synoptic" in spec["allowed_values"]
+        assert len(spec["allowed_values"]) > 0
