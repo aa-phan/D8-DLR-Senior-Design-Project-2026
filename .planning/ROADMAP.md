@@ -63,12 +63,12 @@ any new provider is wired in, per `data_provider.md`'s own flagged design conseq
   4. A pre-existing v2-era row (no provenance data) still validates successfully against the extended schema.
   5. `.venv/bin/python -m pytest -q` reports 0 failed after the interface change.
 
-**Plans**: 3 plans
+**Plans**: 1/3 plans executed
 
 Plans:
 **Wave 1**
 
-- [ ] 06-01-PLAN.md — `PIPELINE_SCHEMA` v3 provenance columns, categorical validation, and end-to-end provenance on the station path (WX-07)
+- [x] 06-01-PLAN.md — `PIPELINE_SCHEMA` v3 provenance columns, categorical validation, and end-to-end provenance on the station path (WX-07)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -161,7 +161,7 @@ Phases execute in numeric order: 6 → 7 → 8 → 9 → 10
 | 3. Safety & Spatial | v1.0 | 3/3 | Complete | 2026-09-03 |
 | 4. Predictive | v1.0 | 3/3 | Complete | 2026-09-09 |
 | 5. DS-F5 Wiring | v1.0 | 1/1 | Complete | 2026-09-10 |
-| 6. Multi-Provider Adapter Foundation | v1.1 | 0/3 | Planned | - |
+| 6. Multi-Provider Adapter Foundation | v1.1 | 1/3 | In Progress|  |
 | 7. Trivial-Integration Providers | v1.1 | 0/TBD | Not started | - |
 | 8. NSRDB Solar Integration | v1.1 | 0/TBD | Not started | - |
 | 9. TCEQ CAMS Integration | v1.1 | 0/TBD | Not started | - |
