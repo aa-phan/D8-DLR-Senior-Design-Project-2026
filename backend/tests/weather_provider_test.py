@@ -19,6 +19,7 @@ import pytest
 
 import asos_provider
 import config
+import corridor_discretization
 import dlr_pipeline
 import units_def
 import weather_provider
@@ -654,3 +655,137 @@ def test_asos_supplemented_rows_validate_against_pipeline_schema(monkeypatch):
 
     for _, row in result.iterrows():
         assert units_def.validate_pipeline_row(row.to_dict(), strict=False) == []
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Task 3 (Plan 07-01): fail loud on bad responses, stay silent-free on real
+# outages, protect the primary
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def test_asos_failure_propagates_out_of_fetch_weather(monkeypatch):
+    synoptic_source = _synthetic_frame(
+        air_temp=[25.0, 25.5],
+        wind_speed=[5.0, 5.2],
+        wind_direction=[180.0, 182.0],
+        relative_humidity=[40.0, 41.0],
+        solar_radiation=[None, None],
+        lat=[30.2711, 30.2711],
+        lon=[-97.7437, -97.7437],
+    )
+    monkeypatch.setattr(dlr_pipeline, "fetch_timeseries", lambda *a, **k: synoptic_source)
+
+    def _raise(*a, **k):
+        raise ValueError("ASOS boom")
+
+    monkeypatch.setattr(asos_provider, "fetch_asos_1min", _raise)
+
+    with pytest.raises(ValueError):
+        weather_provider.fetch_weather(["KAUS"], _START, _END)
+
+
+def test_asos_empty_window_returns_the_synoptic_frame_unchanged(monkeypatch):
+    synoptic_source = _synthetic_frame(
+        air_temp=[25.0, 25.5],
+        wind_speed=[5.0, 5.2],
+        wind_direction=[180.0, 182.0],
+        relative_humidity=[40.0, 41.0],
+        solar_radiation=[None, None],
+        lat=[30.2711, 30.2711],
+        lon=[-97.7437, -97.7437],
+    )
+    monkeypatch.setattr(dlr_pipeline, "fetch_timeseries", lambda *a, **k: synoptic_source)
+    monkeypatch.setattr(asos_provider, "fetch_asos_1min", lambda *a, **k: pd.DataFrame())
+
+    expected = weather_provider.attach_provenance(synoptic_source, "synoptic")
+    result = weather_provider.fetch_weather(["KAUS"], _START, _END)
+
+    pd.testing.assert_frame_equal(result, expected)
+
+
+def test_asos_supplement_is_skipped_when_a_synoptic_row_has_no_resolvable_city(monkeypatch):
+    synoptic_source = _synthetic_frame(
+        air_temp=[25.0, 25.5],
+        wind_speed=[5.0, 5.2],
+        wind_direction=[180.0, 182.0],
+        relative_humidity=[40.0, 41.0],
+        solar_radiation=[None, None],
+        lat=[30.2711, None],
+        lon=[-97.7437, None],
+    )
+    monkeypatch.setattr(dlr_pipeline, "fetch_timeseries", lambda *a, **k: synoptic_source)
+    monkeypatch.setattr(asos_provider, "fetch_asos_1min", lambda *a, **k: _asos_supplement_frame())
+
+    expected = weather_provider.attach_provenance(synoptic_source, "synoptic")
+    result = weather_provider.fetch_weather(["KAUS"], _START, _END)
+
+    pd.testing.assert_frame_equal(result, expected)
+
+
+def test_asos_supplement_is_skipped_when_the_synoptic_frame_has_duplicate_city_timestamp_keys(
+    monkeypatch,
+):
+    times = pd.to_datetime(
+        ["2025-07-01T00:00:00Z", "2025-07-01T00:00:00Z"], utc=True
+    )
+    synoptic_source = pd.DataFrame(
+        {
+            "stid": ["KAUS", "KAUS2"],
+            "datetime_utc": times,
+            "air_temp": [25.0, 26.0],
+            "wind_speed": [5.0, 5.1],
+            "wind_direction": [180.0, 181.0],
+            "relative_humidity": [40.0, 41.0],
+            "solar_radiation": [None, None],
+            "lat": [30.2711, 30.2711],
+            "lon": [-97.7437, -97.7437],
+        }
+    ).set_index(["stid", "datetime_utc"]).sort_index()
+    monkeypatch.setattr(dlr_pipeline, "fetch_timeseries", lambda *a, **k: synoptic_source)
+    monkeypatch.setattr(asos_provider, "fetch_asos_1min", lambda *a, **k: _asos_supplement_frame())
+
+    expected = weather_provider.attach_provenance(synoptic_source, "synoptic")
+    result = weather_provider.fetch_weather(["KAUS", "KAUS2"], _START, _END)
+
+    pd.testing.assert_frame_equal(result, expected)
+
+
+def test_asos_supplement_never_drops_a_synoptic_row(monkeypatch):
+    result = _asos_supplemented_result(monkeypatch)
+
+    reset = result.reset_index()
+    for ts in ("2025-07-01T00:00:00Z", "2025-07-01T00:05:00Z"):
+        matches = reset[
+            (reset["stid"] == "KAUS")
+            & (reset["datetime_utc"] == pd.Timestamp(ts, tz="UTC"))
+        ]
+        assert len(matches) == 1
+
+
+def test_all_four_cities_resolve_to_a_three_letter_asos_station():
+    for city, (lat, lon) in config.CITY_COORDINATES.items():
+        resolved = weather_provider.resolve_station_city(lat, lon)
+        assert resolved in config.ASOS_STATIONS
+
+
+def test_corridor_usable_observation_reads_an_asos_supplemented_frame(monkeypatch):
+    synoptic_source = _synthetic_frame(
+        air_temp=[25.0, 25.5],
+        wind_speed=[5.0, 5.2],
+        wind_direction=[180.0, 182.0],
+        relative_humidity=[40.0, 41.0],
+        solar_radiation=[500.0, 510.0],
+        lat=[30.2711, 30.2711],
+        lon=[-97.7437, -97.7437],
+    )
+    monkeypatch.setattr(dlr_pipeline, "fetch_timeseries", lambda *a, **k: synoptic_source)
+    monkeypatch.setattr(asos_provider, "fetch_asos_1min", lambda *a, **k: _asos_supplement_frame())
+
+    result = weather_provider.fetch_weather(["KAUS"], _START, _END)
+
+    reading = corridor_discretization._usable_observation(result, "KAUS")
+
+    assert reading is not None
+    assert reading["temp"] == 25.0
+    assert reading["wind"] == 5.0
+    assert reading["solar"] == 500.0
