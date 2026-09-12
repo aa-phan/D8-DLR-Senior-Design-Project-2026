@@ -92,12 +92,12 @@ a single-request historical backfill source — behind the Phase 6 interface.
   3. Both providers' output rows carry the correct value in the Phase 6 provenance column(s).
   4. Neither integration requires a new secret or `.env` entry, matching each provider's no-auth access model confirmed live in `data_provider.md`.
 
-**Plans**: 3 plans
+**Plans**: 1/3 plans executed
 
 Plans:
 **Wave 1**
 
-- [ ] 07-01-PLAN.md — ASOS 1-minute supplement: `config.ASOS_STATIONS`, `asos_provider.fetch_asos_1min`, and the union-of-timestamps merge wired transparently into the station path (WX-02)
+- [x] 07-01-PLAN.md — ASOS 1-minute supplement: `config.ASOS_STATIONS`, `asos_provider.fetch_asos_1min`, and the union-of-timestamps merge wired transparently into the station path (WX-02)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -175,7 +175,7 @@ Phases execute in numeric order: 6 → 7 → 8 → 9 → 10
 | 4. Predictive | v1.0 | 3/3 | Complete | 2026-09-09 |
 | 5. DS-F5 Wiring | v1.0 | 1/1 | Complete | 2026-09-10 |
 | 6. Multi-Provider Adapter Foundation | v1.1 | 3/3 | Complete    | 2026-09-11 |
-| 7. Trivial-Integration Providers | v1.1 | 0/TBD | Not started | - |
+| 7. Trivial-Integration Providers | v1.1 | 1/3 | In Progress|  |
 | 8. NSRDB Solar Integration | v1.1 | 0/TBD | Not started | - |
 | 9. TCEQ CAMS Integration | v1.1 | 0/TBD | Not started | - |
 | 10. Fallback Wiring & Documentation Ratification | v1.1 | 0/TBD | Not started | - |
