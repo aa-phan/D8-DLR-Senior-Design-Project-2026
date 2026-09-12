@@ -347,13 +347,17 @@ def _supplement_with_asos(synoptic_frame: pd.DataFrame, start: str, end: str) ->
     The Synoptic frame is returned unchanged (never re-keyed, never
     reordered, never stripped of a row) and the reason is logged at INFO,
     for each of these skip conditions -- so a future reader can tell "ASOS
-    was never asked" apart from "ASOS had nothing":
+    was never asked" apart from "ASOS had nothing" apart from "ASOS broke":
       - `synoptic_frame` is `None` or empty.
       - `synoptic_frame` has no `lat` column (no coordinates to resolve a
         city from, and therefore no station to ask).
       - Any row's resolved `city` is null (merging an unresolvable row
         would raise inside `merge_observations` by design -- letting that
         raise would destroy the primary result over a supplement).
+      - `synoptic_frame` has duplicate `(city, datetime_utc)` keys (e.g.
+        two stations in the same city reporting at the same timestamp) --
+        merging on a duplicated key would let `combine_first` produce a
+        row stitched together from two different stations' readings.
       - No ASOS frame survived the per-city fetch loop (every city was
         either not a key of `config.ASOS_STATIONS`, or returned a
         well-formed empty response for a real sensor-outage window).
@@ -384,6 +388,18 @@ def _supplement_with_asos(synoptic_frame: pd.DataFrame, start: str, end: str) ->
         log.info(
             "ASOS supplement skipped: %d row(s) have an unresolvable city",
             null_city_count,
+        )
+        return synoptic_frame
+
+    plain = (
+        city_attached.reset_index()
+        if any(name is not None for name in city_attached.index.names)
+        else city_attached
+    )
+    if plain[["city", "datetime_utc"]].duplicated().any():
+        log.info(
+            "ASOS supplement skipped: synoptic frame has duplicate "
+            "(city, datetime_utc) keys"
         )
         return synoptic_frame
 
