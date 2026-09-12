@@ -847,3 +847,33 @@ def test_open_meteo_grid_path_still_rejects_other_provider_names():
         weather_provider.fetch_weather(config.CITY_COORDINATES["AUSTIN"], _START, _END)
 
     assert "grid" in str(excinfo.value)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Task 2 (Plan 07-02): Open-Meteo adjacency merge + unresolvable-coordinate
+# guard (WX-04 adjacency edge, D-04)
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def test_open_meteo_row_merges_with_a_station_row_at_an_exactly_equal_key():
+    station = _station_frame(air_temp=[25.0, 26.0], wind_speed=[5.0, 5.5])
+    grid = _grid_frame(air_temp=[99.0, 98.0], solar_radiation=[500.0, 510.0])
+
+    merged = weather_provider.merge_observations(station, grid)
+
+    assert len(merged) == 2
+    assert list(merged["air_temp"]) == [25.0, 26.0]
+    assert (merged["temp_source"] == "synoptic").all()
+    assert list(merged["solar_radiation"]) == [500.0, 510.0]
+    assert (merged["solar_source"] == "open_meteo").all()
+
+
+def test_open_meteo_grid_fetch_raises_on_unresolvable_coordinates(monkeypatch):
+    monkeypatch.setattr(
+        open_meteo_provider, "fetch_open_meteo", lambda *a, **k: _open_meteo_frame()
+    )
+
+    with pytest.raises(ValueError):
+        weather_provider.fetch_weather(
+            (float("nan"), float("nan")), _START, _END, provider="open_meteo"
+        )

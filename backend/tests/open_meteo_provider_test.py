@@ -160,3 +160,143 @@ def test_module_import_has_no_side_effects():
     import importlib
 
     importlib.reload(open_meteo_provider)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Task 2: fail loud on every malformed/missing/short body shape; ordering,
+# adjacency, single-request, and no-substitution guarantees
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def test_fetch_open_meteo_raises_when_hourly_is_missing(monkeypatch):
+    payload = _archive_payload(n_hours=2)
+    del payload["hourly"]
+    _mock_get(monkeypatch, payload=payload)
+
+    with pytest.raises(ValueError):
+        open_meteo_provider.fetch_open_meteo(30.2711, -97.7437, "2025-07-01", "2025-07-01")
+
+
+def test_fetch_open_meteo_raises_when_the_time_array_is_empty(monkeypatch):
+    payload = _archive_payload(n_hours=2)
+    payload["hourly"]["time"] = []
+    _mock_get(monkeypatch, payload=payload)
+
+    with pytest.raises(ValueError):
+        open_meteo_provider.fetch_open_meteo(30.2711, -97.7437, "2025-07-01", "2025-07-01")
+
+
+def test_fetch_open_meteo_raises_when_the_body_is_not_json(monkeypatch):
+    _mock_get(monkeypatch, json_exc=ValueError("Expecting value: line 1 column 1"))
+
+    with pytest.raises(ValueError) as excinfo:
+        open_meteo_provider.fetch_open_meteo(30.2711, -97.7437, "2025-07-01", "2025-07-01")
+
+    assert "JSON" in str(excinfo.value) or "json" in str(excinfo.value)
+
+
+def test_fetch_open_meteo_raises_when_a_variable_array_is_missing(monkeypatch):
+    payload = _archive_payload(n_hours=2)
+    del payload["hourly"]["shortwave_radiation"]
+    _mock_get(monkeypatch, payload=payload)
+
+    with pytest.raises(ValueError) as excinfo:
+        open_meteo_provider.fetch_open_meteo(30.2711, -97.7437, "2025-07-01", "2025-07-01")
+
+    assert "shortwave_radiation" in str(excinfo.value)
+
+
+def test_fetch_open_meteo_raises_when_a_variable_array_is_short(monkeypatch):
+    payload = _archive_payload(n_hours=2)
+    payload["hourly"]["wind_speed_10m"] = payload["hourly"]["wind_speed_10m"][:-1]
+    _mock_get(monkeypatch, payload=payload)
+
+    with pytest.raises(ValueError) as excinfo:
+        open_meteo_provider.fetch_open_meteo(30.2711, -97.7437, "2025-07-01", "2025-07-01")
+
+    assert "wind_speed_10m" in str(excinfo.value)
+
+
+def test_fetch_open_meteo_propagates_an_http_error(monkeypatch):
+    class _FailingResponse:
+        def raise_for_status(self):
+            raise requests.HTTPError("500 Server Error")
+
+    monkeypatch.setattr(
+        open_meteo_provider.requests, "get", lambda *a, **k: _FailingResponse()
+    )
+
+    with pytest.raises(requests.HTTPError):
+        open_meteo_provider.fetch_open_meteo(30.2711, -97.7437, "2025-07-01", "2025-07-01")
+
+
+def test_fetch_open_meteo_raises_when_the_echoed_wind_unit_is_wrong(monkeypatch):
+    payload = _archive_payload(n_hours=2)
+    payload["hourly_units"]["wind_speed_10m"] = "km/h"
+    _mock_get(monkeypatch, payload=payload)
+
+    with pytest.raises(ValueError) as excinfo:
+        open_meteo_provider.fetch_open_meteo(30.2711, -97.7437, "2025-07-01", "2025-07-01")
+
+    assert "wind_speed_10m" in str(excinfo.value)
+    assert "km/h" in str(excinfo.value)
+
+
+def test_fetch_open_meteo_raises_when_a_value_is_out_of_schema_range(monkeypatch):
+    payload = _archive_payload(n_hours=1)
+    high = units_def.PIPELINE_SCHEMA["wind_speed"]["range"][1] + 10.0
+    payload["hourly"]["wind_speed_10m"] = [high]
+    _mock_get(monkeypatch, payload=payload)
+
+    with pytest.raises(ValueError) as excinfo:
+        open_meteo_provider.fetch_open_meteo(30.2711, -97.7437, "2025-07-01", "2025-07-01")
+
+    assert "wind_speed" in str(excinfo.value)
+
+
+def test_fetch_open_meteo_returns_one_row_for_a_single_hour_window(monkeypatch):
+    _mock_get(monkeypatch, payload=_archive_payload(n_hours=1))
+
+    frame = open_meteo_provider.fetch_open_meteo(30.2711, -97.7437, "2025-07-01", "2025-07-01")
+
+    assert len(frame) == 1
+    for col in (
+        "air_temp",
+        "wind_speed",
+        "wind_direction",
+        "solar_radiation",
+        "relative_humidity",
+    ):
+        assert frame[col].notna().all()
+
+
+def test_fetch_open_meteo_output_is_ordered_and_reproducible(monkeypatch):
+    payload = _archive_payload(n_hours=4)
+    _mock_get(monkeypatch, payload=payload)
+
+    first = open_meteo_provider.fetch_open_meteo(30.2711, -97.7437, "2025-07-01", "2025-07-01")
+
+    _mock_get(monkeypatch, payload=_archive_payload(n_hours=4))
+    second = open_meteo_provider.fetch_open_meteo(30.2711, -97.7437, "2025-07-01", "2025-07-01")
+
+    assert first["datetime_utc"].is_monotonic_increasing
+    pd.testing.assert_frame_equal(first, second)
+
+
+def test_fetch_open_meteo_does_not_mutate_module_state(monkeypatch):
+    base_url = open_meteo_provider.OPEN_METEO_ARCHIVE_BASE
+    mapping = dict(open_meteo_provider.HOURLY_TO_PIPELINE)
+    hourly_vars = open_meteo_provider.OPEN_METEO_HOURLY_VARS
+
+    payload = _archive_payload(n_hours=2)
+    payload_copy = _archive_payload(n_hours=2)
+    _mock_get(monkeypatch, payload=payload)
+    open_meteo_provider.fetch_open_meteo(30.2711, -97.7437, "2025-07-01", "2025-07-01")
+
+    _mock_get(monkeypatch, payload=payload)
+    open_meteo_provider.fetch_open_meteo(30.2711, -97.7437, "2025-07-01", "2025-07-01")
+
+    assert open_meteo_provider.OPEN_METEO_ARCHIVE_BASE == base_url
+    assert open_meteo_provider.HOURLY_TO_PIPELINE == mapping
+    assert open_meteo_provider.OPEN_METEO_HOURLY_VARS == hourly_vars
+    assert payload == payload_copy
