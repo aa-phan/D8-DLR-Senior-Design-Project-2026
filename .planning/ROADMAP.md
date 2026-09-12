@@ -92,7 +92,7 @@ a single-request historical backfill source — behind the Phase 6 interface.
   3. Both providers' output rows carry the correct value in the Phase 6 provenance column(s).
   4. Neither integration requires a new secret or `.env` entry, matching each provider's no-auth access model confirmed live in `data_provider.md`.
 
-**Plans**: 2/3 plans executed
+**Plans**: 3/3 plans executed
 
 Plans:
 **Wave 1**
@@ -105,7 +105,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 07-03-PLAN.md — three-provider provenance proof, source-level no-new-secrets gate, C4 spec sync, and live-endpoint confirmation (WX-02, WX-04)
+- [x] 07-03-PLAN.md — three-provider provenance proof, source-level no-new-secrets gate, C4 spec sync, and live-endpoint confirmation (WX-02, WX-04)
 
 ### Phase 8: NSRDB Solar Integration
 
@@ -175,7 +175,7 @@ Phases execute in numeric order: 6 → 7 → 8 → 9 → 10
 | 4. Predictive | v1.0 | 3/3 | Complete | 2026-09-09 |
 | 5. DS-F5 Wiring | v1.0 | 1/1 | Complete | 2026-09-10 |
 | 6. Multi-Provider Adapter Foundation | v1.1 | 3/3 | Complete    | 2026-09-11 |
-| 7. Trivial-Integration Providers | v1.1 | 2/3 | In Progress|  |
+| 7. Trivial-Integration Providers | v1.1 | 3/3 | In Progress|  |
 | 8. NSRDB Solar Integration | v1.1 | 0/TBD | Not started | - |
 | 9. TCEQ CAMS Integration | v1.1 | 0/TBD | Not started | - |
 | 10. Fallback Wiring & Documentation Ratification | v1.1 | 0/TBD | Not started | - |
