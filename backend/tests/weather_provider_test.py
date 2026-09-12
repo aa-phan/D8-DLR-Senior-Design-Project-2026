@@ -600,6 +600,7 @@ def _asos_supplemented_result(monkeypatch) -> pd.DataFrame:
         wind_speed=[5.0, 5.2],
         wind_direction=[180.0, 182.0],
         relative_humidity=[40.0, 41.0],
+        solar_radiation=[None, None],
         lat=[30.2711, 30.2711],
         lon=[-97.7437, -97.7437],
     )

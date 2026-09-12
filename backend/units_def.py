@@ -472,7 +472,15 @@ def validate_pipeline_row(row: Dict[str, Any], strict: bool = True) -> list[str]
     for col, spec in PIPELINE_SCHEMA.items():
         value = row.get(col)
 
-        if value is None:
+        # Treat a NaN value the same as an absent (None) one -- pandas'
+        # natural representation of "no data" for a numeric or object
+        # column after a merge/reindex (e.g. an ASOS-only row's
+        # relative_humidity, or a not-yet-set provenance column) is
+        # float('nan'), not Python None. Without this, a legitimately
+        # missing `required: False` field was misreported as a
+        # NON-FINITE value or an UNKNOWN PROVIDER, rather than being
+        # recognized as simply absent.
+        if value is None or (isinstance(value, float) and math.isnan(value)):
             if spec["required"]:
                 msg = f"MISSING required column '{col}' (expected unit: {spec['unit']})"
                 if strict:

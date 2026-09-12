@@ -13,9 +13,11 @@ supported), that change should be containable entirely within this file —
 callers keep calling `fetch_weather(location, start, end)` and shouldn't
 need to change at all.
 
-This module deliberately does NOT implement a second (e.g. NOAA) provider.
-Doing so would be resolving the open provider question, which is explicitly
-out of scope for this component per the spec's own Open Questions section.
+Phase 7 wires the first two real providers into this file: the station path
+(`_fetch_station`, `provider="synoptic"`) is now transparently supplemented
+with ASOS 1-minute wind/temp rows (`_supplement_with_asos`, WX-02, D-01..
+D-03) whenever the Synoptic frame resolves a coordinate to one of
+`config.ASOS_STATIONS`' four cities.
 
 Importing this module has no side effects (no file I/O, no network calls) —
 it is safe to import without a `SYNOPTIC_TOKEN` env var set. A token is only
@@ -23,14 +25,18 @@ required when `fetch_weather(..., provider="synoptic")` is actually called,
 via `dlr_pipeline.fetch_timeseries`'s own token lookup.
 """
 
+import logging
 import math
 
 import pandas as pd
 
+import asos_provider
 import config
 import dlr_pipeline
 import station_explorer
 import units_def
+
+log = logging.getLogger(__name__)
 
 # PROVENANCE_FIELD_MAP: which underlying data column(s) each per-field
 # provenance column (units_def.PIPELINE_SCHEMA v3) is derived from. A
@@ -330,9 +336,88 @@ def _validate_location_shape(location) -> str:
     )
 
 
+def _supplement_with_asos(synoptic_frame: pd.DataFrame, start: str, end: str) -> pd.DataFrame:
+    """
+    Transparently supplement a Synoptic station frame with ASOS 1-minute
+    wind/temp rows (D-01, D-02, D-03) -- union-of-timestamps rows added at
+    ASOS's finer temporal resolution, Synoptic winning at any shared
+    timestamp, unmeasured ASOS fields (`relative_humidity`,
+    `solar_radiation`) left null rather than backfilled or derived.
+
+    The Synoptic frame is returned unchanged (never re-keyed, never
+    reordered, never stripped of a row) and the reason is logged at INFO,
+    for each of these skip conditions -- so a future reader can tell "ASOS
+    was never asked" apart from "ASOS had nothing":
+      - `synoptic_frame` is `None` or empty.
+      - `synoptic_frame` has no `lat` column (no coordinates to resolve a
+        city from, and therefore no station to ask).
+      - Any row's resolved `city` is null (merging an unresolvable row
+        would raise inside `merge_observations` by design -- letting that
+        raise would destroy the primary result over a supplement).
+      - No ASOS frame survived the per-city fetch loop (every city was
+        either not a key of `config.ASOS_STATIONS`, or returned a
+        well-formed empty response for a real sensor-outage window).
+
+    Args:
+        synoptic_frame: The Synoptic-sourced, already-`attach_provenance`d
+            station frame (may be None or empty).
+        start, end: The date window, passed through unchanged to
+            `asos_provider.fetch_asos_1min`.
+
+    Returns:
+        `synoptic_frame` unchanged for any of the skip conditions above.
+        Otherwise, `merge_observations(city_attached_synoptic, asos_frames)`
+        -- re-keyed to (city, datetime_utc) with `stid` demoted to a
+        nullable column, per D-01's union-of-timestamps requirement.
+    """
+    if synoptic_frame is None or synoptic_frame.empty:
+        return synoptic_frame
+
+    if "lat" not in synoptic_frame.columns:
+        log.info("ASOS supplement skipped: synoptic frame has no 'lat' column")
+        return synoptic_frame
+
+    city_attached = attach_city(synoptic_frame)
+
+    null_city_count = int(city_attached["city"].isna().sum())
+    if null_city_count:
+        log.info(
+            "ASOS supplement skipped: %d row(s) have an unresolvable city",
+            null_city_count,
+        )
+        return synoptic_frame
+
+    asos_frames = []
+    for city in city_attached["city"].dropna().unique():
+        if city not in config.ASOS_STATIONS:
+            continue
+        station_code = config.ASOS_STATIONS[city]
+        asos_raw = asos_provider.fetch_asos_1min(station_code, start, end)
+        if asos_raw is None or asos_raw.empty:
+            log.info(
+                "ASOS supplement: no rows returned for city=%s station=%s "
+                "window=%s..%s (real outage or no data)",
+                city, station_code, start, end,
+            )
+            continue
+        lat, lon = config.CITY_COORDINATES[city]
+        asos_tagged = attach_city(attach_provenance(asos_raw, "asos"), lat=lat, lon=lon)
+        asos_frames.append(asos_tagged)
+
+    if not asos_frames:
+        return synoptic_frame
+
+    asos_combined = pd.concat(asos_frames, ignore_index=True)
+    return merge_observations(city_attached, asos_combined)
+
+
 def _fetch_station(stids: list[str], start: str, end: str, provider: str) -> pd.DataFrame:
     if provider == "synoptic":
-        return attach_provenance(dlr_pipeline.fetch_timeseries(stids, start, end), "synoptic")
+        return _supplement_with_asos(
+            attach_provenance(dlr_pipeline.fetch_timeseries(stids, start, end), "synoptic"),
+            start,
+            end,
+        )
 
     raise ValueError(
         f"Unknown weather provider: {provider!r}. Only 'synoptic' is "
@@ -371,8 +456,15 @@ def fetch_weather(
     Returns:
         A DataFrame matching the weather-observation subset of
         `PIPELINE_SCHEMA` (C2): air_temp, wind_speed, wind_direction,
-        solar_radiation, relative_humidity, indexed by
-        (stid, datetime_utc).
+        solar_radiation, relative_humidity. On the station path
+        (`provider="synoptic"`), indexed by (stid, datetime_utc) UNLESS the
+        ASOS 1-minute supplement (WX-02) actually supplied rows for the
+        resolved city, in which case the frame is re-keyed to
+        (city, datetime_utc) with `stid` demoted to a nullable column (null
+        on ASOS-only rows, since attributing an ASOS row to a Synoptic
+        station ID would fabricate provenance) -- byte-identical to the
+        pre-Phase-7 shape whenever the supplement is skipped or ASOS
+        returns nothing for the window.
 
     Raises:
         ValueError: If `location` is neither a valid station-ID list nor a

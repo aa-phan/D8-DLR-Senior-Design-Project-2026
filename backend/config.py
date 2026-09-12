@@ -240,3 +240,18 @@ ANOMALY_CONTROL_LIMIT_K_BY_LOCATION: dict[str, float] = {
 # location, mirroring how DEFAULT_RATING_BOUNDS backs
 # RATING_BOUNDS_BY_LOCATION above.
 DEFAULT_ANOMALY_CONTROL_LIMIT_K: float = 4.0
+
+# ──────────────────────────────────────────────────────────────────────────────
+# ASOS 1-minute network station IDs (Phase 7, C4)
+# ──────────────────────────────────────────────────────────────────────────────
+# IEM ASOS network 3-letter FAA identifiers -- NOT the 4-letter ICAO codes
+# used elsewhere in this project's docs (data_provider.md, 07-CONTEXT.md).
+# Live-confirmed via https://mesonet.agron.iastate.edu/geojson/network/TX_ASOS.geojson
+# and direct CGI requests this session (07-RESEARCH.md Pitfall 1) -- a 4-letter
+# code fails with "Unknown station provided".
+ASOS_STATIONS: dict[str, str] = {
+    "AUSTIN": "AUS",
+    "CORPUS_CHRISTI": "CRP",
+    "MIDLAND": "MAF",
+    "EL_PASO": "ELP",
+}
