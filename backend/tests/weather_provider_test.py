@@ -17,6 +17,7 @@ import inspect
 import pandas as pd
 import pytest
 
+import asos_provider
 import config
 import dlr_pipeline
 import units_def
@@ -499,6 +500,7 @@ def _end_to_end_merged_frame(monkeypatch) -> pd.DataFrame:
         lon=[-97.7437, -97.7437],
     )
     monkeypatch.setattr(dlr_pipeline, "fetch_timeseries", lambda *a, **k: station_source)
+    monkeypatch.setattr(asos_provider, "fetch_asos_1min", lambda *a, **k: pd.DataFrame())
 
     station = weather_provider.fetch_weather(["KAUS"], _START, _END)
     station = weather_provider.attach_city(station)
@@ -556,3 +558,98 @@ def test_attach_city_returns_literal_config_keys():
     assert set(result["city"].dropna().unique()) <= set(config.CITY_COORDINATES)
     assert list(frame.columns) == original_columns
     assert "city" not in frame.columns
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Task 2 (Plan 07-01): ASOS supplement, automatic and transparent (D-01..D-03)
+# ──────────────────────────────────────────────────────────────────────────
+
+_ASOS_SUPPLEMENT_TIMESTAMPS = [
+    "2025-07-01T00:00:00Z",
+    "2025-07-01T00:01:00Z",
+    "2025-07-01T00:02:00Z",
+]
+
+
+def _asos_supplement_frame() -> pd.DataFrame:
+    """
+    A synthetic 1-minute ASOS frame overlapping the Synoptic frame's 00:00
+    timestamp (with deliberately different sentinel values, to prove
+    Synoptic wins there) and adding two ASOS-only timestamps (00:01, 00:02).
+    """
+    return pd.DataFrame(
+        {
+            "datetime_utc": pd.to_datetime(_ASOS_SUPPLEMENT_TIMESTAMPS, utc=True),
+            "air_temp": [99.0, 25.1, 25.2],
+            "wind_speed": [99.0, 5.05, 5.1],
+            "wind_direction": [999.0, 181.0, 181.5],
+        }
+    )
+
+
+def _asos_supplemented_result(monkeypatch) -> pd.DataFrame:
+    """
+    Shared setup: a synthetic 5-minute Austin Synoptic frame (00:00, 00:05)
+    monkeypatched through dlr_pipeline.fetch_timeseries, supplemented by a
+    1-minute ASOS frame (00:00, 00:01, 00:02) monkeypatched through
+    asos_provider.fetch_asos_1min, obtained through the real, unmodified
+    fetch_weather(["KAUS"], ...) call -- no new argument, no new keyword.
+    """
+    synoptic_source = _synthetic_frame(
+        air_temp=[25.0, 25.5],
+        wind_speed=[5.0, 5.2],
+        wind_direction=[180.0, 182.0],
+        relative_humidity=[40.0, 41.0],
+        lat=[30.2711, 30.2711],
+        lon=[-97.7437, -97.7437],
+    )
+    monkeypatch.setattr(dlr_pipeline, "fetch_timeseries", lambda *a, **k: synoptic_source)
+    monkeypatch.setattr(asos_provider, "fetch_asos_1min", lambda *a, **k: _asos_supplement_frame())
+
+    return weather_provider.fetch_weather(["KAUS"], _START, _END)
+
+
+def _row_at(frame: pd.DataFrame, timestamp: str) -> pd.Series:
+    reset = frame.reset_index()
+    matches = reset[reset["datetime_utc"] == pd.Timestamp(timestamp, tz="UTC")]
+    assert len(matches) == 1, f"expected exactly one row at {timestamp}, found {len(matches)}"
+    return matches.iloc[0]
+
+
+def test_asos_supplement_adds_rows_at_timestamps_synoptic_does_not_have(monkeypatch):
+    result = _asos_supplemented_result(monkeypatch)
+
+    assert len(result) == 4  # union of {00:00, 00:05} and {00:00, 00:01, 00:02}
+
+
+def test_asos_supplement_leaves_synoptic_winning_at_a_shared_timestamp(monkeypatch):
+    result = _asos_supplemented_result(monkeypatch)
+
+    shared = _row_at(result, "2025-07-01T00:00:00Z")
+    assert shared["air_temp"] == 25.0
+    assert shared["temp_source"] == "synoptic"
+
+
+def test_asos_only_rows_are_attributed_to_asos(monkeypatch):
+    result = _asos_supplemented_result(monkeypatch)
+
+    asos_only = _row_at(result, "2025-07-01T00:01:00Z")
+    assert asos_only["temp_source"] == "asos"
+    assert asos_only["wind_source"] == "asos"
+
+
+def test_asos_only_rows_leave_unmeasured_fields_null(monkeypatch):
+    result = _asos_supplemented_result(monkeypatch)
+
+    asos_only = _row_at(result, "2025-07-01T00:01:00Z")
+    assert pd.isna(asos_only["relative_humidity"])
+    assert pd.isna(asos_only["solar_radiation"])
+    assert asos_only["humidity_source"] is None or pd.isna(asos_only["humidity_source"])
+    assert asos_only["solar_source"] is None or pd.isna(asos_only["solar_source"])
+
+
+def test_asos_supplemented_rows_validate_against_pipeline_schema(monkeypatch):
+    result = _asos_supplemented_result(monkeypatch)
+
+    for _, row in result.iterrows():
+        assert units_def.validate_pipeline_row(row.to_dict(), strict=False) == []
