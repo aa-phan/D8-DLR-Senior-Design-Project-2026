@@ -30,7 +30,10 @@ def _archive_payload(n_hours: int = 2) -> dict:
     `hourly_units` echoing the five variables' units, and one array per
     mapped variable.
     """
-    times = [f"2025-07-01T{h:02d}:00" for h in range(n_hours)]
+    times = [
+        ts.strftime("%Y-%m-%dT%H:%M")
+        for ts in pd.date_range("2025-07-01T00:00:00", periods=n_hours, freq="h")
+    ]
     return {
         "latitude": 30.263618,
         "longitude": -97.69321,
@@ -44,11 +47,11 @@ def _archive_payload(n_hours: int = 2) -> dict:
         },
         "hourly": {
             "time": times,
-            "temperature_2m": [29.9 + i for i in range(n_hours)],
-            "wind_speed_10m": [3.4 + i * 0.1 for i in range(n_hours)],
-            "wind_direction_10m": [160 + i for i in range(n_hours)],
-            "shortwave_radiation": [291.0 + i for i in range(n_hours)],
-            "relative_humidity_2m": [63 + i for i in range(n_hours)],
+            "temperature_2m": [29.9 + (i % 10) for i in range(n_hours)],
+            "wind_speed_10m": [3.4 + (i % 10) * 0.1 for i in range(n_hours)],
+            "wind_direction_10m": [(160 + i) % 360 for i in range(n_hours)],
+            "shortwave_radiation": [291.0 + (i % 10) for i in range(n_hours)],
+            "relative_humidity_2m": [63 + (i % 10) for i in range(n_hours)],
         },
     }
 

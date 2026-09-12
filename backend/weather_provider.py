@@ -17,7 +17,11 @@ Phase 7 wires the first two real providers into this file: the station path
 (`_fetch_station`, `provider="synoptic"`) is now transparently supplemented
 with ASOS 1-minute wind/temp rows (`_supplement_with_asos`, WX-02, D-01..
 D-03) whenever the Synoptic frame resolves a coordinate to one of
-`config.ASOS_STATIONS`' four cities.
+`config.ASOS_STATIONS`' four cities. The grid path (`_fetch_grid`,
+`provider="open_meteo"`) now has its first real implementation: a
+standalone historical-backfill source (WX-04, D-04) returning the full
+temp/wind/solar/RH variable set for C9/C10 training data, no merge
+performed.
 
 Importing this module has no side effects (no file I/O, no network calls) —
 it is safe to import without a `SYNOPTIC_TOKEN` env var set. A token is only
@@ -33,6 +37,7 @@ import pandas as pd
 import asos_provider
 import config
 import dlr_pipeline
+import open_meteo_provider
 import station_explorer
 import units_def
 
@@ -442,10 +447,23 @@ def _fetch_station(stids: list[str], start: str, end: str, provider: str) -> pd.
 
 
 def _fetch_grid(lat: float, lon: float, start: str, end: str, provider: str) -> pd.DataFrame:
+    if provider == "open_meteo":
+        frame = open_meteo_provider.fetch_open_meteo(lat, lon, start, end)
+        frame = attach_provenance(frame, "open_meteo")
+        frame = attach_city(frame, lat=lat, lon=lon)
+
+        if not frame.empty and frame["city"].isna().any():
+            raise ValueError(
+                f"_fetch_grid: coordinates ({lat!r}, {lon!r}) did not "
+                "resolve to a known city -- an open_meteo row that can "
+                "never be merged or rated must not be emitted."
+            )
+
+        return frame
+
     raise ValueError(
-        "No grid weather provider is registered yet -- the first one "
-        "(NSRDB or Open-Meteo) lands in Phase 7. A (lat, lon) grid request "
-        "cannot be served by any provider today."
+        f"Unknown grid weather provider: {provider!r}. Only 'open_meteo' "
+        "is currently implemented on the grid path."
     )
 
 
@@ -465,9 +483,11 @@ def fetch_weather(
             grid-based path. Any other shape raises ValueError.
         start: Start of the date window (ISO 8601 string).
         end: End of the date window (ISO 8601 string).
-        provider: Which weather provider to use. Only "synoptic" is
-            currently implemented on the station path; any other value
-            raises ValueError.
+        provider: Which weather provider to use. "synoptic" is the only
+            provider implemented on the station path (list of station
+            IDs); "open_meteo" is the only provider implemented on the
+            grid path ((lat, lon) tuple) -- any other value raises
+            ValueError for the path it was given on.
 
     Returns:
         A DataFrame matching the weather-observation subset of
