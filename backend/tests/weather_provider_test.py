@@ -21,6 +21,7 @@ import asos_provider
 import config
 import corridor_discretization
 import dlr_pipeline
+import open_meteo_provider
 import units_def
 import weather_provider
 
@@ -789,3 +790,60 @@ def test_corridor_usable_observation_reads_an_asos_supplemented_frame(monkeypatc
     assert reading["temp"] == 25.0
     assert reading["wind"] == 5.0
     assert reading["solar"] == 500.0
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Task 1 (Plan 07-02): Open-Meteo grid-path dispatch (D-04, WX-04)
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def _open_meteo_frame(n: int = 2) -> pd.DataFrame:
+    times = pd.date_range("2025-07-01T00:00:00Z", periods=n, freq="1h")
+    return pd.DataFrame(
+        {
+            "datetime_utc": times,
+            "air_temp": [29.9 + i for i in range(n)],
+            "wind_speed": [3.4 + i * 0.1 for i in range(n)],
+            "wind_direction": [160.0 + i for i in range(n)],
+            "solar_radiation": [291.0 + i for i in range(n)],
+            "relative_humidity": [63.0 + i for i in range(n)],
+        }
+    )
+
+
+def test_open_meteo_grid_fetch_returns_a_validated_provenanced_frame(monkeypatch):
+    monkeypatch.setattr(
+        open_meteo_provider, "fetch_open_meteo", lambda *a, **k: _open_meteo_frame()
+    )
+
+    result = weather_provider.fetch_weather(
+        config.CITY_COORDINATES["AUSTIN"], _START, _END, provider="open_meteo"
+    )
+
+    for col in ("temp_source", "wind_source", "solar_source", "humidity_source"):
+        assert (result[col] == "open_meteo").all()
+    assert (result["city"] == "AUSTIN").all()
+    for _, row in result.iterrows():
+        assert units_def.validate_pipeline_row(row.to_dict(), strict=False) == []
+
+
+def test_open_meteo_is_not_reachable_from_the_station_path(monkeypatch):
+    counter = {"count": 0}
+
+    def _recorder(*a, **k):
+        counter["count"] += 1
+        return _open_meteo_frame()
+
+    monkeypatch.setattr(open_meteo_provider, "fetch_open_meteo", _recorder)
+
+    with pytest.raises(ValueError):
+        weather_provider.fetch_weather(["KAUS"], _START, _END, provider="open_meteo")
+
+    assert counter["count"] == 0
+
+
+def test_open_meteo_grid_path_still_rejects_other_provider_names():
+    with pytest.raises(ValueError) as excinfo:
+        weather_provider.fetch_weather(config.CITY_COORDINATES["AUSTIN"], _START, _END)
+
+    assert "grid" in str(excinfo.value)
