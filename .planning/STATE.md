@@ -5,16 +5,16 @@ milestone_name: Multi-Provider Weather
 current_phase: 07
 current_phase_name: Trivial-Integration Providers
 status: executing
-stopped_at: Completed 07-01-PLAN.md
-last_updated: "2026-09-12T07:47:23.113Z"
+stopped_at: Completed 07-02-PLAN.md
+last_updated: "2026-09-12T07:56:34.350Z"
 last_activity: 2026-09-12
 last_activity_desc: Phase 07 execution started
-state_head: 74cd64da9cc70ea5616419d2a3a670f339387e85
+state_head: 367a179e89902dee382d5ea25f843da0287d9c9b
 progress:
   total_phases: 5
   completed_phases: 1
   total_plans: 6
-  completed_plans: 4
+  completed_plans: 5
   percent: 20
 ---
 
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-09-10 after starting v1.1 milestone)
 ## Current Position
 
 Phase: 07 (Trivial-Integration Providers) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 Status: Ready to execute
 Last activity: 2026-09-12 — Phase 07 execution started
 
@@ -63,6 +63,7 @@ Progress: [██░░░░░░░░] 20%
 | Plan | Duration | Tasks | Files |
 |------|----------|-------|-------|
 | Phase 07 P01 | 9min | 3 tasks | 7 files |
+| Phase 07 P02 | 15min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -78,6 +79,7 @@ Recent decisions affecting current work:
 - [Phase 05, v1.0]: DS-F5 resolved via `config.STATIC_RATINGS.get(city, config.DEFAULT_STATIC_RATING)` wired into `process_dlr_to_hourly`, `run_pipeline`, `plot_dlr_summary`.
 - [Phase 07]: WX-02 (07-01): Q1-A/Q2-A checkpoint defaults approved -- ASOS empty-response non-fatal, frame re-keys to (city, datetime_utc) only when ASOS supplies rows
 - [Phase 07]: 07-01: fixed a latent units_def.validate_pipeline_row bug -- NaN values in required:False columns were misreported as NON-FINITE/UNKNOWN PROVIDER instead of being recognized as absent
+- [Phase 07]: WX-04 (07-02): Open-Meteo Archive API selected over Historical Forecast API for the grid path's base URL, per 07-RESEARCH.md discretion-item recommendation (1940-present depth for C9/C10 training volume)
 
 ### Roadmap Evolution
 
@@ -105,8 +107,8 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-12T07:47:23.077Z
-Stopped at: Completed 07-01-PLAN.md
+Last session: 2026-09-12T07:56:34.315Z
+Stopped at: Completed 07-02-PLAN.md
 Resume file: None
 
 ## Operator Next Steps

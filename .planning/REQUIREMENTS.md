@@ -18,7 +18,7 @@ Requirements for the Multi-Provider Weather milestone. Each maps to roadmap phas
 
 ### Historical Backfill
 
-- [ ] **WX-04**: Given a target city and a historical date range, the system fetches the full weather variable set (temp, wind speed/direction, solar, RH) from Open-Meteo in a single request, for use as C9/C10 training data.
+- [x] **WX-04**: Given a target city and a historical date range, the system fetches the full weather variable set (temp, wind speed/direction, solar, RH) from Open-Meteo in a single request, for use as C9/C10 training data.
 
 ### Provider Composition & Fallback
 
@@ -59,7 +59,7 @@ Which phases cover which requirements. Phase numbers match `.planning/ROADMAP.md
 | WX-01 | Phase 9 (TCEQ CAMS Integration) | Pending |
 | WX-02 | Phase 7 (Trivial-Integration Providers) | Complete |
 | WX-03 | Phase 8 (NSRDB Solar Integration) | Pending |
-| WX-04 | Phase 7 (Trivial-Integration Providers) | Pending |
+| WX-04 | Phase 7 (Trivial-Integration Providers) | Complete |
 | WX-05 | Phase 6 (Multi-Provider Adapter Foundation) | Complete |
 | WX-06 | Phase 10 (Fallback Wiring & Documentation Ratification) | Pending |
 | WX-07 | Phase 6 (Multi-Provider Adapter Foundation) | Complete |
