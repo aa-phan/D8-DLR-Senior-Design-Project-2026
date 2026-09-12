@@ -13,6 +13,7 @@ backend/tests/dlr_pipeline_test.py's `monkeypatch.setattr(dlr_pipeline,
 """
 
 import inspect
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -877,3 +878,221 @@ def test_open_meteo_grid_fetch_raises_on_unresolvable_coordinates(monkeypatch):
         weather_provider.fetch_weather(
             (float("nan"), float("nan")), _START, _END, provider="open_meteo"
         )
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 07-03: one frame, three providers, honest provenance (T-07-14,
+# ROADMAP SC3 for WX-02 + WX-04 simultaneously) -- and a source-level
+# no-secrets gate over both new provider modules (T-07-15, ROADMAP SC4)
+# ──────────────────────────────────────────────────────────────────────────
+
+_THREE_PROVIDER_ASOS_TIMESTAMPS = [
+    "2025-07-01T00:01:00Z",
+    "2025-07-01T00:02:00Z",
+]
+
+_THREE_PROVIDER_OPEN_METEO_TIMESTAMPS = [
+    "2025-07-01T00:00:00Z",
+    "2025-07-01T00:10:00Z",
+]
+
+
+def _three_provider_asos_frame() -> pd.DataFrame:
+    """A 1-minute ASOS frame at two ASOS-only timestamps -- no humidity or
+    solar columns (D-02: ASOS never measures those fields)."""
+    return pd.DataFrame(
+        {
+            "datetime_utc": pd.to_datetime(_THREE_PROVIDER_ASOS_TIMESTAMPS, utc=True),
+            "air_temp": [25.1, 25.2],
+            "wind_speed": [5.05, 5.1],
+            "wind_direction": [181.0, 181.5],
+        }
+    )
+
+
+def _three_provider_open_meteo_frame() -> pd.DataFrame:
+    """
+    A grid-sourced frame at two timestamps: `00:00`, which overlaps the
+    Synoptic frame (Synoptic's value and provenance still win there per
+    `merge_observations`' station-first contract -- these values are never
+    read out), and `00:10`, which has no station-side coverage at all --
+    the frame's only genuinely grid-only row.
+
+    Carries the full 5-column set `fetch_open_meteo` always returns in
+    production (it never returns a partial variable set -- see
+    `open_meteo_provider.fetch_open_meteo`'s ordered body-shape validation),
+    rather than a solar-only shape: `PIPELINE_SCHEMA` marks `air_temp`,
+    `wind_speed` and `wind_direction` `required: True`, so a genuinely
+    grid-only row (00:10) that supplied only `solar_radiation` could never
+    satisfy `validate_pipeline_row` no matter what merge logic ran --
+    that's a property of the schema, not something this test's provenance
+    assertions get to waive. Making the mock match real Open-Meteo's actual
+    output shape is what resolves it, and is also the more faithful test.
+    """
+    times = pd.to_datetime(_THREE_PROVIDER_OPEN_METEO_TIMESTAMPS, utc=True)
+    return pd.DataFrame(
+        {
+            "datetime_utc": times,
+            "air_temp": [40.0, 27.0],
+            "wind_speed": [12.0, 6.0],
+            "wind_direction": [270.0, 200.0],
+            "solar_radiation": [500.0, 505.0],
+            "relative_humidity": [70.0, 55.0],
+        }
+    )
+
+
+def _three_provider_frame(monkeypatch) -> pd.DataFrame:
+    """
+    Shared setup for this group: one frame assembled from all three
+    providers this phase composes -- Synoptic (station primary), ASOS
+    (station supplement, D-01..D-03) and Open-Meteo (grid backfill, D-04)
+    -- each obtained through the real fetch_weather dispatch (never a
+    hand-built tagged frame), then combined with the real
+    merge_observations.
+
+    - Synoptic: a 5-minute Austin frame at 00:00 and 00:05 carrying
+      air_temp, wind_speed, wind_direction, relative_humidity, lat, lon.
+    - ASOS: a 1-minute frame at 00:01 and 00:02 carrying only air_temp,
+      wind_speed, wind_direction.
+    - Open-Meteo: the full 5-column set (matching its real, unconditional
+      response shape) at 00:00 (overlapping Synoptic -- discarded there,
+      since Synoptic wins) and 00:10 (the frame's only genuinely
+      grid-only row -- see `_three_provider_open_meteo_frame`'s docstring
+      for why a solar-only mock at this row cannot satisfy
+      `PIPELINE_SCHEMA`'s required-field check).
+    """
+    synoptic_source = _synthetic_frame(
+        air_temp=[25.0, 25.5],
+        wind_speed=[5.0, 5.2],
+        wind_direction=[180.0, 182.0],
+        relative_humidity=[40.0, 41.0],
+        lat=[30.2711, 30.2711],
+        lon=[-97.7437, -97.7437],
+    )
+    monkeypatch.setattr(dlr_pipeline, "fetch_timeseries", lambda *a, **k: synoptic_source)
+    monkeypatch.setattr(
+        asos_provider, "fetch_asos_1min", lambda *a, **k: _three_provider_asos_frame()
+    )
+    monkeypatch.setattr(
+        open_meteo_provider,
+        "fetch_open_meteo",
+        lambda *a, **k: _three_provider_open_meteo_frame(),
+    )
+
+    station = weather_provider.fetch_weather(["KAUS"], _START, _END)
+    grid = weather_provider.fetch_weather(
+        config.CITY_COORDINATES["AUSTIN"], _START, _END, provider="open_meteo"
+    )
+
+    return weather_provider.merge_observations(station, grid)
+
+
+def test_three_provider_frame_has_one_row_per_distinct_timestamp(monkeypatch):
+    result = _three_provider_frame(monkeypatch)
+
+    # union of {00:00, 00:05} (synoptic), {00:01, 00:02} (asos) and
+    # {00:00, 00:10} (open_meteo) -- five distinct timestamps
+    assert len(result) == 5
+
+
+def test_three_provider_frame_names_the_actual_supplier_per_field(monkeypatch):
+    result = _three_provider_frame(monkeypatch)
+
+    # temp_source: Synoptic wins at 00:00/00:05 (it's the station primary and
+    # combine_first keeps its non-null value even though Open-Meteo also
+    # supplies air_temp at 00:00); ASOS is the sole supplier at 00:01/00:02;
+    # Open-Meteo is the sole supplier at 00:10 (no station coverage there).
+    assert _row_at(result, "2025-07-01T00:00:00Z")["temp_source"] == "synoptic"
+    assert _row_at(result, "2025-07-01T00:05:00Z")["temp_source"] == "synoptic"
+    assert _row_at(result, "2025-07-01T00:01:00Z")["temp_source"] == "asos"
+    assert _row_at(result, "2025-07-01T00:02:00Z")["temp_source"] == "asos"
+    assert _row_at(result, "2025-07-01T00:10:00Z")["temp_source"] == "open_meteo"
+
+    # solar_source: only Open-Meteo ever supplies solar_radiation -- present
+    # at both its timestamps, null everywhere neither Synoptic nor ASOS (nor
+    # Open-Meteo) reports it.
+    assert _row_at(result, "2025-07-01T00:00:00Z")["solar_source"] == "open_meteo"
+    assert _row_at(result, "2025-07-01T00:10:00Z")["solar_source"] == "open_meteo"
+    for ts in ("2025-07-01T00:01:00Z", "2025-07-01T00:02:00Z", "2025-07-01T00:05:00Z"):
+        assert pd.isna(_row_at(result, ts)["solar_source"])
+
+    # humidity_source: Synoptic supplies it at 00:00/00:05 and wins there;
+    # ASOS never measures it (D-02, null at 00:01/00:02); Open-Meteo is the
+    # sole supplier at 00:10.
+    assert _row_at(result, "2025-07-01T00:00:00Z")["humidity_source"] == "synoptic"
+    assert _row_at(result, "2025-07-01T00:05:00Z")["humidity_source"] == "synoptic"
+    assert _row_at(result, "2025-07-01T00:10:00Z")["humidity_source"] == "open_meteo"
+    for ts in ("2025-07-01T00:01:00Z", "2025-07-01T00:02:00Z"):
+        assert pd.isna(_row_at(result, ts)["humidity_source"])
+
+
+def test_three_provider_frame_provenance_matches_its_values(monkeypatch):
+    result = _three_provider_frame(monkeypatch)
+
+    for provenance_col, source_cols in weather_provider.PROVENANCE_FIELD_MAP.items():
+        present_source_cols = [c for c in source_cols if c in result.columns]
+        has_value = result[present_source_cols].notna().any(axis=1)
+        assert (result[provenance_col].notna() == has_value).all()
+
+
+def test_three_provider_frame_uses_only_registered_provider_names(monkeypatch):
+    result = _three_provider_frame(monkeypatch)
+
+    seen = set()
+    for provenance_col in weather_provider.PROVENANCE_FIELD_MAP:
+        seen |= set(result[provenance_col].dropna().unique())
+
+    assert seen <= units_def.KNOWN_PROVIDER_NAMES
+    assert seen == {"synoptic", "asos", "open_meteo"}
+
+
+def test_three_provider_frame_rows_validate_against_pipeline_schema(monkeypatch):
+    result = _three_provider_frame(monkeypatch)
+
+    for _, row in result.iterrows():
+        assert units_def.validate_pipeline_row(row.to_dict(), strict=False) == []
+
+
+def test_new_providers_read_no_secret():
+    """
+    ROADMAP Success Criterion 4, asserted at the source level rather than
+    inferred from the tests happening to pass without a token (T-07-15).
+    """
+    backend_dir = Path(__file__).resolve().parent.parent
+    forbidden_substrings = (
+        "os.environ",
+        "os.getenv",
+        "getpass",
+        "_TOKEN",
+        "_KEY",
+        "_SECRET",
+    )
+
+    for module_name in ("asos_provider.py", "open_meteo_provider.py"):
+        source_path = backend_dir / module_name
+        text = source_path.read_text()
+        code_lines = [
+            line for line in text.splitlines() if not line.strip().startswith("#")
+        ]
+        stripped_text = "\n".join(code_lines)
+
+        for forbidden in forbidden_substrings:
+            assert forbidden not in stripped_text, (
+                f"{module_name} contains forbidden substring {forbidden!r}"
+            )
+
+        import_lines = [
+            line
+            for line in code_lines
+            if line.strip().startswith("import ") or line.strip().startswith("from ")
+        ]
+        for import_line in import_lines:
+            assert "import os" not in import_line, (
+                f"{module_name} imports 'os': {import_line!r}"
+            )
+            assert "dotenv" not in import_line, (
+                f"{module_name} imports 'dotenv': {import_line!r}"
+            )
+
+        assert "dlr_pipeline._token" not in stripped_text
