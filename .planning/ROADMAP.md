@@ -119,13 +119,32 @@ Plans:
   3. NSRDB-sourced solar rows are tagged with the correct provenance value and pass `PIPELINE_SCHEMA` range validation for `solar_radiation`.
   4. If the API key is absent or the NSRDB request fails, the adapter raises/surfaces a clear error rather than silently returning fabricated data (e.g. the legacy hardcoded 1000 W/m² constant).
 
-**Plans**: TBD
+**Plans**: 3 plans
 
-**Checkpoint**: this phase is gated on a free NREL developer API key being registered
-(`developer.nrel.gov`) — noted as "being registered for this milestone" in PROJECT.md. Confirm the
-key is available before planning execution; if not yet issued, this phase can be planned but not
-executed, and Phase 9 (TCEQ) does not depend on it and may proceed independently if reordering is
-needed.
+Plans:
+**Wave 1**
+
+- [ ] 08-01-PLAN.md — tracer: end-to-end NSRDB grid fetch (credential lookup, longitude-first WKT, GHI-only 60-minute request, CSV metadata-header parse, `_fetch_grid` dispatch, provenance) for one city and one calendar year (WX-03)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 08-02-PLAN.md — year-chunked window decomposition and reassembly, local 2018 coverage guard, dual-shape (JSON/CSV) error handling with credential redaction, GHI-units metadata check, solar-only provenance through the merge (WX-03)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 08-03-PLAN.md — credential-source gate, C4 spec / README / ACKNOWLEDGEMENTS sync, and the two blocking human checkpoints: register the key, then confirm a real NSRDB pull (WX-03)
+
+**Checkpoint**: this phase is gated on a free NREL developer API key being registered — noted as
+"being registered for this milestone" in PROJECT.md, and confirmed still unissued at Phase 8
+context-gathering (08-CONTEXT.md D-01). Plans 08-01 and 08-02 are fully executable without it: every
+automated test mocks the HTTP call. Plan 08-03's Task 2 (`checkpoint:human-action`) registers the key
+and Task 3 (`checkpoint:human-verify`) makes the one live confirmation mocked tests cannot. If the key
+is not issued, 08-03 halts at Task 2 and records the blocker; Phase 9 (TCEQ) does not depend on this
+phase and may proceed independently if reordering is needed.
+
+**Host note**: the developer portal was renamed — `developer.nrel.gov` no longer resolves and the live
+host is `developer.nlr.gov` (National Laboratory of the Rockies), independently confirmed during Phase
+8 research. Env-var naming deliberately keeps saying NREL to match WX-03's wording.
 
 ### Phase 9: TCEQ CAMS Integration
 
@@ -176,6 +195,6 @@ Phases execute in numeric order: 6 → 7 → 8 → 9 → 10
 | 5. DS-F5 Wiring | v1.0 | 1/1 | Complete | 2026-09-10 |
 | 6. Multi-Provider Adapter Foundation | v1.1 | 3/3 | Complete    | 2026-09-11 |
 | 7. Trivial-Integration Providers | v1.1 | 3/3 | Complete    | 2026-09-12 |
-| 8. NSRDB Solar Integration | v1.1 | 0/TBD | Not started | - |
+| 8. NSRDB Solar Integration | v1.1 | 0/3 | Planned | - |
 | 9. TCEQ CAMS Integration | v1.1 | 0/TBD | Not started | - |
 | 10. Fallback Wiring & Documentation Ratification | v1.1 | 0/TBD | Not started | - |
