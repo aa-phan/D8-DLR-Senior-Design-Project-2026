@@ -1105,7 +1105,11 @@ def test_new_providers_read_no_secret():
 
 
 def _nsrdb_frame(n: int = 2) -> pd.DataFrame:
-    times = pd.date_range("2025-07-01T00:00:00Z", periods=n, freq="1h")
+    # Same cadence as _station_frame's default (freq="5min") so the merge
+    # test below aligns on an exactly-equal (city, datetime_utc) key rather
+    # than exercising the union-of-timestamps path -- that path is already
+    # covered by test_merge_combines_station_and_grid_into_one_row_per_timestamp.
+    times = pd.date_range("2025-07-01T00:00:00Z", periods=n, freq="5min")
     return pd.DataFrame(
         {
             "datetime_utc": times,

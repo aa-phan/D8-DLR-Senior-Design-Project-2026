@@ -83,7 +83,7 @@ def test_fetch_nsrdb_returns_solar_radiation_for_a_known_city(monkeypatch):
     _mock_get(monkeypatch, text=_psm4_csv(n_hours=2, ghi=ghi))
 
     lat, lon = config.CITY_COORDINATES["AUSTIN"]
-    frame = nsrdb_provider.fetch_nsrdb(lat, lon, "2023-07-01", "2023-07-01")
+    frame = nsrdb_provider.fetch_nsrdb(lat, lon, "2023-07-01", "2023-07-02")
 
     assert list(frame.columns) == ["datetime_utc", "solar_radiation"]
     assert list(frame["solar_radiation"]) == ghi
@@ -107,8 +107,9 @@ def test_fetch_nsrdb_timestamps_are_tz_aware_utc(monkeypatch):
     _mock_get(monkeypatch, text=_psm4_csv(n_hours=3))
 
     lat, lon = config.CITY_COORDINATES["AUSTIN"]
-    frame = nsrdb_provider.fetch_nsrdb(lat, lon, "2023-07-01", "2023-07-01")
+    frame = nsrdb_provider.fetch_nsrdb(lat, lon, "2023-07-01", "2023-07-02")
 
+    assert len(frame) == 3
     assert frame["datetime_utc"].dt.tz is not None
     assert str(frame["datetime_utc"].dt.tz) == "UTC"
     assert frame["datetime_utc"].is_monotonic_increasing
