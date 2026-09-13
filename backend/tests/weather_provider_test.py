@@ -22,6 +22,7 @@ import asos_provider
 import config
 import corridor_discretization
 import dlr_pipeline
+import nsrdb_provider
 import open_meteo_provider
 import units_def
 import weather_provider
@@ -1096,3 +1097,89 @@ def test_new_providers_read_no_secret():
             )
 
         assert "dlr_pipeline._token" not in stripped_text
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Task 1 (Plan 08-01): NSRDB grid-path dispatch (D-05, WX-03)
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def _nsrdb_frame(n: int = 2) -> pd.DataFrame:
+    times = pd.date_range("2025-07-01T00:00:00Z", periods=n, freq="1h")
+    return pd.DataFrame(
+        {
+            "datetime_utc": times,
+            "solar_radiation": [291.0 + i for i in range(n)],
+        }
+    )
+
+
+def test_nsrdb_grid_fetch_returns_a_solar_only_provenanced_frame(monkeypatch):
+    monkeypatch.setattr(nsrdb_provider, "fetch_nsrdb", lambda *a, **k: _nsrdb_frame())
+
+    result = weather_provider.fetch_weather(
+        config.CITY_COORDINATES["AUSTIN"], _START, _END, provider="nsrdb"
+    )
+
+    assert (result["solar_source"] == "nsrdb").all()
+    assert (result["city"] == "AUSTIN").all()
+
+
+def test_nsrdb_row_validates_against_the_schema_once_merged_with_a_station_row(monkeypatch):
+    monkeypatch.setattr(nsrdb_provider, "fetch_nsrdb", lambda *a, **k: _nsrdb_frame())
+
+    nsrdb_result = weather_provider.fetch_weather(
+        config.CITY_COORDINATES["AUSTIN"], _START, _END, provider="nsrdb"
+    )
+    station = _station_frame(
+        air_temp=[25.0, 26.0],
+        wind_speed=[5.0, 5.5],
+        wind_direction=[180.0, 190.0],
+    )
+
+    # Assert over the merged row rather than the bare NSRDB row
+    # deliberately: air_temp, wind_speed and wind_direction are
+    # required: True in PIPELINE_SCHEMA, so a solar-only frame reports
+    # three MISSING-required errors by design. The merged row is the shape
+    # a real pipeline row has, and this is the assertion ROADMAP SC3's
+    # "pass PIPELINE_SCHEMA range validation" is actually about.
+    merged = weather_provider.merge_observations(station, nsrdb_result)
+
+    for _, row in merged.iterrows():
+        assert units_def.validate_pipeline_row(row.to_dict(), strict=False) == []
+
+
+def test_nsrdb_is_not_reachable_from_the_station_path(monkeypatch):
+    counter = {"count": 0}
+
+    def _recorder(*a, **k):
+        counter["count"] += 1
+        return _nsrdb_frame()
+
+    monkeypatch.setattr(nsrdb_provider, "fetch_nsrdb", _recorder)
+
+    with pytest.raises(ValueError):
+        weather_provider.fetch_weather(["KAUS"], _START, _END, provider="nsrdb")
+
+    assert counter["count"] == 0
+
+
+def test_nsrdb_grid_fetch_raises_on_unresolvable_coordinates(monkeypatch):
+    monkeypatch.setattr(nsrdb_provider, "fetch_nsrdb", lambda *a, **k: _nsrdb_frame())
+
+    with pytest.raises(ValueError):
+        weather_provider.fetch_weather(
+            (float("nan"), float("nan")), _START, _END, provider="nsrdb"
+        )
+
+
+def test_grid_path_still_rejects_unknown_provider_names():
+    with pytest.raises(ValueError) as excinfo:
+        weather_provider.fetch_weather(
+            config.CITY_COORDINATES["AUSTIN"], _START, _END, provider="tceq"
+        )
+
+    message = str(excinfo.value)
+    assert "grid" in message
+    assert "open_meteo" in message
+    assert "nsrdb" in message
