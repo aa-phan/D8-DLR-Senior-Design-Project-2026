@@ -119,7 +119,7 @@ Plans:
   3. NSRDB-sourced solar rows are tagged with the correct provenance value and pass `PIPELINE_SCHEMA` range validation for `solar_radiation`.
   4. If the API key is absent or the NSRDB request fails, the adapter raises/surfaces a clear error rather than silently returning fabricated data (e.g. the legacy hardcoded 1000 W/m² constant).
 
-**Plans**: 1/3 plans executed
+**Plans**: 2/3 plans executed
 
 Plans:
 **Wave 1**
@@ -128,7 +128,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 08-02-PLAN.md — year-chunked window decomposition and reassembly, local 2018 coverage guard, dual-shape (JSON/CSV) error handling with credential redaction, GHI-units metadata check, solar-only provenance through the merge (WX-03)
+- [x] 08-02-PLAN.md — year-chunked window decomposition and reassembly, local 2018 coverage guard, dual-shape (JSON/CSV) error handling with credential redaction, GHI-units metadata check, solar-only provenance through the merge (WX-03)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
@@ -195,6 +195,6 @@ Phases execute in numeric order: 6 → 7 → 8 → 9 → 10
 | 5. DS-F5 Wiring | v1.0 | 1/1 | Complete | 2026-09-10 |
 | 6. Multi-Provider Adapter Foundation | v1.1 | 3/3 | Complete    | 2026-09-11 |
 | 7. Trivial-Integration Providers | v1.1 | 3/3 | Complete    | 2026-09-12 |
-| 8. NSRDB Solar Integration | v1.1 | 1/3 | In Progress|  |
+| 8. NSRDB Solar Integration | v1.1 | 2/3 | In Progress|  |
 | 9. TCEQ CAMS Integration | v1.1 | 0/TBD | Not started | - |
 | 10. Fallback Wiring & Documentation Ratification | v1.1 | 0/TBD | Not started | - |
