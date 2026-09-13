@@ -1187,3 +1187,47 @@ def test_grid_path_still_rejects_unknown_provider_names():
     assert "grid" in message
     assert "open_meteo" in message
     assert "nsrdb" in message
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Task 2 (Plan 08-02): D-02's solar-only provenance guarantee, observed
+# through fetch_weather and through a real cross-provider merge
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def test_nsrdb_row_leaves_wind_temp_and_humidity_provenance_null(monkeypatch):
+    monkeypatch.setattr(nsrdb_provider, "fetch_nsrdb", lambda *a, **k: _nsrdb_frame())
+
+    result = weather_provider.fetch_weather(
+        config.CITY_COORDINATES["AUSTIN"], _START, _END, provider="nsrdb"
+    )
+
+    assert (result["solar_source"] == "nsrdb").all()
+    assert result["wind_source"].isna().all()
+    assert result["temp_source"].isna().all()
+    assert result["humidity_source"].isna().all()
+
+
+def test_nsrdb_solar_merges_with_a_station_row_at_an_exactly_equal_key():
+    station = _station_frame(air_temp=[25.0, 26.0], wind_speed=[5.0, 5.5])
+    times = pd.date_range("2025-07-01T00:00:00Z", periods=2, freq="5min")
+    nsrdb_grid = weather_provider.attach_provenance(
+        pd.DataFrame(
+            {
+                "datetime_utc": times,
+                "city": ["AUSTIN"] * 2,
+                "solar_radiation": [291.0, 292.0],
+            }
+        ),
+        "nsrdb",
+    )
+
+    merged = weather_provider.merge_observations(station, nsrdb_grid)
+
+    assert len(merged) == 2
+    assert list(merged["air_temp"]) == [25.0, 26.0]
+    assert (merged["temp_source"] == "synoptic").all()
+    assert list(merged["wind_speed"]) == [5.0, 5.5]
+    assert (merged["wind_source"] == "synoptic").all()
+    assert list(merged["solar_radiation"]) == [291.0, 292.0]
+    assert (merged["solar_source"] == "nsrdb").all()

@@ -17,6 +17,7 @@ file's convention in this project.
 """
 
 import importlib
+import json
 
 import pandas as pd
 import pytest
@@ -87,10 +88,18 @@ class _FakeResponse:
         self.status_code = status_code
         self.content = text.encode()
 
+    def json(self):
+        # json.JSONDecodeError is a ValueError subclass -- matches the
+        # production error handler's `except ValueError` branch, which must
+        # fall back to the raw CSV body when the response isn't JSON.
+        return json.loads(self.text)
+
 
 def _mock_get(
     monkeypatch,
     text: str = "",
+    ok: bool = True,
+    status_code: int = 200,
     recorder: dict | None = None,
     response_for_year=None,
 ):
@@ -100,7 +109,8 @@ def _mock_get(
     `names` year. `recorder`, when supplied, accumulates every call's
     params in `recorder["all_params"]` (order-preserving) in addition to
     the last-call convenience keys `recorder["calls"]`/`["params"]`/["url"]`
-    already relied on by Plan 08-01's tests.
+    already relied on by Plan 08-01's tests. `ok`/`status_code` let a test
+    mock a non-2xx response for the fixed (non-year-keyed) body case.
     """
 
     def fake_get(url, params=None, timeout=None):
@@ -112,7 +122,7 @@ def _mock_get(
             recorder["url"] = url
         if response_for_year is not None:
             return response_for_year(params["names"])
-        return _FakeResponse(text=text)
+        return _FakeResponse(text=text, ok=ok, status_code=status_code)
 
     monkeypatch.setattr(nsrdb_provider.requests, "get", fake_get)
 
@@ -471,3 +481,200 @@ def test_fetch_nsrdb_raises_when_the_window_selects_no_rows(monkeypatch):
         nsrdb_provider.fetch_nsrdb(lat, lon, "2023-07-01", "2023-07-01")
 
     assert "2023-07-01" in str(excinfo.value)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 08-02 Task 2: dual-shape error handling, credential redaction, GHI
+# units metadata check
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def _psm4_csv_with_ghi_units(units: str, n_hours: int = 2, year: int = 2023) -> str:
+    lines = [
+        "Source,Location ID,Latitude,Longitude,Time Zone,GHI Units",
+        f"NSRDB,145809,30.2711,-97.7437,0,{units}",
+        "Year,Month,Day,Hour,Minute,GHI",
+    ]
+    start_ts = pd.Timestamp(f"{year}-07-01T00:00:00")
+    for i in range(n_hours):
+        ts = start_ts + pd.Timedelta(hours=i)
+        lines.append(f"{ts.year},{ts.month},{ts.day},{ts.hour},{ts.minute},{200.0 + i}")
+    return "\n".join(lines) + "\n"
+
+
+def _psm4_csv_without_ghi_units(n_hours: int = 2, year: int = 2023) -> str:
+    lines = [
+        "Source,Location ID,Latitude,Longitude,Time Zone",
+        "NSRDB,145809,30.2711,-97.7437,0",
+        "Year,Month,Day,Hour,Minute,GHI",
+    ]
+    start_ts = pd.Timestamp(f"{year}-07-01T00:00:00")
+    for i in range(n_hours):
+        ts = start_ts + pd.Timedelta(hours=i)
+        lines.append(f"{ts.year},{ts.month},{ts.day},{ts.hour},{ts.minute},{200.0 + i}")
+    return "\n".join(lines) + "\n"
+
+
+def test_fetch_nsrdb_raises_on_json_error_body(monkeypatch):
+    monkeypatch.setenv("NREL_API_KEY", "test-key")
+    monkeypatch.setenv("NREL_API_EMAIL", "test@example.com")
+    body = json.dumps(
+        {
+            "inputs": {},
+            "metadata": {"version": "2.0.0"},
+            "status": 400,
+            "errors": [
+                "The optional 'interval' parameter must be an integer in the set [5,15,30,60]"
+            ],
+        }
+    )
+    _mock_get(monkeypatch, text=body, ok=False, status_code=400)
+
+    lat, lon = config.CITY_COORDINATES["AUSTIN"]
+    with pytest.raises(ValueError) as excinfo:
+        nsrdb_provider.fetch_nsrdb(lat, lon, "2023-07-01", "2023-07-02")
+
+    message = str(excinfo.value)
+    assert "interval" in message
+    assert "2023" in message
+
+
+def test_fetch_nsrdb_raises_on_csv_error_body(monkeypatch):
+    monkeypatch.setenv("NREL_API_KEY", "test-key")
+    monkeypatch.setenv("NREL_API_EMAIL", "test@example.com")
+    body = (
+        "Error Code,Error Message\n"
+        '"API_KEY_MISSING","No api_key was supplied. Get one at '
+        'https://developer.nrel.gov/signup/"\n'
+    )
+    _mock_get(monkeypatch, text=body, ok=False, status_code=403)
+
+    lat, lon = config.CITY_COORDINATES["AUSTIN"]
+    with pytest.raises(ValueError) as excinfo:
+        nsrdb_provider.fetch_nsrdb(lat, lon, "2023-07-01", "2023-07-02")
+
+    assert type(excinfo.value) is ValueError
+    assert "API_KEY_MISSING" in str(excinfo.value)
+
+
+def test_fetch_nsrdb_error_message_redacts_the_api_key_and_email(monkeypatch):
+    monkeypatch.setenv("NREL_API_KEY", "sentinel-key-8675309")
+    monkeypatch.setenv("NREL_API_EMAIL", "sentinel-email-8675309@example.com")
+    body = json.dumps(
+        {
+            "inputs": {
+                "api_key": "sentinel-key-8675309",
+                "email": "sentinel-email-8675309@example.com",
+            },
+            "metadata": {"version": "2.0.0"},
+            "status": 400,
+            "errors": [
+                "Invalid api_key sentinel-key-8675309 for contact "
+                "sentinel-email-8675309@example.com"
+            ],
+        }
+    )
+    _mock_get(monkeypatch, text=body, ok=False, status_code=400)
+
+    lat, lon = config.CITY_COORDINATES["AUSTIN"]
+    with pytest.raises(ValueError) as excinfo:
+        nsrdb_provider.fetch_nsrdb(lat, lon, "2023-07-01", "2023-07-02")
+
+    message = str(excinfo.value)
+    assert "sentinel-key-8675309" not in message
+    assert "sentinel-email-8675309@example.com" not in message
+    assert "[REDACTED]" in message
+
+
+def test_fetch_nsrdb_error_detection_does_not_depend_on_a_specific_wording(monkeypatch):
+    monkeypatch.setenv("NREL_API_KEY", "test-key")
+    monkeypatch.setenv("NREL_API_EMAIL", "test@example.com")
+    body = json.dumps({"status": 400, "errors": ["some arbitrary rejection text"]})
+    _mock_get(monkeypatch, text=body, ok=False, status_code=400)
+
+    lat, lon = config.CITY_COORDINATES["AUSTIN"]
+    with pytest.raises(ValueError):
+        nsrdb_provider.fetch_nsrdb(lat, lon, "2023-07-01", "2023-07-02")
+
+
+def test_fetch_nsrdb_raises_on_a_rate_limited_response(monkeypatch):
+    monkeypatch.setenv("NREL_API_KEY", "test-key")
+    monkeypatch.setenv("NREL_API_EMAIL", "test@example.com")
+    _mock_get(monkeypatch, text="", ok=False, status_code=429)
+
+    lat, lon = config.CITY_COORDINATES["AUSTIN"]
+    with pytest.raises(ValueError) as excinfo:
+        nsrdb_provider.fetch_nsrdb(lat, lon, "2023-07-01", "2023-07-02")
+
+    assert "429" in str(excinfo.value)
+
+
+def test_fetch_nsrdb_stops_at_the_first_failing_year(monkeypatch):
+    monkeypatch.setenv("NREL_API_KEY", "test-key")
+    monkeypatch.setenv("NREL_API_EMAIL", "test@example.com")
+    recorder: dict = {}
+
+    def response_for_year(year):
+        if year == 2023:
+            return _FakeResponse(text=_psm4_csv(year=2023, start="2023-12-28T00:00:00"))
+        return _FakeResponse(
+            text=json.dumps({"status": 400, "errors": ["boom"]}),
+            ok=False,
+            status_code=400,
+        )
+
+    _mock_get(monkeypatch, recorder=recorder, response_for_year=response_for_year)
+
+    lat, lon = config.CITY_COORDINATES["AUSTIN"]
+    with pytest.raises(ValueError):
+        nsrdb_provider.fetch_nsrdb(lat, lon, "2023-12-28", "2024-01-03")
+
+    assert recorder["calls"] == 2
+
+
+def test_fetch_nsrdb_raises_when_the_ghi_units_metadata_is_unexpected(monkeypatch):
+    monkeypatch.setenv("NREL_API_KEY", "test-key")
+    monkeypatch.setenv("NREL_API_EMAIL", "test@example.com")
+    _mock_get(monkeypatch, text=_psm4_csv_with_ghi_units("kw/m2"))
+
+    lat, lon = config.CITY_COORDINATES["AUSTIN"]
+    with pytest.raises(ValueError) as excinfo:
+        nsrdb_provider.fetch_nsrdb(lat, lon, "2023-07-01", "2023-07-02")
+
+    assert "kw/m2" in str(excinfo.value)
+
+
+# Read via getattr with a fallback so this module collects cleanly during
+# RED (before NSRDB_ACCEPTED_GHI_UNITS exists) -- the parametrize list
+# itself is not the assertion; the test body is.
+_GHI_UNITS_FOR_PARAMETRIZE = sorted(
+    getattr(nsrdb_provider, "NSRDB_ACCEPTED_GHI_UNITS", {"w/m2", "w/m^2", "w/m²"})
+)
+
+
+@pytest.mark.parametrize(
+    "units_spelling",
+    _GHI_UNITS_FOR_PARAMETRIZE
+    + [
+        _GHI_UNITS_FOR_PARAMETRIZE[0].upper(),
+        " " + _GHI_UNITS_FOR_PARAMETRIZE[0] + " ",
+    ],
+)
+def test_fetch_nsrdb_accepts_the_documented_ghi_unit_spellings(monkeypatch, units_spelling):
+    monkeypatch.setenv("NREL_API_KEY", "test-key")
+    monkeypatch.setenv("NREL_API_EMAIL", "test@example.com")
+    _mock_get(monkeypatch, text=_psm4_csv_with_ghi_units(units_spelling))
+
+    lat, lon = config.CITY_COORDINATES["AUSTIN"]
+    frame = nsrdb_provider.fetch_nsrdb(lat, lon, "2023-07-01", "2023-07-02")
+    assert not frame.empty
+
+
+def test_fetch_nsrdb_skips_the_units_check_when_the_metadata_field_is_absent(monkeypatch):
+    monkeypatch.setenv("NREL_API_KEY", "test-key")
+    monkeypatch.setenv("NREL_API_EMAIL", "test@example.com")
+    _mock_get(monkeypatch, text=_psm4_csv_without_ghi_units())
+
+    lat, lon = config.CITY_COORDINATES["AUSTIN"]
+    frame = nsrdb_provider.fetch_nsrdb(lat, lon, "2023-07-01", "2023-07-02")
+    assert not frame.empty
