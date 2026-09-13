@@ -40,7 +40,7 @@ fallback wiring and the documentation ratification close the milestone, once all
 to fall back from.
 
 - [x] **Phase 6: Multi-Provider Adapter Foundation** - Redesign `fetch_weather`'s signature and extend `PIPELINE_SCHEMA` with provenance columns so station-based and grid-based providers can be combined without breaking existing callers (completed 2026-09-11)
-- [ ] **Phase 7: Trivial-Integration Providers** - Wire ASOS 1-minute (wind/temp supplement) and Open-Meteo (historical backfill) behind the new adapter to prove the design cheaply
+- [x] **Phase 7: Trivial-Integration Providers** - Wire ASOS 1-minute (wind/temp supplement) and Open-Meteo (historical backfill) behind the new adapter to prove the design cheaply (completed 2026-09-12)
 - [ ] **Phase 8: NSRDB Solar Integration** - Wire NREL NSRDB (PSM v4) as the primary solar-irradiance source, gated on a registered developer API key
 - [ ] **Phase 9: TCEQ CAMS Integration** - Wire TCEQ CAMS as the primary wind/temp/RH source for all four cities via HTML-report scraping
 - [ ] **Phase 10: Fallback Wiring & Documentation Ratification** - Wire Synoptic as the fallback behind the same adapter and ratify the provider-composition decision in `PRD.md`/`data_provider.md`
@@ -175,7 +175,7 @@ Phases execute in numeric order: 6 → 7 → 8 → 9 → 10
 | 4. Predictive | v1.0 | 3/3 | Complete | 2026-09-09 |
 | 5. DS-F5 Wiring | v1.0 | 1/1 | Complete | 2026-09-10 |
 | 6. Multi-Provider Adapter Foundation | v1.1 | 3/3 | Complete    | 2026-09-11 |
-| 7. Trivial-Integration Providers | v1.1 | 3/3 | In Progress|  |
+| 7. Trivial-Integration Providers | v1.1 | 3/3 | Complete    | 2026-09-12 |
 | 8. NSRDB Solar Integration | v1.1 | 0/TBD | Not started | - |
 | 9. TCEQ CAMS Integration | v1.1 | 0/TBD | Not started | - |
 | 10. Fallback Wiring & Documentation Ratification | v1.1 | 0/TBD | Not started | - |
