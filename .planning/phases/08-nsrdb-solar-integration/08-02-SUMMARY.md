@@ -230,3 +230,16 @@ None for this plan — every new test mocks `requests.get`, so no `NREL_API_KEY`
 ---
 *Phase: 08-nsrdb-solar-integration*
 *Completed: 2026-09-13*
+
+## Self-Check: PASSED
+
+- FOUND: backend/nsrdb_provider.py
+- FOUND: backend/tests/nsrdb_provider_test.py
+- FOUND: backend/tests/weather_provider_test.py
+- FOUND: .planning/phases/08-nsrdb-solar-integration/08-02-SUMMARY.md
+- FOUND: ACKNOWLEDGEMENTS.md
+- FOUND commit: 4c642ab (test: Task 1 RED)
+- FOUND commit: 061f1a2 (feat: Task 1 GREEN)
+- FOUND commit: 90f5e88 (test: Task 2 RED)
+- FOUND commit: bbae88c (feat: Task 2 GREEN)
+- FOUND commit: b79565e (docs: SUMMARY + ACKNOWLEDGEMENTS)
