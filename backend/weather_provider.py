@@ -23,6 +23,11 @@ standalone historical-backfill source (WX-04, D-04) returning the full
 temp/wind/solar/RH variable set for C9/C10 training data, no merge
 performed.
 
+Phase 8 adds a second grid-path provider: `provider="nsrdb"` delegates to
+`nsrdb_provider.fetch_nsrdb` for solar-only GHI (WX-03, D-02), tagged
+`solar_source="nsrdb"` and merged into a station row exactly like
+`open_meteo`'s solar column would be.
+
 Importing this module has no side effects (no file I/O, no network calls) —
 it is safe to import without a `SYNOPTIC_TOKEN` env var set. A token is only
 required when `fetch_weather(..., provider="synoptic")` is actually called,
@@ -37,6 +42,7 @@ import pandas as pd
 import asos_provider
 import config
 import dlr_pipeline
+import nsrdb_provider
 import open_meteo_provider
 import station_explorer
 import units_def
@@ -461,9 +467,23 @@ def _fetch_grid(lat: float, lon: float, start: str, end: str, provider: str) -> 
 
         return frame
 
+    if provider == "nsrdb":
+        frame = nsrdb_provider.fetch_nsrdb(lat, lon, start, end)
+        frame = attach_provenance(frame, "nsrdb")
+        frame = attach_city(frame, lat=lat, lon=lon)
+
+        if not frame.empty and frame["city"].isna().any():
+            raise ValueError(
+                f"_fetch_grid: coordinates ({lat!r}, {lon!r}) did not "
+                "resolve to a known city -- an nsrdb row that can never be "
+                "merged or rated must not be emitted."
+            )
+
+        return frame
+
     raise ValueError(
         f"Unknown grid weather provider: {provider!r}. Only 'open_meteo' "
-        "is currently implemented on the grid path."
+        "and 'nsrdb' are currently implemented on the grid path."
     )
 
 
@@ -485,9 +505,9 @@ def fetch_weather(
         end: End of the date window (ISO 8601 string).
         provider: Which weather provider to use. "synoptic" is the only
             provider implemented on the station path (list of station
-            IDs); "open_meteo" is the only provider implemented on the
-            grid path ((lat, lon) tuple) -- any other value raises
-            ValueError for the path it was given on.
+            IDs); "open_meteo" and "nsrdb" are the two providers
+            implemented on the grid path ((lat, lon) tuple) -- any other
+            value raises ValueError for the path it was given on.
 
     Returns:
         A DataFrame matching the weather-observation subset of
