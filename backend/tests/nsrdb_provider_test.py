@@ -27,13 +27,23 @@ import units_def
 import nsrdb_provider
 
 
-def _psm4_csv(n_hours: int = 2, year: int = 2023, ghi: list[float] | None = None) -> str:
+def _psm4_csv(
+    n_hours: int = 2,
+    year: int = 2023,
+    ghi: list[float] | None = None,
+    start: str | None = None,
+) -> str:
     """
     Shared payload builder in the documented PSM v4 CSV response shape:
     line 1 is the metadata field-name row (including Latitude, Longitude,
     and GHI Units), line 2 is the matching metadata value row, line 3 is
     the data column header ``Year,Month,Day,Hour,Minute,GHI``, and the
     remaining lines are hourly data rows.
+
+    `start` (an ISO timestamp string) overrides the default "{year}-07-01
+    00:00:00" starting point -- used by the year-boundary tests below to
+    place rows on either side of a requested window's edges within the
+    same calendar year.
     """
     if ghi is None:
         ghi = [200.0 + i * 10 for i in range(n_hours)]
@@ -43,12 +53,31 @@ def _psm4_csv(n_hours: int = 2, year: int = 2023, ghi: list[float] | None = None
         "NSRDB,145809,30.2711,-97.7437,0,w/m2",
         "Year,Month,Day,Hour,Minute,GHI",
     ]
-    start = pd.Timestamp(f"{year}-07-01T00:00:00")
+    start_ts = pd.Timestamp(start) if start is not None else pd.Timestamp(f"{year}-07-01T00:00:00")
     for i in range(n_hours):
-        ts = start + pd.Timedelta(hours=i)
+        ts = start_ts + pd.Timedelta(hours=i)
         lines.append(f"{ts.year},{ts.month},{ts.day},{ts.hour},{ts.minute},{ghi[i]}")
 
     return "\n".join(lines) + "\n"
+
+
+def _year_boundary_fixtures() -> dict[int, str]:
+    """
+    Two per-year PSM v4 fixtures straddling the 2023/2024 boundary, each
+    carrying rows on both sides of a [2023-12-28, 2024-01-03] window so the
+    year-chunking tests can prove filtering actually ran rather than
+    trivially passing on an all-inside fixture.
+
+    2023 fixture: 2023-12-27T22:00 .. 2023-12-28T03:00 (6 hourly rows) --
+    2 rows before the window's start bound (2023-12-28T00:00:00Z), 4 inside.
+    2024 fixture: 2024-01-03T20:00 .. 2024-01-04T01:00 (6 hourly rows) --
+    4 rows inside the window's end bound (2024-01-03T23:59:59.999999Z), 2
+    after it.
+    """
+    return {
+        2023: _psm4_csv(n_hours=6, year=2023, start="2023-12-27T22:00:00"),
+        2024: _psm4_csv(n_hours=6, year=2024, start="2024-01-03T20:00:00"),
+    }
 
 
 class _FakeResponse:
@@ -59,12 +88,30 @@ class _FakeResponse:
         self.content = text.encode()
 
 
-def _mock_get(monkeypatch, text: str = "", recorder: dict | None = None):
+def _mock_get(
+    monkeypatch,
+    text: str = "",
+    recorder: dict | None = None,
+    response_for_year=None,
+):
+    """
+    `response_for_year`, when supplied, is a callable(year) -> _FakeResponse
+    used by the multi-year tests to serve a different body per requested
+    `names` year. `recorder`, when supplied, accumulates every call's
+    params in `recorder["all_params"]` (order-preserving) in addition to
+    the last-call convenience keys `recorder["calls"]`/`["params"]`/["url"]`
+    already relied on by Plan 08-01's tests.
+    """
+
     def fake_get(url, params=None, timeout=None):
         if recorder is not None:
-            recorder["calls"] = recorder.get("calls", 0) + 1
+            all_params = recorder.setdefault("all_params", [])
+            all_params.append(params)
+            recorder["calls"] = len(all_params)
             recorder["params"] = params
             recorder["url"] = url
+        if response_for_year is not None:
+            return response_for_year(params["names"])
         return _FakeResponse(text=text)
 
     monkeypatch.setattr(nsrdb_provider.requests, "get", fake_get)
@@ -288,3 +335,139 @@ def test_fetch_nsrdb_raises_when_a_ghi_value_is_out_of_schema_range(monkeypatch)
     message = str(excinfo.value)
     assert "solar_radiation" in message
     assert str(hi) in message
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 08-02 Task 1: year-chunking and window reconstruction
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def test_fetch_nsrdb_issues_one_request_per_calendar_year(monkeypatch):
+    monkeypatch.setenv("NREL_API_KEY", "test-key")
+    monkeypatch.setenv("NREL_API_EMAIL", "test@example.com")
+    fixtures = _year_boundary_fixtures()
+    recorder: dict = {}
+    _mock_get(
+        monkeypatch,
+        recorder=recorder,
+        response_for_year=lambda year: _FakeResponse(text=fixtures[year]),
+    )
+
+    lat, lon = config.CITY_COORDINATES["AUSTIN"]
+    nsrdb_provider.fetch_nsrdb(lat, lon, "2023-12-28", "2024-01-03")
+
+    assert recorder["calls"] == 2
+    assert [p["names"] for p in recorder["all_params"]] == [2023, 2024]
+
+
+def test_fetch_nsrdb_still_issues_one_request_for_a_single_year_window(monkeypatch):
+    monkeypatch.setenv("NREL_API_KEY", "test-key")
+    monkeypatch.setenv("NREL_API_EMAIL", "test@example.com")
+    recorder: dict = {}
+    _mock_get(monkeypatch, text=_psm4_csv(n_hours=2, year=2023), recorder=recorder)
+
+    lat, lon = config.CITY_COORDINATES["AUSTIN"]
+    nsrdb_provider.fetch_nsrdb(lat, lon, "2023-07-01", "2023-07-02")
+
+    assert recorder["calls"] == 1
+
+
+def test_fetch_nsrdb_concatenates_year_chunks_into_one_ordered_frame(monkeypatch):
+    monkeypatch.setenv("NREL_API_KEY", "test-key")
+    monkeypatch.setenv("NREL_API_EMAIL", "test@example.com")
+    fixtures = _year_boundary_fixtures()
+    _mock_get(
+        monkeypatch,
+        response_for_year=lambda year: _FakeResponse(text=fixtures[year]),
+    )
+
+    lat, lon = config.CITY_COORDINATES["AUSTIN"]
+    frame = nsrdb_provider.fetch_nsrdb(lat, lon, "2023-12-28", "2024-01-03")
+
+    assert (frame["datetime_utc"].dt.year == 2023).any()
+    assert (frame["datetime_utc"].dt.year == 2024).any()
+    assert frame["datetime_utc"].is_monotonic_increasing
+    assert not frame["datetime_utc"].duplicated().any()
+
+
+def test_fetch_nsrdb_filters_the_concatenated_frame_to_the_requested_window(monkeypatch):
+    monkeypatch.setenv("NREL_API_KEY", "test-key")
+    monkeypatch.setenv("NREL_API_EMAIL", "test@example.com")
+    fixtures = _year_boundary_fixtures()
+    _mock_get(
+        monkeypatch,
+        response_for_year=lambda year: _FakeResponse(text=fixtures[year]),
+    )
+
+    lat, lon = config.CITY_COORDINATES["AUSTIN"]
+    start = "2023-12-28"
+    end = "2024-01-03"
+    frame = nsrdb_provider.fetch_nsrdb(lat, lon, start, end)
+
+    start_ts = pd.Timestamp(start, tz="UTC")
+    end_ts = pd.Timestamp(end, tz="UTC") + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
+    assert (frame["datetime_utc"] >= start_ts).all()
+    assert (frame["datetime_utc"] <= end_ts).all()
+    # 6 rows per fixture year, 12 total -- filtering must drop at least the
+    # 2 (2023) + 2 (2024) rows _year_boundary_fixtures placed outside the
+    # window, so the returned count must be strictly smaller than 12.
+    assert len(frame) < 12
+
+
+def test_fetch_nsrdb_treats_a_bare_date_end_as_the_whole_day(monkeypatch):
+    monkeypatch.setenv("NREL_API_KEY", "test-key")
+    monkeypatch.setenv("NREL_API_EMAIL", "test@example.com")
+    full_day = _psm4_csv(n_hours=24, year=2023, start="2023-07-01T00:00:00")
+
+    _mock_get(monkeypatch, text=full_day)
+    lat, lon = config.CITY_COORDINATES["AUSTIN"]
+    whole_day_frame = nsrdb_provider.fetch_nsrdb(lat, lon, "2023-07-01", "2023-07-01")
+    assert len(whole_day_frame) == 24
+
+    _mock_get(monkeypatch, text=full_day)
+    midnight_frame = nsrdb_provider.fetch_nsrdb(
+        lat, lon, "2023-07-01", "2023-07-01T00:00:00Z"
+    )
+    assert len(midnight_frame) == 1
+
+
+def test_fetch_nsrdb_raises_for_a_year_before_the_products_first_covered_year(monkeypatch):
+    monkeypatch.setenv("NREL_API_KEY", "test-key")
+    monkeypatch.setenv("NREL_API_EMAIL", "test@example.com")
+    recorder: dict = {}
+    _mock_get(monkeypatch, text=_psm4_csv(year=2015), recorder=recorder)
+
+    lat, lon = config.CITY_COORDINATES["AUSTIN"]
+    with pytest.raises(ValueError) as excinfo:
+        nsrdb_provider.fetch_nsrdb(lat, lon, "2015-01-01", "2015-02-01")
+
+    message = str(excinfo.value)
+    assert "2015" in message
+    assert str(nsrdb_provider.NSRDB_FIRST_COVERED_YEAR) in message
+    assert recorder.get("calls", 0) == 0
+
+
+def test_fetch_nsrdb_does_not_locally_reject_a_future_year(monkeypatch):
+    monkeypatch.setenv("NREL_API_KEY", "test-key")
+    monkeypatch.setenv("NREL_API_EMAIL", "test@example.com")
+    recorder: dict = {}
+    _mock_get(monkeypatch, text=_psm4_csv(n_hours=2, year=2030), recorder=recorder)
+
+    lat, lon = config.CITY_COORDINATES["AUSTIN"]
+    nsrdb_provider.fetch_nsrdb(lat, lon, "2030-07-01", "2030-07-02")
+
+    assert recorder.get("calls", 0) >= 1
+
+
+def test_fetch_nsrdb_raises_when_the_window_selects_no_rows(monkeypatch):
+    monkeypatch.setenv("NREL_API_KEY", "test-key")
+    monkeypatch.setenv("NREL_API_EMAIL", "test@example.com")
+    # All rows fall on 2023-07-02, entirely outside the requested
+    # 2023-07-01 single-day window.
+    _mock_get(monkeypatch, text=_psm4_csv(n_hours=2, year=2023, start="2023-07-02T00:00:00"))
+
+    lat, lon = config.CITY_COORDINATES["AUSTIN"]
+    with pytest.raises(ValueError) as excinfo:
+        nsrdb_provider.fetch_nsrdb(lat, lon, "2023-07-01", "2023-07-01")
+
+    assert "2023-07-01" in str(excinfo.value)
