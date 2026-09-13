@@ -162,3 +162,129 @@ def test_module_import_has_no_side_effects(monkeypatch):
     monkeypatch.delenv("NREL_API_EMAIL", raising=False)
 
     importlib.reload(nsrdb_provider)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Task 2: credential fail-loud path, request contract for all four cities
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def test_fetch_nsrdb_raises_when_api_key_is_unset(monkeypatch):
+    monkeypatch.delenv("NREL_API_KEY", raising=False)
+    monkeypatch.setenv("NREL_API_EMAIL", "test@example.com")
+    recorder: dict = {}
+    _mock_get(monkeypatch, text=_psm4_csv(), recorder=recorder)
+
+    lat, lon = config.CITY_COORDINATES["AUSTIN"]
+    with pytest.raises(EnvironmentError) as excinfo:
+        nsrdb_provider.fetch_nsrdb(lat, lon, "2023-07-01", "2023-07-02")
+
+    assert "NREL_API_KEY" in str(excinfo.value)
+    assert recorder.get("calls", 0) == 0
+
+
+def test_fetch_nsrdb_raises_when_contact_email_is_unset(monkeypatch):
+    monkeypatch.setenv("NREL_API_KEY", "test-key")
+    monkeypatch.delenv("NREL_API_EMAIL", raising=False)
+    recorder: dict = {}
+    _mock_get(monkeypatch, text=_psm4_csv(), recorder=recorder)
+
+    lat, lon = config.CITY_COORDINATES["AUSTIN"]
+    with pytest.raises(EnvironmentError) as excinfo:
+        nsrdb_provider.fetch_nsrdb(lat, lon, "2023-07-01", "2023-07-02")
+
+    assert "NREL_API_EMAIL" in str(excinfo.value)
+    assert recorder.get("calls", 0) == 0
+
+
+def test_fetch_nsrdb_credential_errors_are_not_value_errors(monkeypatch):
+    monkeypatch.delenv("NREL_API_KEY", raising=False)
+    monkeypatch.setenv("NREL_API_EMAIL", "test@example.com")
+
+    lat, lon = config.CITY_COORDINATES["AUSTIN"]
+    with pytest.raises(EnvironmentError) as excinfo:
+        nsrdb_provider.fetch_nsrdb(lat, lon, "2023-07-01", "2023-07-02")
+
+    assert not isinstance(excinfo.value, ValueError)
+
+
+def test_fetch_nsrdb_error_message_never_echoes_the_credential_values(monkeypatch):
+    monkeypatch.setenv("NREL_API_KEY", "sentinel-key-8675309")
+    monkeypatch.setenv("NREL_API_EMAIL", "sentinel-email-8675309@example.com")
+    _mock_get(monkeypatch, text="<html><body>Internal Server Error</body></html>")
+
+    lat, lon = config.CITY_COORDINATES["AUSTIN"]
+    with pytest.raises(ValueError) as excinfo:
+        nsrdb_provider.fetch_nsrdb(lat, lon, "2023-07-01", "2023-07-02")
+
+    message = str(excinfo.value)
+    assert "sentinel-key-8675309" not in message
+    assert "sentinel-email-8675309@example.com" not in message
+
+
+def test_fetch_nsrdb_builds_a_distinct_longitude_first_wkt_for_all_four_cities(monkeypatch):
+    monkeypatch.setenv("NREL_API_KEY", "test-key")
+    monkeypatch.setenv("NREL_API_EMAIL", "test@example.com")
+
+    wkts = {}
+    for city, (lat, lon) in config.CITY_COORDINATES.items():
+        recorder: dict = {}
+        _mock_get(monkeypatch, text=_psm4_csv(), recorder=recorder)
+        nsrdb_provider.fetch_nsrdb(lat, lon, "2023-07-01", "2023-07-02")
+        wkts[city] = recorder["params"]["wkt"]
+
+    assert len(set(wkts.values())) == 4
+
+    # The assertion that actually catches a swap: parse the two numbers
+    # back out of each string (never call _wkt_point to build the
+    # expectation -- a round-trip agrees with itself) and assert the first
+    # is negative and the second positive. All four Texas cities have
+    # negative longitude and positive latitude, so a latitude-first string
+    # fails this on every city at once.
+    for city, wkt in wkts.items():
+        inner = wkt[len("POINT(") : -1]
+        lon_str, lat_str = inner.split()
+        assert float(lon_str) < 0 < float(lat_str), (city, wkt)
+
+
+def test_fetch_nsrdb_sends_the_optional_request_metadata_parameters(monkeypatch):
+    monkeypatch.setenv("NREL_API_KEY", "test-key")
+    monkeypatch.setenv("NREL_API_EMAIL", "test@example.com")
+    recorder: dict = {}
+    _mock_get(monkeypatch, text=_psm4_csv(), recorder=recorder)
+
+    lat, lon = config.CITY_COORDINATES["AUSTIN"]
+    nsrdb_provider.fetch_nsrdb(lat, lon, "2023-07-01", "2023-07-02")
+
+    for key, value in nsrdb_provider.NSRDB_REQUEST_METADATA.items():
+        assert recorder["params"][key] == value
+
+
+def test_fetch_nsrdb_raises_when_the_response_is_not_a_psm4_csv(monkeypatch):
+    monkeypatch.setenv("NREL_API_KEY", "test-key")
+    monkeypatch.setenv("NREL_API_EMAIL", "test@example.com")
+    _mock_get(
+        monkeypatch,
+        text="<html><head><title>Error</title></head><body>Bad Request</body></html>",
+    )
+
+    lat, lon = config.CITY_COORDINATES["AUSTIN"]
+    with pytest.raises(ValueError) as excinfo:
+        nsrdb_provider.fetch_nsrdb(lat, lon, "2023-07-01", "2023-07-02")
+
+    assert "<html>" in str(excinfo.value)
+
+
+def test_fetch_nsrdb_raises_when_a_ghi_value_is_out_of_schema_range(monkeypatch):
+    monkeypatch.setenv("NREL_API_KEY", "test-key")
+    monkeypatch.setenv("NREL_API_EMAIL", "test@example.com")
+    hi = units_def.PIPELINE_SCHEMA["solar_radiation"]["range"][1]
+    _mock_get(monkeypatch, text=_psm4_csv(n_hours=2, ghi=[hi + 100.0, 200.0]))
+
+    lat, lon = config.CITY_COORDINATES["AUSTIN"]
+    with pytest.raises(ValueError) as excinfo:
+        nsrdb_provider.fetch_nsrdb(lat, lon, "2023-07-01", "2023-07-02")
+
+    message = str(excinfo.value)
+    assert "solar_radiation" in message
+    assert str(hi) in message
