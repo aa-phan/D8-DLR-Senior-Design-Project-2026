@@ -82,6 +82,25 @@ _REQUIRED_DATA_COLUMNS: tuple[str, ...] = ("Year", "Month", "Day", "Hour", "Minu
 # the endpoint's own structured rejection (Task 2's error handler).
 NSRDB_FIRST_COVERED_YEAR: int = 2018
 
+# NSRDB_ACCEPTED_GHI_UNITS: normalized (stripped, lower-cased, no internal
+# spaces) spellings this module accepts for the response's echoed "GHI
+# Units" metadata field. 08-RESEARCH.md Assumption A2 could not confirm the
+# exact spelling without a real API key -- a live probe never returned a
+# real success body -- so this set is deliberately permissive on casing and
+# spacing rather than pinned to one literal string. Plan 08-03's live check
+# records the actual value so this set can be narrowed afterward.
+# `_range_check` remains the independent backstop that catches a
+# magnitude-scale unit error even if this metadata field is missing or
+# lies.
+NSRDB_ACCEPTED_GHI_UNITS: frozenset[str] = frozenset({
+    "w/m2",
+    "w/m^2",
+    "w/m²",
+})
+
+# _REDACTED_PLACEHOLDER: what `_redact` substitutes for a credential value.
+_REDACTED_PLACEHOLDER: str = "[REDACTED]"
+
 
 def _nrel_api_key() -> str:
     """
@@ -140,6 +159,64 @@ def _wkt_point(lat: float, lon: float) -> str:
     return f"POINT({lon:.4f} {lat:.4f})"
 
 
+def _redact(text: str, *secrets: str) -> str:
+    """
+    Return `text` with every non-empty member of `secrets` replaced by
+    `_REDACTED_PLACEHOLDER`.
+
+    NSRDB's JSON error body echoes the request `inputs` back, which include
+    `api_key` and the contact email -- so any body fragment quoted into an
+    exception message must pass through here first. Empty and `None`
+    members are skipped, so this is safe to call when a credential was
+    never resolved (e.g. before both env-var lookups have run).
+    """
+    for secret in secrets:
+        if secret:
+            text = text.replace(secret, _REDACTED_PLACEHOLDER)
+    return text
+
+
+def _raise_for_nsrdb_error(response, year: int, *secrets: str) -> None:
+    """
+    Raise `ValueError` naming this module, the failing year, the response
+    status code, and a redacted/truncated detail, when `response` is not
+    2xx. Returns immediately for a 2xx response.
+
+    NSRDB returns two structurally different error-body shapes depending
+    on whether the key was accepted: a JSON object carrying `status` and an
+    `errors` array for a parameter-validation failure, or a raw
+    `Error Code,Error Message` CSV body for a missing/invalid key
+    (08-RESEARCH.md Pitfall 3). `response.json()` is attempted first and
+    `ValueError` (`json.JSONDecodeError` is a subclass) is caught to fall
+    back to the raw body, so a CSV error body never surfaces a confusing
+    JSON-decode error in place of the real NREL/NLR text. Only the
+    `errors` entry is taken from a JSON body, never the whole object --
+    the rest of it is the echoed request.
+
+    Detection matches on the status and the generic errors-array shape
+    only, never on a specific NREL wording: the exact out-of-range-year
+    text could not be isolated without a real key (08-RESEARCH.md Pitfall
+    3 / Open Question 1), and a substring match on a guessed sentence
+    would turn that unverified assumption into a silent pass-through the
+    first time the wording changed.
+    """
+    if response.ok:
+        return
+
+    try:
+        body = response.json()
+        detail = body.get("errors", body) if isinstance(body, dict) else body
+    except ValueError:
+        detail = response.text
+
+    detail_text = _redact(str(detail), *secrets)[:500]
+
+    raise ValueError(
+        f"nsrdb_provider: request for year {year} failed with HTTP "
+        f"{response.status_code}: {detail_text}"
+    )
+
+
 def _parse_psm4_csv(text: str) -> tuple[pd.DataFrame, dict[str, str]]:
     """
     Parse a PSM v4 CSV response body: two metadata header lines, then a
@@ -152,11 +229,16 @@ def _parse_psm4_csv(text: str) -> tuple[pd.DataFrame, dict[str, str]]:
         value such as a location name can itself contain a quoted comma.
 
     Raises:
-        ValueError: if the body has fewer than three lines, or if the data
+        ValueError: if the body has fewer than three lines; if the data
             column header does not carry every column in
             `_REQUIRED_DATA_COLUMNS` -- an HTML error page or a redirected
             response would otherwise reach `pd.read_csv` and look
-            parseable.
+            parseable; or if a present "GHI Units" metadata field, once
+            normalized (stripped, lower-cased, internal spaces removed),
+            is not a member of `NSRDB_ACCEPTED_GHI_UNITS`. An absent field
+            is not evidence of a wrong unit and is skipped (logged at
+            debug level) -- `_range_check` remains the independent
+            backstop for a magnitude-scale unit error regardless.
     """
     lines = text.splitlines()
     if len(lines) < 3:
@@ -170,6 +252,25 @@ def _parse_psm4_csv(text: str) -> tuple[pd.DataFrame, dict[str, str]]:
     field_names = next(metadata_reader)
     field_values = next(metadata_reader)
     metadata = dict(zip(field_names, field_values))
+
+    ghi_units = metadata.get("GHI Units")
+    if ghi_units is not None:
+        normalized = ghi_units.strip().lower().replace(" ", "")
+        if normalized not in NSRDB_ACCEPTED_GHI_UNITS:
+            raise ValueError(
+                f"nsrdb_provider: response echoed GHI Units {ghi_units!r} "
+                f"(normalized {normalized!r}), which is not in the "
+                f"accepted set {sorted(NSRDB_ACCEPTED_GHI_UNITS)} -- "
+                "Assumption A2 could not confirm the exact spelling "
+                "without a real key, so this check is permissive on "
+                "casing/spacing but not absent."
+            )
+    else:
+        log.debug(
+            "nsrdb_provider: response has no 'GHI Units' metadata field; "
+            "skipping the units check (an absent field is not evidence of "
+            "a wrong unit)."
+        )
 
     data_header = [c.strip() for c in lines[2].split(",")]
     missing = [c for c in _REQUIRED_DATA_COLUMNS if c not in data_header]
@@ -362,11 +463,12 @@ def fetch_nsrdb(lat: float, lon: float, start: str, end: str) -> pd.DataFrame:
         # No .raise_for_status() call here: requests' HTTPError message
         # embeds the request URL, which carries api_key and email in its
         # query string -- letting that exception propagate would leak
-        # both. The response body is handed straight to _parse_psm4_csv,
-        # which fails loud on anything that isn't a well-formed PSM v4
-        # CSV. Task 2 adds a dedicated dual-shape error check here, before
-        # the parse, for a non-2xx response.
+        # both. _raise_for_nsrdb_error checks the response and raises a
+        # credential-redacted ValueError for a non-2xx response before any
+        # parse is attempted; the loop does not retry and does not
+        # continue past a failing year.
         r = requests.get(NSRDB_BASE, params=params, timeout=60)
+        _raise_for_nsrdb_error(r, year, api_key, email)
 
         frame, _metadata = _parse_psm4_csv(r.text)
 
