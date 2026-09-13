@@ -74,6 +74,33 @@ NSRDB_REQUEST_METADATA: dict[str, str] = {
 # to trust a response body enough to hand it to pd.read_csv.
 _REQUIRED_DATA_COLUMNS: tuple[str, ...] = ("Year", "Month", "Day", "Hour", "Minute", "GHI")
 
+# NSRDB_FIRST_COVERED_YEAR: PSM v4 GOES CONUS coverage begins in 2018 -- a
+# fixed product fact that cannot move backwards. Deliberately no matching
+# upper-bound constant: the product's most recent covered year advances
+# every time NREL/NLR publishes a new year, and a local ceiling would
+# reject a year that now legitimately exists. The upper bound is left to
+# the endpoint's own structured rejection (Task 2's error handler).
+NSRDB_FIRST_COVERED_YEAR: int = 2018
+
+# NSRDB_ACCEPTED_GHI_UNITS: normalized (stripped, lower-cased, no internal
+# spaces) spellings this module accepts for the response's echoed "GHI
+# Units" metadata field. 08-RESEARCH.md Assumption A2 could not confirm the
+# exact spelling without a real API key -- a live probe never returned a
+# real success body -- so this set is deliberately permissive on casing and
+# spacing rather than pinned to one literal string. Plan 08-03's live check
+# records the actual value so this set can be narrowed afterward.
+# `_range_check` remains the independent backstop that catches a
+# magnitude-scale unit error even if this metadata field is missing or
+# lies.
+NSRDB_ACCEPTED_GHI_UNITS: frozenset[str] = frozenset({
+    "w/m2",
+    "w/m^2",
+    "w/m²",
+})
+
+# _REDACTED_PLACEHOLDER: what `_redact` substitutes for a credential value.
+_REDACTED_PLACEHOLDER: str = "[REDACTED]"
+
 
 def _nrel_api_key() -> str:
     """
@@ -132,6 +159,64 @@ def _wkt_point(lat: float, lon: float) -> str:
     return f"POINT({lon:.4f} {lat:.4f})"
 
 
+def _redact(text: str, *secrets: str) -> str:
+    """
+    Return `text` with every non-empty member of `secrets` replaced by
+    `_REDACTED_PLACEHOLDER`.
+
+    NSRDB's JSON error body echoes the request `inputs` back, which include
+    `api_key` and the contact email -- so any body fragment quoted into an
+    exception message must pass through here first. Empty and `None`
+    members are skipped, so this is safe to call when a credential was
+    never resolved (e.g. before both env-var lookups have run).
+    """
+    for secret in secrets:
+        if secret:
+            text = text.replace(secret, _REDACTED_PLACEHOLDER)
+    return text
+
+
+def _raise_for_nsrdb_error(response, year: int, *secrets: str) -> None:
+    """
+    Raise `ValueError` naming this module, the failing year, the response
+    status code, and a redacted/truncated detail, when `response` is not
+    2xx. Returns immediately for a 2xx response.
+
+    NSRDB returns two structurally different error-body shapes depending
+    on whether the key was accepted: a JSON object carrying `status` and an
+    `errors` array for a parameter-validation failure, or a raw
+    `Error Code,Error Message` CSV body for a missing/invalid key
+    (08-RESEARCH.md Pitfall 3). `response.json()` is attempted first and
+    `ValueError` (`json.JSONDecodeError` is a subclass) is caught to fall
+    back to the raw body, so a CSV error body never surfaces a confusing
+    JSON-decode error in place of the real NREL/NLR text. Only the
+    `errors` entry is taken from a JSON body, never the whole object --
+    the rest of it is the echoed request.
+
+    Detection matches on the status and the generic errors-array shape
+    only, never on a specific NREL wording: the exact out-of-range-year
+    text could not be isolated without a real key (08-RESEARCH.md Pitfall
+    3 / Open Question 1), and a substring match on a guessed sentence
+    would turn that unverified assumption into a silent pass-through the
+    first time the wording changed.
+    """
+    if response.ok:
+        return
+
+    try:
+        body = response.json()
+        detail = body.get("errors", body) if isinstance(body, dict) else body
+    except ValueError:
+        detail = response.text
+
+    detail_text = _redact(str(detail), *secrets)[:500]
+
+    raise ValueError(
+        f"nsrdb_provider: request for year {year} failed with HTTP "
+        f"{response.status_code}: {detail_text}"
+    )
+
+
 def _parse_psm4_csv(text: str) -> tuple[pd.DataFrame, dict[str, str]]:
     """
     Parse a PSM v4 CSV response body: two metadata header lines, then a
@@ -144,11 +229,16 @@ def _parse_psm4_csv(text: str) -> tuple[pd.DataFrame, dict[str, str]]:
         value such as a location name can itself contain a quoted comma.
 
     Raises:
-        ValueError: if the body has fewer than three lines, or if the data
+        ValueError: if the body has fewer than three lines; if the data
             column header does not carry every column in
             `_REQUIRED_DATA_COLUMNS` -- an HTML error page or a redirected
             response would otherwise reach `pd.read_csv` and look
-            parseable.
+            parseable; or if a present "GHI Units" metadata field, once
+            normalized (stripped, lower-cased, internal spaces removed),
+            is not a member of `NSRDB_ACCEPTED_GHI_UNITS`. An absent field
+            is not evidence of a wrong unit and is skipped (logged at
+            debug level) -- `_range_check` remains the independent
+            backstop for a magnitude-scale unit error regardless.
     """
     lines = text.splitlines()
     if len(lines) < 3:
@@ -162,6 +252,25 @@ def _parse_psm4_csv(text: str) -> tuple[pd.DataFrame, dict[str, str]]:
     field_names = next(metadata_reader)
     field_values = next(metadata_reader)
     metadata = dict(zip(field_names, field_values))
+
+    ghi_units = metadata.get("GHI Units")
+    if ghi_units is not None:
+        normalized = ghi_units.strip().lower().replace(" ", "")
+        if normalized not in NSRDB_ACCEPTED_GHI_UNITS:
+            raise ValueError(
+                f"nsrdb_provider: response echoed GHI Units {ghi_units!r} "
+                f"(normalized {normalized!r}), which is not in the "
+                f"accepted set {sorted(NSRDB_ACCEPTED_GHI_UNITS)} -- "
+                "Assumption A2 could not confirm the exact spelling "
+                "without a real key, so this check is permissive on "
+                "casing/spacing but not absent."
+            )
+    else:
+        log.debug(
+            "nsrdb_provider: response has no 'GHI Units' metadata field; "
+            "skipping the units check (an absent field is not evidence of "
+            "a wrong unit)."
+        )
 
     data_header = [c.strip() for c in lines[2].split(",")]
     missing = [c for c in _REQUIRED_DATA_COLUMNS if c not in data_header]
@@ -222,31 +331,111 @@ def _to_utc_timestamp(value: str) -> pd.Timestamp:
     return ts
 
 
+def _window_bounds(start: str, end: str) -> tuple[pd.Timestamp, pd.Timestamp]:
+    """
+    Resolve a caller's [start, end] window to tz-aware UTC timestamps,
+    coercing each argument exactly as `open_meteo_provider._to_archive_date`
+    does (tz-naive localized to UTC, tz-aware converted to UTC).
+
+    A bare-date `end` (containing neither "T" nor ":") names a calendar
+    day rather than an instant, so it is advanced to the last microsecond
+    of that day: Phase 7 confirmed live that Open-Meteo returns a full
+    day's rows for a single-day window, and a caller writing the same
+    window against this provider should get the same 24 rows rather than
+    the single midnight row a literal reading would select. `start` is
+    never widened this way -- only `end` names a closing boundary that a
+    bare date could ambiguously read as "the start of that day" instead of
+    "through the end of that day".
+
+    Raises:
+        ValueError: if either argument cannot be parsed by
+            `_to_utc_timestamp`, or if the resolved end precedes the
+            resolved start.
+    """
+    start_ts = _to_utc_timestamp(start)
+    end_ts = _to_utc_timestamp(end)
+
+    if "T" not in end and ":" not in end:
+        end_ts = end_ts + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
+
+    if end_ts < start_ts:
+        raise ValueError(
+            f"nsrdb_provider: resolved end {end_ts} precedes resolved start "
+            f"{start_ts} (from start={start!r}, end={end!r})"
+        )
+
+    return start_ts, end_ts
+
+
+def _years_spanned(start_ts: pd.Timestamp, end_ts: pd.Timestamp) -> list[int]:
+    """
+    Return the ascending list of calendar years spanned by [start_ts,
+    end_ts], e.g. [2023, 2024] for a window crossing that boundary.
+
+    Raises:
+        ValueError: naming the offending year and `NSRDB_FIRST_COVERED_YEAR`
+            when any spanned year precedes the product's covered range.
+            Raised before any request is issued, so an out-of-range request
+            costs nothing and fails with a message about the product rather
+            than a remote validation error. There is deliberately no
+            matching check against an upper bound -- see
+            `NSRDB_FIRST_COVERED_YEAR`'s comment.
+    """
+    years = list(range(start_ts.year, end_ts.year + 1))
+    for year in years:
+        if year < NSRDB_FIRST_COVERED_YEAR:
+            raise ValueError(
+                f"nsrdb_provider: requested year {year} precedes NSRDB PSM "
+                f"v4 GOES CONUS coverage, which begins at "
+                f"NSRDB_FIRST_COVERED_YEAR={NSRDB_FIRST_COVERED_YEAR}."
+            )
+    return years
+
+
 def fetch_nsrdb(lat: float, lon: float, start: str, end: str) -> pd.DataFrame:
     """
     Fetch GHI from NSRDB PSM v4 (GOES CONUS) for one (lat, lon) point over
-    a window lying wholly inside one calendar year, in exactly one HTTP
-    request.
+    an arbitrary [start, end] window, including one crossing a calendar-year
+    boundary.
+
+    NSRDB's CSV endpoint takes a single year in its `names` parameter and
+    has no start/end parameter at all (08-RESEARCH.md Pitfall 2), so this
+    function issues one request per calendar year spanned by the window,
+    concatenates the per-year frames, and filters the result back down to
+    the caller's actual window. A window inside one calendar year still
+    issues exactly one request -- the loop is the general case, not an
+    unconditional fan-out. Request volume consequence: one request per
+    spanned calendar year per city, against a documented standard-key
+    limit of 1,000 requests/hour, so a four-city eight-year backfill is 32
+    requests. No retry, no backoff and no concurrency are added here -- a
+    rate-limited response is a non-2xx and is handled like any other
+    rejection (Task 2's error handler).
 
     Args:
         lat, lon: The target point's coordinates, latitude-first (matching
             `config.CITY_COORDINATES`).
-        start, end: ISO-8601 or bare-date strings, both inside the same
-            calendar year.
+        start, end: ISO-8601 or bare-date strings. A bare-date `end` covers
+            that whole calendar day (`_window_bounds`).
 
     Returns:
         A DataFrame with exactly the columns ["datetime_utc",
         "solar_radiation"], in PIPELINE_SCHEMA units (W/m²). `datetime_utc`
-        is tz-aware UTC and monotonically increasing. No wind, temperature,
-        or humidity column is ever present (D-02).
+        is tz-aware UTC, monotonically increasing, filtered to [start, end]
+        inclusive, and carries no duplicate timestamp across a year seam
+        (the first occurrence wins). No wind, temperature, or humidity
+        column is ever present (D-02).
 
     Raises:
         EnvironmentError: if `NREL_API_KEY` or `NREL_API_EMAIL` is unset --
             this machine is misconfigured. Raised before any network call,
             both credential lookups being the first two statements below.
-        ValueError: if a date argument cannot be parsed; if the response
-            body is not a well-formed PSM v4 CSV; or if a GHI value falls
-            outside `units_def.PIPELINE_SCHEMA`'s declared range for
+        ValueError: if a date argument cannot be parsed; if any spanned
+            year precedes `NSRDB_FIRST_COVERED_YEAR`; if a response body is
+            not a well-formed PSM v4 CSV; if the filtered result selects
+            zero rows (07-CONTEXT.md D-05's fail-loud precedent -- NSRDB is
+            a standalone primary on this path, not a supplement with a
+            real-outage carve-out); or if a GHI value falls outside
+            `units_def.PIPELINE_SCHEMA`'s declared range for
             `solar_radiation`. Deliberately a different exception type from
             `EnvironmentError`: a misconfigured machine and a malformed
             provider response are different failure modes, and Phase 10's
@@ -255,44 +444,56 @@ def fetch_nsrdb(lat: float, lon: float, start: str, end: str) -> pd.DataFrame:
     api_key = _nrel_api_key()
     email = _nrel_contact_email()
 
-    start_ts = _to_utc_timestamp(start)
-    end_ts = _to_utc_timestamp(end)
-    # This task handles a window wholly inside one calendar year. Plan
-    # 08-02 generalises this into a loop over every year spanned by
-    # [start, end].
-    year = start_ts.year
+    start_ts, end_ts = _window_bounds(start, end)
+    years = _years_spanned(start_ts, end_ts)
 
-    params = {
-        "api_key": api_key,
-        "email": email,
-        "names": year,
-        "attributes": NSRDB_ATTRIBUTES,
-        "interval": NSRDB_INTERVAL_MINUTES,
-        "utc": "true",
-        "wkt": _wkt_point(lat, lon),
-        **NSRDB_REQUEST_METADATA,
-    }
+    frames = []
+    for year in years:
+        params = {
+            "api_key": api_key,
+            "email": email,
+            "names": year,
+            "attributes": NSRDB_ATTRIBUTES,
+            "interval": NSRDB_INTERVAL_MINUTES,
+            "utc": "true",
+            "wkt": _wkt_point(lat, lon),
+            **NSRDB_REQUEST_METADATA,
+        }
 
-    # No .raise_for_status() call here: requests' HTTPError message embeds
-    # the request URL, which carries api_key and email in its query string
-    # -- letting that exception propagate would leak both. The response
-    # body is handed straight to _parse_psm4_csv, which fails loud on
-    # anything that isn't a well-formed PSM v4 CSV.
-    r = requests.get(NSRDB_BASE, params=params, timeout=60)
+        # No .raise_for_status() call here: requests' HTTPError message
+        # embeds the request URL, which carries api_key and email in its
+        # query string -- letting that exception propagate would leak
+        # both. _raise_for_nsrdb_error checks the response and raises a
+        # credential-redacted ValueError for a non-2xx response before any
+        # parse is attempted; the loop does not retry and does not
+        # continue past a failing year.
+        r = requests.get(NSRDB_BASE, params=params, timeout=60)
+        _raise_for_nsrdb_error(r, year, api_key, email)
 
-    frame, _metadata = _parse_psm4_csv(r.text)
+        frame, _metadata = _parse_psm4_csv(r.text)
 
-    frame["datetime_utc"] = pd.to_datetime(
-        frame[["Year", "Month", "Day", "Hour", "Minute"]], utc=True
-    )
-    frame["solar_radiation"] = pd.to_numeric(frame["GHI"], errors="coerce")
+        frame["datetime_utc"] = pd.to_datetime(
+            frame[["Year", "Month", "Day", "Hour", "Minute"]], utc=True
+        )
+        frame["solar_radiation"] = pd.to_numeric(frame["GHI"], errors="coerce")
+        frames.append(frame[["datetime_utc", "solar_radiation"]])
 
-    result = frame[["datetime_utc", "solar_radiation"]]
-    result = result[
-        (result["datetime_utc"] >= start_ts) & (result["datetime_utc"] <= end_ts)
+    combined = pd.concat(frames, ignore_index=True)
+    combined = combined[
+        (combined["datetime_utc"] >= start_ts) & (combined["datetime_utc"] <= end_ts)
     ]
-    result = result.sort_values("datetime_utc").reset_index(drop=True)
+    combined = combined.sort_values("datetime_utc")
+    combined = combined.drop_duplicates(subset="datetime_utc", keep="first")
+    combined = combined.reset_index(drop=True)
 
-    _range_check(result)
+    if combined.empty:
+        raise ValueError(
+            f"nsrdb_provider: window [{start_ts}, {end_ts}] selected zero "
+            f"rows across {len(years)} year(s) of NSRDB data -- raising "
+            "rather than returning an empty frame a caller could mistake "
+            "for night-time (07-CONTEXT.md D-05)."
+        )
 
-    return result
+    _range_check(combined)
+
+    return combined
