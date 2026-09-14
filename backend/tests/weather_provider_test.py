@@ -1486,3 +1486,72 @@ def test_tceq_accepts_a_single_cams_id_list(monkeypatch):
     result = weather_provider.fetch_weather(["83"], _START, _END, provider="tceq")
 
     assert not result.empty
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 09-03 Task 1: TCEQ no-credential source-and-behaviour gate
+# (T-09-20, T-09-21)
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def test_tceq_provider_reads_no_credential(monkeypatch):
+    """
+    Source-and-behaviour gate in the same style as Plan 07-03's
+    `test_new_providers_read_no_secret` and Plan 08-03's
+    `test_no_nsrdb_credential_value_is_tracked_in_the_repository`/
+    `test_nsrdb_provider_imports_without_any_credential`: TCEQ's
+    `daily_summary.pl` endpoint is public and unauthenticated, so this
+    phase must not have quietly introduced a credential path (T-09-20).
+
+    Comment lines are filtered out before scanning so a comment explaining
+    that TCEQ needs no credential (the module docstring says exactly this)
+    cannot itself trip the gate -- the gate is proven load-bearing by
+    making it fail against a deliberately broken scratch copy before being
+    accepted as green (T-09-21).
+    """
+    import re
+
+    source_path = Path(__file__).resolve().parent.parent / "tceq_provider.py"
+    lines = source_path.read_text().splitlines()
+    code_lines = [line for line in lines if not line.strip().startswith("#")]
+    stripped_text = "\n".join(code_lines)
+
+    assert "os.environ" not in stripped_text, (
+        "tceq_provider.py references os.environ -- TCEQ is unauthenticated "
+        "and must read no environment variable."
+    )
+    assert "os.getenv" not in stripped_text, (
+        "tceq_provider.py references os.getenv -- TCEQ is unauthenticated "
+        "and must read no environment variable."
+    )
+
+    import_lines = [
+        line
+        for line in code_lines
+        if line.strip().startswith("import ") or line.strip().startswith("from ")
+    ]
+    for import_line in import_lines:
+        assert "import os" not in import_line, (
+            f"tceq_provider.py imports 'os': {import_line!r}"
+        )
+
+    assignment_pattern = re.compile(
+        r'^\s*[A-Za-z_][A-Za-z0-9_]*(TOKEN|KEY|SECRET|PASSWORD)[A-Za-z0-9_]*\s*'
+        r'(?::\s*\w+(?:\[[^\]]*\])?\s*)?=\s*["\'][^"\']*["\']\s*$',
+        re.IGNORECASE,
+    )
+    offending = [line for line in code_lines if assignment_pattern.match(line)]
+    assert offending == [], (
+        f"tceq_provider.py assigns a quoted string literal to a "
+        f"TOKEN/KEY/SECRET/PASSWORD-named variable: {offending!r}"
+    )
+
+    # Behavioural proof: the claim that actually matters is that
+    # tceq_provider works with none of this phase's sibling providers'
+    # credential env vars set either -- reload must succeed regardless.
+    for var in ("SYNOPTIC_TOKEN", "NREL_API_KEY", "NREL_API_EMAIL"):
+        monkeypatch.delenv(var, raising=False)
+
+    import importlib
+
+    importlib.reload(tceq_provider)
