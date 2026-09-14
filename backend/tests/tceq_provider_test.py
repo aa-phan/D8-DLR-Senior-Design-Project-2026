@@ -579,3 +579,91 @@ def test_fetch_tceq_raises_when_a_row_is_shorter_than_the_header(monkeypatch):
 
     with pytest.raises(ValueError):
         tceq_provider.fetch_tceq(_CAMS_83, _START, _END)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 09-03 Task 2: regressions for two bugs found only by the live
+# `daily_summary.pl` check (T-09-19) -- no mocked test in Plans 09-01/09-02
+# could have caught either, since both fixtures matched the report shape
+# research recorded rather than the shape the live page actually renders.
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def test_fetch_tceq_finds_the_site_link_in_a_non_first_h1(monkeypatch):
+    """
+    The live report page renders TWO <h1> elements: a generic "Texas
+    Commission on Environmental Quality" banner first, then the
+    site-specific title carrying the CAMS link. `_validate_response`
+    originally checked only `soup.find("h1")` (the first one), which
+    rejected every genuine live report as if it were the invalid-site
+    page. Confirmed live against all four config.TCEQ_STATIONS sites
+    before this fix landed.
+    """
+    header_cells = "".join(f"<td>{h}</td>" for h in _HOUR_LABELS)
+    header_row = f"<tr><td>&nbsp;</td>{header_cells}<td>Parameter Measured</td><td>POC</td></tr>"
+    required_rows = {
+        "Wind Speed": _WIND_SPEED_MPH,
+        "Wind Direction": _WIND_DIRECTION_DEG,
+        "Outdoor Temperature": _OUTDOOR_TEMP_DEGF,
+    }
+    data_rows = "".join(
+        "<tr><td><a href='#'><strong>{label}</strong></a></td>{cells}"
+        "<td>{label}</td><td>1</td></tr>".format(
+            label=label, cells="".join(f"<td>{v}</td>" for v in values)
+        )
+        for label, values in required_rows.items()
+    )
+    table = f"<table border='1'>{header_row}{data_rows}</table>"
+    html = (
+        "<html><body>"
+        "<h1>Texas Commission on Environmental Quality</h1>"
+        f"<h1><a href='daily_summary.pl?CAMS={_CAMS_83}&region=14'>Corpus Christi C83</a></h1>"
+        f"{table}"
+        "</body></html>"
+    )
+    _mock_get(monkeypatch, html)
+
+    result = tceq_provider.fetch_tceq(_CAMS_83, _START, _END)
+
+    assert len(result) == len(_HOUR_LABELS)
+
+
+def test_fetch_tceq_extracts_hour_labels_from_th_header_cells(monkeypatch):
+    """
+    The live report page's header row is rendered entirely with <th> cells
+    (the original fixture used <td>). A <td>-only header search silently
+    returned zero hour labels for every real report -- not a crash and not
+    a raise, just a fetch that quietly contributed 0 rows for every
+    fetched day. Confirmed live against CAMS 83 before this fix landed.
+    Data rows still use <td> exclusively on the live page, so this fixture
+    intentionally leaves the data rows' cells as <td> to match.
+    """
+    header_cells = "".join(f"<th>{h}</th>" for h in _HOUR_LABELS)
+    header_row = f"<tr><th>&nbsp;</th>{header_cells}<th>Parameter Measured</th><th>POC</th></tr>"
+    required_rows = {
+        "Wind Speed": _WIND_SPEED_MPH,
+        "Wind Direction": _WIND_DIRECTION_DEG,
+        "Outdoor Temperature": _OUTDOOR_TEMP_DEGF,
+    }
+    data_rows = "".join(
+        "<tr><td><a href='#'><strong>{label}</strong></a></td>{cells}"
+        "<td>{label}</td><td>1</td></tr>".format(
+            label=label, cells="".join(f"<td>{v}</td>" for v in values)
+        )
+        for label, values in required_rows.items()
+    )
+    table = f"<table border='1'>{header_row}{data_rows}</table>"
+    html = (
+        "<html><body>"
+        f"<h1><a href='daily_summary.pl?CAMS={_CAMS_83}&region=14'>Corpus Christi C83</a></h1>"
+        f"{table}"
+        "</body></html>"
+    )
+    _mock_get(monkeypatch, html)
+
+    result = tceq_provider.fetch_tceq(_CAMS_83, _START, _END)
+
+    assert len(result) == len(_HOUR_LABELS)
+    assert list(result["wind_speed"]) == [
+        pytest.approx(Q(v, "mph").to("m/s").value) for v in _WIND_SPEED_MPH
+    ]

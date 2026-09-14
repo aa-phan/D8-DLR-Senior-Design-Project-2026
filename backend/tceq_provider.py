@@ -140,13 +140,28 @@ def _validate_response(html: str, cams_id: str):
     `<h1><a href=...CAMS=cams_id>` link AND a `<table border='1'>`
     element.
 
+    Every `<h1>` on the page is searched for the site-specific link, not
+    just the first: a live Plan 09-03 Task 2 check found the report page
+    now renders two `<h1>` elements (a generic "Texas Commission on
+    Environmental Quality" banner first, then the site-specific title
+    carrying the CAMS link) rather than the single `<h1>` the original
+    research fixture assumed. Checking only `soup.find("h1")` therefore
+    rejected every genuine report as if it were the invalid-site page. An
+    invalid CAMS ID's page still renders two `<h1>` elements, but neither
+    carries a CAMS link and no `<table border='1'>` exists at all, so
+    scanning every `<h1>` does not weaken the invalid-site check.
+
     Raises:
         ValueError: prefixed "tceq_provider:", naming `cams_id`, when
             either check fails.
     """
     soup = BeautifulSoup(html, "html.parser")
-    h1 = soup.find("h1")
-    site_link = h1.find("a", href=lambda h: h and f"CAMS={cams_id}" in h) if h1 else None
+    site_link = None
+    for h1 in soup.find_all("h1"):
+        link = h1.find("a", href=lambda h: h and f"CAMS={cams_id}" in h)
+        if link is not None:
+            site_link = link
+            break
     data_table = soup.find("table", attrs={"border": "1"})
     if site_link is None or data_table is None:
         raise ValueError(
@@ -167,11 +182,20 @@ def _hour_labels(data_table) -> list[str]:
     what makes a partial same-day report (which returns only the hours
     elapsed so far -- 09-RESEARCH.md Pitfall 5) align correctly instead of
     silently shifting.
+
+    Searches both `<th>` and `<td>` cells: a live Plan 09-03 Task 2 check
+    found the report page's header row is rendered entirely with `<th>`
+    cells (the original research fixture used `<td>`), so a `<td>`-only
+    search silently returned zero hour labels for every real report,
+    which downstream is indistinguishable from "this fetched day
+    contributed 0 rows" -- not a crash, and not a raise, just quietly
+    missing data. Data rows still use `<td>` exclusively (confirmed on the
+    same live fetch), so `_extract_row_values` is unaffected.
     """
     header_row = data_table.find("tr")
     if header_row is None:
         return []
-    cells = header_row.find_all("td")
+    cells = header_row.find_all(["td", "th"])
     labels = [c.get_text(strip=True) for c in cells]
     return [label for label in labels if _HOUR_LABEL_RE.match(label)]
 
