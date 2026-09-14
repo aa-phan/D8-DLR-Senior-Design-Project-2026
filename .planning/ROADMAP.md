@@ -159,11 +159,32 @@ temperature (RH where available) across all four cities, despite TCEQ exposing n
   3. TCEQ-sourced rows are tagged with the correct provenance value in the wind/temp provenance column(s).
   4. If a targeted CAMS site's report is unreachable, malformed, or missing a needed field (e.g. no solar radiation at that site), the adapter fails clearly or falls through rather than silently fabricating a reading.
 
-**Plans**: TBD
+**Plans**: 3 plans
+
+Plans:
+**Wave 1**
+
+- [ ] 09-01-PLAN.md — tracer: end-to-end TCEQ station fetch (bs4 legitimacy gate, `config.TCEQ_STATIONS`, `daily_summary.pl` scrape with `select_date=user`, exact-label row extraction, fixed never-DST UTC offset, `Q` unit conversion, range check, `_fetch_station` dispatch, provenance) for one city and one calendar day (WX-01)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 09-02-PLAN.md — multi-day per-calendar-day decomposition with deterministic ordering and a self-imposed day cap, all four cities, null-RH sites with null humidity provenance, MST-vs-CST offset split, and the full fail-loud suite (WX-01)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 09-03-PLAN.md — no-credential source gate, C4 spec / ACKNOWLEDGEMENTS sync, and the blocking human checkpoint confirming a real four-site TCEQ pull (WX-01)
 
 **Design note**: this is the highest-integration-effort provider in the milestone — HTML report
 scraping, not a JSON/REST client — per `data_provider.md`'s own assessment. Plan for a scraper
 module, not an API wrapper, and budget for it independently of Phase 7's trivial integrations.
+
+**Checkpoint**: Plan 09-01 Task 1 is a blocking package-legitimacy checkpoint — `bs4` is this
+codebase's first HTML-parser dependency and carries a `[SUS]` verdict (`unknown-downloads`,
+`no-repository`) in 09-RESEARCH.md's audit. Contrary to that document's Pitfall 8, `requirements.txt`
+does **not** already declare `bs4`; the pin is genuinely new, so the gate is a real one. Plan 09-03
+Task 2 is a second blocking checkpoint: every automated test in this phase mocks `requests.get`, so a
+live four-site fetch is the only evidence supporting Success Criterion 1 and the only way to close
+09-RESEARCH.md assumptions A1 and A3 before its 2026-10-13 validity window expires.
 
 ### Phase 10: Fallback Wiring & Documentation Ratification
 
@@ -196,5 +217,5 @@ Phases execute in numeric order: 6 → 7 → 8 → 9 → 10
 | 6. Multi-Provider Adapter Foundation | v1.1 | 3/3 | Complete    | 2026-09-11 |
 | 7. Trivial-Integration Providers | v1.1 | 3/3 | Complete    | 2026-09-12 |
 | 8. NSRDB Solar Integration | v1.1 | 3/3 | In Progress|  |
-| 9. TCEQ CAMS Integration | v1.1 | 0/TBD | Not started | - |
+| 9. TCEQ CAMS Integration | v1.1 | 0/3 | Planned | - |
 | 10. Fallback Wiring & Documentation Ratification | v1.1 | 0/TBD | Not started | - |
