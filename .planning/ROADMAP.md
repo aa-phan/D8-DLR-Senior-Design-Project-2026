@@ -159,12 +159,12 @@ temperature (RH where available) across all four cities, despite TCEQ exposing n
   3. TCEQ-sourced rows are tagged with the correct provenance value in the wind/temp provenance column(s).
   4. If a targeted CAMS site's report is unreachable, malformed, or missing a needed field (e.g. no solar radiation at that site), the adapter fails clearly or falls through rather than silently fabricating a reading.
 
-**Plans**: 3 plans
+**Plans**: 1/3 plans executed
 
 Plans:
 **Wave 1**
 
-- [ ] 09-01-PLAN.md — tracer: end-to-end TCEQ station fetch (bs4 legitimacy gate, `config.TCEQ_STATIONS`, `daily_summary.pl` scrape with `select_date=user`, exact-label row extraction, fixed never-DST UTC offset, `Q` unit conversion, range check, `_fetch_station` dispatch, provenance) for one city and one calendar day (WX-01)
+- [x] 09-01-PLAN.md — tracer: end-to-end TCEQ station fetch (bs4 legitimacy gate, `config.TCEQ_STATIONS`, `daily_summary.pl` scrape with `select_date=user`, exact-label row extraction, fixed never-DST UTC offset, `Q` unit conversion, range check, `_fetch_station` dispatch, provenance) for one city and one calendar day (WX-01)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -217,5 +217,5 @@ Phases execute in numeric order: 6 → 7 → 8 → 9 → 10
 | 6. Multi-Provider Adapter Foundation | v1.1 | 3/3 | Complete    | 2026-09-11 |
 | 7. Trivial-Integration Providers | v1.1 | 3/3 | Complete    | 2026-09-12 |
 | 8. NSRDB Solar Integration | v1.1 | 3/3 | In Progress|  |
-| 9. TCEQ CAMS Integration | v1.1 | 0/3 | Planned | - |
+| 9. TCEQ CAMS Integration | v1.1 | 1/3 | In Progress|  |
 | 10. Fallback Wiring & Documentation Ratification | v1.1 | 0/TBD | Not started | - |
