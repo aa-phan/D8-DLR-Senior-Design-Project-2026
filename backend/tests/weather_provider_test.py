@@ -1410,3 +1410,48 @@ def test_tceq_row_validates_against_pipeline_schema(monkeypatch):
 
     for _, row in result.iterrows():
         assert units_def.validate_pipeline_row(row.to_dict(), strict=False) == []
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 09-02 Task 2: four-city provenance, including the null-RH proof (D-05)
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def _tceq_frame_with_rh(relative_humidity) -> pd.DataFrame:
+    times = pd.date_range("2026-07-01T06:00:00Z", periods=2, freq="h")
+    return pd.DataFrame(
+        {
+            "datetime_utc": times,
+            "air_temp": [24.0, 24.5],
+            "wind_speed": [4.0, 4.5],
+            "wind_direction": [180.0, 185.0],
+            "relative_humidity": relative_humidity,
+        }
+    )
+
+
+def test_tceq_null_rh_row_has_null_humidity_source(monkeypatch):
+    monkeypatch.setattr(
+        tceq_provider, "fetch_tceq", lambda *a, **k: _tceq_frame_with_rh([None, None])
+    )
+
+    result = weather_provider.fetch_weather(["38"], _START, _END, provider="tceq")
+
+    row = result.iloc[0]
+    assert pd.isna(row["humidity_source"])
+    assert row["wind_source"] == "tceq"
+    assert row["temp_source"] == "tceq"
+
+
+@pytest.mark.parametrize("cams_id", sorted(config.TCEQ_STATIONS.values()))
+def test_tceq_provenance_holds_for_every_configured_city(monkeypatch, cams_id):
+    monkeypatch.setattr(
+        tceq_provider, "fetch_tceq", lambda *a, **k: _tceq_frame_with_rh([60.0, 61.0])
+    )
+
+    result = weather_provider.fetch_weather([cams_id], _START, _END, provider="tceq")
+
+    row = result.iloc[0]
+    assert row["wind_source"] == "tceq"
+    assert row["temp_source"] == "tceq"
+    assert row["humidity_source"] == "tceq"

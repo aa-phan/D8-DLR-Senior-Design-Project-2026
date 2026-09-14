@@ -61,6 +61,14 @@ TARGET_LABELS: dict[str, str] = {
 # fetch_tceq raises ValueError naming the CAMS ID for any ID absent from
 # this table, rather than defaulting to -6: an unknown site's true offset
 # is not knowable from a default, and a wrong offset is silent.
+#
+# Per-site evidence (09-RESEARCH.md CAMS Site Selection): CAMS 38 (Austin),
+# 83 (Corpus Christi), and 1095 (Midland) each render "All times shown are
+# in CST" on their live report page; CAMS 41 (El Paso) renders "All times
+# shown are in MST" -- all four confirmed on the SAME September fetch date,
+# which is exactly why El Paso carries its own -7 rather than sharing the
+# other three's -6: this is a real per-site timezone difference, not a
+# label that would coincide if DST were in effect for all four.
 TCEQ_FIXED_UTC_OFFSET_HOURS: dict[str, int] = {
     "38": -6,  # Austin -- CST, never DST-adjusted
     "83": -6,  # Corpus Christi -- CST, never DST-adjusted

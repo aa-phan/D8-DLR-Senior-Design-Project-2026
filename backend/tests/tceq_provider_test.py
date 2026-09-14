@@ -20,6 +20,7 @@ sites and multi-day windows are Plan 09-02's expansion.
 import pandas as pd
 import pytest
 
+import config
 import tceq_provider
 from units_def import Q
 
@@ -397,3 +398,80 @@ def test_fetch_tceq_accepts_iso_and_bare_date_windows(monkeypatch):
 
     assert not iso_result.empty
     assert not bare_result.empty
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 09-02 Task 2: all four cities, the null-RH sites, and the
+# MST-versus-CST offset split.
+# ──────────────────────────────────────────────────────────────────────────
+
+# Austin (38) and Midland (1095) have no Relative Humidity row at all
+# (09-RESEARCH.md CAMS Site Selection table, D-04); Corpus Christi (83) and
+# El Paso (41) both carry a live RH row.
+_RH_LESS_CAMS_IDS = {"38", "1095"}
+
+
+def _rows_for_cams(cams_id: str) -> dict:
+    rows = dict(_PRIMARY_ROWS)
+    if cams_id in _RH_LESS_CAMS_IDS:
+        del rows["Relative Humidity"]
+    return rows
+
+
+@pytest.mark.parametrize("cams_id", sorted(config.TCEQ_STATIONS.values()))
+def test_fetch_tceq_serves_every_configured_city(monkeypatch, cams_id):
+    html = _report_html(cams_id, _HOUR_LABELS, _rows_for_cams(cams_id))
+    _mock_get(monkeypatch, html)
+
+    result = tceq_provider.fetch_tceq(cams_id, _START, _END)
+
+    assert list(result.columns) == tceq_provider._RETURN_COLUMNS
+    assert len(result) > 0
+
+
+def test_fetch_tceq_leaves_rh_null_when_the_site_has_no_rh_row(monkeypatch):
+    rows = _rows_for_cams("38")
+    assert "Relative Humidity" not in rows
+    html = _report_html("38", _HOUR_LABELS, rows)
+    _mock_get(monkeypatch, html)
+
+    result = tceq_provider.fetch_tceq("38", _START, _END)
+
+    assert "relative_humidity" in result.columns
+    assert result["relative_humidity"].isna().all()
+
+
+def test_fetch_tceq_applies_the_el_paso_offset_separately(monkeypatch):
+    fixed_day = pd.Timestamp("2026-07-01", tz="UTC").date()
+    monkeypatch.setattr(tceq_provider, "_days_spanned", lambda *a, **k: [fixed_day])
+
+    wide_start, wide_end = "2026-06-25T00:00:00Z", "2026-07-10T23:59:59Z"
+
+    def _mk_get(cams_id):
+        html = _report_html(cams_id, _HOUR_LABELS, _PRIMARY_ROWS)
+        return lambda *a, **k: _FakeResponse(html)
+
+    monkeypatch.setattr(tceq_provider.requests, "get", _mk_get("41"))
+    el_paso = tceq_provider.fetch_tceq("41", wide_start, wide_end)
+
+    monkeypatch.setattr(tceq_provider.requests, "get", _mk_get("83"))
+    corpus = tceq_provider.fetch_tceq("83", wide_start, wide_end)
+
+    assert el_paso["datetime_utc"].iloc[0] == pd.Timestamp("2026-07-01T07:00:00Z")
+    assert corpus["datetime_utc"].iloc[0] == pd.Timestamp("2026-07-01T06:00:00Z")
+
+
+def test_fetch_tceq_rejects_a_cams_id_with_no_known_offset(monkeypatch):
+    counter = {"count": 0}
+
+    def _recorder(*a, **k):
+        counter["count"] += 1
+        return _FakeResponse(_PRIMARY_HTML)
+
+    monkeypatch.setattr(tceq_provider.requests, "get", _recorder)
+
+    with pytest.raises(ValueError) as excinfo:
+        tceq_provider.fetch_tceq("999999", _START, _END)
+
+    assert "999999" in str(excinfo.value)
+    assert counter["count"] == 0
