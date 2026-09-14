@@ -1455,3 +1455,34 @@ def test_tceq_provenance_holds_for_every_configured_city(monkeypatch, cams_id):
     assert row["wind_source"] == "tceq"
     assert row["temp_source"] == "tceq"
     assert row["humidity_source"] == "tceq"
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 09-02 Task 3: the multi-CAMS-ID guard on the "tceq" station path.
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def test_tceq_rejects_multiple_cams_ids(monkeypatch):
+    counter = {"count": 0}
+
+    def _recorder(*a, **k):
+        counter["count"] += 1
+        return _tceq_frame()
+
+    monkeypatch.setattr(tceq_provider, "fetch_tceq", _recorder)
+
+    with pytest.raises(ValueError) as excinfo:
+        weather_provider.fetch_weather(["38", "83"], _START, _END, provider="tceq")
+
+    message = str(excinfo.value)
+    assert "38" in message
+    assert "83" in message
+    assert counter["count"] == 0
+
+
+def test_tceq_accepts_a_single_cams_id_list(monkeypatch):
+    monkeypatch.setattr(tceq_provider, "fetch_tceq", lambda *a, **k: _tceq_frame())
+
+    result = weather_provider.fetch_weather(["83"], _START, _END, provider="tceq")
+
+    assert not result.empty

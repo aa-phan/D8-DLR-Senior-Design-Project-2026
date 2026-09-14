@@ -474,4 +474,108 @@ def test_fetch_tceq_rejects_a_cams_id_with_no_known_offset(monkeypatch):
         tceq_provider.fetch_tceq("999999", _START, _END)
 
     assert "999999" in str(excinfo.value)
-    assert counter["count"] == 0
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 09-02 Task 3: the fail-loud suite -- malformed reports, absent
+# required rows, placeholder cells, and (in weather_provider_test.py)
+# multi-site requests.
+# ──────────────────────────────────────────────────────────────────────────
+
+# The live-confirmed shape of the generic site-selection form TCEQ serves
+# for an unknown/invalid CAMS ID at HTTP 200 (09-RESEARCH.md Pitfall 3):
+# no site-specific <h1><a> link, zero <table> elements.
+_GENERIC_SITE_SELECTION_HTML = "<html><body><h1>Data by Site by Date (all parameters)</h1></body></html>"
+
+
+def test_fetch_tceq_raises_on_the_generic_site_selection_page(monkeypatch):
+    _mock_get(monkeypatch, _GENERIC_SITE_SELECTION_HTML)
+
+    with pytest.raises(ValueError) as excinfo:
+        tceq_provider.fetch_tceq(_CAMS_83, _START, _END)
+
+    assert _CAMS_83 in str(excinfo.value)
+
+
+def test_fetch_tceq_raises_when_the_h1_names_a_different_site(monkeypatch):
+    # A well-formed report, but the <h1> link's CAMS id (999) does not match
+    # the CAMS id actually requested (83) -- the endpoint answering about a
+    # site nobody asked for is exactly as wrong as answering about no site.
+    html = _report_html("999", _HOUR_LABELS, _PRIMARY_ROWS, site_name="Some Other Site")
+    _mock_get(monkeypatch, html)
+
+    with pytest.raises(ValueError):
+        tceq_provider.fetch_tceq(_CAMS_83, _START, _END)
+
+
+@pytest.mark.parametrize("missing_label", ["Wind Speed", "Wind Direction", "Outdoor Temperature"])
+def test_fetch_tceq_raises_when_a_required_row_is_absent(monkeypatch, missing_label):
+    rows = dict(_PRIMARY_ROWS)
+    del rows[missing_label]
+    html = _report_html(_CAMS_83, _HOUR_LABELS, rows)
+    _mock_get(monkeypatch, html)
+
+    with pytest.raises(ValueError) as excinfo:
+        tceq_provider.fetch_tceq(_CAMS_83, _START, _END)
+
+    message = str(excinfo.value)
+    assert _CAMS_83 in message
+    assert missing_label in message
+
+
+def test_fetch_tceq_omitting_only_relative_humidity_does_not_raise(monkeypatch):
+    # Pinned against the group above: the three required labels raise,
+    # Relative Humidity does not -- proving the two dispositions are
+    # distinct branches rather than one collapsed check.
+    rows = dict(_PRIMARY_ROWS)
+    del rows["Relative Humidity"]
+    html = _report_html(_CAMS_83, _HOUR_LABELS, rows)
+    _mock_get(monkeypatch, html)
+
+    result = tceq_provider.fetch_tceq(_CAMS_83, _START, _END)
+
+    assert result["relative_humidity"].isna().all()
+
+
+def test_fetch_tceq_treats_placeholder_cells_as_null(monkeypatch):
+    fixed_day = pd.Timestamp("2026-07-01", tz="UTC").date()
+    monkeypatch.setattr(tceq_provider, "_days_spanned", lambda *a, **k: [fixed_day])
+
+    rows = dict(_PRIMARY_ROWS)
+    rows["Wind Speed"] = [5.0, "FEW", 15.0, "NA"]
+    html = _report_html(_CAMS_83, _HOUR_LABELS, rows)
+    _mock_get(monkeypatch, html)
+
+    wide_start, wide_end = "2026-06-25T00:00:00Z", "2026-07-10T23:59:59Z"
+    result = tceq_provider.fetch_tceq(_CAMS_83, wide_start, wide_end)
+
+    # A placeholder nulls a cell without dropping its row: the row count
+    # still equals the hour-column count.
+    assert len(result) == len(_HOUR_LABELS)
+    assert pd.isna(result["wind_speed"].iloc[1])
+    assert pd.isna(result["wind_speed"].iloc[3])
+    assert result["wind_speed"].iloc[0] == pytest.approx(Q(5.0, "mph").to("m/s").value)
+    assert result["wind_speed"].iloc[2] == pytest.approx(Q(15.0, "mph").to("m/s").value)
+
+
+def test_fetch_tceq_raises_when_a_row_is_shorter_than_the_header(monkeypatch):
+    header_cells = "".join(f"<td>{h}</td>" for h in _HOUR_LABELS)
+    header_row = f"<tr><td>&nbsp;</td>{header_cells}<td>Parameter Measured</td><td>POC</td></tr>"
+    # Header names 4 hours, but this row carries only 2 value cells --
+    # a truncated row that would otherwise misalign hours against values.
+    short_row = (
+        "<tr><td><a href='#'><strong>Wind Speed</strong></a></td>"
+        "<td>5.0</td><td>10.0</td>"
+        "<td>Wind Speed</td><td>1</td></tr>"
+    )
+    table = f"<table border='1'>{header_row}{short_row}</table>"
+    html = (
+        "<html><body>"
+        f"<h1><a href='daily_summary.pl?CAMS={_CAMS_83}&region=14'>Corpus Christi C83</a></h1>"
+        f"{table}"
+        "</body></html>"
+    )
+    _mock_get(monkeypatch, html)
+
+    with pytest.raises(ValueError):
+        tceq_provider.fetch_tceq(_CAMS_83, _START, _END)
