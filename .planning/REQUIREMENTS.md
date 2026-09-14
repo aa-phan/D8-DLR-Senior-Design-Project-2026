@@ -9,7 +9,7 @@ Requirements for the Multi-Provider Weather milestone. Each maps to roadmap phas
 
 ### Wind/Temp Ingestion
 
-- [ ] **WX-01**: Given a target city, the system fetches wind speed, wind direction, temperature, and relative humidity from TCEQ CAMS as the primary real-station source, for all four cities (Austin, Corpus Christi, Midland, El Paso).
+- [x] **WX-01**: Given a target city, the system fetches wind speed, wind direction, temperature, and relative humidity from TCEQ CAMS as the primary real-station source, for all four cities (Austin, Corpus Christi, Midland, El Paso).
 - [x] **WX-02**: Given a target city, the system can additionally fetch higher-temporal-density wind/temp observations from ASOS 1-minute data as a supplement to TCEQ.
 
 ### Solar Ingestion
@@ -56,7 +56,7 @@ Which phases cover which requirements. Phase numbers match `.planning/ROADMAP.md
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| WX-01 | Phase 9 (TCEQ CAMS Integration) | Pending |
+| WX-01 | Phase 9 (TCEQ CAMS Integration) | Complete |
 | WX-02 | Phase 7 (Trivial-Integration Providers) | Complete |
 | WX-03 | Phase 8 (NSRDB Solar Integration) | Complete |
 | WX-04 | Phase 7 (Trivial-Integration Providers) | Complete |
