@@ -41,7 +41,7 @@ to fall back from.
 
 - [x] **Phase 6: Multi-Provider Adapter Foundation** - Redesign `fetch_weather`'s signature and extend `PIPELINE_SCHEMA` with provenance columns so station-based and grid-based providers can be combined without breaking existing callers (completed 2026-09-11)
 - [x] **Phase 7: Trivial-Integration Providers** - Wire ASOS 1-minute (wind/temp supplement) and Open-Meteo (historical backfill) behind the new adapter to prove the design cheaply (completed 2026-09-12)
-- [ ] **Phase 8: NSRDB Solar Integration** - Wire NREL NSRDB (PSM v4) as the primary solar-irradiance source, gated on a registered developer API key
+- [x] **Phase 8: NSRDB Solar Integration** - Wire NREL NSRDB (PSM v4) as the primary solar-irradiance source, gated on a registered developer API key (completed 2026-09-14)
 - [ ] **Phase 9: TCEQ CAMS Integration** - Wire TCEQ CAMS as the primary wind/temp/RH source for all four cities via HTML-report scraping
 - [ ] **Phase 10: Fallback Wiring & Documentation Ratification** - Wire Synoptic as the fallback behind the same adapter and ratify the provider-composition decision in `PRD.md`/`data_provider.md`
 

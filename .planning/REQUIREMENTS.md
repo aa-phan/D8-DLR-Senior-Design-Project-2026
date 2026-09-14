@@ -14,7 +14,7 @@ Requirements for the Multi-Provider Weather milestone. Each maps to roadmap phas
 
 ### Solar Ingestion
 
-- [ ] **WX-03**: Given a target city and time window, the system fetches solar irradiance (GHI) from NREL NSRDB (PSM v4) as the primary solar source, using a registered NREL developer API key stored the same way `SYNOPTIC_TOKEN` is (`.env`/environment only, never committed).
+- [x] **WX-03**: Given a target city and time window, the system fetches solar irradiance (GHI) from NREL NSRDB (PSM v4) as the primary solar source, using a registered NREL developer API key stored the same way `SYNOPTIC_TOKEN` is (`.env`/environment only, never committed).
 
 ### Historical Backfill
 
@@ -58,7 +58,7 @@ Which phases cover which requirements. Phase numbers match `.planning/ROADMAP.md
 |-------------|-------|--------|
 | WX-01 | Phase 9 (TCEQ CAMS Integration) | Pending |
 | WX-02 | Phase 7 (Trivial-Integration Providers) | Complete |
-| WX-03 | Phase 8 (NSRDB Solar Integration) | Pending |
+| WX-03 | Phase 8 (NSRDB Solar Integration) | Complete |
 | WX-04 | Phase 7 (Trivial-Integration Providers) | Complete |
 | WX-05 | Phase 6 (Multi-Provider Adapter Foundation) | Complete |
 | WX-06 | Phase 10 (Fallback Wiring & Documentation Ratification) | Pending |
