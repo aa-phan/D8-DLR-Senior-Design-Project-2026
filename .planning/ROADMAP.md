@@ -42,7 +42,7 @@ to fall back from.
 - [x] **Phase 6: Multi-Provider Adapter Foundation** - Redesign `fetch_weather`'s signature and extend `PIPELINE_SCHEMA` with provenance columns so station-based and grid-based providers can be combined without breaking existing callers (completed 2026-09-11)
 - [x] **Phase 7: Trivial-Integration Providers** - Wire ASOS 1-minute (wind/temp supplement) and Open-Meteo (historical backfill) behind the new adapter to prove the design cheaply (completed 2026-09-12)
 - [x] **Phase 8: NSRDB Solar Integration** - Wire NREL NSRDB (PSM v4) as the primary solar-irradiance source, gated on a registered developer API key (completed 2026-09-14)
-- [ ] **Phase 9: TCEQ CAMS Integration** - Wire TCEQ CAMS as the primary wind/temp/RH source for all four cities via HTML-report scraping
+- [x] **Phase 9: TCEQ CAMS Integration** - Wire TCEQ CAMS as the primary wind/temp/RH source for all four cities via HTML-report scraping (completed 2026-09-14)
 - [ ] **Phase 10: Fallback Wiring & Documentation Ratification** - Wire Synoptic as the fallback behind the same adapter and ratify the provider-composition decision in `PRD.md`/`data_provider.md`
 
 ## Phase Details
@@ -159,7 +159,7 @@ temperature (RH where available) across all four cities, despite TCEQ exposing n
   3. TCEQ-sourced rows are tagged with the correct provenance value in the wind/temp provenance column(s).
   4. If a targeted CAMS site's report is unreachable, malformed, or missing a needed field (e.g. no solar radiation at that site), the adapter fails clearly or falls through rather than silently fabricating a reading.
 
-**Plans**: 2/3 plans executed
+**Plans**: 3/3 plans executed
 
 Plans:
 **Wave 1**
@@ -172,7 +172,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 09-03-PLAN.md — no-credential source gate, C4 spec / ACKNOWLEDGEMENTS sync, and the blocking human checkpoint confirming a real four-site TCEQ pull (WX-01)
+- [x] 09-03-PLAN.md — no-credential source gate, C4 spec / ACKNOWLEDGEMENTS sync, and the blocking human checkpoint confirming a real four-site TCEQ pull (WX-01)
 
 **Design note**: this is the highest-integration-effort provider in the milestone — HTML report
 scraping, not a JSON/REST client — per `data_provider.md`'s own assessment. Plan for a scraper
@@ -217,5 +217,5 @@ Phases execute in numeric order: 6 → 7 → 8 → 9 → 10
 | 6. Multi-Provider Adapter Foundation | v1.1 | 3/3 | Complete    | 2026-09-11 |
 | 7. Trivial-Integration Providers | v1.1 | 3/3 | Complete    | 2026-09-12 |
 | 8. NSRDB Solar Integration | v1.1 | 3/3 | In Progress|  |
-| 9. TCEQ CAMS Integration | v1.1 | 2/3 | In Progress|  |
+| 9. TCEQ CAMS Integration | v1.1 | 3/3 | Complete    | 2026-09-14 |
 | 10. Fallback Wiring & Documentation Ratification | v1.1 | 0/TBD | Not started | - |
