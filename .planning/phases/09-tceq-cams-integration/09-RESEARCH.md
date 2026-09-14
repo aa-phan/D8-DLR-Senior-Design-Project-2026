@@ -662,7 +662,10 @@ def _extract_row_values(data_table, label: str) -> list[float | None]:
 **If this table is empty:** N/A — see entries above; all are low-risk given the live confirmation
 already performed.
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+*Both questions below were settled during planning; each carries its `RESOLVED:` marker naming the
+plan and task where the decision became executable content.*
 
 1. **How should the `_fetch_station(stids, start, end, "tceq")` branch resolve `stids` into a
    `city`/`lat`/`lon` for downstream merge compatibility (if any future caller needs it)?**
@@ -683,6 +686,16 @@ already performed.
      CAMS ID from `config.TCEQ_STATIONS[city]`) and can attach `city` itself with
      `weather_provider.attach_city` the same way `_fetch_grid`'s `open_meteo`/`nsrdb` branches
      already do via their own `lat`/`lon` arguments — no new machinery needed in this phase.
+   - **RESOLVED:** Adopted as recommended — no city resolution happens inside `_fetch_station`, and
+     no `city`/`lat`/`lon` column is added in this phase. Settled as executable content in **Plan
+     09-01 Task 3** (the tracer), which fixes `tceq_provider._RETURN_COLUMNS` to exactly
+     `[datetime_utc, air_temp, wind_speed, wind_direction, relative_humidity]` — the same return
+     shape as `asos_provider.fetch_asos_1min` — and whose `_fetch_station` `tceq` branch forwards
+     the caller's CAMS ID straight through to `fetch_tceq` with no lookup. Plan 09-02 Task 2 then
+     parameterises every test over all four `config.TCEQ_STATIONS` values against that same fixed
+     column list, so the shape is pinned by test rather than by convention. Attaching `city` stays
+     the caller's job via the existing `weather_provider.attach_city`; Phase 10's merge wiring can
+     do it without a change here.
 
 2. **Should a request whose window spans a genuinely large multi-day range (e.g. a full historical
    backfill) be rate-limited/throttled against `daily_summary.pl`?**
@@ -695,6 +708,16 @@ already performed.
      long historical backfill — Open-Meteo already owns that job (WX-04). No retry/backoff logic
      is recommended for this phase; if a future phase does need TCEQ historical backfill at scale,
      it should re-verify rate-limit behavior with a real multi-week request first.
+   - **RESOLVED:** Adopted as recommended, plus one addition. No retry, backoff or throttle logic
+     ships in this phase. Instead the question is closed structurally by a hard cap: **Plan 09-02
+     Task 1** defines `tceq_provider.TCEQ_MAX_DAYS_PER_FETCH = 31` and raises *before any request is
+     issued* when a requested window spans more days than that, with the raise message pointing bulk
+     historical callers at Open-Meteo (WX-04), which already owns that job. So the undocumented
+     rate-limit behaviour is never exercised rather than being guessed at — the long multi-week loop
+     that would provoke it cannot be built from this entry point. Recorded as threat **T-09-11**
+     (Denial of Service, `daily_summary.pl`, disposition `mitigate`) in Plan 09-02's threat model,
+     and verified by the `window decomposition OK` assertion in that task's `<verify>`. Re-verifying
+     real rate-limit behaviour remains a prerequisite for any future phase that wants to lift the cap.
 
 ## Environment Availability
 
