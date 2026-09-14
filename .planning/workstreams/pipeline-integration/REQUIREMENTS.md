@@ -48,16 +48,16 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| PIPE-01 | TBD | Pending |
-| PIPE-02 | TBD | Pending |
-| VAL-01 | TBD | Pending |
-| VAL-02 | TBD | Pending |
+| PIPE-01 | Phase 1 (Pipeline Integration) | Pending |
+| PIPE-02 | Phase 2 (Automated Scheduling) | Pending |
+| VAL-01 | Phase 3 (Real-Data Validation) | Pending |
+| VAL-02 | Phase 3 (Real-Data Validation) | Pending |
 
 **Coverage:**
 - v1.2 requirements: 4 total
-- Mapped to phases: 0
-- Unmapped: 4 ⚠️ (roadmap not yet created)
+- Mapped to phases: 4
+- Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-09-14*
-*Last updated: 2026-09-14 after initial definition*
+*Last updated: 2026-09-14 after ROADMAP.md creation (3 phases, 100% coverage)*
