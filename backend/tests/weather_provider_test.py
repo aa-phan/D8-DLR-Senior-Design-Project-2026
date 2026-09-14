@@ -24,6 +24,7 @@ import corridor_discretization
 import dlr_pipeline
 import nsrdb_provider
 import open_meteo_provider
+import tceq_provider
 import units_def
 import weather_provider
 
@@ -1346,3 +1347,66 @@ def test_no_nsrdb_credential_value_is_tracked_in_the_repository():
         f"nsrdb_provider.py assigns a quoted string literal to a "
         f"KEY/EMAIL-named variable: {offending!r}"
     )
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 09-01 Task 3: "tceq" station-path dispatch (WX-01 tracer)
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def _tceq_frame() -> pd.DataFrame:
+    times = pd.date_range("2026-07-01T06:00:00Z", periods=2, freq="h")
+    return pd.DataFrame(
+        {
+            "datetime_utc": times,
+            "air_temp": [24.0, 24.5],
+            "wind_speed": [4.0, 4.5],
+            "wind_direction": [180.0, 185.0],
+            "relative_humidity": [60.0, 61.0],
+        }
+    )
+
+
+def test_tceq_station_path_returns_a_provenanced_frame(monkeypatch):
+    monkeypatch.setattr(tceq_provider, "fetch_tceq", lambda *a, **k: _tceq_frame())
+
+    result = weather_provider.fetch_weather(["83"], _START, _END, provider="tceq")
+
+    row = result.iloc[0]
+    assert row["wind_source"] == "tceq"
+    assert row["temp_source"] == "tceq"
+    assert row["humidity_source"] == "tceq"
+
+
+def test_tceq_is_not_reachable_from_the_grid_path(monkeypatch):
+    counter = {"count": 0}
+
+    def _recorder(*a, **k):
+        counter["count"] += 1
+        return _tceq_frame()
+
+    monkeypatch.setattr(tceq_provider, "fetch_tceq", _recorder)
+
+    with pytest.raises(ValueError) as excinfo:
+        weather_provider.fetch_weather((27.8006, -97.3964), _START, _END, provider="tceq")
+
+    assert "grid" in str(excinfo.value)
+    assert counter["count"] == 0
+
+
+def test_tceq_station_path_still_rejects_an_unknown_provider_name():
+    with pytest.raises(ValueError) as excinfo:
+        weather_provider.fetch_weather(["83"], _START, _END, provider="nope")
+
+    message = str(excinfo.value)
+    assert "synoptic" in message
+    assert "tceq" in message
+
+
+def test_tceq_row_validates_against_pipeline_schema(monkeypatch):
+    monkeypatch.setattr(tceq_provider, "fetch_tceq", lambda *a, **k: _tceq_frame())
+
+    result = weather_provider.fetch_weather(["83"], _START, _END, provider="tceq")
+
+    for _, row in result.iterrows():
+        assert units_def.validate_pipeline_row(row.to_dict(), strict=False) == []

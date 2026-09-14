@@ -28,6 +28,13 @@ Phase 8 adds a second grid-path provider: `provider="nsrdb"` delegates to
 `solar_source="nsrdb"` and merged into a station row exactly like
 `open_meteo`'s solar column would be.
 
+Phase 9 adds a second station-path provider: `provider="tceq"` delegates to
+`tceq_provider.fetch_tceq` for one CAMS site's wind/temp/RH (WX-01), tagged
+`"tceq"` via the same `attach_provenance` mechanism the Synoptic branch
+uses. Unlike the Synoptic branch, no ASOS supplement is applied here --
+`_supplement_with_asos` is Synoptic-specific and mixing it into the TCEQ
+branch is not in WX-01's scope.
+
 Importing this module has no side effects (no file I/O, no network calls) —
 it is safe to import without a `SYNOPTIC_TOKEN` env var set. A token is only
 required when `fetch_weather(..., provider="synoptic")` is actually called,
@@ -45,6 +52,7 @@ import dlr_pipeline
 import nsrdb_provider
 import open_meteo_provider
 import station_explorer
+import tceq_provider
 import units_def
 
 log = logging.getLogger(__name__)
@@ -439,6 +447,9 @@ def _supplement_with_asos(synoptic_frame: pd.DataFrame, start: str, end: str) ->
 
 
 def _fetch_station(stids: list[str], start: str, end: str, provider: str) -> pd.DataFrame:
+    if provider == "tceq":
+        return attach_provenance(tceq_provider.fetch_tceq(stids[0], start, end), "tceq")
+
     if provider == "synoptic":
         return _supplement_with_asos(
             attach_provenance(dlr_pipeline.fetch_timeseries(stids, start, end), "synoptic"),
@@ -447,8 +458,8 @@ def _fetch_station(stids: list[str], start: str, end: str, provider: str) -> pd.
         )
 
     raise ValueError(
-        f"Unknown weather provider: {provider!r}. Only 'synoptic' is "
-        "currently implemented."
+        f"Unknown weather provider: {provider!r}. Only 'synoptic' and "
+        "'tceq' are currently implemented."
     )
 
 
@@ -503,9 +514,9 @@ def fetch_weather(
             grid-based path. Any other shape raises ValueError.
         start: Start of the date window (ISO 8601 string).
         end: End of the date window (ISO 8601 string).
-        provider: Which weather provider to use. "synoptic" is the only
-            provider implemented on the station path (list of station
-            IDs); "open_meteo" and "nsrdb" are the two providers
+        provider: Which weather provider to use. "synoptic" and "tceq" are
+            the two providers implemented on the station path (list of
+            station IDs); "open_meteo" and "nsrdb" are the two providers
             implemented on the grid path ((lat, lon) tuple) -- any other
             value raises ValueError for the path it was given on.
 
