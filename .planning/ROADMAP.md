@@ -159,7 +159,7 @@ temperature (RH where available) across all four cities, despite TCEQ exposing n
   3. TCEQ-sourced rows are tagged with the correct provenance value in the wind/temp provenance column(s).
   4. If a targeted CAMS site's report is unreachable, malformed, or missing a needed field (e.g. no solar radiation at that site), the adapter fails clearly or falls through rather than silently fabricating a reading.
 
-**Plans**: 1/3 plans executed
+**Plans**: 2/3 plans executed
 
 Plans:
 **Wave 1**
@@ -168,7 +168,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 09-02-PLAN.md — multi-day per-calendar-day decomposition with deterministic ordering and a self-imposed day cap, all four cities, null-RH sites with null humidity provenance, MST-vs-CST offset split, and the full fail-loud suite (WX-01)
+- [x] 09-02-PLAN.md — multi-day per-calendar-day decomposition with deterministic ordering and a self-imposed day cap, all four cities, null-RH sites with null humidity provenance, MST-vs-CST offset split, and the full fail-loud suite (WX-01)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
@@ -217,5 +217,5 @@ Phases execute in numeric order: 6 → 7 → 8 → 9 → 10
 | 6. Multi-Provider Adapter Foundation | v1.1 | 3/3 | Complete    | 2026-09-11 |
 | 7. Trivial-Integration Providers | v1.1 | 3/3 | Complete    | 2026-09-12 |
 | 8. NSRDB Solar Integration | v1.1 | 3/3 | In Progress|  |
-| 9. TCEQ CAMS Integration | v1.1 | 1/3 | In Progress|  |
+| 9. TCEQ CAMS Integration | v1.1 | 2/3 | In Progress|  |
 | 10. Fallback Wiring & Documentation Ratification | v1.1 | 0/TBD | Not started | - |
