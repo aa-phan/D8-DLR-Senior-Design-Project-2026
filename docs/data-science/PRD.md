@@ -92,11 +92,22 @@ This is the most consequential open item and is deliberately **not** decided her
 
 ## 8. Future Scope (brief)
 
-These appear in the System Design Report's risk-reduction section as work in progress but have no corresponding code today. Full component specs exist for them (`specs/C8`, `specs/C9`, `specs/C10`) since they're part of the phased roadmap, but they are intentionally last — see PRD §4 and `ROADMAP.md` Phase 4.
+**This section is stale as of v1.0 and is kept only for history.** It originally described
+C8/C9/C10 as having "no corresponding code today" — true when written, not true since v1.0
+shipped (2026-09-10). All three now have implemented, tested code. What actually remains open
+is documented in `DEVELOPMENT-TRACKS.md`, not here:
 
-- **Corridor spatial discretization** (C8) — break a transmission corridor into multiple points along its real geometry, compute ampacity at each, and take the minimum as the corridor-level bottleneck rating.
-- **ML-based ampacity forecasting** (C9) — regression or neural-network model to forecast ahead of real time, per IEEE Trans. Smart Grid prior art (`Prior Art Report.md`).
-- **Trained anomaly detection** (C10) — replace/augment `DLRSafetyMonitor`'s deterministic gates with a model trained on historical baselines per variable (wind, temp, solar, load).
+- **Corridor spatial discretization** (C8) is implemented (`corridor_discretization.py`) but
+  runs on placeholder city-centroid corridor geometry, not real transmission-line paths, and is
+  never called from the pipeline's actual entry point — see Track 1 and Track 3.
+- **Ampacity forecasting** (C9) is implemented (`ampacity_forecast.py`) but as classical
+  statistical methods (naive last-value, EWM), not the regression/neural-network model this
+  section originally called for — see Track 2.
+- **Anomaly detection** (C10) is implemented (`anomaly_detector.py`) but as a rolling
+  `mean ± k·std` threshold, not a trained model on historical baselines — see Track 2.
+
+See `docs/data-science/DEVELOPMENT-TRACKS.md` for the current, accurate scope of remaining work
+and how it's split across three independent tracks.
 
 ## 9. Critical Bug Found and Fixed: IEEE 738 Forced-Convection Formula
 
