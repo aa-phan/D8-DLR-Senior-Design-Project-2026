@@ -255,3 +255,19 @@ ASOS_STATIONS: dict[str, str] = {
     "MIDLAND": "MAF",
     "EL_PASO": "ELP",
 }
+
+# ──────────────────────────────────────────────────────────────────────────────
+# TCEQ CAMS site IDs (Phase 9, C4 / WX-01)
+# ──────────────────────────────────────────────────────────────────────────────
+# Selected on wind/temp/RH completeness alone (D-01/D-02) -- NOT proximity to a
+# corridor endpoint and NOT solar availability. Each site was confirmed by a
+# raw fetch of monitors.pl?region=<n> and daily_summary.pl?cams=<id> during
+# Phase 9 research (09-RESEARCH.md "CAMS Site Selection"). Values are strings
+# to match daily_summary.pl's `cams=<id>` query parameter, mirroring
+# ASOS_STATIONS' own dict[str, str] shape.
+TCEQ_STATIONS: dict[str, str] = {
+    "AUSTIN": "38",           # Audubon C38 -- WS+WD(true)+Temp confirmed; NO Relative Humidity row
+    "CORPUS_CHRISTI": "83",   # Corpus Christi Palm C83 -- WS+WD+Temp+RH all live-confirmed
+    "MIDLAND": "1095",        # Midland Avalon Drive C1095 -- WS+WD(true)+Temp confirmed; NO Relative Humidity row
+    "EL_PASO": "41",          # Chamizal C41 -- WS+WD+Temp+RH all live-confirmed
+}
