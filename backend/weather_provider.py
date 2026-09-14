@@ -448,6 +448,27 @@ def _supplement_with_asos(synoptic_frame: pd.DataFrame, start: str, end: str) ->
 
 def _fetch_station(stids: list[str], start: str, end: str, provider: str) -> pd.DataFrame:
     if provider == "tceq":
+        # daily_summary.pl serves exactly one site per request and the
+        # frame tceq_provider.fetch_tceq returns carries no station
+        # discriminator column -- concatenating two sites' rows would let
+        # merge_observations' (city, datetime_utc) key stitch one row
+        # together from two different stations' readings. Raising here
+        # (rather than taking stids[0], as 09-RESEARCH.md Open Question 1
+        # originally recommended) keeps this project's standing commitment
+        # that an unreliable/ambiguous input must never pass quietly: a
+        # caller passing multiple CAMS IDs gets a clear error naming every
+        # ID it supplied, not a silently-incomplete result for only the
+        # first one.
+        if len(stids) != 1:
+            raise ValueError(
+                f"weather_provider: provider='tceq' requires exactly one "
+                f"CAMS ID per call, got {stids!r} -- daily_summary.pl "
+                "serves one site per request and the returned frame "
+                "carries no station discriminator column, so rows from "
+                "two sites would be indistinguishable once merged on "
+                "(city, datetime_utc). Call fetch_weather once per CAMS "
+                "ID instead."
+            )
         return attach_provenance(tceq_provider.fetch_tceq(stids[0], start, end), "tceq")
 
     if provider == "synoptic":
@@ -535,8 +556,11 @@ def fetch_weather(
 
     Raises:
         ValueError: If `location` is neither a valid station-ID list nor a
-            valid (lat, lon) tuple, or if `provider` is not a supported
-            provider name.
+            valid (lat, lon) tuple; if `provider` is not a supported
+            provider name; or, for `provider="tceq"` specifically, if
+            `location` carries more than one CAMS ID (`daily_summary.pl`
+            serves one site per request and the returned frame carries no
+            station discriminator column).
     """
     shape = _validate_location_shape(location)
 
