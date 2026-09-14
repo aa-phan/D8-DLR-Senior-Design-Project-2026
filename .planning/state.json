@@ -1,0 +1,63 @@
+{
+  "contract": "1.0.0",
+  "flavor": "core",
+  "milestone": "v1.1 — Multi-Provider Weather",
+  "phases": [
+    {
+      "number": "1",
+      "name": "Foundation & Data Contract",
+      "status": "complete"
+    },
+    {
+      "number": "2",
+      "name": "Core Consolidation",
+      "status": "complete"
+    },
+    {
+      "number": "3",
+      "name": "Safety & Spatial",
+      "status": "complete"
+    },
+    {
+      "number": "4",
+      "name": "Predictive",
+      "status": "complete"
+    },
+    {
+      "number": "5",
+      "name": "DS-F5 Wiring",
+      "status": "complete"
+    },
+    {
+      "number": "6",
+      "name": "Multi-Provider Adapter Foundation",
+      "status": "complete"
+    },
+    {
+      "number": "7",
+      "name": "Trivial-Integration Providers",
+      "status": "complete"
+    },
+    {
+      "number": "8",
+      "name": "NSRDB Solar Integration",
+      "status": "in_progress"
+    },
+    {
+      "number": "9",
+      "name": "TCEQ CAMS Integration",
+      "status": "complete"
+    },
+    {
+      "number": "10",
+      "name": "Fallback Wiring & Documentation Ratification",
+      "status": "pending"
+    }
+  ],
+  "next": {
+    "command": "/gsd:progress --next",
+    "label": "Advance to the next step (plan phase 10)",
+    "reason": "Phase 10 of 5 — needs a plan"
+  },
+  "updated_at": "2026-09-14T08:01:05.014Z"
+}
