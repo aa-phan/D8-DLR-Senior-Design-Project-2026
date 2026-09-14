@@ -78,6 +78,15 @@ _RETURN_COLUMNS = [
 
 _HOUR_LABEL_RE = re.compile(r"^\d{4}$")
 
+# TCEQ_MAX_DAYS_PER_FETCH: the self-imposed cap on calendar days a single
+# fetch_tceq call may span. No rate limit is documented for daily_summary.pl
+# and none was confirmed during research (09-RESEARCH.md Open Question 2) --
+# this cap is this project's own restraint toward a free, unauthenticated,
+# public government CGI endpoint, not a limit the server enforces. A caller
+# needing a longer historical backfill should use Open-Meteo (WX-04)
+# instead of looping this provider hundreds of times.
+TCEQ_MAX_DAYS_PER_FETCH: int = 31
+
 
 def _fetch_one_day(cams_id: str, year: int, month: int, day: int) -> str:
     """
@@ -229,19 +238,105 @@ def _range_check(frame: pd.DataFrame) -> None:
             )
 
 
+def _to_utc_timestamp(value: str) -> pd.Timestamp:
+    """
+    Coerce an ISO-8601 timestamp or a bare-date string into a tz-aware UTC
+    `pd.Timestamp`, matching `nsrdb_provider._to_utc_timestamp`'s coercion.
+
+    Raises:
+        ValueError: prefixed "tceq_provider:", naming the offending value,
+            when it cannot be parsed by `pd.Timestamp`.
+    """
+    try:
+        ts = pd.Timestamp(value)
+    except (ValueError, TypeError) as exc:
+        raise ValueError(f"tceq_provider: cannot parse date {value!r}: {exc}") from exc
+
+    if ts.tzinfo is None:
+        ts = ts.tz_localize("UTC")
+    else:
+        ts = ts.tz_convert("UTC")
+
+    return ts
+
+
+def _window_bounds(start: str, end: str) -> tuple[pd.Timestamp, pd.Timestamp]:
+    """
+    Resolve a caller's [start, end] window to tz-aware UTC timestamps,
+    mirroring `nsrdb_provider._window_bounds`'s coercion exactly: a bare-date
+    `end` (containing neither "T" nor ":") is advanced to the last
+    microsecond of that day, so a single-day window returns a full day's
+    rows rather than the single midnight instant a literal reading would
+    select. `start` is never widened this way.
+
+    Raises:
+        ValueError: if either argument cannot be parsed by
+            `_to_utc_timestamp`, or if the resolved end precedes the
+            resolved start.
+    """
+    start_ts = _to_utc_timestamp(start)
+    end_ts = _to_utc_timestamp(end)
+
+    if "T" not in end and ":" not in end:
+        end_ts = end_ts + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
+
+    if end_ts < start_ts:
+        raise ValueError(
+            f"tceq_provider: resolved end {end_ts} precedes resolved start "
+            f"{start_ts} (from start={start!r}, end={end!r})"
+        )
+
+    return start_ts, end_ts
+
+
+def _days_spanned(start_ts: pd.Timestamp, end_ts: pd.Timestamp, offset_hours: int) -> list:
+    """
+    Return the ascending list of calendar dates (`datetime.date`) that
+    [start_ts, end_ts] spans, keyed to the LOCAL calendar the report is
+    actually organized by rather than to UTC.
+
+    A window is expressed in UTC but a `daily_summary.pl` report is a local
+    calendar day -- shifting each bound by `offset_hours` before taking the
+    date component is what makes a window starting at, e.g., 00:30Z include
+    the local day that actually contains its first hours, rather than
+    silently starting one local day late.
+
+    Args:
+        offset_hours: The requesting site's fixed UTC offset (e.g. -6),
+            passed in rather than looked up from the module constant, so
+            this function stays a pure date computation independent of
+            which site is asking.
+    """
+    local_start = (start_ts + pd.Timedelta(hours=offset_hours)).normalize()
+    local_end = (end_ts + pd.Timedelta(hours=offset_hours)).normalize()
+
+    days = []
+    current = local_start
+    while current <= local_end:
+        days.append(current.date())
+        current = current + pd.Timedelta(days=1)
+    return days
+
+
 def fetch_tceq(cams_id: str, start: str, end: str) -> pd.DataFrame:
     """
-    Fetch one calendar day of TCEQ CAMS wind/temperature/RH observations
-    for `cams_id`.
+    Fetch TCEQ CAMS wind/temperature/RH observations for `cams_id` over an
+    arbitrary [start, end] window, up to `TCEQ_MAX_DAYS_PER_FETCH` calendar
+    days.
+
+    Because `daily_summary.pl` reports exactly one calendar day per request
+    (D-09), this issues one request per LOCAL calendar day the window spans
+    (`_days_spanned`), each with its own `user_month`/`user_day`/`user_year`
+    values, concatenates the per-day frames, restricts the result back to
+    [start, end], sorts, and de-duplicates by timestamp (first wins) --
+    mirroring `nsrdb_provider.fetch_nsrdb`'s per-period-loop-then-concat
+    shape exactly, adapted from per-year to per-calendar-day.
 
     Args:
         cams_id: A `config.TCEQ_STATIONS` value (e.g. "83" for Corpus
             Christi).
-        start, end: ISO-8601 timestamp strings that must resolve to the
-            SAME calendar day in UTC -- this tracer proves the single-day
-            path only; a window spanning more than one calendar day
-            raises (Plan 09-02 replaces this with real multi-day
-            decomposition, D-09).
+        start, end: ISO-8601 or bare-date strings. A bare-date `end` covers
+            that whole calendar day (`_window_bounds`).
 
     Returns:
         A DataFrame with exactly the columns ["datetime_utc", "air_temp",
@@ -250,106 +345,150 @@ def fetch_tceq(cams_id: str, start: str, end: str) -> pd.DataFrame:
         `datetime_utc` is tz-aware UTC, built by subtracting
         `TCEQ_FIXED_UTC_OFFSET_HOURS[cams_id]` from each reported
         local-standard-time hour -- never a DST-aware conversion. Sorted
-        ascending, de-duplicated by timestamp (first wins), and
-        restricted to [start, end] inclusive.
+        ascending, de-duplicated by timestamp (first wins, via a stable
+        sort so "first" is deterministic), and restricted to [start, end]
+        inclusive. The same window fetched twice returns a byte-identical
+        frame.
 
     Raises:
         ValueError: if `cams_id` is absent from
-            `TCEQ_FIXED_UTC_OFFSET_HOURS`; if a date argument cannot be
-            parsed; if `start`/`end` resolve to different calendar days;
-            if the response is not a genuine site-specific report
-            (`_validate_response`); if the report is missing a required
-            row entirely for `wind_speed`, `wind_direction`, or
-            `air_temp` (relative_humidity's absence is never a raise --
-            it becomes a null column instead, D-04); if a matched row is
-            truncated relative to the header's hour count
-            (`_extract_row_values`); or if a converted value falls
-            outside `units_def.PIPELINE_SCHEMA`'s declared range for its
-            column (a units regression -- see `_range_check`).
+            `TCEQ_FIXED_UTC_OFFSET_HOURS` (raised before any request); if a
+            window argument cannot be parsed (`_window_bounds`); if the
+            resolved window spans more than `TCEQ_MAX_DAYS_PER_FETCH`
+            calendar days (raised before any request -- see
+            `TCEQ_MAX_DAYS_PER_FETCH`); if any fetched day's response is
+            not a genuine site-specific report (`_validate_response`); if
+            any fetched day's report is missing a required row entirely
+            for `Wind Speed`, `Wind Direction`, or `Outdoor Temperature`
+            (`Relative Humidity`'s absence is never a raise -- it becomes
+            a null column instead, D-04); if a matched row is truncated
+            relative to the header's hour count (`_extract_row_values`);
+            if the resolved window selects zero rows across every fetched
+            day (an empty frame a caller could mistake for a quiet weather
+            day, D-06); or if a converted value falls outside
+            `units_def.PIPELINE_SCHEMA`'s declared range for its column (a
+            units regression -- see `_range_check`).
         requests.HTTPError: propagated unchanged from `_fetch_one_day`.
     """
     if cams_id not in TCEQ_FIXED_UTC_OFFSET_HOURS:
         raise ValueError(
             f"tceq_provider: no fixed UTC offset registered for CAMS ID "
-            f"{cams_id!r} -- add it to TCEQ_FIXED_UTC_OFFSET_HOURS before "
-            "requesting this site (an unknown site's true offset is not "
-            "knowable from a default, and a wrong offset is silent)."
+            f"{cams_id!r} -- known CAMS IDs are "
+            f"{sorted(TCEQ_FIXED_UTC_OFFSET_HOURS)}. Add it to "
+            "TCEQ_FIXED_UTC_OFFSET_HOURS before requesting this site (an "
+            "unknown site's true offset is not knowable from a default, "
+            "and a wrong offset is silent)."
         )
     offset_hours = TCEQ_FIXED_UTC_OFFSET_HOURS[cams_id]
 
-    try:
-        start_ts = pd.Timestamp(start)
-        end_ts = pd.Timestamp(end)
-    except (ValueError, TypeError) as exc:
-        raise ValueError(f"tceq_provider: cannot parse date {start!r}/{end!r}: {exc}") from exc
+    start_ts, end_ts = _window_bounds(start, end)
+    days = _days_spanned(start_ts, end_ts, offset_hours)
 
-    start_ts = start_ts.tz_localize("UTC") if start_ts.tzinfo is None else start_ts.tz_convert("UTC")
-    end_ts = end_ts.tz_localize("UTC") if end_ts.tzinfo is None else end_ts.tz_convert("UTC")
-
-    if start_ts.normalize() != end_ts.normalize():
+    if len(days) > TCEQ_MAX_DAYS_PER_FETCH:
         raise ValueError(
-            f"tceq_provider: window {start!r}..{end!r} spans more than "
-            "one calendar day -- multi-day windows arrive in Plan 09-02."
+            f"tceq_provider: window {start_ts}..{end_ts} spans {len(days)} "
+            f"calendar days, exceeding TCEQ_MAX_DAYS_PER_FETCH="
+            f"{TCEQ_MAX_DAYS_PER_FETCH}. No rate limit is documented for "
+            "daily_summary.pl, but this project does not service a long "
+            "historical backfill by issuing hundreds of rapid sequential "
+            "requests against a free, unauthenticated, public government "
+            "CGI endpoint -- use Open-Meteo (WX-04) for bulk historical "
+            "backfill instead."
         )
 
-    report_day = start_ts.normalize()
+    frames = []
+    for day in days:
+        report_day = pd.Timestamp(day, tz="UTC")
+        html = _fetch_one_day(cams_id, report_day.year, report_day.month, report_day.day)
+        data_table = _validate_response(html, cams_id)
+        hour_labels = _hour_labels(data_table)
+        hour_count = len(hour_labels)
 
-    html = _fetch_one_day(cams_id, report_day.year, report_day.month, report_day.day)
-    data_table = _validate_response(html, cams_id)
-    hour_labels = _hour_labels(data_table)
-    hour_count = len(hour_labels)
+        if hour_count == 0:
+            # A single fetched day that yields no hour labels at all
+            # contributes no rows and is not itself a raise condition --
+            # the window-level empty check below is what catches a fetch
+            # that produced nothing overall.
+            log.info(
+                "tceq_provider: CAMS %s report for %s carried no hour "
+                "labels -- contributing 0 rows",
+                cams_id,
+                report_day.date(),
+            )
+            continue
 
-    per_column_values: dict[str, list] = {}
-    missing_required = []
-    for label, column in TARGET_LABELS.items():
-        values = _extract_row_values(data_table, label, hour_count)
-        if not values:
-            if column == "relative_humidity":
-                per_column_values[column] = [None] * hour_count
+        per_column_values: dict[str, list] = {}
+        missing_required_labels = []
+        for label, column in TARGET_LABELS.items():
+            values = _extract_row_values(data_table, label, hour_count)
+            if not values:
+                if column == "relative_humidity":
+                    per_column_values[column] = [None] * hour_count
+                else:
+                    missing_required_labels.append(label)
             else:
-                missing_required.append(column)
-        else:
-            per_column_values[column] = values
+                per_column_values[column] = values
 
-    if missing_required:
+        if missing_required_labels:
+            raise ValueError(
+                f"tceq_provider: CAMS {cams_id!r} report for "
+                f"{report_day.date()} is missing required row(s) "
+                f"{missing_required_labels!r} -- Wind Speed, Wind "
+                "Direction, and Outdoor Temperature were confirmed present "
+                "at every TCEQ site this project checked, so their "
+                "absence signals a broken or unexpectedly-shaped report "
+                "rather than an ordinary site limitation. Relative "
+                "Humidity is deliberately exempt from this check (D-04)."
+            )
+
+        records = []
+        for i, hour_label in enumerate(hour_labels):
+            hour = int(hour_label[:2])
+            # `report_day` is UTC-labeled but its wall-clock value
+            # represents the site's LOCAL standard time midnight -- adding
+            # `hour` still in that same "local, mislabeled UTC" frame,
+            # then subtracting the fixed offset converts to real UTC
+            # (never a DST-aware lookup).
+            local_as_utc = report_day + pd.Timedelta(hours=hour)
+            datetime_utc = local_as_utc - pd.Timedelta(hours=offset_hours)
+
+            raw_temp = per_column_values["air_temp"][i]
+            raw_wind = per_column_values["wind_speed"][i]
+
+            records.append(
+                {
+                    "datetime_utc": datetime_utc,
+                    "air_temp": Q(raw_temp, "degF").to("degC").value if raw_temp is not None else None,
+                    "wind_speed": Q(raw_wind, "mph").to("m/s").value if raw_wind is not None else None,
+                    "wind_direction": per_column_values["wind_direction"][i],
+                    "relative_humidity": per_column_values["relative_humidity"][i],
+                }
+            )
+
+        frames.append(pd.DataFrame(records, columns=_RETURN_COLUMNS))
+
+    if frames:
+        combined = pd.concat(frames, ignore_index=True)
+    else:
+        combined = pd.DataFrame(columns=_RETURN_COLUMNS)
+    combined["datetime_utc"] = pd.to_datetime(combined["datetime_utc"], utc=True)
+
+    combined = combined[(combined["datetime_utc"] >= start_ts) & (combined["datetime_utc"] <= end_ts)]
+    # A stable sort is required, not merely convenient: it is what makes
+    # "duplicates dropped keep='first'" deterministically mean "the
+    # earlier-fetched day's value wins" rather than an arbitrary tie-break.
+    combined = combined.sort_values("datetime_utc", kind="stable")
+    combined = combined.drop_duplicates(subset="datetime_utc", keep="first")
+    combined = combined.reset_index(drop=True)
+
+    if combined.empty:
         raise ValueError(
-            f"tceq_provider: CAMS {cams_id!r} report for "
-            f"{report_day.date()} is missing required row(s) for "
-            f"column(s) {missing_required} -- the site does not monitor "
-            "this parameter at all."
+            f"tceq_provider: window {start_ts}..{end_ts} for CAMS "
+            f"{cams_id!r} selected zero rows across {len(days)} day(s) "
+            "fetched -- raising rather than returning an empty frame a "
+            "caller could mistake for a quiet weather day (D-06)."
         )
 
-    records = []
-    for i, hour_label in enumerate(hour_labels):
-        hour = int(hour_label[:2])
-        # `report_day` is UTC-labeled but its wall-clock value represents
-        # the site's LOCAL standard time midnight -- adding `hour` still
-        # in that same "local, mislabeled UTC" frame, then subtracting the
-        # fixed offset converts to real UTC (never a DST-aware lookup).
-        local_as_utc = report_day + pd.Timedelta(hours=hour)
-        datetime_utc = local_as_utc - pd.Timedelta(hours=offset_hours)
+    _range_check(combined)
 
-        raw_temp = per_column_values["air_temp"][i]
-        raw_wind = per_column_values["wind_speed"][i]
-
-        records.append(
-            {
-                "datetime_utc": datetime_utc,
-                "air_temp": Q(raw_temp, "degF").to("degC").value if raw_temp is not None else None,
-                "wind_speed": Q(raw_wind, "mph").to("m/s").value if raw_wind is not None else None,
-                "wind_direction": per_column_values["wind_direction"][i],
-                "relative_humidity": per_column_values["relative_humidity"][i],
-            }
-        )
-
-    frame = pd.DataFrame(records, columns=_RETURN_COLUMNS)
-    frame["datetime_utc"] = pd.to_datetime(frame["datetime_utc"], utc=True)
-
-    frame = frame[(frame["datetime_utc"] >= start_ts) & (frame["datetime_utc"] <= end_ts)]
-    frame = frame.sort_values("datetime_utc")
-    frame = frame.drop_duplicates(subset="datetime_utc", keep="first")
-    frame = frame.reset_index(drop=True)
-
-    _range_check(frame)
-
-    return frame[_RETURN_COLUMNS]
+    return combined[_RETURN_COLUMNS]

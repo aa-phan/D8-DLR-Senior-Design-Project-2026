@@ -154,7 +154,15 @@ def test_fetch_tceq_request_carries_select_date_user(monkeypatch):
     assert params["user_year"] == 2026
 
 
-def test_fetch_tceq_single_day_window_issues_exactly_one_request(monkeypatch):
+def test_fetch_tceq_utc_day_window_issues_one_request_per_spanned_local_day(monkeypatch):
+    # Superseded by Plan 09-02's real local-calendar-day decomposition
+    # (D-09): _START/_END name one UTC calendar day (2026-07-01T00:00Z..
+    # T23:59:59Z), but CAMS 83's fixed offset (-6) means that UTC window
+    # actually spans TWO local calendar days (2026-06-30 and 2026-07-01) --
+    # local midnight of 07-01 is 06:00Z, so the window's first 6 hours
+    # belong to 06-30's local report. This is exactly why _days_spanned
+    # shifts by the site's offset before taking the date component, rather
+    # than assuming a UTC day and a local day always coincide.
     counter = {"count": 0}
 
     def _counting_recorder(*a, **k):
@@ -165,7 +173,7 @@ def test_fetch_tceq_single_day_window_issues_exactly_one_request(monkeypatch):
 
     tceq_provider.fetch_tceq(_CAMS_83, _START, _END)
 
-    assert counter["count"] == 1
+    assert counter["count"] == 2
 
 
 def test_fetch_tceq_applies_fixed_utc_offset_not_dst(monkeypatch):
