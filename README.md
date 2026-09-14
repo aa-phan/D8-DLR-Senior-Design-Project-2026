@@ -41,14 +41,28 @@ Register for a **free research token** at https://synopticdata.com/
 export SYNOPTIC_TOKEN=your_token_here
 ```
 
-### 3 — Discover stations near your corridors
+### 3 — Get an NREL/NLR developer API key (NSRDB solar data)
+
+Register for a **free developer key** on the `developer.nlr.gov` developer portal
+(the National Laboratory of the Rockies — the organization's institutional rename
+of NREL; the old `developer.nrel.gov` hostname no longer resolves). NSRDB requires
+a syntactically valid contact address on every request, and it must be the same
+address the key was registered with. Put both in `.env` or your shell environment
+— never in source:
+
+```bash
+export NREL_API_KEY=your_key_here
+export NREL_API_EMAIL=your_registered_email@example.com
+```
+
+### 4 — Discover stations near your corridors
 
 ```bash
 python backend/station_explorer.py
 # → writes data/wtm_stations_austin.csv with nearest-corridor ranking
 ```
 
-### 4 — Run the DLR pipeline
+### 5 — Run the DLR pipeline
 
 Edit the bottom of `backend/dlr_pipeline.py` to set:
 - `TARGET_STATIONS`  — stids from the explorer output

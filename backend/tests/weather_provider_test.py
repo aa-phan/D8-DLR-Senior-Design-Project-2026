@@ -1231,3 +1231,118 @@ def test_nsrdb_solar_merges_with_a_station_row_at_an_exactly_equal_key():
     assert (merged["wind_source"] == "synoptic").all()
     assert list(merged["solar_radiation"]) == [291.0, 292.0]
     assert (merged["solar_source"] == "nsrdb").all()
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Task 1 (Plan 08-03): NSRDB credential-source gate (T-08-15, T-08-16)
+# ──────────────────────────────────────────────────────────────────────────
+
+
+class _FakeNsrdbResponse:
+    """
+    A minimal stand-in for `requests.Response`, carrying only the
+    attributes `nsrdb_provider.fetch_nsrdb`'s success path reads
+    (`ok`, `status_code`, `text`). Scoped to this test group rather than
+    reusing `nsrdb_provider_test.py::_FakeResponse`, since this file tests
+    `nsrdb_provider` only from the outside, through `weather_provider`'s
+    own import of it.
+    """
+
+    def __init__(self, text: str = ""):
+        self.text = text
+        self.ok = True
+        self.status_code = 200
+
+
+_NSRDB_SUCCESS_CSV = (
+    "Source,Location ID,Latitude,Longitude,Time Zone,GHI Units\n"
+    "NSRDB,145809,30.2711,-97.7437,0,w/m2\n"
+    "Year,Month,Day,Hour,Minute,GHI\n"
+    "2023,7,1,0,0,200.0\n"
+)
+
+
+def test_nsrdb_provider_imports_without_any_credential(monkeypatch):
+    """
+    Importing nsrdb_provider must never require NREL_API_KEY or
+    NREL_API_EMAIL -- both credential lookups happen inside fetch_nsrdb,
+    not at module level (mirrors
+    test_module_import_has_no_side_effects's SYNOPTIC_TOKEN check above).
+    """
+    monkeypatch.delenv("NREL_API_KEY", raising=False)
+    monkeypatch.delenv("NREL_API_EMAIL", raising=False)
+
+    import importlib
+
+    importlib.reload(nsrdb_provider)
+
+
+def test_nsrdb_provider_reads_its_credentials_only_from_the_environment(monkeypatch):
+    """
+    Behavioural proof that no credential literal exists anywhere in
+    nsrdb_provider: with both variables unset, fetch_nsrdb must raise
+    EnvironmentError having issued zero requests (a baked-in default would
+    make this half pass silently with a request); with sentinel values
+    set, the recorded request params must carry exactly those sentinels
+    (a baked-in override would make this half carry something else).
+    """
+    monkeypatch.delenv("NREL_API_KEY", raising=False)
+    monkeypatch.delenv("NREL_API_EMAIL", raising=False)
+
+    counter = {"count": 0}
+
+    def _counting_recorder(*a, **k):
+        counter["count"] += 1
+        return _FakeNsrdbResponse(_NSRDB_SUCCESS_CSV)
+
+    monkeypatch.setattr(nsrdb_provider.requests, "get", _counting_recorder)
+
+    with pytest.raises(EnvironmentError):
+        nsrdb_provider.fetch_nsrdb(30.2711, -97.7431, "2023-07-01", "2023-07-01")
+
+    assert counter["count"] == 0
+
+    sentinel_key = "sentinel-key-08-03"
+    sentinel_email = "sentinel-email-08-03@example.com"
+    monkeypatch.setenv("NREL_API_KEY", sentinel_key)
+    monkeypatch.setenv("NREL_API_EMAIL", sentinel_email)
+
+    recorder = {}
+
+    def _success_recorder(url, params=None, timeout=None):
+        recorder["params"] = params
+        return _FakeNsrdbResponse(_NSRDB_SUCCESS_CSV)
+
+    monkeypatch.setattr(nsrdb_provider.requests, "get", _success_recorder)
+
+    nsrdb_provider.fetch_nsrdb(30.2711, -97.7431, "2023-07-01", "2023-07-01")
+
+    assert recorder["params"]["api_key"] == sentinel_key
+    assert recorder["params"]["email"] == sentinel_email
+
+
+def test_no_nsrdb_credential_value_is_tracked_in_the_repository():
+    """
+    Source-level gate (T-08-15): narrow and readable on purpose -- its job
+    is to catch a pasted key during development, not to be a general
+    secret scanner. Asserts nsrdb_provider.py contains no line that
+    assigns a quoted string literal to a name containing "key" or "email"
+    (case-insensitive); every real credential read in the module is an
+    os.getenv(...) call, never a literal.
+    """
+    import re
+
+    source_path = Path(__file__).resolve().parent.parent / "nsrdb_provider.py"
+    lines = source_path.read_text().splitlines()
+
+    assignment_pattern = re.compile(
+        r'^\s*[A-Za-z_][A-Za-z0-9_]*(key|email)[A-Za-z0-9_]*\s*'
+        r'(?::\s*\w+\s*)?=\s*["\'][^"\']*["\']\s*$',
+        re.IGNORECASE,
+    )
+
+    offending = [line for line in lines if assignment_pattern.match(line)]
+    assert offending == [], (
+        f"nsrdb_provider.py assigns a quoted string literal to a "
+        f"KEY/EMAIL-named variable: {offending!r}"
+    )
