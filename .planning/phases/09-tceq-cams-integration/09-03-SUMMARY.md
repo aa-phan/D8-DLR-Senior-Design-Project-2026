@@ -229,3 +229,11 @@ None — TCEQ's `daily_summary.pl` endpoint remains public and unauthenticated. 
 ---
 *Phase: 09-tceq-cams-integration*
 *Completed: 2026-09-14*
+
+## Self-Check: PASSED
+
+- FOUND: `.planning/phases/09-tceq-cams-integration/09-03-SUMMARY.md`
+- FOUND: commit `eb36cde` (test: no-credential gate)
+- FOUND: commit `68f2d1c` (docs: C4 spec)
+- FOUND: commit `b6e4900` (fix: two live-check bugs + regression tests)
+- FOUND: commit `6f3c001` (docs: ACKNOWLEDGEMENTS.md)
