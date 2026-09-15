@@ -1875,3 +1875,200 @@ def test_both_sides_failing_message_carries_no_credential_value(monkeypatch):
     message = str(excinfo.value)
     assert "leaky-test-token-10-01" not in message
     assert "token" not in message.lower()
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 10-02 Task 1: NSRDB grid-path fallback, shaped for the grid contract
+# and honest about solar (WX-06, T-10-07, T-10-08)
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def _fallback_synoptic_grid_frame(solar_radiation=None) -> pd.DataFrame:
+    """
+    A Synoptic-shaped frame with no `lat` column -- like
+    `_fallback_synoptic_frame`, deliberately, so `_supplement_with_asos`
+    takes its "no 'lat' column" skip branch and this section's tests never
+    attempt a live ASOS network call. `solar_radiation` is left as the
+    caller's choice (default all-null, the normal case for an airport
+    station per the C4 spec).
+    """
+    return _synthetic_frame(
+        air_temp=[24.0, 24.5],
+        wind_speed=[4.0, 4.2],
+        wind_direction=[180.0, 182.0],
+        solar_radiation=solar_radiation if solar_radiation is not None else [None, None],
+    )
+
+
+def _synoptic_frame_with_lat_lon(city: str, **columns) -> pd.DataFrame:
+    """
+    A Synoptic-shaped frame carrying `lat`/`lon` columns for the resolved
+    fallback station's city -- the shape `_supplement_with_asos` needs to
+    actually attempt (rather than skip) the ASOS supplement.
+    """
+    times = pd.date_range("2025-07-01T00:00:00Z", periods=2, freq="5min")
+    lat, lon = config.CITY_COORDINATES[city]
+    df = pd.DataFrame(
+        {
+            "stid": [config.SYNOPTIC_FALLBACK_STATIONS[city]] * 2,
+            "datetime_utc": times,
+            "lat": [lat, lat],
+            "lon": [lon, lon],
+            **columns,
+        }
+    )
+    return df.set_index(["stid", "datetime_utc"]).sort_index()
+
+
+def _grid_fallback_asos_supplement_frame(n: int = 2) -> pd.DataFrame:
+    """A minimal ASOS 1-minute supplement frame -- enough to make
+    `_supplement_with_asos` actually fire and return a non-empty result."""
+    times = pd.date_range("2025-07-01T00:02:00Z", periods=n, freq="1min")
+    return pd.DataFrame(
+        {
+            "datetime_utc": times,
+            "air_temp": [23.5 + i for i in range(n)],
+            "wind_speed": [3.5 + i for i in range(n)],
+        }
+    )
+
+
+def test_nsrdb_grid_failure_falls_back_to_a_city_attributed_synoptic_frame(monkeypatch):
+    def _raise_nsrdb(*a, **k):
+        raise ValueError("NSRDB boom")
+
+    monkeypatch.setattr(nsrdb_provider, "fetch_nsrdb", _raise_nsrdb)
+    monkeypatch.setattr(
+        dlr_pipeline, "fetch_timeseries", lambda *a, **k: _fallback_synoptic_grid_frame()
+    )
+
+    result = weather_provider.fetch_weather(
+        config.CITY_COORDINATES["AUSTIN"], _START, _END, provider="nsrdb"
+    )
+
+    assert not result.empty
+    city_values = (
+        result["city"] if "city" in result.columns else result.index.get_level_values("city")
+    )
+    assert (city_values == "AUSTIN").all()
+    for col in ("wind_source", "temp_source"):
+        assert (result[col] == "synoptic").all()
+
+
+def test_nsrdb_grid_fallback_solar_source_is_null_and_never_fabricates_1000(monkeypatch):
+    """
+    Pins the C4 solar-honesty guarantee (T-10-07): the `fillna(1000)`
+    substitution lives in `dlr_pipeline.run_pipeline` (backend/dlr_pipeline.py:228),
+    not in `fetch_timeseries`, so a Synoptic fallback frame with an
+    all-null `solar_radiation` (the normal case for an airport station)
+    must report a null `solar_source` on every row and never carry a
+    `solar_radiation` value of 1000 -- that separation is the only reason
+    an NSRDB-to-Synoptic solar fallback can stay honest.
+    """
+
+    def _raise_nsrdb(*a, **k):
+        raise ValueError("NSRDB boom")
+
+    monkeypatch.setattr(nsrdb_provider, "fetch_nsrdb", _raise_nsrdb)
+    monkeypatch.setattr(
+        dlr_pipeline,
+        "fetch_timeseries",
+        lambda *a, **k: _fallback_synoptic_grid_frame(solar_radiation=[None, None]),
+    )
+
+    result = weather_provider.fetch_weather(
+        config.CITY_COORDINATES["AUSTIN"], _START, _END, provider="nsrdb"
+    )
+
+    assert result["solar_source"].isna().all()
+    assert not (result["solar_radiation"] == 1000).any()
+
+
+def test_nsrdb_grid_fallback_solar_source_is_synoptic_only_where_measured(monkeypatch):
+    def _raise_nsrdb(*a, **k):
+        raise ValueError("NSRDB boom")
+
+    monkeypatch.setattr(nsrdb_provider, "fetch_nsrdb", _raise_nsrdb)
+    monkeypatch.setattr(
+        dlr_pipeline,
+        "fetch_timeseries",
+        lambda *a, **k: _fallback_synoptic_grid_frame(solar_radiation=[None, 512.0]),
+    )
+
+    result = weather_provider.fetch_weather(
+        config.CITY_COORDINATES["AUSTIN"], _START, _END, provider="nsrdb"
+    )
+
+    assert pd.isna(result["solar_source"].iloc[0])
+    assert result["solar_source"].iloc[1] == "synoptic"
+
+
+def test_nsrdb_grid_fallback_survives_an_asos_supplemented_frame_without_raising(monkeypatch):
+    """
+    When the Synoptic fallback frame for a grid (nsrdb) request gets
+    ASOS-supplemented (WX-02), `_supplement_with_asos` already re-keys it
+    to (city, datetime_utc) -- `city` becomes an index level, not a
+    column. `_as_grid_shaped` must recognize that and pass the frame
+    through unchanged rather than assigning a second `city` column, which
+    would break `merge_observations._prepare_merge_side`'s `reset_index()`
+    call on a duplicate name (T-10-08).
+    """
+
+    def _raise_nsrdb(*a, **k):
+        raise ValueError("NSRDB boom")
+
+    monkeypatch.setattr(nsrdb_provider, "fetch_nsrdb", _raise_nsrdb)
+    monkeypatch.setattr(
+        dlr_pipeline,
+        "fetch_timeseries",
+        lambda *a, **k: _synoptic_frame_with_lat_lon(
+            "AUSTIN",
+            air_temp=[24.0, 24.5],
+            wind_speed=[4.0, 4.2],
+            wind_direction=[180.0, 182.0],
+        ),
+    )
+    monkeypatch.setattr(
+        asos_provider,
+        "fetch_asos_1min",
+        lambda *a, **k: _grid_fallback_asos_supplement_frame(),
+    )
+
+    result = weather_provider.fetch_weather(
+        config.CITY_COORDINATES["AUSTIN"], _START, _END, provider="nsrdb"
+    )
+
+    assert not result.empty
+    assert "city" in {n for n in result.index.names if n is not None}
+
+    station = _station_frame(
+        air_temp=[25.0, 25.5], wind_speed=[5.0, 5.2], wind_direction=[180.0, 182.0]
+    )
+    merged = weather_provider.merge_observations(station, result)
+    assert not merged.empty
+
+
+def test_as_grid_shaped_returns_frame_unchanged_when_city_already_an_index_level():
+    frame = _station_frame(city="AUSTIN")
+    reindexed = frame.reset_index().set_index(["city", "datetime_utc"]).sort_index()
+
+    result = weather_provider._as_grid_shaped(reindexed, *config.CITY_COORDINATES["AUSTIN"])
+
+    assert result is reindexed
+
+
+def test_as_grid_shaped_returns_frame_unchanged_when_city_already_a_column():
+    frame = _station_frame(city="AUSTIN").reset_index()
+
+    result = weather_provider._as_grid_shaped(frame, *config.CITY_COORDINATES["AUSTIN"])
+
+    assert result is frame
+
+
+def test_as_grid_shaped_returns_none_or_empty_frame_unchanged():
+    lat, lon = config.CITY_COORDINATES["AUSTIN"]
+
+    assert weather_provider._as_grid_shaped(None, lat, lon) is None
+
+    empty = pd.DataFrame()
+    assert weather_provider._as_grid_shaped(empty, lat, lon) is empty

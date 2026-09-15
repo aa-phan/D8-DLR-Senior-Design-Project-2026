@@ -35,6 +35,13 @@ uses. Unlike the Synoptic branch, no ASOS supplement is applied here --
 `_supplement_with_asos` is Synoptic-specific and mixing it into the TCEQ
 branch is not in WX-01's scope.
 
+Phase 10 wires Synoptic as the automatic fallback (WX-06) for both
+fallback-eligible primaries (`FALLBACK_ELIGIBLE_PRIMARIES = {"tceq",
+"nsrdb"}`), on both the station path (Plan 10-01) and the grid path (Plan
+10-02, `_as_grid_shaped`). `open_meteo` is deliberately excluded -- it is a
+standalone 1940-present historical-backfill source Synoptic cannot serve,
+so substituting Synoptic for it would be a silent downgrade, not a rescue.
+
 Importing this module has no side effects (no file I/O, no network calls) —
 it is safe to import without a `SYNOPTIC_TOKEN` env var set. A token is only
 required when `fetch_weather(..., provider="synoptic")` is actually called,
@@ -235,6 +242,48 @@ def attach_city(
         for row_lat, row_lon in zip(frame["lat"], lon_values)
     ]
     return frame
+
+
+def _as_grid_shaped(frame: pd.DataFrame, lat: float, lon: float) -> pd.DataFrame:
+    """
+    Return `frame` normalized to the grid path's `city`-column contract
+    (Plan 10-02, WX-06) -- the single seam that reconciles a station-shaped
+    Synoptic fallback frame with a grid-path caller.
+
+    This guard exists because `_supplement_with_asos` may already have
+    re-keyed the Synoptic fallback frame to `(city, datetime_utc)` (WX-02):
+    when a fallback for a grid request (`provider="nsrdb"`) resolves to a
+    Synoptic station whose city is ASOS-supplemented, the returned frame
+    already carries `city` as an index level. Unconditionally calling
+    `attach_city(frame, lat=lat, lon=lon)` on that frame would assign a new
+    `city` *column* onto a frame that already has `city` as an index
+    *level* -- a name collision that later breaks
+    `merge_observations._prepare_merge_side`'s `reset_index()` call (it
+    would try to move an index level into a column name that already
+    exists). Returning the frame unchanged whenever `city` is already
+    present -- as a column or as an index level -- avoids that collision
+    entirely, rather than reimplementing `_supplement_with_asos`'s own
+    re-keying logic here.
+
+    Args:
+        frame: The fallback frame (may be `None` or empty).
+        lat, lon: The caller's original grid-request coordinates, used to
+            resolve `city` only when `frame` does not already carry one.
+
+    Returns:
+        `frame` unchanged when it is `None`, empty, or already carries
+        `city` as a column or index level. Otherwise,
+        `attach_city(frame, lat=lat, lon=lon)`.
+    """
+    if frame is None or frame.empty:
+        return frame
+
+    has_city_column = "city" in frame.columns
+    has_city_index_level = "city" in {n for n in frame.index.names if n is not None}
+    if has_city_column or has_city_index_level:
+        return frame
+
+    return attach_city(frame, lat=lat, lon=lon)
 
 
 def _prepare_merge_side(frame: pd.DataFrame, side_name: str) -> pd.DataFrame:
@@ -611,7 +660,11 @@ def _attempt_fallback(location, start: str, end: str, provider: str, primary_err
             this fallback attempt.
 
     Returns:
-        The Synoptic-sourced DataFrame from `_fetch_station`.
+        The Synoptic-sourced DataFrame from `_fetch_station`. For a grid
+        request (`provider` in `GRID_PATH_PROVIDERS`), the frame is passed
+        through `_as_grid_shaped(frame, lat, lon)` first -- this is the one
+        place fallback-frame grid shaping happens, so it is never
+        duplicated per provider.
 
     Raises:
         The original `primary_error`, unchanged, when no fallback station
@@ -621,7 +674,12 @@ def _attempt_fallback(location, start: str, end: str, provider: str, primary_err
             and the resolved city -- built only from provider names, the
             city key, and the station ID, never from a request URL, a
             response body, or any environment value (T-10-03) -- and is
-            chained via `raise ... from primary_error`.
+            chained via `raise ... from primary_error`. Also raised
+            (chained the same way) when the shaped grid-path fallback
+            frame is non-empty but has an unresolvable (null) `city` --
+            mirroring the null-city guard `_fetch_grid` already applies to
+            its own providers, since a row that can never be merged or
+            rated must not be emitted (T-10-08).
     """
     station_ids = _fallback_station_ids(location, provider)
     if station_ids is None:
@@ -639,13 +697,50 @@ def _attempt_fallback(location, start: str, end: str, provider: str, primary_err
     )
 
     try:
-        return _fetch_station(station_ids, start, end, FALLBACK_PROVIDER)
+        frame = _fetch_station(station_ids, start, end, FALLBACK_PROVIDER)
     except Exception as fallback_error:  # noqa: BLE001 -- deliberately broad, re-wrapped below
         raise ValueError(
             f"weather_provider: both primary provider {provider!r} and "
             f"fallback provider {FALLBACK_PROVIDER!r} failed for city "
             f"{city!r} (station {station_ids[0]!r})"
         ) from primary_error
+
+    if provider in GRID_PATH_PROVIDERS:
+        # Deliberately NOT narrowing this frame to solar_radiation alone,
+        # even though NSRDB (the only fallback-eligible grid provider) is
+        # solar-only: NSRDB is solar-only because NREL's own documentation
+        # says its 2m reanalysis wind must not be used for a wind-power
+        # calculation, but Synoptic's wind is a real 10m station
+        # measurement, so a Synoptic fallback frame is allowed to carry its
+        # full measured variable set. Every field stays attributed to
+        # "synoptic" by attach_provenance (already applied inside
+        # _fetch_station), and merge_observations gives a station-side
+        # primary precedence anyway, so the extra columns add information
+        # without displacing a better source or fabricating anything.
+        lat, lon = location
+        frame = _as_grid_shaped(frame, lat, lon)
+        if not frame.empty:
+            # `city` may be a column (the common _as_grid_shaped-via-
+            # attach_city case) or an index level (when the frame was
+            # already ASOS-supplemented and re-keyed to
+            # (city, datetime_utc) before _as_grid_shaped ever ran) --
+            # both are legal fallback-frame shapes per _as_grid_shaped's
+            # own contract, so this guard must check whichever is present.
+            city_values = (
+                frame["city"]
+                if "city" in frame.columns
+                else frame.index.get_level_values("city")
+            )
+            if pd.isna(city_values).any():
+                raise ValueError(
+                    f"weather_provider: fallback frame for "
+                    f"{FALLBACK_PROVIDER!r} station {station_ids[0]!r} "
+                    f"(targeting city {city!r}) did not resolve to a known "
+                    "city on the grid path -- a row that can never be "
+                    "merged or rated must not be emitted."
+                ) from primary_error
+
+    return frame
 
 
 def fetch_weather(
