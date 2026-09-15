@@ -52,16 +52,16 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| FCST-01 | TBD | Pending |
-| FCST-02 | TBD | Pending |
-| ANOM-01 | TBD | Pending |
-| ANOM-02 | TBD | Pending |
+| FCST-01 | Phase 1 | Pending |
+| FCST-02 | Phase 1 | Pending |
+| ANOM-01 | Phase 2 | Pending |
+| ANOM-02 | Phase 2 | Pending |
 
 **Coverage:**
 - v1.3 requirements: 4 total
-- Mapped to phases: 0
-- Unmapped: 4 ⚠️ (roadmap not yet created)
+- Mapped to phases: 4
+- Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-09-14*
-*Last updated: 2026-09-14 after initial definition*
+*Last updated: 2026-09-14 after ROADMAP.md creation (2 phases, 100% coverage)*
