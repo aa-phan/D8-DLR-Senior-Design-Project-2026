@@ -3,7 +3,7 @@
 ## Milestones
 
 - ✅ **v1.0 MVP** — Phases 1-5 (shipped 2026-09-10)
-- 🚧 **v1.1 Multi-Provider Weather** — Phases 6-10 (in progress)
+- ✅ **v1.1 Multi-Provider Weather** — Phases 6-10 (all phases complete, ready to archive)
 
 ## Phases
 
@@ -20,7 +20,7 @@ Full phase details (goals, success criteria, plans, requirements): `.planning/mi
 
 </details>
 
-### 🚧 v1.1 Multi-Provider Weather (In Progress)
+### ✅ v1.1 Multi-Provider Weather (All Phases Complete)
 
 **Milestone Goal:** Resolve `PRD.md` §7.1 (the open weather-data-provider decision) by adopting
 and implementing the per-variable provider composition from `docs/data-science/decisions/data_provider.md`'s
@@ -43,7 +43,7 @@ to fall back from.
 - [x] **Phase 7: Trivial-Integration Providers** - Wire ASOS 1-minute (wind/temp supplement) and Open-Meteo (historical backfill) behind the new adapter to prove the design cheaply (completed 2026-09-12)
 - [x] **Phase 8: NSRDB Solar Integration** - Wire NREL NSRDB (PSM v4) as the primary solar-irradiance source, gated on a registered developer API key (completed 2026-09-14)
 - [x] **Phase 9: TCEQ CAMS Integration** - Wire TCEQ CAMS as the primary wind/temp/RH source for all four cities via HTML-report scraping (completed 2026-09-14)
-- [ ] **Phase 10: Fallback Wiring & Documentation Ratification** - Wire Synoptic as the fallback behind the same adapter and ratify the provider-composition decision in `PRD.md`/`data_provider.md`
+- [x] **Phase 10: Fallback Wiring & Documentation Ratification** - Wire Synoptic as the fallback behind the same adapter and ratify the provider-composition decision in `PRD.md`/`data_provider.md` (completed 2026-09-15)
 
 ## Phase Details
 
@@ -235,4 +235,4 @@ Phases execute in numeric order: 6 → 7 → 8 → 9 → 10
 | 7. Trivial-Integration Providers | v1.1 | 3/3 | Complete    | 2026-09-12 |
 | 8. NSRDB Solar Integration | v1.1 | 3/3 | In Progress|  |
 | 9. TCEQ CAMS Integration | v1.1 | 3/3 | Complete    | 2026-09-14 |
-| 10. Fallback Wiring & Documentation Ratification | v1.1 | 3/3 | In Progress|  |
+| 10. Fallback Wiring & Documentation Ratification | v1.1 | 3/3 | Complete    | 2026-09-15 |
