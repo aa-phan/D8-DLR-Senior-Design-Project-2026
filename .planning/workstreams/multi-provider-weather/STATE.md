@@ -1,21 +1,21 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.1
-milestone_name: Multi-Provider Weather
-current_phase: 10
-current_phase_name: Fallback Wiring & Documentation Ratification
-status: complete
+status: Awaiting next milestone
 stopped_at: Phase 10 complete and verified — v1.1 milestone goal met, ready to archive
-last_updated: "2026-09-15T05:40:00.000Z"
+last_updated: "2026-09-15T06:25:39.325Z"
 last_activity: 2026-09-15
-last_activity_desc: Phase 10 verified (PASSED, 4/4 must-haves); v1.1 all phases complete
-state_head: 642ac9b
+last_activity_desc: Milestone v1.1 completed and archived
+state_head: 5da34faac04a5942c166441c87951abd399d06b7
 progress:
   total_phases: 5
   completed_phases: 5
   total_plans: 15
   completed_plans: 15
   percent: 100
+milestone_name: Multi-Provider Weather
+current_phase: 10
+current_phase_name: Fallback Wiring & Documentation Ratification
 ---
 
 # Project State
@@ -29,12 +29,10 @@ See: .planning/PROJECT.md (updated 2026-09-10 after starting v1.1 milestone)
 
 ## Current Position
 
-Phase: 10 (Fallback Wiring & Documentation Ratification) — COMPLETE, VERIFIED
-Plan: 3 of 3
-Status: v1.1 milestone goal met (PRD.md §7.1 ratified, WX-06/WX-08 satisfied)
-Last activity: 2026-09-15 — Phase 10 verification PASSED (10-VERIFICATION.md, commit 642ac9b)
-
-Progress: [██████████] 100%
+Phase: Milestone v1.1 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-09-15 — Milestone v1.1 completed and archived
 
 ## Performance Metrics
 
@@ -117,4 +115,4 @@ Resume file: .planning/workstreams/multi-provider-weather/phases/10-fallback-wir
 
 ## Operator Next Steps
 
-- v1.1 Multi-Provider Weather is complete: all 5 phases (6-10) done and Phase 10 independently verified (PASSED, 4/4 must-haves, `10-VERIFICATION.md`). Run `/gsd-complete-milestone` to archive the milestone and prepare for v1.2.
+- Start the next milestone with /gsd-new-milestone

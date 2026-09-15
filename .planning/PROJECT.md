@@ -1,38 +1,34 @@
 # Dynamic Line Rating (DLR) System
 
-## Current State (as of v1.0)
+## Current State (as of v1.1)
 
-**Shipped 2026-09-10.** The Data Science subsystem is feature-complete against all 17 v1
-requirements: weather ingestion → IEEE 738 thermal modeling → per-location static-rating
-comparison → fail-safe safety monitoring → corridor spatial discretization → ampacity
-forecasting → learned anomaly detection, all producing a real end-to-end DLR value merged with
-ERCOT grid load. See `.planning/milestones/v1.0-ROADMAP.md` and `v1.0-REQUIREMENTS.md` for the
-full archived record.
+**Shipped 2026-09-15.** The Data Science subsystem's weather ingestion is now a ratified,
+five-provider composition behind one adapter (`backend/weather_provider.py::fetch_weather`):
+TCEQ CAMS + ASOS 1-minute (wind/temp/RH, station path), NREL NSRDB PSM v4 (solar, grid path),
+Open-Meteo (historical bulk backfill, grid path, standalone), and Synoptic retained as the
+automatic fallback behind TCEQ/NSRDB only — never an additional/parallel source, and never
+triggered by a caller-shaped error or a missing-credential `EnvironmentError`. Every row carries
+per-field provenance (`wind_source`, `temp_source`, `humidity_source`, `solar_source`) so exports
+and plots can show which provider actually supplied each value. `PRD.md` §7.1 and
+`data_provider.md` now record this as the team's ratified decision, closing the project's
+longest-standing open engineering item and the System Design Report's self-flagged NOAA/NSRDB
+discrepancy (see `docs/data-science/PRD.md` §10, corrected in this milestone). See
+`.planning/workstreams/multi-provider-weather/milestones/v1.1-ROADMAP.md` and
+`v1.1-REQUIREMENTS.md` for the full archived record, and `.planning/milestones/v1.0-ROADMAP.md`/
+`v1.0-REQUIREMENTS.md` for v1.0.
 
 **What's still a gap going into the next milestone:** `ampacity_forecast.forecast_ampacity` and
 `anomaly_detector.AnomalyDetector` are implemented and tested but have no production caller —
 `api/` and `frontend/` remain documented, not-started placeholders owned by the Software
 sub-team. Whoever builds that serving/scheduler layer needs to wire the Phase 3+4 loop
 (`rate_corridor` with a real, history-backed `AnomalyDetector`, periodic archive→forecast refit)
-live; today it's proven only by tests.
+live; today it's proven only by tests. Separately, TCEQ solar-radiation instrumentation remains
+confirmed only for Austin/Corpus Christi CAMS sites (tracked as v2 requirement WX-09 if TCEQ solar
+is ever pursued — TCEQ is wired for wind/temp/RH only in v1.1).
 
-## Current Milestone: v1.1 Multi-Provider Weather
+## Current Milestone
 
-**Goal:** Resolve `PRD.md` §7.1 (the open weather-data-provider decision) by adopting and
-implementing the per-variable provider composition from `docs/data-science/decisions/data_provider.md`'s
-vetting log, closing both the Synoptic coverage/scaling gap and the System Design Report's
-documentation discrepancy.
-
-**Target features:**
-- TCEQ CAMS + ASOS 1-minute as the primary/supplement real-station sources for wind speed, wind
-  direction, and temperature across all four cities.
-- NREL NSRDB (PSM v4) as the primary solar irradiance source (a free NREL developer API key is
-  being registered for this milestone).
-- Open-Meteo as the historical bulk-backfill source for C9/C10 training data.
-- Synoptic kept behind the same `weather_provider.py` adapter as a fallback provider, not retired.
-- `PIPELINE_SCHEMA` extended with per-field provenance columns (e.g. `wind_source`, `solar_source`)
-  so exports/plots can show which provider supplied which value.
-- `PRD.md` §7.1 and `data_provider.md` updated to reflect the ratified decision.
+No milestone is currently active. Run `/gsd-new-milestone` to scope v1.2.
 
 ## What This Is
 
@@ -69,18 +65,19 @@ ethical commitment, not a nice-to-have).
 - ✓ DS-F5: Per-location static-rating comparison — `config.STATIC_RATINGS.get(city, config.DEFAULT_STATIC_RATING)` wired into `dlr_pipeline.py::run_pipeline`/`plot_dlr_summary` and `ercot_dlr_merger.py::process_dlr_to_hourly` (already wired into `corridor_discretization.py` since Phase 3) — v1.0 (Phase 5)
 - ✓ DS-F11: Ampacity forecasting ahead of real time — `ampacity_forecast.forecast_ampacity`, out-of-sample expanding-window walk-forward backtested confidence band, published through `PIPELINE_SCHEMA` v2's additive columns — v1.0 (Phase 4)
 - ✓ DS-F12: Learned anomaly detection, additive to the fallback path — `anomaly_detector.AnomalyDetector` (forecast-residual + rolling-baseline cold start) wired as gate G6 into `DLRSafetyMonitor._fallback` — v1.0 (Phase 4)
+- ✓ WX-01/WX-02: TCEQ CAMS (primary) + ASOS 1-minute (temporal-density supplement) for wind speed, wind direction, temperature, and RH across all four cities — v1.1 (Phases 7, 9)
+- ✓ WX-03: NREL NSRDB PSM v4 as the primary solar-irradiance source, live-confirmed against the real API — v1.1 (Phase 8)
+- ✓ WX-04: Open-Meteo Archive API as the historical bulk-backfill source for C9/C10 training data — v1.1 (Phase 7)
+- ✓ WX-05: `weather_provider.py::fetch_weather` combines station-based (TCEQ/ASOS) and grid-based (NSRDB/Open-Meteo) providers into one row per timestamp via a type-dispatched `location` parameter, with zero changes required of existing callers — v1.1 (Phase 6)
+- ✓ WX-06: Synoptic retained as the automatic fallback behind TCEQ/NSRDB only (never an additional source, never triggered by a caller-shaped error or missing-credential `EnvironmentError`), confirmed end-to-end against the live Synoptic and NSRDB endpoints — v1.1 (Phase 10)
+- ✓ WX-07: `PIPELINE_SCHEMA` v3 extended with per-field provenance columns (`wind_source`, `temp_source`, `humidity_source`, `solar_source`) — v1.1 (Phase 6)
+- ✓ WX-08: `PRD.md` §7.1 and `data_provider.md` ratified to record the shipped per-variable composition, resolving the "Pending" status and the System Design Report's self-flagged discrepancy — v1.1 (Phase 10)
 
 ### Active
 
-<!-- Current scope. Building toward these (v1.1). -->
+<!-- Current scope. No milestone is active — run /gsd-new-milestone to scope v1.2. -->
 
-- [ ] Wire TCEQ CAMS as the primary wind/temp/RH source for all four cities
-- [ ] Wire ASOS 1-minute as a temporal-density supplement to TCEQ
-- [ ] Wire NREL NSRDB (PSM v4) as the primary solar irradiance source
-- [ ] Wire Open-Meteo as the historical bulk-backfill source for C9/C10 training data
-- [ ] Keep Synoptic as a fallback provider behind the same `weather_provider.py` adapter
-- [ ] Extend `PIPELINE_SCHEMA` with per-field provenance columns (`wind_source`, `solar_source`, etc.)
-- [ ] Update `PRD.md` §7.1 and `data_provider.md` to mark the composition as ratified
+(None — awaiting v1.2 requirements definition.)
 
 ### Out of Scope
 
@@ -109,12 +106,14 @@ ethical commitment, not a nice-to-have).
   Corridor Discretization) and Phase 4 (C9 Forecasting, C10 Learned Anomaly Detection) are not
   started. This is the first `.planning/` setup for this repo (GSD wasn't used for Phases 1–2);
   they're recorded here as Complete to reflect reality, not re-planned from scratch.
-- **Documentation discrepancies (self-flagged in `PRD.md` §10):** the System Design Report claims
-  NOAA+NSRDB was selected for weather data, that a corridor spatial pipeline exists, and that an
-  ML anomaly-detection model is "currently being trained" — none of this matches the actual repo
-  state. Synoptic/West Texas Mesonet is the only working weather source; C8 and C10 are not
-  started. Per default doc precedence (SPEC/PRD > DOC), this PROJECT.md reflects the SPEC/PRD
-  state (what's actually built), not the course-deliverable claims.
+- **Documentation discrepancies (self-flagged in `PRD.md` §10, updated after v1.1):** as of v1.0
+  the System Design Report claimed NOAA+NSRDB was selected for weather data, that a corridor
+  spatial pipeline exists, and that an ML anomaly-detection model is "currently being trained" —
+  none of that matched the repo state at the time. C8/C10 shipped in v1.0 (Phases 3-4), closing
+  those two rows. The NOAA+NSRDB row is now substantially correct for the solar half after v1.1:
+  NSRDB is the real solar primary (TCEQ CAMS, not NOAA, supplies wind/temperature) — `PRD.md` §10
+  records this correction in its existing RESOLVED-row style; the exact wording should be restated
+  precisely in the next System Design Report submission.
 - **Known safety-relevant bug (fixed):** `thermal_model.py`'s forced-convection term had an
   erroneous `* np.pi` factor with no basis in IEEE Std 738-2023 — it overstated ampacity by ~69%
   for the standard's own worked example before being caught during reference validation. This is
@@ -122,6 +121,9 @@ ethical commitment, not a nice-to-have).
   validation is treated as load-bearing, not a formality, going forward.
 - **AI-use disclosure requirement:** ECE 464 requires disclosing AI assistance in
   `ACKNOWLEDGEMENTS.md`; update it before any significant AI-assisted commit.
+- **Carried-forward blockers (unaffected by v1.1):** `ercot_data_retriever.py::pull_ercot_data`'s
+  live path fails with a deterministic `Bad CRC-32` error inside the third-party `gridstatus`
+  library, blocking live ERCOT pulls until upstream fixes it.
 
 ## Constraints
 
@@ -153,7 +155,10 @@ ethical commitment, not a nice-to-have).
 | Adopt the existing 4-phase structure from `docs/data-science/ROADMAP.md`/`PRD.md` §4 (Foundation → Core Consolidation → Safety & Spatial → Predictive) as this project's ROADMAP.md | Already derived from the real component dependency graph (C1→{C4,C5,C6}→{C7,C8}→{C9,C10}); two of the four phases are already delivered against it | ✓ Good — validated by two completed phases |
 | **RESOLVED — Geographic/corridor scope**: adopted `Project Definition.md`'s 4-city scope (Austin, Corpus Christi, Midland, El Paso) as authoritative for `config.py::STATIC_RATINGS`, replacing the previous mismatched 5-city table. See `docs/data-science/decisions/geographic_scope.md` for full evidence and rationale. | `PRD.md` §10 and `data_provider.md` already implicitly treated the 4-city spec as ground truth; this makes it official. `config.py::STATIC_RATINGS` re-keyed to the 4 cities (midpoint of each city's documented static-limit range); `dlr_pipeline.py`'s redundant dead-code stub deleted. | ✓ Resolved 2026-09-02. Corridor-endpoint mapping (previously open) resolved 2026-09-08 — see next row. |
 | **RESOLVED — Corridor endpoints for C8**: `config.CORRIDOR_ENDPOINTS` defines exactly two corridors (Austin↔Corpus Christi, Midland↔El Paso / D-01), each endpoint resolving into `CITY_COORDINATES`/`STATIC_RATINGS`/`RATING_BOUNDS_BY_LOCATION` — one consistent geographic model across station discovery, static ratings, and discretization. Legacy `station_explorer.py::CORRIDORS` left untouched, not read by the new module. | Closed the gap `geographic_scope.md` flagged as still open. City coordinates for Corpus Christi/El Paso needed live re-verification against OpenStreetMap Nominatim (US Census Gazetteer diverged materially due to those cities' irregular incorporated-limits shapes). | ✓ Resolved 2026-09-08 — Phase 3 (03-02) |
-| **IN PROGRESS — Weather data provider**: adopting `data_provider.md`'s recommended per-variable composition (TCEQ+ASOS for wind/temp, NSRDB for solar, Open-Meteo for historical backfill, Synoptic retained as fallback) to resolve `PRD.md` §7.1 | Synoptic/WTM has real research-tier scaling limits and doesn't match the real four-city spec's coverage; the vetting log in `data_provider.md` already did the candidate research — no single provider is both observation-grade and variable-complete, so per-variable sourcing was the strongest option found | — Pending implementation, v1.1 |
+| **RESOLVED — Weather data provider**: adopted `data_provider.md`'s per-variable composition (TCEQ+ASOS for wind/temp/RH, NSRDB for solar, Open-Meteo for historical backfill, Synoptic retained as automatic fallback — never an additional/parallel source) to resolve `PRD.md` §7.1 | Synoptic/WTM has real research-tier scaling limits and doesn't match the real four-city spec's coverage; the vetting log in `data_provider.md` already did the candidate research — no single provider is both observation-grade and variable-complete, so per-variable sourcing was the strongest option found | ✓ Resolved 2026-09-15 — Phases 6-10 (v1.1); ratified in `PRD.md` §7.1/`data_provider.md`, confirmed against live Synoptic/NSRDB endpoints |
+| TCEQ multi-day fetch capped at 31 calendar days per request (`TCEQ_MAX_DAYS_PER_FETCH`) rather than serving unbounded historical backfill | `daily_summary.pl` is a free, unauthenticated, public government CGI endpoint with no documented rate limit; the project chose not to service long backfills by issuing hundreds of rapid sequential requests against it — Open-Meteo (WX-04) exists for bulk historical backfill instead | ✓ Resolved — Phase 9 (09-02) |
+| Fallback eligibility (Synoptic behind TCEQ/NSRDB) computed before any provider dispatch, keyed on provider+path only — never on error type; `EnvironmentError` (missing credential) is never masked by a fallback | A caller-shaped error (unknown provider, wrong path, multiple CAMS IDs, unresolvable coordinates) must never trigger a real network fallback request; a misconfigured machine (missing credential) must stay visibly broken rather than silently served from a fallback that looks like success | ✓ Resolved — Phase 10 (10-01/10-02) |
+| NSRDB window requests spanning a calendar-year boundary decomposed into per-year requests and reassembled, rather than raising or truncating | NSRDB's PSM v4 API is year-scoped per request; C9/C10 training windows can legitimately cross a year boundary | ✓ Resolved — Phase 8 (08-02) |
 | C7 (`DLRSafetyMonitor`) currently computes ampacity with a placeholder linear formula, not the real IEEE 738 model in C5 | Historical: C7 was written before C5's thermal model was extracted into its own module | ✓ Resolved 2026-09-08 — Phase 3 (03-01) unified `_compute_ampacity` with `thermal_model.ieee738_ampacity` |
 | G5 ("large rating swing") large-swing checkpoint: flat vs. relative threshold shape, and whether it should fall back at all | Checkpoint decision required during 03-01 execution — old flat 150A threshold was calibrated against the placeholder formula's output range, not real IEEE 738 magnitudes (~1700-2300A) | ✓ Resolved 2026-09-08 — chose relative threshold (`config.DELTA_FRACTION = 0.15`) with conservative `min(computed, static_rating)` fallback under `status="fallback"`; `last_good_rating` still updates so a genuine sustained weather change resolves in one cycle |
 | Anomaly detection (G6) trained on a rolling baseline with per-corridor control limits, additive to (never replacing) the G1-G5 fallback chain | C10 needed a cold-start path since historical archives start empty; wider-of-two-endpoint-cities control limit avoids one city's noisier readings suppressing detection at the other endpoint | ✓ Resolved 2026-09-09 — Phase 4 (04-01/04-03); `AnomalyDetector.for_corridor` resolves per-corridor limits, `rate_corridor` wires it as an optional constructor param, fail-safe on exception |
@@ -178,4 +183,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-09-10 after starting v1.1 milestone*
+*Last updated: 2026-09-15 after v1.1 milestone*
