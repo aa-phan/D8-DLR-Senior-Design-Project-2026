@@ -51,15 +51,22 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| GEOM-01 | TBD | Pending |
-| GEOM-02 | TBD | Pending |
-| GEOM-03 | TBD | Pending |
+| GEOM-01 | Phase 1 (Define & Request Real Corridor Geometry) | Pending |
+| GEOM-02 | Phase 1 (Define & Request Real Corridor Geometry) | Pending |
+| GEOM-03 | Phase 2 (Integrate Real Corridor Geometry into Point Generation) | Pending |
 
 **Coverage:**
 - v1.4 requirements: 3 total
-- Mapped to phases: 0
-- Unmapped: 3 ⚠️ (roadmap not yet created)
+- Mapped to phases: 3
+- Unmapped: 0 ✓
+
+**Note on GEOM-01 phasing:** GEOM-01 is mapped to Phase 1 because that is the first (and only
+unilaterally completable) phase that delivers DS-side progress on it — defining the geometry data
+contract and formally requesting it from the Power Systems sub-team. The requirement's full
+real-world resolution (actual geometry data in hand) is an external dependency tracked as a
+blocker in STATE.md; Phase 2 (GEOM-03) is explicitly gated on that external response arriving,
+per ROADMAP.md's "External Dependency" section.
 
 ---
 *Requirements defined: 2026-09-14*
-*Last updated: 2026-09-14 after initial definition*
+*Last updated: 2026-09-14 after roadmap creation (v1.4, 2 phases, 3/3 requirements mapped)*
