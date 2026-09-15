@@ -18,7 +18,7 @@ affects: []
 # Actuals (#2632)
 actuals:
   tokens: 6800
-  tasks: 1
+  tasks: 2
   commits: 1
 
 # Tech tracking
@@ -38,10 +38,10 @@ key-files:
 
 key-decisions:
   - "Task 1's ratification decision was resolved in a prior session (human approved the composition and fallback policy exactly as documented in the plan's <interface_context>/<decision> text, \"approve, proceed exactly as stated\") -- this session did not re-present that decision, per explicit instruction from the coordinating orchestrator."
-  - "Task 3's live-endpoint confirmation was NOT attempted: this isolated worktree's shell environment has neither SYNOPTIC_TOKEN nor the NREL credential pair set, and the sandbox denies direct access to the repository's .env file from a worktree-isolated agent. Per the task's own <how-to-verify> step 1 (\"If it is absent, stop and record the blocker rather than reporting a failed fallback\"), this is a recorded blocker, not a failed check or a self-approved checkpoint."
-  - "SUMMARY status recorded as halted, not complete: Task 2 is fully committed and verified against every <verify> command in the plan. Task 3's own gate=\"blocking-human\" checkpoint requires a human (or a session with live-credential access) to perform the live confirmation and give explicit sign-off -- this project's own checkpoint convention excludes gate=\"blocking-human\" checkpoints from auto-approval in every execution mode, including when an instruction asks the executor to \"proceed through\" a task."
+  - "Task 3's live-endpoint confirmation was completed in a follow-up session run by the human directly against their local checkout, where SYNOPTIC_TOKEN and the NREL credential pair (loaded from the repository's untracked .env) are genuinely available -- the isolated worktree that produced Task 2's commit had neither, per the blocker recorded below. The human ran the automation themselves (per-city fetches, a real TCEQ >31-day-window failure to force the station-path fallback, a real NSRDB HTTP 400 on an unpublished data year to force the grid-path fallback, and an EnvironmentError check with NREL_API_KEY unset) and reported the full evidence back for review."
+  - "SUMMARY status updated to complete: Task 2's ratification and Task 3's live-endpoint confirmation are both done. The human reviewed the gathered evidence (see Checkpoint Resolution) and approved it explicitly -- gate=\"blocking-human\" was never auto-approved."
 
-requirements-completed: [WX-08]
+requirements-completed: [WX-06, WX-08]
 
 coverage:
   - id: D1
@@ -87,23 +87,35 @@ coverage:
   - id: D6
     description: "A human confirms, against the live Synoptic endpoint, that the fallback retrieves real data for all four configured stations and attributes it honestly (Task 3)"
     requirement: "WX-06"
-    verification: []
+    verification:
+      - kind: other
+        ref: "Live per-city fetch: AUSTIN/KAUS 2,682 rows, CORPUS_CHRISTI/KCRP 5,209 rows, MIDLAND/KMAF 5,542 rows, EL_PASO/KELP 1,257 rows -- all four non-null for air_temp/wind_speed/wind_direction (all four stations readable under this project's token, improving on the C4 spec's prior 'only KAUS confirmed' note)"
+        status: pass
+      - kind: other
+        ref: "Real station-path fallback: TCEQ AUSTIN request over a 74-day window (> TCEQ_MAX_DAYS_PER_FETCH=31) raised a genuine ValueError; fallback fired to Synoptic KAUS (87,226 rows); wind_source/temp_source read 'synoptic'/'asos', never 'tceq'"
+        status: pass
+      - kind: other
+        ref: "Real grid-path fallback: NSRDB AUSTIN request for year 2026 (not yet published) raised a genuine HTTP 400 ValueError; fallback fired to Synoptic KAUS (5,316 rows); solar_source correctly null (KAUS carries no solar sensor -- matches the documented no-fabrication guarantee) and no *_source cell read 'nsrdb'"
+        status: pass
+      - kind: other
+        ref: "EnvironmentError branch: NSRDB request with NREL_API_KEY unset raised EnvironmentError and did NOT fall back, as required"
+        status: pass
     human_judgment: true
-    rationale: "Task 3 is an explicit checkpoint:human-verify with gate=\"blocking-human\", and this session could not even run its own automation: SYNOPTIC_TOKEN and the NREL credential pair are not set in this isolated worktree's environment, and reading the repository's .env file is denied by the execution sandbox. Per the task's own <how-to-verify> step 1, this is a recorded blocker, not a completed or failed check -- a human (or a session with live-credential access) must perform the live confirmation this task requires."
+    rationale: "Task 3 is an explicit checkpoint:human-verify with gate=\"blocking-human\". The isolated worktree that produced Task 2's commit had no SYNOPTIC_TOKEN/NREL credentials and could not run this task's automation (recorded as a blocker, not a failure). The human then ran the four checks above directly against their local checkout (where the credentials are genuinely available) and reviewed the full evidence, approving it explicitly rather than the checkpoint being auto-approved."
 
-duration: ~20min (Task 2 only; Task 3 blocked before any automation could run)
+duration: ~20min (Task 2, prior session) + live-endpoint confirmation run and approved by the human in a follow-up session
 completed: 2026-09-15
-status: halted
+status: complete
 ---
 
 # Phase 10 Plan 3: PRD.md/data_provider.md Ratification and C4 Fallback Documentation Summary
 
-**`PRD.md` §7.1 and `data_provider.md` now record the ratified per-variable weather-provider composition Phases 6-10 actually built (TCEQ+ASOS wind/temp, NSRDB solar, Open-Meteo historical backfill, Synoptic automatic fallback), and `C4-weather-ingestion.md` documents Phase 10's fallback wiring — with Task 3's live-endpoint confirmation blocked by a genuine credential-access gap in this isolated worktree, not by any finding about the fallback itself.**
+**`PRD.md` §7.1 and `data_provider.md` now record the ratified per-variable weather-provider composition Phases 6-10 actually built (TCEQ+ASOS wind/temp, NSRDB solar, Open-Meteo historical backfill, Synoptic automatic fallback), `C4-weather-ingestion.md` documents Phase 10's fallback wiring, and the fallback has now been confirmed against the live Synoptic and NSRDB endpoints — all four `SYNOPTIC_FALLBACK_STATIONS` return real data, and both the station-path and grid-path fallbacks were exercised end-to-end against genuine provider failures with correct provenance.**
 
 ## Performance
 
-- **Duration:** ~20 min (Task 2 only)
-- **Tasks:** 1 of 2 remaining tasks completed (Task 2); Task 3's checkpoint could not begin its own automation
+- **Duration:** ~20 min (Task 2) + a follow-up session for Task 3's live-endpoint confirmation
+- **Tasks:** 2 of 2 completed (Task 2 and Task 3; Task 1's decision was resolved in an earlier session)
 - **Files modified:** 4
 
 ## Accomplishments
@@ -113,7 +125,7 @@ status: halted
 - Rewrote `data_provider.md`'s status line, retitled "Recommended Composition (synthesis, not a final decision)" to "Adopted Composition (ratified 2026-09-15)" and appended the Synoptic-fallback element, and rewrote the closing "Explicitly not decided here" paragraph into a record of what was decided and which phase implemented each provider. Corrected all three stale NREL developer-portal hostname occurrences, describing the old hostname by reference (not by repeating the literal stale string) so the plan's own zero-occurrence verify grep holds. Left the TCEQ solar finding (confirmed only for Austin/Corpus Christi) unweakened, pointing at v2 requirement WX-09.
 - Added a "Phase 10 additions (WX-06)" paragraph to `C4-weather-ingestion.md` naming `config.SYNOPTIC_FALLBACK_STATIONS`, the `fallback` keyword, `FALLBACK_ELIGIBLE_PRIMARIES`, `_fallback_city_for_request`, `_as_grid_shaped`, the `EnvironmentError`/`ValueError` split, the fallback WARNING log, the credential-free chained both-providers-failed error, and the null-solar guarantee; updated the Status line; added two acceptance-criteria bullets; resolved the Open Questions weather-provider entry.
 - Confirmed no file under `backend/` was touched and the full repository suite still reports 388 passed, 0 failed.
-- Attempted Task 3's live-endpoint confirmation and found it blocked before any automation step could run: `SYNOPTIC_TOKEN`/NREL credentials are not set in this worktree's shell environment, and this project's execution sandbox denies reading the repository's `.env` file from a worktree-isolated agent. Recorded as a blocker per the task's own instruction, not attempted around.
+- Completed Task 3's live-endpoint confirmation in a follow-up session run directly against the human's local checkout (real `SYNOPTIC_TOKEN`/NREL credentials, no mocking): all four `SYNOPTIC_FALLBACK_STATIONS` (`KAUS`, `KCRP`, `KMAF`, `KELP`) returned real, non-null observation data; a real TCEQ failure (a >31-day window exceeding `TCEQ_MAX_DAYS_PER_FETCH`) forced a genuine station-path fallback to Synoptic with correct `synoptic`/`asos` provenance; a real NSRDB failure (HTTP 400 for an unpublished 2026 data year) forced a genuine grid-path fallback to Synoptic with a correctly-null `solar_source` (KAUS has no solar sensor); and the `EnvironmentError` branch (NREL credential unset) correctly raised without falling back.
 
 ## Task Commits
 
@@ -121,9 +133,9 @@ Each completed unit of work was committed atomically:
 
 1. **Task 2 — ratify PRD.md §7.1 and data_provider.md, document the fallback in the C4 spec** — `b761540` (docs; includes the `ACKNOWLEDGEMENTS.md` session entry)
 
-**Plan metadata:** pending (this commit, per worktree convention — `.planning/workstreams/multi-provider-weather/STATE.md` and `ROADMAP.md` are excluded, owned by the orchestrator)
+**Plan metadata:** owned by the orchestrator (`.planning/workstreams/multi-provider-weather/STATE.md` and `ROADMAP.md` are updated centrally, not per-worktree).
 
-_Task 1 (`checkpoint:decision`) was resolved in a prior session and is not re-committed here. Task 3 (`checkpoint:human-verify`, `gate="blocking-human"`) is blocked; see "Issues Encountered" below._
+_Task 1 (`checkpoint:decision`) was resolved in a prior session and is not re-committed here. Task 3 (`checkpoint:human-verify`, `gate="blocking-human"`) produces no code/doc commit of its own — it is a live-evidence-gathering and human-approval gate, and its evidence is recorded in coverage item D6 and "Checkpoint Resolution" below._
 
 ## Files Created/Modified
 
@@ -135,28 +147,23 @@ _Task 1 (`checkpoint:decision`) was resolved in a prior session and is not re-co
 ## Decisions Made
 
 - **Task 1 not re-presented:** the human's prior "approve, proceed exactly as stated" resolution was treated as final for the ratification wording, per explicit instruction from the coordinating orchestrator — see key-decisions above.
-- **Task 3 not attempted past its own precondition check:** the task's own `<how-to-verify>` step 1 requires stopping and recording a blocker when `SYNOPTIC_TOKEN` is absent, rather than reporting a failed fallback. This environment has no `SYNOPTIC_TOKEN` or NREL credentials set, and reading the repo's `.env` file is denied by the sandbox — so this session recorded the blocker rather than fabricating evidence or bypassing the sandbox's access control.
-- **`gate="blocking-human"` honored literally, even under an instruction to "proceed through" the task:** this project's checkpoint convention (and the executor's own protocol) excludes `gate="blocking-human"` checkpoints from auto-approval in every execution mode. Because this session could not even gather the automation evidence Task 3 requires (no credentials), there was nothing to present for approval regardless — the checkpoint remains open pending either a human/session with live-credential access performing the check, or an explicit decision to defer it.
-- **SUMMARY `status: halted`, not `complete`:** Task 2 is fully committed and verified. Task 3's automation could not run at all in this session (credential gap), and its checkpoint's human sign-off has not occurred — `halted` is the template's documented status for "an intentional, designed stop," which this is.
+- **Task 3 initially blocked, then completed in a follow-up session:** the task's own `<how-to-verify>` step 1 requires stopping and recording a blocker when `SYNOPTIC_TOKEN` is absent, rather than reporting a failed fallback. The isolated worktree that produced Task 2's commit had no `SYNOPTIC_TOKEN`/NREL credentials, so that session recorded the blocker per instruction. A follow-up session then ran Task 3's automation directly against the human's local checkout (real credentials present) and reported the results back for review.
+- **`gate="blocking-human"` honored literally throughout:** this project's checkpoint convention excludes `gate="blocking-human"` checkpoints from auto-approval in every execution mode. The evidence in coverage item D6 was gathered by the automation and then explicitly reviewed and approved by the human — it was never self-approved by an executor.
+- **SUMMARY `status: complete`:** Task 2 is fully committed and verified; Task 3's live-endpoint evidence has been gathered and explicitly approved by the human. Both tasks in this plan are now done.
 
 ## Deviations from Plan
 
-None — plan executed as written through Task 2. Task 3 was not skipped by choice; it hit its own documented precondition-failure path (absent `SYNOPTIC_TOKEN`), which the plan's own `<how-to-verify>` step 1 explicitly designed for.
+An invalid CAMS ID (as a literal example) does not exercise the fallback the way Task 3 intends: `tceq_provider.fetch_tceq` rejects an unrecognized site ID with a `ValueError` before any network call (`no fixed UTC offset registered`), and `weather_provider._fallback_city_for_request` correctly treats an unrecognized CAMS ID as unresolvable and re-raises rather than falling back — this is the caller-shaped-error exclusion working exactly as designed, not a bug. Task 3's live check instead forced the station-path fallback with a *valid* CAMS ID (`config.TCEQ_STATIONS["AUSTIN"]`) over a 74-day window exceeding `TCEQ_MAX_DAYS_PER_FETCH=31`, and the grid-path fallback with a real NSRDB request for an as-yet-unpublished data year (2026) rather than a future date (a future date also causes the Synoptic fallback itself to have no data available, which would have produced a correct-but-uninformative both-providers-failed result instead of demonstrating a successful fallback).
 
 ## Issues Encountered
 
-- **Task 3 blocked: no live Synoptic/NREL credentials accessible from this isolated worktree.** `env | grep -iE 'synoptic|nrel|nsrdb'` returned nothing in this worktree's shell, and a direct attempt to check the repository's `.env` file (a read-only `grep -c` count, not printing any secret value) was denied by the execution sandbox's own classifier. `backend/config.py`'s credential-reading functions (`dlr_pipeline._token()`, `nsrdb_provider`'s `NREL_API_KEY`/`NREL_API_EMAIL` lookups) read only `os.getenv`/`os.environ` — no `.env` auto-loading exists in this codebase — so the absence of these env vars in this session's shell is a genuine, verified absence, not an artifact of not having looked hard enough. Per Task 3's own `<how-to-verify>` step 1, this is a recorded blocker, not a finding about the four `SYNOPTIC_FALLBACK_STATIONS` station IDs (`KAUS` confirmed elsewhere; `KCRP`/`KMAF`/`KELP` remain genuinely unconfirmed). Contrast with Phase 9 Plan 09-03's Task 2 (TCEQ live check), which succeeded in an isolated worktree because TCEQ's `daily_summary.pl` endpoint is public and unauthenticated — Synoptic and NREL both require a credential this environment does not expose.
-- **Resolution path:** either (a) run Task 3's `<how-to-verify>` steps in a session/environment where `SYNOPTIC_TOKEN` and the NREL credential pair are genuinely available (e.g. the main checkout, not this worktree), or (b) the human explicitly defers Task 3 the way Task 1's own `<options>` describes deferring ratification — though deferring Task 3 specifically (rather than declining the whole ratification) is not one of Task 1's three named options, since Task 1 and Task 3 gate different things (publication wording vs. live-fallback confirmation).
-
-## User Setup Required
-
-**External credentials required to complete this plan's Task 3.** `SYNOPTIC_TOKEN` and the `NREL_API_KEY`/`NREL_API_EMAIL` pair must be available in the environment that runs Task 3's live confirmation — see "Issues Encountered" above. No new account or dashboard configuration is needed beyond what Phases 8-10 already required; this is an environment-access gap for this specific isolated worktree, not a missing external service.
+- **Task 3 initially blocked: no live Synoptic/NREL credentials accessible from the isolated worktree that ran Task 2.** `SYNOPTIC_TOKEN`/`NREL_API_KEY` were absent from that worktree's shell environment, and the execution sandbox denied reading the repository's `.env` file directly from within it. This was resolved by running Task 3's automation in a follow-up session against the human's own local checkout, where `.env` is genuinely loaded (via `source .env` with `set -a`, since this codebase reads plain `os.getenv`/`os.environ` — there is no `.env` auto-loading in `backend/`).
+- **Resolved — no further action needed.** All four `SYNOPTIC_FALLBACK_STATIONS` entries returned real data (`KCRP`/`KMAF`/`KELP` had been genuinely unconfirmed prior to this check; all three are now confirmed alongside `KAUS`), so no station ID needs replacement, contrary to what "Issues Encountered" originally anticipated.
 
 ## Next Phase Readiness
 
-- **Task 2 is complete and committed.** `PRD.md` §7.1, `data_provider.md`, and `C4-weather-ingestion.md` now record the ratified composition and the Phase 10 fallback, matching what Phases 6-10 actually implemented. WX-08 is satisfied.
-- **Task 3 remains open, blocked on credential access in this session — not failed, not skipped by choice.** Re-run this plan's Task 3 (or dispatch a fresh executor with `SYNOPTIC_TOKEN`/NREL credentials genuinely available) to perform the live per-city fetches, the two forced end-to-end fallbacks (station path via an invalid CAMS ID, grid path via unset NSRDB credentials), and gather the evidence Task 3's `<how-to-verify>` names. Once gathered, a human must still review and approve it — `gate="blocking-human"` is never auto-approved.
-- **The v1.1 milestone goal is not yet fully met.** WX-08 (documentation ratification) is done; WX-06's live-endpoint confirmation (this plan's own contribution beyond what 10-01/10-02 already tested against mocks) is the one remaining item before Phase 10 — and the v1.1 milestone — can be marked complete.
+- **Both tasks are complete.** `PRD.md` §7.1, `data_provider.md`, and `C4-weather-ingestion.md` record the ratified composition and the Phase 10 fallback (WX-08), and the fallback has been confirmed against the live Synoptic and NSRDB endpoints with correct provenance in both directions (WX-06).
+- **The v1.1 milestone goal is met by this plan's completion.** Phase 10 (and with it, the v1.1 milestone's `PRD.md` §7.1 resolution) can be marked complete pending the orchestrator's roadmap/state update and phase-goal verification.
 - No architectural (Rule 4) escalations occurred this session.
 
 ---
@@ -172,8 +179,15 @@ None — plan executed as written through Task 2. Task 3 was not skipped by choi
 - FOUND: commit `b761540` in `git log --oneline --all`
 - Full repository suite: 388 passed, 0 failed (unchanged from the Plan 10-02 baseline — a documentation-only pass)
 - `git diff --name-only -- backend/`: empty
-- Plan-level `<verification>` re-run: all grep-based checks pass (see coverage D1-D5 above); Task 3's live-endpoint confirmation (D6) not run — recorded blocker, human_judgment: true
+- Plan-level `<verification>` re-run: all grep-based checks pass (see coverage D1-D5 above); Task 3's live-endpoint confirmation (D6) gathered and human-approved in a follow-up session
 
 ## Checkpoint Resolution
 
-Task 3's `blocking-human` checkpoint (live Synoptic-fallback confirmation across all four `SYNOPTIC_FALLBACK_STATIONS` entries) is **still open**. This session could not gather the required live evidence: no `SYNOPTIC_TOKEN` or NREL credential is available in this isolated worktree's environment, and the execution sandbox denies reading the repository's `.env` file directly. No automation was run, no evidence was fabricated, and the checkpoint was not self-approved. A follow-up session with genuine access to `SYNOPTIC_TOKEN` and the NREL credential pair must perform Task 3's `<how-to-verify>` steps before a human can review and approve.
+Task 3's `blocking-human` checkpoint (live Synoptic-fallback confirmation across all four `SYNOPTIC_FALLBACK_STATIONS` entries) is **resolved and approved**. The isolated worktree that ran Task 2 could not gather live evidence (no credentials available there); a follow-up session ran the required checks directly against the human's local checkout, where `SYNOPTIC_TOKEN` and the NREL credential pair are genuinely available:
+
+- **Per-city live fetch** (all four `SYNOPTIC_FALLBACK_STATIONS`): `AUSTIN`/`KAUS` 2,682 rows, `CORPUS_CHRISTI`/`KCRP` 5,209 rows, `MIDLAND`/`KMAF` 5,542 rows, `EL_PASO`/`KELP` 1,257 rows — all four non-null for `air_temp`, `wind_speed`, `wind_direction`. No station is unreadable; no replacement ID is needed.
+- **Station-path fallback**, forced with a real TCEQ failure (a 74-day request window exceeding `TCEQ_MAX_DAYS_PER_FETCH=31`): fired to Synoptic `KAUS`, returned 87,226 rows, `wind_source`/`temp_source` correctly read `synoptic`/`asos` and never `tceq`.
+- **Grid-path fallback**, forced with a real NSRDB failure (HTTP 400 for the as-yet-unpublished 2026 data year): fired to Synoptic `KAUS`, returned 5,316 rows, and `solar_source` was correctly null (this Synoptic station carries no solar sensor, so the null-rather-than-fabricated guarantee held) with no `*_source` cell reading `nsrdb`.
+- **`EnvironmentError` branch** (NREL credential unset): raised `EnvironmentError` and did not fall back, as required.
+
+The human reviewed this evidence in full and explicitly approved it. No secret value (token, request URL, response header) was ever printed or recorded — only station IDs, row counts, timestamps, and null-ness, per the plan's own information-disclosure mitigation (T-10-15).
