@@ -669,17 +669,23 @@ def _attempt_fallback(location, start: str, end: str, provider: str, primary_err
     Raises:
         The original `primary_error`, unchanged, when no fallback station
         resolves.
-        ValueError: When the fallback call itself raises. The message
-            names both the failed primary provider and `FALLBACK_PROVIDER`
-            and the resolved city -- built only from provider names, the
-            city key, and the station ID, never from a request URL, a
-            response body, or any environment value (T-10-03) -- and is
-            chained via `raise ... from primary_error`. Also raised
-            (chained the same way) when the shaped grid-path fallback
-            frame is non-empty but has an unresolvable (null) `city` --
-            mirroring the null-city guard `_fetch_grid` already applies to
-            its own providers, since a row that can never be merged or
-            rated must not be emitted (T-10-08).
+        ValueError: When the fallback call itself raises, or when it
+            returns `None`/an empty frame -- an empty fallback result is a
+            second exhausted provider, not usable data, and PROJECT.md's
+            fail-safe commitment forbids returning it as if it were (ROADMAP
+            SC1's "still returns a usable row" describes the case where the
+            fallback HAS data; a caller resolving toward its static rating
+            on a clean raise is correct here, a fabricated or empty row is
+            not). The message names both the failed primary provider and
+            `FALLBACK_PROVIDER` and the resolved city -- built only from
+            provider names, the city key, and the station ID, never from a
+            request URL, a response body, or any environment value
+            (T-10-03) -- and is chained via `raise ... from primary_error`.
+            Also raised (chained the same way) when the shaped grid-path
+            fallback frame is non-empty but has an unresolvable (null)
+            `city` -- mirroring the null-city guard `_fetch_grid` already
+            applies to its own providers, since a row that can never be
+            merged or rated must not be emitted (T-10-08).
     """
     station_ids = _fallback_station_ids(location, provider)
     if station_ids is None:
@@ -703,6 +709,13 @@ def _attempt_fallback(location, start: str, end: str, provider: str, primary_err
             f"weather_provider: both primary provider {provider!r} and "
             f"fallback provider {FALLBACK_PROVIDER!r} failed for city "
             f"{city!r} (station {station_ids[0]!r})"
+        ) from primary_error
+
+    if frame is None or frame.empty:
+        raise ValueError(
+            f"weather_provider: both primary provider {provider!r} and "
+            f"fallback provider {FALLBACK_PROVIDER!r} returned no usable "
+            f"data for city {city!r} (station {station_ids[0]!r})"
         ) from primary_error
 
     if provider in GRID_PATH_PROVIDERS:

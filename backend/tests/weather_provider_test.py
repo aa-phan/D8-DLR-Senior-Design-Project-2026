@@ -2072,3 +2072,203 @@ def test_as_grid_shaped_returns_none_or_empty_frame_unchanged():
 
     empty = pd.DataFrame()
     assert weather_provider._as_grid_shaped(empty, lat, lon) is empty
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 10-02 Task 2: four cities x two fallback-eligible primaries, plus the
+# both-providers-failed exhaustion path (WX-06, ROADMAP SC1, T-10-09, T-10-12)
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def _capturing_fetch_timeseries(monkeypatch, captured, frame_builder):
+    """
+    Monkeypatch `dlr_pipeline.fetch_timeseries` to record the `stids`
+    argument it is actually called with (into `captured["stids"]`) before
+    returning `frame_builder()` -- proves the per-city station resolution
+    is real rather than a constant, since a test only checking "a frame
+    came back" cannot distinguish the two.
+    """
+
+    def _spy(stids, *a, **k):
+        captured["stids"] = stids
+        return frame_builder()
+
+    monkeypatch.setattr(dlr_pipeline, "fetch_timeseries", _spy)
+
+
+@pytest.mark.parametrize("city,cams_id", sorted(config.TCEQ_STATIONS.items()))
+def test_tceq_fallback_resolves_the_correct_synoptic_station_per_city(
+    monkeypatch, city, cams_id
+):
+    def _raise_tceq(*a, **k):
+        raise ValueError("TCEQ boom")
+
+    captured = {}
+    monkeypatch.setattr(tceq_provider, "fetch_tceq", _raise_tceq)
+    _capturing_fetch_timeseries(monkeypatch, captured, _fallback_synoptic_frame)
+
+    result = weather_provider.fetch_weather([cams_id], _START, _END, provider="tceq")
+
+    assert not result.empty
+    assert captured["stids"] == [config.SYNOPTIC_FALLBACK_STATIONS[city]]
+
+
+@pytest.mark.parametrize("city,coords", sorted(config.CITY_COORDINATES.items()))
+def test_nsrdb_fallback_resolves_the_correct_synoptic_station_per_city(
+    monkeypatch, city, coords
+):
+    def _raise_nsrdb(*a, **k):
+        raise ValueError("NSRDB boom")
+
+    captured = {}
+    monkeypatch.setattr(nsrdb_provider, "fetch_nsrdb", _raise_nsrdb)
+    _capturing_fetch_timeseries(monkeypatch, captured, _fallback_synoptic_grid_frame)
+
+    result = weather_provider.fetch_weather(coords, _START, _END, provider="nsrdb")
+
+    assert not result.empty
+    assert captured["stids"] == [config.SYNOPTIC_FALLBACK_STATIONS[city]]
+
+
+def test_fallback_station_ids_resolve_for_all_eight_city_primary_combinations():
+    """
+    A gap here would mean a city silently has no fallback -- exactly the
+    kind of partial coverage the phase goal (WX-06 across the adapter's
+    full surface) rules out.
+    """
+    tceq_gaps = [
+        city
+        for city, cams_id in config.TCEQ_STATIONS.items()
+        if weather_provider._fallback_station_ids([cams_id], "tceq") is None
+    ]
+    nsrdb_gaps = [
+        city
+        for city, coords in config.CITY_COORDINATES.items()
+        if weather_provider._fallback_station_ids(coords, "nsrdb") is None
+    ]
+    assert not tceq_gaps, tceq_gaps
+    assert not nsrdb_gaps, nsrdb_gaps
+
+    for city, cams_id in config.TCEQ_STATIONS.items():
+        assert weather_provider._fallback_station_ids([cams_id], "tceq") == [
+            config.SYNOPTIC_FALLBACK_STATIONS[city]
+        ]
+    for city, coords in config.CITY_COORDINATES.items():
+        assert weather_provider._fallback_station_ids(coords, "nsrdb") == [
+            config.SYNOPTIC_FALLBACK_STATIONS[city]
+        ]
+
+
+def test_nsrdb_and_synoptic_both_failing_names_both_providers_and_chains_nsrdb_error(
+    monkeypatch,
+):
+    nsrdb_error = ValueError("NSRDB boom")
+
+    def _raise_nsrdb(*a, **k):
+        raise nsrdb_error
+
+    def _raise_synoptic(*a, **k):
+        raise ValueError("Synoptic boom")
+
+    monkeypatch.setattr(nsrdb_provider, "fetch_nsrdb", _raise_nsrdb)
+    monkeypatch.setattr(dlr_pipeline, "fetch_timeseries", _raise_synoptic)
+
+    with pytest.raises(ValueError) as excinfo:
+        weather_provider.fetch_weather(
+            config.CITY_COORDINATES["AUSTIN"], _START, _END, provider="nsrdb"
+        )
+
+    message = str(excinfo.value)
+    assert "nsrdb" in message
+    assert "synoptic" in message
+    assert excinfo.value.__cause__ is nsrdb_error
+
+
+def test_empty_synoptic_fallback_raises_instead_of_returning_the_empty_frame(monkeypatch):
+    """
+    ROADMAP SC1's "still returns a usable row" describes the case where
+    the fallback HAS data; PROJECT.md's standing fail-safe commitment
+    forbids inventing a reading (or silently propagating an unusable one)
+    when no source has one. A clear raise here lets the caller resolve
+    toward its static rating, which a returned-but-empty frame would not
+    (T-10-12).
+    """
+    tceq_error = ValueError("TCEQ boom")
+
+    def _raise_tceq(*a, **k):
+        raise tceq_error
+
+    monkeypatch.setattr(tceq_provider, "fetch_tceq", _raise_tceq)
+    monkeypatch.setattr(dlr_pipeline, "fetch_timeseries", lambda *a, **k: pd.DataFrame())
+
+    with pytest.raises(ValueError) as excinfo:
+        weather_provider.fetch_weather(["83"], _START, _END, provider="tceq")
+
+    assert excinfo.value.__cause__ is tceq_error
+
+
+def test_empty_nsrdb_synoptic_fallback_raises_instead_of_returning_the_empty_frame(
+    monkeypatch,
+):
+    nsrdb_error = ValueError("NSRDB boom")
+
+    def _raise_nsrdb(*a, **k):
+        raise nsrdb_error
+
+    monkeypatch.setattr(nsrdb_provider, "fetch_nsrdb", _raise_nsrdb)
+    monkeypatch.setattr(dlr_pipeline, "fetch_timeseries", lambda *a, **k: pd.DataFrame())
+
+    with pytest.raises(ValueError) as excinfo:
+        weather_provider.fetch_weather(
+            config.CITY_COORDINATES["AUSTIN"], _START, _END, provider="nsrdb"
+        )
+
+    assert excinfo.value.__cause__ is nsrdb_error
+
+
+def test_tceq_fallback_disabled_suppresses_fallback_with_zero_calls(monkeypatch):
+    def _raise_tceq(*a, **k):
+        raise ValueError("TCEQ boom")
+
+    counter = {"count": 0}
+
+    def _counting_fetch_timeseries(*a, **k):
+        counter["count"] += 1
+        return _fallback_synoptic_frame()
+
+    monkeypatch.setattr(tceq_provider, "fetch_tceq", _raise_tceq)
+    monkeypatch.setattr(dlr_pipeline, "fetch_timeseries", _counting_fetch_timeseries)
+
+    with pytest.raises(ValueError) as excinfo:
+        weather_provider.fetch_weather(
+            ["83"], _START, _END, provider="tceq", fallback=False
+        )
+
+    assert "TCEQ boom" in str(excinfo.value)
+    assert counter["count"] == 0
+
+
+def test_nsrdb_fallback_disabled_suppresses_fallback_with_zero_calls(monkeypatch):
+    def _raise_nsrdb(*a, **k):
+        raise ValueError("NSRDB boom")
+
+    counter = {"count": 0}
+
+    def _counting_fetch_timeseries(*a, **k):
+        counter["count"] += 1
+        return _fallback_synoptic_grid_frame()
+
+    monkeypatch.setattr(nsrdb_provider, "fetch_nsrdb", _raise_nsrdb)
+    monkeypatch.setattr(dlr_pipeline, "fetch_timeseries", _counting_fetch_timeseries)
+
+    with pytest.raises(ValueError) as excinfo:
+        weather_provider.fetch_weather(
+            config.CITY_COORDINATES["AUSTIN"],
+            _START,
+            _END,
+            provider="nsrdb",
+            fallback=False,
+        )
+
+    assert "NSRDB boom" in str(excinfo.value)
+    assert counter["count"] == 0
