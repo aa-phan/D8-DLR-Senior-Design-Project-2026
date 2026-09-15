@@ -30,6 +30,18 @@ Track 1). Each maps to roadmap phases in this workstream.
   code — re-validating whatever model Track 2 (ML Model Development) eventually builds is
   Track 2's own responsibility, not repeated here.
 
+### Data Cleaning
+
+- [ ] **CLEAN-01**: Real accumulated archive data is checked for physically-implausible
+  outliers (e.g. a stuck sensor repeating a value, a spike inconsistent with neighboring
+  readings) that pass unit/range checks but are still garbage, and are flagged or handled per a
+  documented policy.
+- [ ] **CLEAN-02**: A documented gap-filling/interpolation strategy handles missing timestamps
+  in the accumulated historical archive, rather than leaving gaps unaddressed.
+- [ ] **CLEAN-03**: When multiple providers could report the same time/location (e.g. a primary
+  provider plus its fallback), the archive contains no duplicate or silently-conflicting rows
+  for that slot.
+
 ## Out of Scope
 
 Explicitly excluded from this workstream. Documented to prevent scope creep and duplicate work
@@ -52,12 +64,15 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PIPE-02 | Phase 2 (Automated Scheduling) | Pending |
 | VAL-01 | Phase 3 (Real-Data Validation) | Pending |
 | VAL-02 | Phase 3 (Real-Data Validation) | Pending |
+| CLEAN-01 | TBD | Pending |
+| CLEAN-02 | TBD | Pending |
+| CLEAN-03 | TBD | Pending |
 
 **Coverage:**
-- v1.2 requirements: 4 total
+- v1.2 requirements: 7 total
 - Mapped to phases: 4
-- Unmapped: 0 ✓
+- Unmapped: 3 ⚠️ (CLEAN-01/02/03 added after roadmap creation — re-run roadmapper)
 
 ---
 *Requirements defined: 2026-09-14*
-*Last updated: 2026-09-14 after ROADMAP.md creation (3 phases, 100% coverage)*
+*Last updated: 2026-09-14 after adding Data Cleaning category (CLEAN-01/02/03)*
