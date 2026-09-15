@@ -1,6 +1,6 @@
 # Data Provider Decision Log
 
-**Status:** Open — vetting in progress. Answers `PRD.md` §7.1 (weather data provider — unresolved).
+**Status:** Ratified, 2026-09-15. Answers `PRD.md` §7.1 (weather data provider — ratified).
 
 **Purpose:** One section per candidate data provider, vetted individually against this project's actual requirements before a decision is made. Not a final recommendation document — a working log of what was checked and why each provider was accepted, rejected, or kept as a supplement.
 
@@ -81,13 +81,15 @@ This means the likely outcome of this vetting pass is **per-variable sourcing** 
 
 **Decision rationale:** Best real-station candidate for the wind term specifically — better spatial density and longer history than Synoptic/WTM, and it's not gated by an account tier the way Synoptic's default token currently is. But solar is a real gap that needs a per-city, per-site check (not yet done for two of the four cities) before treating this as anything more than a wind/temp source, and the lack of a real API means this is the highest integration-effort option that still made the "viable" list.
 
+**Ratified scope (2026-09-15):** TCEQ was wired for wind, temperature, and relative humidity exclusively (Phase 9) — never solar. The document's finding above (solar-equipped CAMS sites confirmed only for Austin and Corpus Christi) remains accurate and unchanged in substance; per-site solar availability for Midland and El Paso is tracked as v2 requirement WX-09, out of this ratification's scope.
+
 ---
 
 ### NREL NSRDB — PSM v4 (GOES CONUS)
 
 **Verdict:** Viable as the primary **solar** source for all four cities — weak, not-recommended-by-NREL-itself for wind.
 
-**Cost & access:** Free. Requires a free NREL developer API key (registration at `developer.nrel.gov` — a user action, no account was created during this research pass).
+**Cost & access:** Free. Requires a free NREL developer API key (registration at `developer.nlr.gov` — following the National Laboratory of the Rockies rename; Phase 8 confirmed the previous developer-portal hostname no longer resolves — a user action, no account was created during this research pass).
 
 **Temporal resolution:** Selectable — 5, 15, 30, or 60-minute intervals (confirmed via NREL docs and the `pvlib.iotools.get_psm3` reader's own `interval` parameter, which only accepts {5, 15, 30, 60}).
 
@@ -97,11 +99,11 @@ This means the likely outcome of this vetting pass is **per-variable sourcing** 
 
 **Historical depth:** 2018–2025 for this specific product (GOES CONUS PSM v4). Older/coarser NSRDB products go back further at lower resolution (30-min, 4 km) if a longer window is needed.
 
-**Integration effort:** Real REST API (`developer.nrel.gov`), and an existing, maintained Python reader (`pvlib.iotools.get_psm3`) already handles auth, request building, and interval selection — this is the easiest integration of any candidate that isn't already wired into the codebase.
+**Integration effort:** Real REST API (`developer.nlr.gov`), and an existing, maintained Python reader (`pvlib.iotools.get_psm3`) already handles auth, request building, and interval selection — this is the easiest integration of any candidate that isn't already wired into the codebase.
 
 **Rate limits (confirmed via docs):** CSV format — 10,000 requests/day, 1 req/sec, 20 concurrent in-flight.
 
-**Evidence checked:** Attribute list, interval options, and rate limits confirmed via NREL's own developer docs (`developer.nrel.gov/docs/solar/nsrdb/...`) and cross-checked against `pvlib`'s documented `get_psm3` signature. **Not confirmed live** — no API key was obtained, so no actual data pull was performed this pass.
+**Evidence checked:** Attribute list, interval options, and rate limits confirmed via NREL's own developer docs (`developer.nlr.gov/docs/solar/nsrdb/...`) and cross-checked against `pvlib`'s documented `get_psm3` signature. **Not confirmed live** — no API key was obtained, so no actual data pull was performed this pass.
 
 **Decision rationale:** Best solar candidate by a wide margin — complete GHI/DNI/DHI, 5-minute option, all four cities, simple auth, existing Python library support. The wind field is the catch: it's derived from **MERRA-2 reanalysis at 2 meters**, and NREL's own documentation states this wind data "should not be used for wind power calculations" — a direct signal it's not trustworthy for a physics calculation as wind-sensitive as IEEE 738 ampacity. Use for solar; do not use for the wind term.
 
@@ -208,20 +210,20 @@ Lower priority; documented briefly since none surfaced a compelling reason to in
 
 ---
 
-## Recommended Composition (synthesis, not a final decision)
+## Adopted Composition (ratified 2026-09-15)
 
-Based on the vetting above, the strongest path is **per-variable sourcing**, not a single winning provider:
+Based on the vetting above, the adopted path is **per-variable sourcing**, not a single winning provider:
 
 - **Wind (speed + direction) and temperature:** TCEQ CAMS as primary (best spatial density + longest history of any real-station network for these four cities), with ASOS 1-minute as a higher-temporal-density supplement where sub-hourly wind matters (e.g. C9 feature engineering).
-- **Solar irradiance:** NSRDB PSM v4 as primary (purpose-built, complete, 5-minute option) — this is also the piece that would make the System Design Report's existing NOAA+NSRDB claim (`PRD.md` §10) actually true, if the team wants to close that discrepancy.
-- **Bulk historical backfill for C9/C10 training volume:** Open-Meteo, given it's the only candidate confirmed live to return the complete variable set from a single, zero-auth request — the fastest way to start accumulating the historical corpus ROADMAP Finding 5 flags as currently missing, without waiting on NSRDB API-key provisioning or a TCEQ scraper being built.
-- **Immediate fix, independent of the above:** apply for Synoptic Open Access now — it's free, uses credentials already available, and resolves the account-tier failure blocking the pipeline's default config today, regardless of what else is decided.
+- **Solar irradiance:** NSRDB PSM v4 as primary (purpose-built, complete, 5-minute option) — this is also the piece that makes the System Design Report's existing NOAA+NSRDB claim (`PRD.md` §10) substantially correct for its solar half.
+- **Bulk historical backfill for C9/C10 training volume:** Open-Meteo, given it's the only candidate confirmed live to return the complete variable set from a single, zero-auth request — the fastest way to accumulate the historical corpus ROADMAP Finding 5 flagged as missing, without waiting on NSRDB API-key provisioning or a TCEQ scraper being built.
+- **Automatic fallback, added Phase 10 (WX-06):** Synoptic is retained as the automatic fallback for a failing or empty TCEQ or NSRDB result, across all four cities and both the station and grid adapter paths, via `config.SYNOPTIC_FALLBACK_STATIONS`. The fallback deliberately excludes `open_meteo` (a standalone historical-backfill source Synoptic cannot serve — substituting it would be a silent downgrade, not a rescue) and never fires for a caller-shaped error or for an `EnvironmentError` (a misconfigured machine stays visible rather than being quietly served from the fallback). When Synoptic also fails, the adapter raises an error naming both providers rather than fabricating a row.
 
-**A real design consequence this surfaced:** `backend/weather_provider.py::fetch_weather(stids, start, end, provider)` is station-ID-based. NSRDB and Open-Meteo are lat/lon-based. Combining a station-based primary (TCEQ/ASOS) with a grid-based supplement (NSRDB/Open-Meteo) needs either a station→lat/lon mapping layer or a signature change to `fetch_weather` — this should be designed deliberately now rather than discovered mid-way through C8.
+**A real design consequence this surfaced:** `backend/weather_provider.py::fetch_weather(stids, start, end, provider)` was station-ID-based. NSRDB and Open-Meteo are lat/lon-based. Combining a station-based primary (TCEQ/ASOS) with a grid-based supplement (NSRDB/Open-Meteo) needed either a station→lat/lon mapping layer or a signature change to `fetch_weather` — Phase 6 made the deliberate signature change (type-dispatched `location`: a `list[str]` selects the station path, a `(lat, lon)` tuple selects the grid path), rather than building a separate station-to-lat/lon mapping layer. That alternative mapping-layer approach is tracked as v2 requirement WX-10, not pursued here.
 
-**Standardization implication, per the team's own stated approach:** whatever combination is chosen, every provider's output must be scrubbed down to the intersection of fields common across the selected set — `PIPELINE_SCHEMA`'s five weather columns (`air_temp`, `wind_speed`, `wind_direction`, `solar_radiation`, `relative_humidity`) — with the source provider tracked per row (not just per dataset), since accuracy/measurement-height caveats differ by provider (e.g. NSRDB's 2m reanalysis wind vs. TCEQ's real 10m sensor) and that provenance will matter if the research paper needs to explain result quality.
+**Standardization implication, per the team's own stated approach:** every provider's output is scrubbed down to the intersection of fields common across the selected set — `PIPELINE_SCHEMA`'s five weather columns (`air_temp`, `wind_speed`, `wind_direction`, `solar_radiation`, `relative_humidity`) — with the source provider tracked per row (not just per dataset), since accuracy/measurement-height caveats differ by provider (e.g. NSRDB's 2m reanalysis wind vs. TCEQ's real 10m sensor) and that provenance matters if the research paper needs to explain result quality.
 
-**Explicitly not decided here:** which combination to actually adopt, whether to update `PRD.md` §7.1's status, and any provider integration code. This section is a synthesis of the research for the team to review, not a final call.
+**Decided here, and where each provider was implemented:** the combination above was adopted, `PRD.md` §7.1's status was updated to ratified, and all five providers' integration code is shipped: TCEQ CAMS and Synoptic (station path, Phase 6/9), ASOS 1-minute (Phase 7 supplement), Open-Meteo (Phase 7 grid), NSRDB (Phase 8 grid), and the Synoptic automatic fallback behind TCEQ/NSRDB (Phase 10, WX-06).
 
 ## References
 
