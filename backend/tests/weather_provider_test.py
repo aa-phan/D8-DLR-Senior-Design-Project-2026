@@ -1665,3 +1665,213 @@ def test_fallback_failure_after_tceq_failure_chains_the_original_tceq_error(monk
     assert "tceq" in message
     assert "synoptic" in message
     assert excinfo.value.__cause__ is tceq_error
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 10-01 Task 2: the no-fallback taxonomy -- every caller-shaped error
+# and every configuration error still fails loudly with zero fallback
+# requests (WX-06, T-10-05, T-10-06)
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def _counting_fetch_timeseries_spy(monkeypatch):
+    """
+    One shared counting spy for `dlr_pipeline.fetch_timeseries` -- the
+    network entry point every fallback attempt in this module ultimately
+    goes through via `_fetch_station(..., FALLBACK_PROVIDER)`. A non-zero
+    counter in any test in this section is the precise signal that the
+    eligibility gate leaked.
+    """
+    counter = {"count": 0}
+
+    def _spy(*a, **k):
+        counter["count"] += 1
+        return _synthetic_frame(air_temp=[24.0, 24.5], wind_speed=[4.0, 4.2])
+
+    monkeypatch.setattr(dlr_pipeline, "fetch_timeseries", _spy)
+    return counter
+
+
+def test_unknown_provider_on_station_path_raises_with_zero_fallback_requests(monkeypatch):
+    counter = _counting_fetch_timeseries_spy(monkeypatch)
+
+    with pytest.raises(ValueError):
+        weather_provider.fetch_weather(["83"], _START, _END, provider="nope")
+
+    assert counter["count"] == 0
+
+
+def test_unknown_provider_on_grid_path_raises_with_zero_fallback_requests(monkeypatch):
+    counter = _counting_fetch_timeseries_spy(monkeypatch)
+
+    with pytest.raises(ValueError):
+        weather_provider.fetch_weather(
+            config.CITY_COORDINATES["AUSTIN"], _START, _END, provider="nope"
+        )
+
+    assert counter["count"] == 0
+
+
+def test_nsrdb_requested_through_a_station_list_raises_with_zero_fallback_requests(
+    monkeypatch,
+):
+    counter = _counting_fetch_timeseries_spy(monkeypatch)
+
+    with pytest.raises(ValueError):
+        weather_provider.fetch_weather(["83"], _START, _END, provider="nsrdb")
+
+    assert counter["count"] == 0
+
+
+def test_open_meteo_requested_through_a_station_list_raises_with_zero_fallback_requests(
+    monkeypatch,
+):
+    counter = _counting_fetch_timeseries_spy(monkeypatch)
+
+    with pytest.raises(ValueError):
+        weather_provider.fetch_weather(["83"], _START, _END, provider="open_meteo")
+
+    assert counter["count"] == 0
+
+
+def test_tceq_requested_through_a_coordinate_tuple_raises_with_zero_fallback_requests(
+    monkeypatch,
+):
+    counter = _counting_fetch_timeseries_spy(monkeypatch)
+
+    with pytest.raises(ValueError):
+        weather_provider.fetch_weather(
+            config.CITY_COORDINATES["AUSTIN"], _START, _END, provider="tceq"
+        )
+
+    assert counter["count"] == 0
+
+
+@pytest.mark.parametrize(
+    "bad_location",
+    [
+        [30.27, -97.74],
+        ("KAUS", "KDFW"),
+        [],
+        (),
+        (1.0, 2.0, 3.0),
+    ],
+)
+def test_bad_location_shape_raises_with_zero_fallback_requests(monkeypatch, bad_location):
+    counter = _counting_fetch_timeseries_spy(monkeypatch)
+
+    with pytest.raises(ValueError):
+        weather_provider.fetch_weather(bad_location, _START, _END, provider="tceq")
+
+    assert counter["count"] == 0
+
+
+def test_multiple_cams_ids_raises_naming_both_ids_with_zero_fallback_requests(monkeypatch):
+    counter = _counting_fetch_timeseries_spy(monkeypatch)
+
+    with pytest.raises(ValueError) as excinfo:
+        weather_provider.fetch_weather(["38", "83"], _START, _END, provider="tceq")
+
+    message = str(excinfo.value)
+    assert "38" in message
+    assert "83" in message
+    assert counter["count"] == 0
+
+
+def test_nonfinite_coordinates_under_nsrdb_raise_with_zero_fallback_requests(monkeypatch):
+    counter = _counting_fetch_timeseries_spy(monkeypatch)
+    monkeypatch.setattr(nsrdb_provider, "fetch_nsrdb", lambda *a, **k: _nsrdb_frame())
+
+    with pytest.raises(ValueError):
+        weather_provider.fetch_weather(
+            (float("nan"), float("nan")), _START, _END, provider="nsrdb"
+        )
+
+    assert counter["count"] == 0
+
+
+def test_synoptic_provider_failure_raises_and_is_not_fallback_eligible(monkeypatch):
+    # Synoptic IS the fallback -- it has nowhere to fall back to, so this
+    # deliberately does not use the shared counting spy (fetch_timeseries
+    # is the very function under test here, not a fallback side-effect).
+    def _raise_synoptic(*a, **k):
+        raise ValueError("Synoptic boom")
+
+    monkeypatch.setattr(dlr_pipeline, "fetch_timeseries", _raise_synoptic)
+
+    with pytest.raises(ValueError):
+        weather_provider.fetch_weather(["KAUS"], _START, _END, provider="synoptic")
+
+
+def test_open_meteo_provider_failure_raises_and_is_not_fallback_eligible(monkeypatch):
+    def _raise_open_meteo(*a, **k):
+        raise ValueError("Open-Meteo boom")
+
+    monkeypatch.setattr(open_meteo_provider, "fetch_open_meteo", _raise_open_meteo)
+
+    with pytest.raises(ValueError):
+        weather_provider.fetch_weather(
+            config.CITY_COORDINATES["AUSTIN"], _START, _END, provider="open_meteo"
+        )
+
+
+def test_nsrdb_environment_error_propagates_and_is_not_masked_by_fallback(monkeypatch):
+    """
+    A missing NREL_API_KEY means the operator has not finished setup, not
+    that the primary provider itself is failing -- silently serving
+    Synoptic data instead would let the machine look healthy while the
+    solar primary is never actually reachable (T-10-06). EnvironmentError
+    must propagate unmasked and trigger zero fallback requests.
+    """
+    counter = _counting_fetch_timeseries_spy(monkeypatch)
+
+    def _raise_env(*a, **k):
+        raise EnvironmentError("NREL_API_KEY not set")
+
+    monkeypatch.setattr(nsrdb_provider, "fetch_nsrdb", _raise_env)
+
+    with pytest.raises(EnvironmentError):
+        weather_provider.fetch_weather(
+            config.CITY_COORDINATES["AUSTIN"], _START, _END, provider="nsrdb"
+        )
+
+    assert counter["count"] == 0
+
+
+def test_successful_fallback_emits_a_warning_log_naming_both_providers(monkeypatch, caplog):
+    import logging
+
+    def _raise_tceq(*a, **k):
+        raise ValueError("TCEQ boom")
+
+    monkeypatch.setattr(tceq_provider, "fetch_tceq", _raise_tceq)
+    monkeypatch.setattr(
+        dlr_pipeline, "fetch_timeseries", lambda *a, **k: _fallback_synoptic_frame()
+    )
+
+    with caplog.at_level(logging.WARNING):
+        weather_provider.fetch_weather(["83"], _START, _END, provider="tceq")
+
+    messages = " ".join(record.message for record in caplog.records)
+    assert "tceq" in messages
+    assert "synoptic" in messages
+
+
+def test_both_sides_failing_message_carries_no_credential_value(monkeypatch):
+    monkeypatch.setenv("SYNOPTIC_TOKEN", "leaky-test-token-10-01")
+
+    def _raise_tceq(*a, **k):
+        raise ValueError("TCEQ boom")
+
+    def _raise_synoptic(*a, **k):
+        raise ValueError("Synoptic boom")
+
+    monkeypatch.setattr(tceq_provider, "fetch_tceq", _raise_tceq)
+    monkeypatch.setattr(dlr_pipeline, "fetch_timeseries", _raise_synoptic)
+
+    with pytest.raises(ValueError) as excinfo:
+        weather_provider.fetch_weather(["83"], _START, _END, provider="tceq")
+
+    message = str(excinfo.value)
+    assert "leaky-test-token-10-01" not in message
+    assert "token" not in message.lower()
