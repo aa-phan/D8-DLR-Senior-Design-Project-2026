@@ -57,7 +57,7 @@ Status reflects what's actually implemented in this repo, not what's planned. Ea
 | ID | Requirement | Status | Owning Component |
 |---|---|---|---|
 | DS-F1 | Discover weather stations near defined transmission corridors | Implemented | C4 |
-| DS-F2 | Fetch time-series weather observations (temp, wind speed/direction, solar, humidity) for target stations | Implemented — now behind a provider-agnostic adapter (`backend/weather_provider.py`) | C4 |
+| DS-F2 | Fetch time-series weather observations (temp, wind speed/direction, solar, humidity) for target stations | Implemented — behind a provider-agnostic adapter (`backend/weather_provider.py`) implementing the ratified multi-provider composition (§7.1): TCEQ CAMS + ASOS primary/supplement, NSRDB solar, Open-Meteo historical backfill, Synoptic as automatic fallback | C4 |
 | DS-F3 | Compute wind component perpendicular to the line for forced-convection cooling | Implemented — extracted to `backend/thermal_model.py` | C5 |
 | DS-F4 | Compute steady-state IEEE 738 ampacity from weather + conductor properties | Implemented and now validated against a published reference — see §9 below for a real bug found and fixed during that validation | C5 |
 | DS-F5 | Compare DLR against a static rating and flag uplift/headroom | Implemented — per-location lookup (`backend/config.py::STATIC_RATINGS`, 5 TX cities) with a uniform fallback; not yet wired to select a location per run | C1, C5 |
@@ -74,21 +74,56 @@ Status reflects what's actually implemented in this repo, not what's planned. Ea
 - **Fail-safe by default.** Any missing sensor data, broken communication link, out-of-range reading, implausible computed rating, or large rating swing must resolve toward the static rating, never toward an optimistic guess. This is the core ethical commitment made in the Project Definition and must hold even as the anomaly-detection logic gets more sophisticated (C7, C10).
 - **Unit correctness at every boundary.** Any value crossing a module boundary (API response → pipeline row, pipeline row → safety monitor, ampacity → MW) must be validated against a known unit/dimension (C2). A kW-for-MW-style mistake should be caught, not silently propagated.
 - **Reproducibility.** Given the same station IDs, time window, and conductor config, the pipeline should produce the same output. No wall-clock-dependent or non-deterministic logic in the ampacity math.
-- **No secrets committed.** API tokens (`SYNOPTIC_TOKEN`) live in `.env` / environment variables only. `.env` is gitignored.
+- **No secrets committed.** API tokens/credentials (`SYNOPTIC_TOKEN`, `NREL_API_KEY`, `NREL_API_EMAIL`) live in `.env` / environment variables only. `.env` is gitignored.
 - **Modularity.** Components should remain independently workable — no component's implementation should require another dev's in-progress, uncommitted changes to compile or run. See `ROADMAP.md` "Parallel-safe" fields per component.
 
 ## 7. Open Decisions
 
-### 7.1 Weather data provider — unresolved
+### 7.1 Weather data provider — ratified
 
-This is the most consequential open item and is deliberately **not** decided here.
+This was the project's single most consequential open item. It is ratified here, as of
+**2026-09-15**, recording the composition Phases 6-10 implemented and tested.
 
-- The System Design Report (§3.1) states the team evaluated NOAA + NSRDB against Synoptic and selected NOAA + NSRDB "because of their superior data accessibility and the lack of restrictive privacy limitations."
-- In practice, every working ingestion path in this repo uses the Synoptic Data API against the West Texas Mesonet (WTM) network.
-- During prototyping, the team found it difficult to identify a source with consistent, station-dense coverage. Synoptic was what got the pipeline working end-to-end, but the free research tier has real access limits (rate limits, station/network restrictions) that constrain how far this can scale.
-- NOAA is a plausible path to remove that constraint but has not been validated against this pipeline — no code has been written against a NOAA API, and NSRDB (solar) integration doesn't exist at all; solar currently comes from Synoptic's `solar_radiation` field.
+- The System Design Report (§3.1) states the team evaluated NOAA + NSRDB against Synoptic and
+  selected NOAA + NSRDB "because of their superior data accessibility and the lack of
+  restrictive privacy limitations."
+- Historically, every working ingestion path in this repo used the Synoptic Data API against
+  the West Texas Mesonet (WTM) network.
+- During prototyping, the team found it difficult to identify a single source with consistent,
+  station-dense coverage AND full variable completeness (wind, temperature, solar, RH) at
+  once. Synoptic was what got the pipeline working end-to-end, but its free research tier has
+  real access limits (rate limits, station/network restrictions) that constrain how far it can
+  scale on its own.
 
-**Decision needed:** whether to (a) stay on Synoptic and budget for a paid tier, (b) migrate to NOAA (+ a separate solar source, since NOAA doesn't provide GHI), or (c) support both via a provider-agnostic ingestion interface. **This must not block Phase 2/3 work** — C4 defines a provider adapter boundary specifically so C8 (corridor discretization) and later components can build against the existing Synoptic provider (or a mock) without waiting for this decision. See `ROADMAP.md` Finding 3.
+**Resolution: option (c), a provider-agnostic ingestion interface supporting multiple
+providers, sourced per variable.** No single vetted candidate was both observation-grade and
+variable-complete — `decisions/data_provider.md`'s own headline finding — so the ratified
+composition sources each variable family from whichever provider is strongest for it, with
+Synoptic retained as the automatic fallback rather than retired:
+
+| Variable family | Provider | Role | Module | Provenance value |
+|---|---|---|---|---|
+| Wind speed/direction, temperature, relative humidity | TCEQ CAMS | Primary (station path) | `tceq_provider.fetch_tceq`, `config.TCEQ_STATIONS` | `tceq` |
+| Wind/temp temporal-density supplement | ASOS 1-minute (IEM) | Supplement | `asos_provider.fetch_asos_1min`, `config.ASOS_STATIONS` | `asos` |
+| Solar irradiance (GHI) | NREL NSRDB PSM v4 | Primary (grid path) | `nsrdb_provider.fetch_nsrdb` | `nsrdb` |
+| Full variable set, historical bulk backfill | Open-Meteo Archive API | Standalone (grid path) | `open_meteo_provider.fetch_open_meteo` | `open_meteo` |
+| Any of the above, on primary failure | Synoptic | Automatic fallback | `weather_provider._attempt_fallback`, `config.SYNOPTIC_FALLBACK_STATIONS` | `synoptic` |
+
+The fallback (WX-06) fires only for a failing or empty TCEQ or NSRDB result. It deliberately
+does **not** fire for a caller-shaped error (an unknown provider name, a provider called on
+the wrong path, more than one CAMS ID passed to `provider="tceq"`, or an unresolvable
+coordinate pair), for `open_meteo` (a standalone 1940-present historical source Synoptic
+cannot serve, so substituting it would be a silent downgrade rather than a rescue), or for an
+`EnvironmentError` — a missing credential means the operator hasn't finished setup, not that
+the provider is failing, so a misconfigured machine stays visible rather than being quietly
+served from the fallback. When Synoptic also fails, or returns nothing usable, the adapter
+raises an error naming both providers rather than fabricating or emitting an empty row.
+
+Per-field provenance is recorded on every row via `PIPELINE_SCHEMA` v3's four `*_source`
+columns — see `units_def.py` for the schema itself, not restated here.
+
+See `decisions/data_provider.md` for the full per-provider vetting evidence and
+`specs/C4-weather-ingestion.md` for the implementation detail (Phase 7-10 additions).
 
 ## 8. Future Scope (brief)
 
@@ -125,10 +160,10 @@ Places where `System Design Report.md` (or, for the row below, `Project Definiti
 
 | Course Deliverable Claim | Location | Actual Repo State |
 |---|---|---|
-| Team evaluated and selected NOAA + NSRDB over Synoptic for weather ingestion | SDR §3.1 Design Concept | All working ingestion code uses Synoptic/WTM, now behind a provider-agnostic adapter (`backend/weather_provider.py`). No NOAA or NSRDB integration exists. See Open Decisions §7.1 — this was not actually settled. |
+| ~~Team evaluated and selected NOAA + NSRDB over Synoptic for weather ingestion~~ **RESOLVED** | SDR §3.1 Design Concept | Ratified in `PRD.md` §7.1 (2026-09-15): the shipped composition sources solar from NREL NSRDB (Phase 8) — making the SDR's NSRDB half substantially correct — but wind, temperature, and RH come from TCEQ CAMS (Phase 9), not NOAA; no NOAA integration was ever built. Synoptic is retained as the automatic fallback (Phase 10, WX-06), not retired. The next System Design Report submission should restate this claim precisely: NSRDB for solar, TCEQ CAMS (not NOAA) for wind/temperature/RH. |
 | A spatial pipeline discretizes transmission corridors into multiple points, computes ampacity at each, and takes the corridor-level minimum as the true bottleneck | SDR §3.2 Risk Reduction ("Weather Data and Transmission Corridor Mapping") | No such pipeline exists yet — this is C8, Phase 3, not started. `backend/station_explorer.py::CORRIDORS` is five hardcoded lat/lon pairs used to rank station proximity, not to discretize a line for per-point ampacity. |
 | An ML anomaly-detection model is "currently being trained and tuned on historical ambient weather and operating datasets" | SDR §3.2 Risk Reduction ("Data Integrity") | No model, training script, or training dataset exists anywhere in the repo — this is C10, Phase 4, not started. `backend/DLRSafetyMonitor.py` is entirely deterministic threshold/range gating (G1–G5), not a trained model. |
-| Solar irradiance sourced from NSRDB | SDR §3.2 Risk Reduction | Solar irradiance comes from Synoptic's `solar_radiation` field. |
+| ~~Solar irradiance sourced from NSRDB~~ **RESOLVED** | SDR §3.2 Risk Reduction | NSRDB PSM v4 is now the solar-irradiance primary (Phase 8, ratified `PRD.md` §7.1), reached via `nsrdb_provider.fetch_nsrdb`. Synoptic is retained only as the automatic fallback when NSRDB fails or returns nothing usable (Phase 10, WX-06), never as the primary. |
 | ~~The system targets **four** specific cities — Austin, Corpus Christi, Midland, El Paso — each with its own documented input-range and static-rating bounds~~ **RESOLVED** | Project Definition.md §"Input/Output Specifications" (lines 79-86) | Previously, no code implemented this four-city list, and three different, mutually inconsistent location sets existed instead (`config.py`'s old 5-city table, `station_explorer.py`'s 5 West-Texas corridors, and a dead-code stub in `dlr_pipeline.py`). Resolved per `docs/data-science/decisions/geographic_scope.md`: `config.py::STATIC_RATINGS` is now re-keyed to the real four-city scope (Austin, Corpus Christi, Midland, El Paso), and the dead-code stub was deleted. `station_explorer.py::CORRIDORS`' West-Texas corridors remain unchanged — the open question of how these four cities map to actual corridor endpoints for C8 is tracked separately in `geographic_scope.md`'s Open Questions, not yet resolved. |
 
 ## 11. References
