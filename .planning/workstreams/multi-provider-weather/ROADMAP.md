@@ -200,7 +200,24 @@ project's canonical docs.
   3. `docs/data-science/PRD.md` §7.1 and `docs/data-science/decisions/data_provider.md`'s status line are updated from "Pending"/"Open — vetting in progress" to record the ratified per-variable composition, matching what's actually implemented.
   4. `.venv/bin/python -m pytest -q` reports 0 failed with the full multi-provider adapter (all four providers + fallback) in place.
 
-**Plans**: TBD
+**Plans**: 3 plans
+
+Plans:
+**Wave 1**
+
+- [ ] 10-01-PLAN.md — tracer: end-to-end TCEQ→Synoptic fallback on one path (`config.SYNOPTIC_FALLBACK_STATIONS`, `FALLBACK_ELIGIBLE_PRIMARIES`, `_fallback_city_for_request`, `_attempt_fallback`, `fetch_weather(fallback=True)`), plus the no-fallback taxonomy proving every Phase 6-9 fail-loud case still raises (WX-06)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 10-02-PLAN.md — expansion: NSRDB grid-path fallback via `_as_grid_shaped`, solar honesty against the `run_pipeline` 1000 W/m² substitution, all four cities × both primaries, provider-exhaustion raise, and fallback schema/merge integration (WX-06)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 10-03-PLAN.md — ratification: blocking decision checkpoint on the wording, then `PRD.md` §7.1 + §10, `data_provider.md` (status, adopted composition, stale NREL hostname), C4 spec Phase 10 paragraph, and the blocking live four-city fallback confirmation (WX-06, WX-08)
+
+**Design note**: no fallback logic existed in `weather_provider.py` before this phase — `_fetch_station`/`_fetch_grid` dispatch to a single provider and every failure propagates. Phases 6-9 also left behind a large fail-loud suite asserting raises *through* `fetch_weather`, so the fallback is armed by an eligibility flag computed before the `try`: a request that never reached a provider (unknown name, wrong path, multiple CAMS IDs, unresolvable coordinates) dispatches with no `try` at all. `EnvironmentError` is deliberately never masked, per the exception-type split `C4-weather-ingestion.md`'s Phase 8 paragraph introduced for exactly this purpose.
+
+**Checkpoints**: Plan 10-03 Task 1 is a `checkpoint:decision` — ratifying `PRD.md` §7.1 is an act of team authority rated one-way (retracting a published decision is not a code rollback), so the wording is approved before it is written. Plan 10-03 Task 3 is a `checkpoint:human-verify` (`gate="blocking-human"`): every test in Plans 10-01 and 10-02 monkeypatches `dlr_pipeline.fetch_timeseries`, and three of the four `SYNOPTIC_FALLBACK_STATIONS` entries (`KCRP`, `KMAF`, `KELP`) have never been fetched under this project's Synoptic token — which `C4-weather-ingestion.md` already documents can return zero observation rows while metadata access still succeeds.
 
 ## Progress
 
@@ -218,4 +235,4 @@ Phases execute in numeric order: 6 → 7 → 8 → 9 → 10
 | 7. Trivial-Integration Providers | v1.1 | 3/3 | Complete    | 2026-09-12 |
 | 8. NSRDB Solar Integration | v1.1 | 3/3 | In Progress|  |
 | 9. TCEQ CAMS Integration | v1.1 | 3/3 | Complete    | 2026-09-14 |
-| 10. Fallback Wiring & Documentation Ratification | v1.1 | 0/TBD | Not started | - |
+| 10. Fallback Wiring & Documentation Ratification | v1.1 | 0/3 | Planned | - |
