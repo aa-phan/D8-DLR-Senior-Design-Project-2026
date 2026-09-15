@@ -62,17 +62,19 @@ Which phases cover which requirements. Updated during roadmap creation.
 |-------------|-------|--------|
 | PIPE-01 | Phase 1 (Pipeline Integration) | Pending |
 | PIPE-02 | Phase 2 (Automated Scheduling) | Pending |
-| VAL-01 | Phase 3 (Real-Data Validation) | Pending |
-| VAL-02 | Phase 3 (Real-Data Validation) | Pending |
-| CLEAN-01 | TBD | Pending |
-| CLEAN-02 | TBD | Pending |
-| CLEAN-03 | TBD | Pending |
+| VAL-01 | Phase 4 (Real-Data Validation) | Pending |
+| VAL-02 | Phase 4 (Real-Data Validation) | Pending |
+| CLEAN-01 | Phase 3 (Data Cleaning) | Pending |
+| CLEAN-02 | Phase 3 (Data Cleaning) | Pending |
+| CLEAN-03 | Phase 3 (Data Cleaning) | Pending |
 
 **Coverage:**
 - v1.2 requirements: 7 total
-- Mapped to phases: 4
-- Unmapped: 3 ⚠️ (CLEAN-01/02/03 added after roadmap creation — re-run roadmapper)
+- Mapped to phases: 7
+- Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-09-14*
-*Last updated: 2026-09-14 after adding Data Cleaning category (CLEAN-01/02/03)*
+*Last updated: 2026-09-14 — roadmapper inserted Phase 3 (Data Cleaning, CLEAN-01/02/03) ahead of
+the original Phase 3, which is renumbered to Phase 4 (Real-Data Validation, VAL-01/VAL-02
+unchanged); see ROADMAP.md Overview for the dependency-order reasoning.*

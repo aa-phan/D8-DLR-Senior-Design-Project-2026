@@ -525,6 +525,14 @@ Based on these findings, Claude authored `docs/data-science/DEVELOPMENT-TRACKS.m
 
 No production code was changed in this session.
 
+### Session: 2026-09-14 (continued), conducted by Aaron Phan — GSD workstream scoping for three post-v1.1 tracks
+
+Claude Code was used, via GSD (`/gsd-new-milestone`, subagent `gsd-roadmapper`), to migrate the existing v1.1 planning state into a GSD workstream and scope three independent parallel workstreams — `pipeline-integration` (v1.2), `ml-modeling` (v1.3), and `corridor-geometry` (v1.4) — corresponding to the three tracks in `docs/data-science/DEVELOPMENT-TRACKS.md`. For each, Claude gathered scope through conversational questioning (goal confirmation, category-level requirement scoping via multi-select options, full requirements-list confirmation), then wrote `REQUIREMENTS.md` and spawned a `gsd-roadmapper` subagent per workstream to derive a phased roadmap grounded in the actual codebase (reading `dlr_pipeline.py`, `corridor_discretization.py`, `ampacity_forecast.py`, `anomaly_detector.py`, `historical_archive.py`, `config.py`, and course documents directly, not paraphrasing from memory) — each roadmap was presented for explicit human approval before being committed.
+
+Two decisions of note: (1) the `corridor-geometry` roadmapper subagent identified that Phase 1 (obtaining real transmission-line geometry) is an external coordination dependency on the Power Systems sub-team that the team does not yet have, and deliberately scoped Phase 1 to only what the DS side can unilaterally complete (a data contract + formal request) rather than assuming external data arrives on schedule, explicitly marking Phase 2 as blocked; (2) after the user identified a missing "data cleaning" requirement, Claude added CLEAN-01/02/03 to `pipeline-integration`'s `REQUIREMENTS.md` and re-spawned the roadmapper in revision mode, which — grounded in reading `historical_archive.py`'s actual `read_history`/`append_observation` functions — determined that a new Data Cleaning phase must be inserted *before* the existing Real-Data Validation phase (renumbering it), since validation's forecast/anomaly calibration findings would otherwise measure archive defects (stuck sensors, gaps, duplicate rows) rather than real signal.
+
+No production code was changed in this session — all work was planning-document creation (`.planning/workstreams/*/REQUIREMENTS.md`, `ROADMAP.md`, `STATE.md`) via git-committed GSD workflow steps.
+
 ## Keeping This Updated
 
 This file should be reviewed and updated to reflect new AI-assisted work **before any significant commit** — i.e., before committing new features, substantial documentation, or non-trivial refactors produced with AI assistance. A commit is "significant" for this purpose if it would need describing in a standup/status update; trivial fixes (typos, formatting) don't require an update here.
