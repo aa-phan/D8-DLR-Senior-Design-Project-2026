@@ -1875,3 +1875,537 @@ def test_both_sides_failing_message_carries_no_credential_value(monkeypatch):
     message = str(excinfo.value)
     assert "leaky-test-token-10-01" not in message
     assert "token" not in message.lower()
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 10-02 Task 1: NSRDB grid-path fallback, shaped for the grid contract
+# and honest about solar (WX-06, T-10-07, T-10-08)
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def _fallback_synoptic_grid_frame(solar_radiation=None) -> pd.DataFrame:
+    """
+    A Synoptic-shaped frame with no `lat` column -- like
+    `_fallback_synoptic_frame`, deliberately, so `_supplement_with_asos`
+    takes its "no 'lat' column" skip branch and this section's tests never
+    attempt a live ASOS network call. `solar_radiation` is left as the
+    caller's choice (default all-null, the normal case for an airport
+    station per the C4 spec).
+    """
+    return _synthetic_frame(
+        air_temp=[24.0, 24.5],
+        wind_speed=[4.0, 4.2],
+        wind_direction=[180.0, 182.0],
+        solar_radiation=solar_radiation if solar_radiation is not None else [None, None],
+    )
+
+
+def _synoptic_frame_with_lat_lon(city: str, **columns) -> pd.DataFrame:
+    """
+    A Synoptic-shaped frame carrying `lat`/`lon` columns for the resolved
+    fallback station's city -- the shape `_supplement_with_asos` needs to
+    actually attempt (rather than skip) the ASOS supplement.
+    """
+    times = pd.date_range("2025-07-01T00:00:00Z", periods=2, freq="5min")
+    lat, lon = config.CITY_COORDINATES[city]
+    df = pd.DataFrame(
+        {
+            "stid": [config.SYNOPTIC_FALLBACK_STATIONS[city]] * 2,
+            "datetime_utc": times,
+            "lat": [lat, lat],
+            "lon": [lon, lon],
+            **columns,
+        }
+    )
+    return df.set_index(["stid", "datetime_utc"]).sort_index()
+
+
+def _grid_fallback_asos_supplement_frame(n: int = 2) -> pd.DataFrame:
+    """A minimal ASOS 1-minute supplement frame -- enough to make
+    `_supplement_with_asos` actually fire and return a non-empty result."""
+    times = pd.date_range("2025-07-01T00:02:00Z", periods=n, freq="1min")
+    return pd.DataFrame(
+        {
+            "datetime_utc": times,
+            "air_temp": [23.5 + i for i in range(n)],
+            "wind_speed": [3.5 + i for i in range(n)],
+        }
+    )
+
+
+def test_nsrdb_grid_failure_falls_back_to_a_city_attributed_synoptic_frame(monkeypatch):
+    def _raise_nsrdb(*a, **k):
+        raise ValueError("NSRDB boom")
+
+    monkeypatch.setattr(nsrdb_provider, "fetch_nsrdb", _raise_nsrdb)
+    monkeypatch.setattr(
+        dlr_pipeline, "fetch_timeseries", lambda *a, **k: _fallback_synoptic_grid_frame()
+    )
+
+    result = weather_provider.fetch_weather(
+        config.CITY_COORDINATES["AUSTIN"], _START, _END, provider="nsrdb"
+    )
+
+    assert not result.empty
+    city_values = (
+        result["city"] if "city" in result.columns else result.index.get_level_values("city")
+    )
+    assert (city_values == "AUSTIN").all()
+    for col in ("wind_source", "temp_source"):
+        assert (result[col] == "synoptic").all()
+
+
+def test_nsrdb_grid_fallback_solar_source_is_null_and_never_fabricates_1000(monkeypatch):
+    """
+    Pins the C4 solar-honesty guarantee (T-10-07): the `fillna(1000)`
+    substitution lives in `dlr_pipeline.run_pipeline` (backend/dlr_pipeline.py:228),
+    not in `fetch_timeseries`, so a Synoptic fallback frame with an
+    all-null `solar_radiation` (the normal case for an airport station)
+    must report a null `solar_source` on every row and never carry a
+    `solar_radiation` value of 1000 -- that separation is the only reason
+    an NSRDB-to-Synoptic solar fallback can stay honest.
+    """
+
+    def _raise_nsrdb(*a, **k):
+        raise ValueError("NSRDB boom")
+
+    monkeypatch.setattr(nsrdb_provider, "fetch_nsrdb", _raise_nsrdb)
+    monkeypatch.setattr(
+        dlr_pipeline,
+        "fetch_timeseries",
+        lambda *a, **k: _fallback_synoptic_grid_frame(solar_radiation=[None, None]),
+    )
+
+    result = weather_provider.fetch_weather(
+        config.CITY_COORDINATES["AUSTIN"], _START, _END, provider="nsrdb"
+    )
+
+    assert result["solar_source"].isna().all()
+    assert not (result["solar_radiation"] == 1000).any()
+
+
+def test_nsrdb_grid_fallback_solar_source_is_synoptic_only_where_measured(monkeypatch):
+    def _raise_nsrdb(*a, **k):
+        raise ValueError("NSRDB boom")
+
+    monkeypatch.setattr(nsrdb_provider, "fetch_nsrdb", _raise_nsrdb)
+    monkeypatch.setattr(
+        dlr_pipeline,
+        "fetch_timeseries",
+        lambda *a, **k: _fallback_synoptic_grid_frame(solar_radiation=[None, 512.0]),
+    )
+
+    result = weather_provider.fetch_weather(
+        config.CITY_COORDINATES["AUSTIN"], _START, _END, provider="nsrdb"
+    )
+
+    assert pd.isna(result["solar_source"].iloc[0])
+    assert result["solar_source"].iloc[1] == "synoptic"
+
+
+def test_nsrdb_grid_fallback_survives_an_asos_supplemented_frame_without_raising(monkeypatch):
+    """
+    When the Synoptic fallback frame for a grid (nsrdb) request gets
+    ASOS-supplemented (WX-02), `_supplement_with_asos` already re-keys it
+    to (city, datetime_utc) -- `city` becomes an index level, not a
+    column. `_as_grid_shaped` must recognize that and pass the frame
+    through unchanged rather than assigning a second `city` column, which
+    would break `merge_observations._prepare_merge_side`'s `reset_index()`
+    call on a duplicate name (T-10-08).
+    """
+
+    def _raise_nsrdb(*a, **k):
+        raise ValueError("NSRDB boom")
+
+    monkeypatch.setattr(nsrdb_provider, "fetch_nsrdb", _raise_nsrdb)
+    monkeypatch.setattr(
+        dlr_pipeline,
+        "fetch_timeseries",
+        lambda *a, **k: _synoptic_frame_with_lat_lon(
+            "AUSTIN",
+            air_temp=[24.0, 24.5],
+            wind_speed=[4.0, 4.2],
+            wind_direction=[180.0, 182.0],
+        ),
+    )
+    monkeypatch.setattr(
+        asos_provider,
+        "fetch_asos_1min",
+        lambda *a, **k: _grid_fallback_asos_supplement_frame(),
+    )
+
+    result = weather_provider.fetch_weather(
+        config.CITY_COORDINATES["AUSTIN"], _START, _END, provider="nsrdb"
+    )
+
+    assert not result.empty
+    assert "city" in {n for n in result.index.names if n is not None}
+
+    station = _station_frame(
+        air_temp=[25.0, 25.5], wind_speed=[5.0, 5.2], wind_direction=[180.0, 182.0]
+    )
+    merged = weather_provider.merge_observations(station, result)
+    assert not merged.empty
+
+
+def test_as_grid_shaped_returns_frame_unchanged_when_city_already_an_index_level():
+    frame = _station_frame(city="AUSTIN")
+    reindexed = frame.reset_index().set_index(["city", "datetime_utc"]).sort_index()
+
+    result = weather_provider._as_grid_shaped(reindexed, *config.CITY_COORDINATES["AUSTIN"])
+
+    assert result is reindexed
+
+
+def test_as_grid_shaped_returns_frame_unchanged_when_city_already_a_column():
+    frame = _station_frame(city="AUSTIN").reset_index()
+
+    result = weather_provider._as_grid_shaped(frame, *config.CITY_COORDINATES["AUSTIN"])
+
+    assert result is frame
+
+
+def test_as_grid_shaped_returns_none_or_empty_frame_unchanged():
+    lat, lon = config.CITY_COORDINATES["AUSTIN"]
+
+    assert weather_provider._as_grid_shaped(None, lat, lon) is None
+
+    empty = pd.DataFrame()
+    assert weather_provider._as_grid_shaped(empty, lat, lon) is empty
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 10-02 Task 2: four cities x two fallback-eligible primaries, plus the
+# both-providers-failed exhaustion path (WX-06, ROADMAP SC1, T-10-09, T-10-12)
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def _capturing_fetch_timeseries(monkeypatch, captured, frame_builder):
+    """
+    Monkeypatch `dlr_pipeline.fetch_timeseries` to record the `stids`
+    argument it is actually called with (into `captured["stids"]`) before
+    returning `frame_builder()` -- proves the per-city station resolution
+    is real rather than a constant, since a test only checking "a frame
+    came back" cannot distinguish the two.
+    """
+
+    def _spy(stids, *a, **k):
+        captured["stids"] = stids
+        return frame_builder()
+
+    monkeypatch.setattr(dlr_pipeline, "fetch_timeseries", _spy)
+
+
+@pytest.mark.parametrize("city,cams_id", sorted(config.TCEQ_STATIONS.items()))
+def test_tceq_fallback_resolves_the_correct_synoptic_station_per_city(
+    monkeypatch, city, cams_id
+):
+    def _raise_tceq(*a, **k):
+        raise ValueError("TCEQ boom")
+
+    captured = {}
+    monkeypatch.setattr(tceq_provider, "fetch_tceq", _raise_tceq)
+    _capturing_fetch_timeseries(monkeypatch, captured, _fallback_synoptic_frame)
+
+    result = weather_provider.fetch_weather([cams_id], _START, _END, provider="tceq")
+
+    assert not result.empty
+    assert captured["stids"] == [config.SYNOPTIC_FALLBACK_STATIONS[city]]
+
+
+@pytest.mark.parametrize("city,coords", sorted(config.CITY_COORDINATES.items()))
+def test_nsrdb_fallback_resolves_the_correct_synoptic_station_per_city(
+    monkeypatch, city, coords
+):
+    def _raise_nsrdb(*a, **k):
+        raise ValueError("NSRDB boom")
+
+    captured = {}
+    monkeypatch.setattr(nsrdb_provider, "fetch_nsrdb", _raise_nsrdb)
+    _capturing_fetch_timeseries(monkeypatch, captured, _fallback_synoptic_grid_frame)
+
+    result = weather_provider.fetch_weather(coords, _START, _END, provider="nsrdb")
+
+    assert not result.empty
+    assert captured["stids"] == [config.SYNOPTIC_FALLBACK_STATIONS[city]]
+
+
+def test_fallback_station_ids_resolve_for_all_eight_city_primary_combinations():
+    """
+    A gap here would mean a city silently has no fallback -- exactly the
+    kind of partial coverage the phase goal (WX-06 across the adapter's
+    full surface) rules out.
+    """
+    tceq_gaps = [
+        city
+        for city, cams_id in config.TCEQ_STATIONS.items()
+        if weather_provider._fallback_station_ids([cams_id], "tceq") is None
+    ]
+    nsrdb_gaps = [
+        city
+        for city, coords in config.CITY_COORDINATES.items()
+        if weather_provider._fallback_station_ids(coords, "nsrdb") is None
+    ]
+    assert not tceq_gaps, tceq_gaps
+    assert not nsrdb_gaps, nsrdb_gaps
+
+    for city, cams_id in config.TCEQ_STATIONS.items():
+        assert weather_provider._fallback_station_ids([cams_id], "tceq") == [
+            config.SYNOPTIC_FALLBACK_STATIONS[city]
+        ]
+    for city, coords in config.CITY_COORDINATES.items():
+        assert weather_provider._fallback_station_ids(coords, "nsrdb") == [
+            config.SYNOPTIC_FALLBACK_STATIONS[city]
+        ]
+
+
+def test_nsrdb_and_synoptic_both_failing_names_both_providers_and_chains_nsrdb_error(
+    monkeypatch,
+):
+    nsrdb_error = ValueError("NSRDB boom")
+
+    def _raise_nsrdb(*a, **k):
+        raise nsrdb_error
+
+    def _raise_synoptic(*a, **k):
+        raise ValueError("Synoptic boom")
+
+    monkeypatch.setattr(nsrdb_provider, "fetch_nsrdb", _raise_nsrdb)
+    monkeypatch.setattr(dlr_pipeline, "fetch_timeseries", _raise_synoptic)
+
+    with pytest.raises(ValueError) as excinfo:
+        weather_provider.fetch_weather(
+            config.CITY_COORDINATES["AUSTIN"], _START, _END, provider="nsrdb"
+        )
+
+    message = str(excinfo.value)
+    assert "nsrdb" in message
+    assert "synoptic" in message
+    assert excinfo.value.__cause__ is nsrdb_error
+
+
+def test_empty_synoptic_fallback_raises_instead_of_returning_the_empty_frame(monkeypatch):
+    """
+    ROADMAP SC1's "still returns a usable row" describes the case where
+    the fallback HAS data; PROJECT.md's standing fail-safe commitment
+    forbids inventing a reading (or silently propagating an unusable one)
+    when no source has one. A clear raise here lets the caller resolve
+    toward its static rating, which a returned-but-empty frame would not
+    (T-10-12).
+    """
+    tceq_error = ValueError("TCEQ boom")
+
+    def _raise_tceq(*a, **k):
+        raise tceq_error
+
+    monkeypatch.setattr(tceq_provider, "fetch_tceq", _raise_tceq)
+    monkeypatch.setattr(dlr_pipeline, "fetch_timeseries", lambda *a, **k: pd.DataFrame())
+
+    with pytest.raises(ValueError) as excinfo:
+        weather_provider.fetch_weather(["83"], _START, _END, provider="tceq")
+
+    assert excinfo.value.__cause__ is tceq_error
+
+
+def test_empty_nsrdb_synoptic_fallback_raises_instead_of_returning_the_empty_frame(
+    monkeypatch,
+):
+    nsrdb_error = ValueError("NSRDB boom")
+
+    def _raise_nsrdb(*a, **k):
+        raise nsrdb_error
+
+    monkeypatch.setattr(nsrdb_provider, "fetch_nsrdb", _raise_nsrdb)
+    monkeypatch.setattr(dlr_pipeline, "fetch_timeseries", lambda *a, **k: pd.DataFrame())
+
+    with pytest.raises(ValueError) as excinfo:
+        weather_provider.fetch_weather(
+            config.CITY_COORDINATES["AUSTIN"], _START, _END, provider="nsrdb"
+        )
+
+    assert excinfo.value.__cause__ is nsrdb_error
+
+
+def test_tceq_fallback_disabled_suppresses_fallback_with_zero_calls(monkeypatch):
+    def _raise_tceq(*a, **k):
+        raise ValueError("TCEQ boom")
+
+    counter = {"count": 0}
+
+    def _counting_fetch_timeseries(*a, **k):
+        counter["count"] += 1
+        return _fallback_synoptic_frame()
+
+    monkeypatch.setattr(tceq_provider, "fetch_tceq", _raise_tceq)
+    monkeypatch.setattr(dlr_pipeline, "fetch_timeseries", _counting_fetch_timeseries)
+
+    with pytest.raises(ValueError) as excinfo:
+        weather_provider.fetch_weather(
+            ["83"], _START, _END, provider="tceq", fallback=False
+        )
+
+    assert "TCEQ boom" in str(excinfo.value)
+    assert counter["count"] == 0
+
+
+def test_nsrdb_fallback_disabled_suppresses_fallback_with_zero_calls(monkeypatch):
+    def _raise_nsrdb(*a, **k):
+        raise ValueError("NSRDB boom")
+
+    counter = {"count": 0}
+
+    def _counting_fetch_timeseries(*a, **k):
+        counter["count"] += 1
+        return _fallback_synoptic_grid_frame()
+
+    monkeypatch.setattr(nsrdb_provider, "fetch_nsrdb", _raise_nsrdb)
+    monkeypatch.setattr(dlr_pipeline, "fetch_timeseries", _counting_fetch_timeseries)
+
+    with pytest.raises(ValueError) as excinfo:
+        weather_provider.fetch_weather(
+            config.CITY_COORDINATES["AUSTIN"],
+            _START,
+            _END,
+            provider="nsrdb",
+            fallback=False,
+        )
+
+    assert "NSRDB boom" in str(excinfo.value)
+    assert counter["count"] == 0
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 10-02 Task 3: schema and merge integration for a fallback-sourced
+# row, and the phase-wide suite gate (WX-06, ROADMAP SC2/SC4, T-10-10)
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def test_fallback_sourced_grid_frame_rows_validate_against_pipeline_schema(monkeypatch):
+    def _raise_nsrdb(*a, **k):
+        raise ValueError("NSRDB boom")
+
+    monkeypatch.setattr(nsrdb_provider, "fetch_nsrdb", _raise_nsrdb)
+    monkeypatch.setattr(
+        dlr_pipeline,
+        "fetch_timeseries",
+        lambda *a, **k: _fallback_synoptic_grid_frame(solar_radiation=[220.0, 225.0]),
+    )
+
+    result = weather_provider.fetch_weather(
+        config.CITY_COORDINATES["AUSTIN"], _START, _END, provider="nsrdb"
+    )
+    plain = result.reset_index() if any(n is not None for n in result.index.names) else result
+
+    for _, row in plain.iterrows():
+        assert units_def.validate_pipeline_row(row.to_dict(), strict=False) == []
+
+
+def test_fallback_sourced_grid_frame_source_columns_use_only_known_provider_names(
+    monkeypatch,
+):
+    """
+    The guard that a fallback never invents an unregistered provenance
+    label -- every non-null value across the four `*_source` columns must
+    be a member of `units_def.KNOWN_PROVIDER_NAMES`.
+    """
+
+    def _raise_nsrdb(*a, **k):
+        raise ValueError("NSRDB boom")
+
+    monkeypatch.setattr(nsrdb_provider, "fetch_nsrdb", _raise_nsrdb)
+    monkeypatch.setattr(
+        dlr_pipeline,
+        "fetch_timeseries",
+        lambda *a, **k: _fallback_synoptic_grid_frame(solar_radiation=[220.0, 225.0]),
+    )
+
+    result = weather_provider.fetch_weather(
+        config.CITY_COORDINATES["AUSTIN"], _START, _END, provider="nsrdb"
+    )
+
+    seen = set()
+    for provenance_col in weather_provider.PROVENANCE_FIELD_MAP:
+        seen |= set(result[provenance_col].dropna().unique())
+
+    assert seen <= units_def.KNOWN_PROVIDER_NAMES
+
+
+def test_fallback_sourced_row_merged_with_a_live_tceq_frame_attributes_the_real_supplier(
+    monkeypatch,
+):
+    """
+    ROADMAP SC2 stated exactly: a fallback-sourced row records the
+    provider that really supplied it, not the one that was asked. Builds
+    a real TCEQ station frame (Corpus Christi, CAMS 83) and a
+    fallback-sourced grid frame (Corpus Christi, a failing `nsrdb`
+    request substituted by Synoptic station KCRP), merges them, and
+    asserts wind/temp read "tceq" (the live station primary), the
+    fallback-supplied `solar_radiation` (TCEQ has no solar sensor) reads
+    "synoptic", and no `*_source` cell anywhere reads "nsrdb" -- the
+    primary that was actually asked for and never actually supplied
+    anything (T-10-10).
+    """
+    tceq_times = pd.date_range("2025-07-01T00:00:00Z", periods=2, freq="5min")
+    tceq_raw = pd.DataFrame(
+        {
+            "datetime_utc": tceq_times,
+            "air_temp": [30.0, 30.5],
+            "wind_speed": [6.0, 6.2],
+            "wind_direction": [190.0, 192.0],
+            "relative_humidity": [55.0, 56.0],
+        }
+    )
+    monkeypatch.setattr(tceq_provider, "fetch_tceq", lambda *a, **k: tceq_raw)
+
+    def _raise_nsrdb(*a, **k):
+        raise ValueError("NSRDB boom")
+
+    monkeypatch.setattr(nsrdb_provider, "fetch_nsrdb", _raise_nsrdb)
+    monkeypatch.setattr(
+        dlr_pipeline,
+        "fetch_timeseries",
+        lambda *a, **k: _fallback_synoptic_grid_frame(solar_radiation=[220.0, 225.0]),
+    )
+
+    station = weather_provider.fetch_weather(["83"], _START, _END, provider="tceq")
+    lat, lon = config.CITY_COORDINATES["CORPUS_CHRISTI"]
+    station = weather_provider.attach_city(station, lat=lat, lon=lon)
+
+    grid = weather_provider.fetch_weather(
+        config.CITY_COORDINATES["CORPUS_CHRISTI"], _START, _END, provider="nsrdb"
+    )
+
+    merged = weather_provider.merge_observations(station, grid)
+
+    assert (merged["wind_source"] == "tceq").all()
+    assert (merged["temp_source"] == "tceq").all()
+    assert (merged["solar_source"] == "synoptic").all()
+
+    for col in ("wind_source", "temp_source", "humidity_source", "solar_source"):
+        assert not (merged[col] == "nsrdb").any()
+
+    for _, row in merged.reset_index().iterrows():
+        assert units_def.validate_pipeline_row(row.to_dict(), strict=False) == []
+
+
+_PIPELINE_SCHEMA_V3_KEYS = frozenset({
+    # v1 (Phase 1-3 baseline)
+    "air_temp", "wind_speed", "wind_direction", "wind_perp_ms", "solar_radiation",
+    "relative_humidity", "dlr_amps", "dlr_capacity_mw", "static_capacity_mw",
+    "ercot_west_load_mw",
+    # v2 (Phase 4 / C9 forecasting, C10 anomaly detection)
+    "forecast_horizon_min", "forecast_amps", "forecast_ci_lower_amps",
+    "forecast_ci_upper_amps", "anomaly_score",
+    # v3 (Phase 6 / C4 multi-provider provenance)
+    "wind_source", "temp_source", "humidity_source", "solar_source",
+})
+
+
+def test_pipeline_schema_is_unchanged_by_this_phase():
+    """
+    This phase adds no PIPELINE_SCHEMA key and does not bump
+    PIPELINE_SCHEMA_VERSION -- so a future reader can see this was a
+    deliberate choice, not an oversight.
+    """
+    assert units_def.PIPELINE_SCHEMA_VERSION == 3
+    assert set(units_def.PIPELINE_SCHEMA.keys()) == _PIPELINE_SCHEMA_V3_KEYS
