@@ -70,6 +70,26 @@ PROVENANCE_FIELD_MAP: dict[str, tuple[str, ...]] = {
     "solar_source": ("solar_radiation",),
 }
 
+# FALLBACK_PROVIDER: the one provider proven end-to-end since Phase 2 and
+# the one WX-06 names as the automatic fallback target.
+FALLBACK_PROVIDER: str = "synoptic"
+
+# FALLBACK_ELIGIBLE_PRIMARIES: exactly the two providers WX-06 calls
+# primaries. `open_meteo` is deliberately excluded: it is a standalone
+# historical-backfill source whose 1940-present depth Synoptic cannot
+# serve, so quietly substituting a 1-year-capped source for it would be a
+# silent downgrade, not a rescue.
+FALLBACK_ELIGIBLE_PRIMARIES: frozenset[str] = frozenset({"tceq", "nsrdb"})
+
+# STATION_PATH_PROVIDERS / GRID_PATH_PROVIDERS: the registry fetch_weather
+# reads to decide whether a request even reached a provider. `_fetch_station`
+# and `_fetch_grid` keep their own existing `if provider == ...` branches and
+# their existing final `raise ValueError(...)` messages completely
+# unmodified -- these registries are read-only lookups fetch_weather uses to
+# gate the fallback, never a re-route into those functions.
+STATION_PATH_PROVIDERS: frozenset[str] = frozenset({"synoptic", "tceq"})
+GRID_PATH_PROVIDERS: frozenset[str] = frozenset({"open_meteo", "nsrdb"})
+
 
 def attach_provenance(
     frame: pd.DataFrame,
@@ -519,11 +539,122 @@ def _fetch_grid(lat: float, lon: float, start: str, end: str, provider: str) -> 
     )
 
 
+def _fallback_city_for_request(location, provider: str) -> str | None:
+    """
+    Resolve `location`/`provider` to the `config.CITY_COORDINATES` key the
+    fallback should target, or `None` when the request is ambiguous or
+    unresolvable.
+
+    Returning `None` is the single mechanism that suppresses a fallback for
+    an ambiguous or unresolvable request -- a multi-CAMS-ID call and a
+    non-finite coordinate pair both land here, and letting either proceed
+    would issue a real network request on behalf of a request that was
+    never valid.
+
+    Args:
+        location: The original request's `location` argument (a station-ID
+            list for `provider="tceq"`, a `(lat, lon)` tuple for
+            `provider="nsrdb"`).
+        provider: The primary provider that failed. Only "tceq" and
+            "nsrdb" resolve to a city; every other provider returns `None`.
+
+    Returns:
+        A `config.CITY_COORDINATES` key, or `None`.
+    """
+    if provider == "tceq":
+        if not isinstance(location, list) or len(location) != 1:
+            return None
+        cams_id = location[0]
+        for city, configured_id in config.TCEQ_STATIONS.items():
+            if configured_id == cams_id:
+                return city
+        return None
+
+    if provider == "nsrdb":
+        if not isinstance(location, tuple) or len(location) != 2:
+            return None
+        lat, lon = location
+        return resolve_station_city(lat, lon)
+
+    return None
+
+
+def _fallback_station_ids(location, provider: str) -> list[str] | None:
+    """
+    Resolve the Synoptic fallback station ID(s) for `location`/`provider`,
+    or `None` when no fallback target can be resolved.
+
+    Returns `[config.SYNOPTIC_FALLBACK_STATIONS[city]]` when
+    `_fallback_city_for_request` resolves a city that is a key of that
+    table, else `None`.
+    """
+    city = _fallback_city_for_request(location, provider)
+    if city is None or city not in config.SYNOPTIC_FALLBACK_STATIONS:
+        return None
+    return [config.SYNOPTIC_FALLBACK_STATIONS[city]]
+
+
+def _attempt_fallback(location, start: str, end: str, provider: str, primary_error: Exception):
+    """
+    Attempt the Synoptic fallback for a failed `provider` request, or
+    re-raise `primary_error` unchanged when no fallback target resolves.
+
+    Goes through `_fetch_station` -- the same adapter entry point the
+    Synoptic path already uses -- so the fallback inherits the ASOS
+    supplement and the provenance tagging rather than reimplementing them.
+
+    Args:
+        location: The original request's `location` argument.
+        start, end: The original request's date window.
+        provider: The primary provider that failed.
+        primary_error: The exception (or empty-result stand-in) that armed
+            this fallback attempt.
+
+    Returns:
+        The Synoptic-sourced DataFrame from `_fetch_station`.
+
+    Raises:
+        The original `primary_error`, unchanged, when no fallback station
+        resolves.
+        ValueError: When the fallback call itself raises. The message
+            names both the failed primary provider and `FALLBACK_PROVIDER`
+            and the resolved city -- built only from provider names, the
+            city key, and the station ID, never from a request URL, a
+            response body, or any environment value (T-10-03) -- and is
+            chained via `raise ... from primary_error`.
+    """
+    station_ids = _fallback_station_ids(location, provider)
+    if station_ids is None:
+        raise primary_error
+
+    city = _fallback_city_for_request(location, provider)
+    log.warning(
+        "weather_provider fallback: provider=%r failed (%r) -- retrying "
+        "via provider=%r city=%r station=%r",
+        provider,
+        repr(primary_error),
+        FALLBACK_PROVIDER,
+        city,
+        station_ids[0],
+    )
+
+    try:
+        return _fetch_station(station_ids, start, end, FALLBACK_PROVIDER)
+    except Exception as fallback_error:  # noqa: BLE001 -- deliberately broad, re-wrapped below
+        raise ValueError(
+            f"weather_provider: both primary provider {provider!r} and "
+            f"fallback provider {FALLBACK_PROVIDER!r} failed for city "
+            f"{city!r} (station {station_ids[0]!r})"
+        ) from primary_error
+
+
 def fetch_weather(
     location: list[str] | tuple[float, float],
     start: str,
     end: str,
     provider: str = "synoptic",
+    *,
+    fallback: bool = True,
 ) -> pd.DataFrame:
     """
     Fetch weather observations for the given location and date window,
@@ -540,6 +671,25 @@ def fetch_weather(
             station IDs); "open_meteo" and "nsrdb" are the two providers
             implemented on the grid path ((lat, lon) tuple) -- any other
             value raises ValueError for the path it was given on.
+        fallback: Whether a fallback-eligible primary provider
+            (`FALLBACK_ELIGIBLE_PRIMARIES`: "tceq" and "nsrdb") that fails
+            or returns no usable data is automatically retried against
+            `FALLBACK_PROVIDER` ("synoptic") on the same path (WX-06,
+            ROADMAP SC1). Defaults to `True` because the fallback is
+            required to be automatic. A caller-shaped error (unknown
+            provider name, a provider on the wrong path, an invalid
+            `location` shape, or -- for "tceq" -- multiple CAMS IDs) is
+            never eligible for a fallback: the eligibility flag is computed
+            before any provider is called, so those cases dispatch with no
+            `try` around them at all. `EnvironmentError` (a misconfigured
+            machine -- e.g. a missing `NREL_API_KEY` -- rather than a
+            failing provider) is also never masked by a fallback; it
+            always propagates unchanged. When a fallback fires, the
+            returned frame's provenance columns (`wind_source`,
+            `temp_source`, ...) honestly read `FALLBACK_PROVIDER`, never
+            the failed primary's name. Set `fallback=False` to restore
+            strict primary-only behaviour, reproducing the pre-Phase-10
+            raise.
 
     Returns:
         A DataFrame matching the weather-observation subset of
@@ -557,15 +707,50 @@ def fetch_weather(
     Raises:
         ValueError: If `location` is neither a valid station-ID list nor a
             valid (lat, lon) tuple; if `provider` is not a supported
-            provider name; or, for `provider="tceq"` specifically, if
+            provider name; if, for `provider="tceq"` specifically,
             `location` carries more than one CAMS ID (`daily_summary.pl`
             serves one site per request and the returned frame carries no
-            station discriminator column).
+            station discriminator column); or if a fallback-eligible
+            primary and the fallback both fail (message names both
+            providers, chained via `raise ... from` the primary's error).
+        EnvironmentError: If a fallback-eligible primary raises
+            `EnvironmentError` (e.g. a missing credential) -- propagates
+            unchanged, never routed to a fallback.
     """
     shape = _validate_location_shape(location)
 
-    if shape == "station":
-        return _fetch_station(location, start, end, provider)
+    path_providers = STATION_PATH_PROVIDERS if shape == "station" else GRID_PATH_PROVIDERS
+    fallback_eligible = (
+        fallback and provider in FALLBACK_ELIGIBLE_PRIMARIES and provider in path_providers
+    )
 
-    lat, lon = location
-    return _fetch_grid(lat, lon, start, end, provider)
+    if not fallback_eligible:
+        if shape == "station":
+            return _fetch_station(location, start, end, provider)
+        lat, lon = location
+        return _fetch_grid(lat, lon, start, end, provider)
+
+    try:
+        if shape == "station":
+            frame = _fetch_station(location, start, end, provider)
+        else:
+            lat, lon = location
+            frame = _fetch_grid(lat, lon, start, end, provider)
+    except EnvironmentError:
+        raise
+    except ValueError as exc:
+        return _attempt_fallback(location, start, end, provider, exc)
+
+    if frame is None or frame.empty:
+        return _attempt_fallback(
+            location,
+            start,
+            end,
+            provider,
+            ValueError(
+                f"weather_provider: provider={provider!r} returned no "
+                f"usable data for location={location!r}"
+            ),
+        )
+
+    return frame
