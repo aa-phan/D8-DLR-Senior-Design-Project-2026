@@ -200,7 +200,7 @@ project's canonical docs.
   3. `docs/data-science/PRD.md` §7.1 and `docs/data-science/decisions/data_provider.md`'s status line are updated from "Pending"/"Open — vetting in progress" to record the ratified per-variable composition, matching what's actually implemented.
   4. `.venv/bin/python -m pytest -q` reports 0 failed with the full multi-provider adapter (all four providers + fallback) in place.
 
-**Plans**: 1/3 plans executed
+**Plans**: 2/3 plans executed
 
 Plans:
 **Wave 1**
@@ -209,7 +209,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 10-02-PLAN.md — expansion: NSRDB grid-path fallback via `_as_grid_shaped`, solar honesty against the `run_pipeline` 1000 W/m² substitution, all four cities × both primaries, provider-exhaustion raise, and fallback schema/merge integration (WX-06)
+- [x] 10-02-PLAN.md — expansion: NSRDB grid-path fallback via `_as_grid_shaped`, solar honesty against the `run_pipeline` 1000 W/m² substitution, all four cities × both primaries, provider-exhaustion raise, and fallback schema/merge integration (WX-06)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
@@ -235,4 +235,4 @@ Phases execute in numeric order: 6 → 7 → 8 → 9 → 10
 | 7. Trivial-Integration Providers | v1.1 | 3/3 | Complete    | 2026-09-12 |
 | 8. NSRDB Solar Integration | v1.1 | 3/3 | In Progress|  |
 | 9. TCEQ CAMS Integration | v1.1 | 3/3 | Complete    | 2026-09-14 |
-| 10. Fallback Wiring & Documentation Ratification | v1.1 | 1/3 | In Progress|  |
+| 10. Fallback Wiring & Documentation Ratification | v1.1 | 2/3 | In Progress|  |
