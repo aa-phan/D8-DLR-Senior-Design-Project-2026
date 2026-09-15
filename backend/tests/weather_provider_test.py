@@ -1555,3 +1555,113 @@ def test_tceq_provider_reads_no_credential(monkeypatch):
     import importlib
 
     importlib.reload(tceq_provider)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 10-01 Task 1: end-to-end TCEQ-to-Synoptic fallback -- one path only
+# (WX-06, ROADMAP SC1/SC2)
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def _fallback_synoptic_frame() -> pd.DataFrame:
+    """
+    A Synoptic-shaped frame with no `lat` column -- deliberately, so
+    `_supplement_with_asos` takes its "no 'lat' column" skip branch and
+    these fallback tests never attempt a live ASOS network call.
+    """
+    return _synthetic_frame(
+        air_temp=[24.0, 24.5],
+        wind_speed=[4.0, 4.2],
+        wind_direction=[180.0, 182.0],
+    )
+
+
+def test_tceq_failure_triggers_fallback_and_returns_a_usable_synoptic_frame(monkeypatch):
+    def _raise_tceq(*a, **k):
+        raise ValueError("TCEQ boom")
+
+    monkeypatch.setattr(tceq_provider, "fetch_tceq", _raise_tceq)
+    monkeypatch.setattr(
+        dlr_pipeline, "fetch_timeseries", lambda *a, **k: _fallback_synoptic_frame()
+    )
+
+    result = weather_provider.fetch_weather(["83"], _START, _END, provider="tceq")
+
+    assert not result.empty
+    assert (result["wind_source"] == "synoptic").all()
+    assert (result["temp_source"] == "synoptic").all()
+    for col in ("wind_source", "temp_source", "humidity_source", "solar_source"):
+        assert not (result[col] == "tceq").any()
+
+
+def test_tceq_fallback_disabled_reproduces_the_original_raise(monkeypatch):
+    def _raise_tceq(*a, **k):
+        raise ValueError("TCEQ boom")
+
+    monkeypatch.setattr(tceq_provider, "fetch_tceq", _raise_tceq)
+
+    counter = {"count": 0}
+
+    def _counting_fetch_timeseries(*a, **k):
+        counter["count"] += 1
+        return _fallback_synoptic_frame()
+
+    monkeypatch.setattr(dlr_pipeline, "fetch_timeseries", _counting_fetch_timeseries)
+
+    with pytest.raises(ValueError) as excinfo:
+        weather_provider.fetch_weather(
+            ["83"], _START, _END, provider="tceq", fallback=False
+        )
+
+    assert "TCEQ boom" in str(excinfo.value)
+    assert counter["count"] == 0
+
+
+def test_tceq_success_does_not_invoke_fallback(monkeypatch):
+    monkeypatch.setattr(tceq_provider, "fetch_tceq", lambda *a, **k: _tceq_frame())
+
+    counter = {"count": 0}
+
+    def _counting_fetch_timeseries(*a, **k):
+        counter["count"] += 1
+        return _fallback_synoptic_frame()
+
+    monkeypatch.setattr(dlr_pipeline, "fetch_timeseries", _counting_fetch_timeseries)
+
+    result = weather_provider.fetch_weather(["83"], _START, _END, provider="tceq")
+
+    assert (result["temp_source"] == "tceq").all()
+    assert counter["count"] == 0
+
+
+def test_tceq_empty_result_triggers_fallback(monkeypatch):
+    monkeypatch.setattr(tceq_provider, "fetch_tceq", lambda *a, **k: pd.DataFrame())
+    monkeypatch.setattr(
+        dlr_pipeline, "fetch_timeseries", lambda *a, **k: _fallback_synoptic_frame()
+    )
+
+    result = weather_provider.fetch_weather(["83"], _START, _END, provider="tceq")
+
+    assert not result.empty
+    assert (result["temp_source"] == "synoptic").all()
+
+
+def test_fallback_failure_after_tceq_failure_chains_the_original_tceq_error(monkeypatch):
+    tceq_error = ValueError("TCEQ boom")
+
+    def _raise_tceq(*a, **k):
+        raise tceq_error
+
+    def _raise_synoptic(*a, **k):
+        raise ValueError("Synoptic boom")
+
+    monkeypatch.setattr(tceq_provider, "fetch_tceq", _raise_tceq)
+    monkeypatch.setattr(dlr_pipeline, "fetch_timeseries", _raise_synoptic)
+
+    with pytest.raises(ValueError) as excinfo:
+        weather_provider.fetch_weather(["83"], _START, _END, provider="tceq")
+
+    message = str(excinfo.value)
+    assert "tceq" in message
+    assert "synoptic" in message
+    assert excinfo.value.__cause__ is tceq_error

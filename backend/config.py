@@ -271,3 +271,20 @@ TCEQ_STATIONS: dict[str, str] = {
     "MIDLAND": "1095",        # Midland Avalon Drive C1095 -- WS+WD(true)+Temp confirmed; NO Relative Humidity row
     "EL_PASO": "41",          # Chamizal C41 -- WS+WD+Temp+RH all live-confirmed
 }
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Synoptic fallback station IDs (Phase 10, C4 / WX-06)
+# ──────────────────────────────────────────────────────────────────────────────
+# These are 4-letter ICAO identifiers -- deliberately NOT the 3-letter FAA
+# codes ASOS_STATIONS uses for the IEM network. Only KAUS has been confirmed
+# to return observation rows under this project's Synoptic token (per
+# `docs/data-science/specs/C4-weather-ingestion.md`'s live-verification
+# note); the other three are unconfirmed until Plan 10-03's live check. This
+# table is the fallback target only -- it does not change
+# DEFAULT_STATION_SOURCE or any primary path.
+SYNOPTIC_FALLBACK_STATIONS: dict[str, str] = {
+    "AUSTIN": "KAUS",
+    "CORPUS_CHRISTI": "KCRP",
+    "MIDLAND": "KMAF",
+    "EL_PASO": "KELP",
+}
