@@ -2272,3 +2272,140 @@ def test_nsrdb_fallback_disabled_suppresses_fallback_with_zero_calls(monkeypatch
 
     assert "NSRDB boom" in str(excinfo.value)
     assert counter["count"] == 0
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 10-02 Task 3: schema and merge integration for a fallback-sourced
+# row, and the phase-wide suite gate (WX-06, ROADMAP SC2/SC4, T-10-10)
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def test_fallback_sourced_grid_frame_rows_validate_against_pipeline_schema(monkeypatch):
+    def _raise_nsrdb(*a, **k):
+        raise ValueError("NSRDB boom")
+
+    monkeypatch.setattr(nsrdb_provider, "fetch_nsrdb", _raise_nsrdb)
+    monkeypatch.setattr(
+        dlr_pipeline,
+        "fetch_timeseries",
+        lambda *a, **k: _fallback_synoptic_grid_frame(solar_radiation=[220.0, 225.0]),
+    )
+
+    result = weather_provider.fetch_weather(
+        config.CITY_COORDINATES["AUSTIN"], _START, _END, provider="nsrdb"
+    )
+    plain = result.reset_index() if any(n is not None for n in result.index.names) else result
+
+    for _, row in plain.iterrows():
+        assert units_def.validate_pipeline_row(row.to_dict(), strict=False) == []
+
+
+def test_fallback_sourced_grid_frame_source_columns_use_only_known_provider_names(
+    monkeypatch,
+):
+    """
+    The guard that a fallback never invents an unregistered provenance
+    label -- every non-null value across the four `*_source` columns must
+    be a member of `units_def.KNOWN_PROVIDER_NAMES`.
+    """
+
+    def _raise_nsrdb(*a, **k):
+        raise ValueError("NSRDB boom")
+
+    monkeypatch.setattr(nsrdb_provider, "fetch_nsrdb", _raise_nsrdb)
+    monkeypatch.setattr(
+        dlr_pipeline,
+        "fetch_timeseries",
+        lambda *a, **k: _fallback_synoptic_grid_frame(solar_radiation=[220.0, 225.0]),
+    )
+
+    result = weather_provider.fetch_weather(
+        config.CITY_COORDINATES["AUSTIN"], _START, _END, provider="nsrdb"
+    )
+
+    seen = set()
+    for provenance_col in weather_provider.PROVENANCE_FIELD_MAP:
+        seen |= set(result[provenance_col].dropna().unique())
+
+    assert seen <= units_def.KNOWN_PROVIDER_NAMES
+
+
+def test_fallback_sourced_row_merged_with_a_live_tceq_frame_attributes_the_real_supplier(
+    monkeypatch,
+):
+    """
+    ROADMAP SC2 stated exactly: a fallback-sourced row records the
+    provider that really supplied it, not the one that was asked. Builds
+    a real TCEQ station frame (Corpus Christi, CAMS 83) and a
+    fallback-sourced grid frame (Corpus Christi, a failing `nsrdb`
+    request substituted by Synoptic station KCRP), merges them, and
+    asserts wind/temp read "tceq" (the live station primary), the
+    fallback-supplied `solar_radiation` (TCEQ has no solar sensor) reads
+    "synoptic", and no `*_source` cell anywhere reads "nsrdb" -- the
+    primary that was actually asked for and never actually supplied
+    anything (T-10-10).
+    """
+    tceq_times = pd.date_range("2025-07-01T00:00:00Z", periods=2, freq="5min")
+    tceq_raw = pd.DataFrame(
+        {
+            "datetime_utc": tceq_times,
+            "air_temp": [30.0, 30.5],
+            "wind_speed": [6.0, 6.2],
+            "wind_direction": [190.0, 192.0],
+            "relative_humidity": [55.0, 56.0],
+        }
+    )
+    monkeypatch.setattr(tceq_provider, "fetch_tceq", lambda *a, **k: tceq_raw)
+
+    def _raise_nsrdb(*a, **k):
+        raise ValueError("NSRDB boom")
+
+    monkeypatch.setattr(nsrdb_provider, "fetch_nsrdb", _raise_nsrdb)
+    monkeypatch.setattr(
+        dlr_pipeline,
+        "fetch_timeseries",
+        lambda *a, **k: _fallback_synoptic_grid_frame(solar_radiation=[220.0, 225.0]),
+    )
+
+    station = weather_provider.fetch_weather(["83"], _START, _END, provider="tceq")
+    lat, lon = config.CITY_COORDINATES["CORPUS_CHRISTI"]
+    station = weather_provider.attach_city(station, lat=lat, lon=lon)
+
+    grid = weather_provider.fetch_weather(
+        config.CITY_COORDINATES["CORPUS_CHRISTI"], _START, _END, provider="nsrdb"
+    )
+
+    merged = weather_provider.merge_observations(station, grid)
+
+    assert (merged["wind_source"] == "tceq").all()
+    assert (merged["temp_source"] == "tceq").all()
+    assert (merged["solar_source"] == "synoptic").all()
+
+    for col in ("wind_source", "temp_source", "humidity_source", "solar_source"):
+        assert not (merged[col] == "nsrdb").any()
+
+    for _, row in merged.reset_index().iterrows():
+        assert units_def.validate_pipeline_row(row.to_dict(), strict=False) == []
+
+
+_PIPELINE_SCHEMA_V3_KEYS = frozenset({
+    # v1 (Phase 1-3 baseline)
+    "air_temp", "wind_speed", "wind_direction", "wind_perp_ms", "solar_radiation",
+    "relative_humidity", "dlr_amps", "dlr_capacity_mw", "static_capacity_mw",
+    "ercot_west_load_mw",
+    # v2 (Phase 4 / C9 forecasting, C10 anomaly detection)
+    "forecast_horizon_min", "forecast_amps", "forecast_ci_lower_amps",
+    "forecast_ci_upper_amps", "anomaly_score",
+    # v3 (Phase 6 / C4 multi-provider provenance)
+    "wind_source", "temp_source", "humidity_source", "solar_source",
+})
+
+
+def test_pipeline_schema_is_unchanged_by_this_phase():
+    """
+    This phase adds no PIPELINE_SCHEMA key and does not bump
+    PIPELINE_SCHEMA_VERSION -- so a future reader can see this was a
+    deliberate choice, not an oversight.
+    """
+    assert units_def.PIPELINE_SCHEMA_VERSION == 3
+    assert set(units_def.PIPELINE_SCHEMA.keys()) == _PIPELINE_SCHEMA_V3_KEYS
