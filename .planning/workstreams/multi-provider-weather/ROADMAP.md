@@ -200,12 +200,12 @@ project's canonical docs.
   3. `docs/data-science/PRD.md` §7.1 and `docs/data-science/decisions/data_provider.md`'s status line are updated from "Pending"/"Open — vetting in progress" to record the ratified per-variable composition, matching what's actually implemented.
   4. `.venv/bin/python -m pytest -q` reports 0 failed with the full multi-provider adapter (all four providers + fallback) in place.
 
-**Plans**: 3 plans
+**Plans**: 1/3 plans executed
 
 Plans:
 **Wave 1**
 
-- [ ] 10-01-PLAN.md — tracer: end-to-end TCEQ→Synoptic fallback on one path (`config.SYNOPTIC_FALLBACK_STATIONS`, `FALLBACK_ELIGIBLE_PRIMARIES`, `_fallback_city_for_request`, `_attempt_fallback`, `fetch_weather(fallback=True)`), plus the no-fallback taxonomy proving every Phase 6-9 fail-loud case still raises (WX-06)
+- [x] 10-01-PLAN.md — tracer: end-to-end TCEQ→Synoptic fallback on one path (`config.SYNOPTIC_FALLBACK_STATIONS`, `FALLBACK_ELIGIBLE_PRIMARIES`, `_fallback_city_for_request`, `_attempt_fallback`, `fetch_weather(fallback=True)`), plus the no-fallback taxonomy proving every Phase 6-9 fail-loud case still raises (WX-06)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -235,4 +235,4 @@ Phases execute in numeric order: 6 → 7 → 8 → 9 → 10
 | 7. Trivial-Integration Providers | v1.1 | 3/3 | Complete    | 2026-09-12 |
 | 8. NSRDB Solar Integration | v1.1 | 3/3 | In Progress|  |
 | 9. TCEQ CAMS Integration | v1.1 | 3/3 | Complete    | 2026-09-14 |
-| 10. Fallback Wiring & Documentation Ratification | v1.1 | 0/3 | Planned | - |
+| 10. Fallback Wiring & Documentation Ratification | v1.1 | 1/3 | In Progress|  |
