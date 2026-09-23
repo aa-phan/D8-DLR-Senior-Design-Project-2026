@@ -9,6 +9,9 @@ This document exists because `PRD.md` §8 ("Future Scope") predates v1.0 and is 
 describes C8/C9/C10 as "no corresponding code today," which was true when it was written but
 is not true now. This document reflects actual current repo state (2026-09-14) instead.
 
+**For current status** — which of these three tracks are scoped vs. planned vs. shipped, and
+what's actually landed since this document was written — see [`PROJECT-STATUS.md`](PROJECT-STATUS.md).
+
 ---
 
 ## Track 1: Pipeline Integration & Real-Data Verification
