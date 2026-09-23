@@ -52,14 +52,12 @@ GSD workstream:
 | 3 — Real Transmission-Line Corridor Geometry | v1.4 | `corridor-geometry` | Scoped (2 phases); Phase 2 blocked on the Power Systems sub-team | Replace the two placeholder straight-line corridors with real substation-to-substation route geometry |
 
 Each workstream's live roadmap and requirements are the actual source of truth — this table is a
-summary, not a substitute. `workstreams/<track>/` below are symlinks into `.planning/` (real
-files, not copies) so they show up under `docs/` for a local checkout or an editor; GitHub's web
-UI doesn't follow symlinks, so if you're reading this on github.com, use the direct `.planning/`
-links instead — both resolve to the exact same file:
+summary, not a substitute. The links below are one click through a redirect page into the real
+file GSD maintains under `.planning/`:
 
-- Track 1: [`workstreams/pipeline-integration/ROADMAP.md`](workstreams/pipeline-integration/ROADMAP.md) · [`REQUIREMENTS.md`](workstreams/pipeline-integration/REQUIREMENTS.md) (direct: [`../../.planning/workstreams/pipeline-integration/`](../../.planning/workstreams/pipeline-integration/))
-- Track 2: [`workstreams/ml-modeling/ROADMAP.md`](workstreams/ml-modeling/ROADMAP.md) · [`REQUIREMENTS.md`](workstreams/ml-modeling/REQUIREMENTS.md) (direct: [`../../.planning/workstreams/ml-modeling/`](../../.planning/workstreams/ml-modeling/))
-- Track 3: [`workstreams/corridor-geometry/ROADMAP.md`](workstreams/corridor-geometry/ROADMAP.md) · [`REQUIREMENTS.md`](workstreams/corridor-geometry/REQUIREMENTS.md) (direct: [`../../.planning/workstreams/corridor-geometry/`](../../.planning/workstreams/corridor-geometry/))
+- Track 1: [`ROADMAP.md`](workstreams/pipeline-integration/ROADMAP.md) · [`REQUIREMENTS.md`](workstreams/pipeline-integration/REQUIREMENTS.md)
+- Track 2: [`ROADMAP.md`](workstreams/ml-modeling/ROADMAP.md) · [`REQUIREMENTS.md`](workstreams/ml-modeling/REQUIREMENTS.md)
+- Track 3: [`ROADMAP.md`](workstreams/corridor-geometry/ROADMAP.md) · [`REQUIREMENTS.md`](workstreams/corridor-geometry/REQUIREMENTS.md)
 
 ---
 
