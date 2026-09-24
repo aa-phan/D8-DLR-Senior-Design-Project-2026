@@ -509,7 +509,15 @@ def main(argv=None):
         return
 
     for corridor in corridors:
-        frame = corridor_training_frame(corridor, args.years)
+        try:
+            frame = corridor_training_frame(corridor, args.years)
+        except Exception:
+            logger.exception(
+                "forecast_training: failed assembling corridor %s -- "
+                "continuing to the next corridor", corridor,
+            )
+            print(f"{corridor}: FAILED to assemble training frame -- see log")
+            continue
 
         os.makedirs(config.FORECAST_ML_MODEL_DIR, exist_ok=True)
         frame_path = os.path.join(
@@ -537,9 +545,13 @@ def _run_bakeoff(corridors, years):
     ONCE on the full matrix, persist it, and accumulate the report. A
     failure assembling one corridor is reported by name and the run
     continues to the next corridor rather than aborting silently
-    (`01-02-PLAN.md` Task 2).
+    (`01-02-PLAN.md` Task 2). Each corridor also gets one final `SUMMARY:`
+    line (corridor, rows, window span, winner, persisted path) so a single
+    invocation's stdout is a complete, greppable record of what was
+    trained.
     """
     reports = {}
+    summary_lines = []
 
     for corridor in corridors:
         try:
@@ -579,6 +591,10 @@ def _run_bakeoff(corridors, years):
                 f"{scores['rows']:>10d}"
             )
         print(f"winner: {winner_name} -> persisted to {model_path}")
+        summary_lines.append(
+            f"SUMMARY: {corridor} rows={len(frame)} window={start}->{end} "
+            f"winner={winner_name} path={model_path}"
+        )
 
     os.makedirs(config.FORECAST_ML_MODEL_DIR, exist_ok=True)
     report_path = os.path.join(
@@ -587,6 +603,11 @@ def _run_bakeoff(corridors, years):
     with open(report_path, "w") as fh:
         json.dump(reports, fh, indent=2)
     print(f"\nbake-off report written to {report_path}")
+
+    if summary_lines:
+        print()
+        for line in summary_lines:
+            print(line)
 
 
 if __name__ == "__main__":
