@@ -265,3 +265,128 @@ def test_forecast_columns_round_trip_validates():
 
 def test_forecast_columns_of_none_is_empty():
     assert amp_forecast.forecast_columns(None) == {}
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# "ml" method model-honesty invariants (v1.3 Phase 1 Plan 01-01 Task 2)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_build_ml_features_no_future_leakage_on_mutation():
+    n = 30
+    base_dt = datetime(2026, 1, 1, 0, 0, 0)
+    timestamps = pd.to_datetime([(base_dt + timedelta(hours=i)).isoformat() for i in range(n)])
+    rng = np.random.default_rng(20260924)
+
+    frame = pd.DataFrame({
+        "dlr_amps": 1200.0 + rng.normal(0.0, 15.0, n),
+        "air_temp": 25.0 + rng.normal(0.0, 2.0, n),
+        "wind_speed": 5.0 + rng.normal(0.0, 1.0, n),
+        "solar_radiation": 500.0 + rng.normal(0.0, 20.0, n),
+    }, index=timestamps)
+
+    baseline = amp_forecast.build_ml_features(frame)
+
+    t = 15  # comfortably clear of both edges, given max lag = 6h
+
+    mutated_after = frame.copy()
+    mutated_after.loc[frame.index[t + 1], "dlr_amps"] += 500.0
+    features_after = amp_forecast.build_ml_features(mutated_after)
+    pd.testing.assert_series_equal(
+        baseline.iloc[t], features_after.iloc[t], check_names=False
+    )
+
+    mutated_before = frame.copy()
+    mutated_before.loc[frame.index[t - 1], "dlr_amps"] += 500.0
+    features_before = amp_forecast.build_ml_features(mutated_before)
+    assert not features_before.iloc[t].equals(baseline.iloc[t])
+
+
+def test_ml_method_sensitive_to_weather_naive_ewm_unaffected(fitted_ml_model):
+    history = _synthetic_history(n_rows=672, noise_amps=10.0, varying_weather=True)
+
+    baseline_ml = amp_forecast.forecast_ampacity(history, method="ml")
+    baseline_naive = amp_forecast.forecast_ampacity(history, method="naive")
+    baseline_ewm = amp_forecast.forecast_ampacity(history, method="ewm")
+
+    edited = history.copy()
+    edited["air_temp"] = edited["air_temp"] + 15.0
+    edited["wind_speed"] = edited["wind_speed"] + 3.0
+    edited["solar_radiation"] = edited["solar_radiation"] + 100.0
+
+    edited_ml = amp_forecast.forecast_ampacity(edited, method="ml")
+    edited_naive = amp_forecast.forecast_ampacity(edited, method="naive")
+    edited_ewm = amp_forecast.forecast_ampacity(edited, method="ewm")
+
+    assert abs(edited_ml.amps - baseline_ml.amps) > 1e-6
+    assert edited_naive.amps == pytest.approx(baseline_naive.amps, abs=1e-9)
+    assert edited_ewm.amps == pytest.approx(baseline_ewm.amps, abs=1e-9)
+
+
+def test_corridor_model_selection_mixed_corridor_raises_naming_both():
+    history = _synthetic_history(n_rows=50)
+    history = history.copy()
+    half = len(history) // 2
+    history.loc[history.index[:half], "corridor"] = "AUSTIN_CORPUS_CHRISTI"
+    history.loc[history.index[half:], "corridor"] = "MIDLAND_EL_PASO"
+
+    with pytest.raises(ValueError) as exc_info:
+        amp_forecast._corridor_of(history)
+
+    message = str(exc_info.value)
+    assert "AUSTIN_CORPUS_CHRISTI" in message
+    assert "MIDLAND_EL_PASO" in message
+
+
+def test_corridor_model_selection_unknown_corridor_raises_naming_valid_corridors():
+    history = _synthetic_history(n_rows=50).copy()
+    history["corridor"] = "NOT_A_REAL_CORRIDOR"
+
+    with pytest.raises(ValueError) as exc_info:
+        amp_forecast._corridor_of(history)
+
+    message = str(exc_info.value)
+    assert "NOT_A_REAL_CORRIDOR" in message
+    for corridor in config.CORRIDOR_ENDPOINTS:
+        assert corridor in message
+
+
+def test_missing_artifact_raises_and_never_falls_back(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "FORECAST_ML_MODEL_DIR", str(tmp_path))
+    monkeypatch.setattr(amp_forecast, "_MODEL_CACHE", {})
+
+    corridor = "AUSTIN_CORPUS_CHRISTI"
+    expected_path = amp_forecast._model_path_for(corridor)
+
+    with pytest.raises(FileNotFoundError) as exc_info:
+        amp_forecast._load_corridor_model(corridor)
+
+    message = str(exc_info.value)
+    assert corridor in message
+    assert expected_path in message
+
+    history = _synthetic_history(n_rows=50)
+    with pytest.raises(FileNotFoundError):
+        amp_forecast.forecast_ampacity(history, method="ml")
+
+
+def test_null_weather_raises_rather_than_imputing(fitted_ml_model):
+    history = _synthetic_history(n_rows=100, varying_weather=True).copy()
+    history.loc[history.index[-1], "wind_speed"] = np.nan
+
+    with pytest.raises(ValueError) as exc_info:
+        amp_forecast.forecast_ampacity(history, method="ml")
+
+    assert "wind_speed" in str(exc_info.value)
+
+
+def test_forecast_ampacity_ml_missing_weather_columns_raises_naming_them():
+    history = _synthetic_history(n_rows=50).drop(
+        columns=["air_temp", "wind_speed", "solar_radiation"]
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        amp_forecast.forecast_ampacity(history, method="ml")
+
+    message = str(exc_info.value)
+    for column in config.FORECAST_ML_FEATURE_WEATHER_COLUMNS:
+        assert column in message
