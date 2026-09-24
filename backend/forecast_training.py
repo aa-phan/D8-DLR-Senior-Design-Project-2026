@@ -20,7 +20,9 @@ Run directly:
 """
 
 import argparse
+import json
 import logging
+import math
 import os
 import tempfile
 
@@ -36,6 +38,52 @@ import thermal_model
 import units_def
 
 logger = logging.getLogger(__name__)
+
+
+def _make_regression_candidate():
+    """Regression arm of D-01's bake-off. Fixed `random_state` so a
+    bake-off run is reproducible. Lazy `sklearn` import, matching this
+    module's other estimator-touching functions (`fit_corridor_model`) --
+    importing `forecast_training` stays free of a hard `sklearn` import."""
+    from sklearn.ensemble import HistGradientBoostingRegressor
+
+    return HistGradientBoostingRegressor(random_state=20260924)
+
+
+def _make_neural_network_candidate():
+    """
+    Neural-network arm of D-01's bake-off. `MLPRegressor` is scale-sensitive
+    in a way the tree candidate is not -- the raw features span amps in the
+    thousands, degrees Celsius, and unit-interval sine/cosine terms -- so it
+    is wrapped in `make_pipeline(StandardScaler(), MLPRegressor(...))`. This
+    measures the architecture rather than a missing scaling step; without it
+    the neural-network arm would lose for a reason that has nothing to do
+    with D-01's question (RESEARCH.md Pattern, `01-02-PLAN.md` Task 1).
+    """
+    from sklearn.neural_network import MLPRegressor
+    from sklearn.pipeline import make_pipeline
+    from sklearn.preprocessing import StandardScaler
+
+    return make_pipeline(
+        StandardScaler(),
+        MLPRegressor(
+            hidden_layer_sizes=(32, 16),
+            max_iter=2000,
+            random_state=20260924,
+            early_stopping=False,
+        ),
+    )
+
+
+# D-01's evidence-based bake-off: exactly two entries, one per arm of
+# "regression or neural network" -- a zero-argument factory per entry (not
+# a shared instance), since each `TimeSeriesSplit` fold must fit a FRESH,
+# never-before-fit estimator. Order is significant: `select_winner`'s
+# deterministic tiebreak falls back to this order as its last resort.
+CANDIDATE_ESTIMATORS: dict = {
+    "HistGradientBoostingRegressor": _make_regression_candidate,
+    "MLPRegressor": _make_neural_network_candidate,
+}
 
 
 def fetch_city_weather(city: str, years: int) -> pd.DataFrame:
@@ -221,18 +269,176 @@ def build_training_matrix(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]
     return X_clean, y_clean
 
 
-def fit_corridor_model(X: pd.DataFrame, y: pd.Series):
+def bakeoff_corridor(X: pd.DataFrame, y: pd.Series) -> dict:
     """
-    Fit a `sklearn.ensemble.HistGradientBoostingRegressor` with a fixed
-    `random_state` on (X, y). This plan fits one candidate so the "ml"
-    path is proven end-to-end; Plan 01-02 turns this into D-01's
-    evidence-based two-candidate bake-off.
-    """
-    from sklearn.ensemble import HistGradientBoostingRegressor
+    D-01's two-candidate comparison: for each entry in `CANDIDATE_
+    ESTIMATORS`, fit a FRESH (never-before-fit) estimator on each
+    `sklearn.model_selection.TimeSeriesSplit(n_splits=config.FORECAST_ML_
+    BAKEOFF_SPLITS)` fold's train rows, predict the fold's test rows, and
+    pool the absolute/squared errors across all folds. `TimeSeriesSplit`
+    is the only fold source -- no hand-rolled `.iloc[:i]`/`.iloc[i:]`
+    slicing loop (RESEARCH.md "Don't Hand-Roll") -- so every fold's train
+    index maxima are strictly below its test index minima.
 
-    model = HistGradientBoostingRegressor(random_state=20260924)
-    model.fit(X.to_numpy(dtype=float), y.to_numpy(dtype=float))
-    return model
+    Returns a mapping keyed by `CANDIDATE_ESTIMATORS` name, each with a
+    finite `mae`, a finite `rmse`, and the total number of held-out rows
+    scored across all folds.
+    """
+    from sklearn.model_selection import TimeSeriesSplit
+
+    X_arr = X.to_numpy(dtype=float)
+    y_arr = y.to_numpy(dtype=float)
+    splitter = TimeSeriesSplit(n_splits=config.FORECAST_ML_BAKEOFF_SPLITS)
+
+    report = {}
+    for name, factory in CANDIDATE_ESTIMATORS.items():
+        abs_errors = []
+        sq_errors = []
+        for train_idx, test_idx in splitter.split(X_arr):
+            estimator = factory()
+            estimator.fit(X_arr[train_idx], y_arr[train_idx])
+            predictions = estimator.predict(X_arr[test_idx])
+            residual = y_arr[test_idx] - predictions
+            abs_errors.append(np.abs(residual))
+            sq_errors.append(residual ** 2)
+
+        abs_errors = np.concatenate(abs_errors)
+        sq_errors = np.concatenate(sq_errors)
+        report[name] = {
+            "mae": float(np.mean(abs_errors)),
+            "rmse": float(np.sqrt(np.mean(sq_errors))),
+            "rows": int(abs_errors.size),
+        }
+
+    return report
+
+
+def baseline_scores(frame: pd.DataFrame) -> dict:
+    """
+    Score `"naive"` and `"ewm"` on the SAME assembled corridor `frame` by
+    calling `ampacity_forecast.backtest_residuals` -- the apples-to-apples
+    requirement in ROADMAP SC3/SC4: the baselines come from the module's
+    own walk-forward function, never a second error computation written
+    here. The residual count is recorded as that candidate's held-out row
+    count.
+    """
+    indexed = frame.copy()
+    indexed.index = pd.to_datetime(indexed["datetime_utc"])
+    indexed = indexed.sort_index()
+    series = indexed["dlr_amps"]
+
+    scores = {}
+    for method in ("naive", "ewm"):
+        residuals = ampacity_forecast.backtest_residuals(
+            series, method,
+            min_train_rows=config.FORECAST_MIN_HISTORY_ROWS,
+            halflife_min=config.FORECAST_EWM_HALFLIFE_MIN,
+        )
+        scores[method] = {
+            "mae": float(np.mean(np.abs(residuals))),
+            "rmse": float(np.sqrt(np.mean(residuals ** 2))),
+            "rows": int(residuals.size),
+        }
+
+    return scores
+
+
+def corridor_report(corridor: str, frame: pd.DataFrame, X: pd.DataFrame,
+                     y: pd.Series) -> dict:
+    """
+    Merge `bakeoff_corridor` and `baseline_scores` into one mapping for
+    `corridor`: a `candidates` sub-mapping holding all four entries (the
+    two `CANDIDATE_ESTIMATORS` plus `"naive"` and `"ewm"`), plus the
+    assembled row count and the window (`window_start`/`window_end`, ISO
+    strings) the score was measured on -- so a shortened run is visible in
+    the evidence rather than hidden behind a score (this plan's first
+    prohibition).
+    """
+    candidates = bakeoff_corridor(X, y)
+    candidates.update(baseline_scores(frame))
+
+    return {
+        "corridor": corridor,
+        "rows": int(len(frame)),
+        "window_start": pd.Timestamp(frame["datetime_utc"].min()).isoformat(),
+        "window_end": pd.Timestamp(frame["datetime_utc"].max()).isoformat(),
+        "feature_columns": list(ampacity_forecast.ML_FEATURE_COLUMNS),
+        "horizon_min": float(config.FORECAST_HORIZON_MINUTES),
+        "candidates": candidates,
+    }
+
+
+def select_winner(report: dict) -> str:
+    """
+    Over the two `CANDIDATE_ESTIMATORS` names only (never `"naive"`/
+    `"ewm"`), return the one with the strictly lowest `mae` in `report`.
+
+    Raises `ValueError` naming the problem when a candidate entry is
+    missing from the report or its `mae` is not a finite number -- a
+    winner chosen despite a missing measurement is exactly the default
+    lean D-01 forbids.
+
+    On an exact MAE tie, breaks deterministically by `rmse`, then by
+    `CANDIDATE_ESTIMATORS` order; which tiebreak fired (if any) is logged
+    at INFO for the record.
+    """
+    candidates = report.get("candidates", {})
+    ml_names = list(CANDIDATE_ESTIMATORS)
+
+    scored = []
+    for name in ml_names:
+        entry = candidates.get(name)
+        if entry is None:
+            raise ValueError(
+                f"select_winner: report is missing candidate {name!r}; "
+                f"present candidates: {sorted(candidates)}"
+            )
+        mae = entry.get("mae")
+        try:
+            mae = float(mae)
+        except (TypeError, ValueError):
+            mae = math.nan
+        if not math.isfinite(mae):
+            raise ValueError(
+                f"select_winner: candidate {name!r} has non-finite mae "
+                f"{entry.get('mae')!r} -- refusing to pick a winner on a "
+                f"missing measurement"
+            )
+        rmse = float(entry.get("rmse", math.inf))
+        scored.append((name, mae, rmse))
+
+    best_mae = min(s[1] for s in scored)
+    mae_tied = [s for s in scored if s[1] == best_mae]
+    if len(mae_tied) == 1:
+        return mae_tied[0][0]
+
+    best_rmse = min(s[2] for s in mae_tied)
+    rmse_tied = [s for s in mae_tied if s[2] == best_rmse]
+    if len(rmse_tied) == 1:
+        logger.info(
+            "select_winner: MAE tie between %s broken by rmse -> %r",
+            [s[0] for s in mae_tied], rmse_tied[0][0],
+        )
+        return rmse_tied[0][0]
+
+    winner = rmse_tied[0][0]  # CANDIDATE_ESTIMATORS order, preserved above
+    logger.info(
+        "select_winner: MAE and rmse tie between %s broken by "
+        "CANDIDATE_ESTIMATORS order -> %r",
+        [s[0] for s in rmse_tied], winner,
+    )
+    return winner
+
+
+def fit_corridor_model(X: pd.DataFrame, y: pd.Series, estimator):
+    """
+    Fit `estimator` (already constructed, unfitted) on (X, y) and return
+    it fitted. The same function serves the tracer's single fit (Plan
+    01-01) and the bake-off winner's full-window refit (this plan) --
+    never a second, parallel fit path.
+    """
+    estimator.fit(X.to_numpy(dtype=float), y.to_numpy(dtype=float))
+    return estimator
 
 
 def persist_corridor_model(model, corridor: str) -> str:
@@ -285,12 +491,33 @@ def main(argv=None):
         help="Complete calendar years of Open-Meteo backfill per city "
              "(default: config.FORECAST_ML_TRAINING_YEARS).",
     )
+    parser.add_argument(
+        "--bakeoff",
+        action="store_true",
+        help="Run D-01's two-candidate bake-off (regression vs. neural "
+             "network) against the naive/ewm baselines, per corridor, "
+             "select each corridor's own measured winner by MAE, persist "
+             "it, and write the accumulated comparison to "
+             "config.FORECAST_ML_BAKEOFF_REPORT_NAME.",
+    )
     args = parser.parse_args(argv)
 
     corridors = [args.corridor] if args.corridor else sorted(config.CORRIDOR_ENDPOINTS)
 
+    if args.bakeoff:
+        _run_bakeoff(corridors, args.years)
+        return
+
     for corridor in corridors:
-        frame = corridor_training_frame(corridor, args.years)
+        try:
+            frame = corridor_training_frame(corridor, args.years)
+        except Exception:
+            logger.exception(
+                "forecast_training: failed assembling corridor %s -- "
+                "continuing to the next corridor", corridor,
+            )
+            print(f"{corridor}: FAILED to assemble training frame -- see log")
+            continue
 
         os.makedirs(config.FORECAST_ML_MODEL_DIR, exist_ok=True)
         frame_path = os.path.join(
@@ -300,7 +527,7 @@ def main(argv=None):
         frame.to_csv(frame_path, index=False)
 
         X, y = build_training_matrix(frame)
-        model = fit_corridor_model(X, y)
+        model = fit_corridor_model(X, y, _make_regression_candidate())
         model_path = persist_corridor_model(model, corridor)
 
         start = frame["datetime_utc"].min()
@@ -309,6 +536,78 @@ def main(argv=None):
             f"{corridor}: {len(frame)} rows, {start} -> {end}, "
             f"model persisted to {model_path}"
         )
+
+
+def _run_bakeoff(corridors, years):
+    """
+    D-01's bake-off entry point, one corridor at a time: assemble, build
+    the comparison report, select the winner by measured MAE, refit it
+    ONCE on the full matrix, persist it, and accumulate the report. A
+    failure assembling one corridor is reported by name and the run
+    continues to the next corridor rather than aborting silently
+    (`01-02-PLAN.md` Task 2). Each corridor also gets one final `SUMMARY:`
+    line (corridor, rows, window span, winner, persisted path) so a single
+    invocation's stdout is a complete, greppable record of what was
+    trained.
+    """
+    reports = {}
+    summary_lines = []
+
+    for corridor in corridors:
+        try:
+            frame = corridor_training_frame(corridor, years)
+        except Exception:
+            logger.exception(
+                "forecast_training --bakeoff: failed assembling corridor "
+                "%s -- continuing to the next corridor", corridor,
+            )
+            print(f"{corridor}: FAILED to assemble training frame -- see log")
+            continue
+
+        os.makedirs(config.FORECAST_ML_MODEL_DIR, exist_ok=True)
+        frame_path = os.path.join(
+            config.FORECAST_ML_MODEL_DIR,
+            config.FORECAST_ML_TRAINING_FRAME_TEMPLATE.format(corridor=corridor),
+        )
+        frame.to_csv(frame_path, index=False)
+
+        X, y = build_training_matrix(frame)
+        report = corridor_report(corridor, frame, X, y)
+        winner_name = select_winner(report)
+        winner_estimator = fit_corridor_model(
+            X, y, CANDIDATE_ESTIMATORS[winner_name]()
+        )
+        model_path = persist_corridor_model(winner_estimator, corridor)
+
+        reports[corridor] = report
+
+        start = frame["datetime_utc"].min()
+        end = frame["datetime_utc"].max()
+        print(f"\n{corridor}: {len(frame)} rows, {start} -> {end}")
+        print(f"{'candidate':<32}{'mae':>12}{'rmse':>12}{'rows':>10}")
+        for name, scores in report["candidates"].items():
+            print(
+                f"{name:<32}{scores['mae']:>12.3f}{scores['rmse']:>12.3f}"
+                f"{scores['rows']:>10d}"
+            )
+        print(f"winner: {winner_name} -> persisted to {model_path}")
+        summary_lines.append(
+            f"SUMMARY: {corridor} rows={len(frame)} window={start}->{end} "
+            f"winner={winner_name} path={model_path}"
+        )
+
+    os.makedirs(config.FORECAST_ML_MODEL_DIR, exist_ok=True)
+    report_path = os.path.join(
+        config.FORECAST_ML_MODEL_DIR, config.FORECAST_ML_BAKEOFF_REPORT_NAME
+    )
+    with open(report_path, "w") as fh:
+        json.dump(reports, fh, indent=2)
+    print(f"\nbake-off report written to {report_path}")
+
+    if summary_lines:
+        print()
+        for line in summary_lines:
+            print(line)
 
 
 if __name__ == "__main__":

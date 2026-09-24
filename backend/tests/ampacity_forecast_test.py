@@ -12,6 +12,7 @@ Also covers Plan 04-02 Task 2's `forecast_columns` <-> `units_def.PIPELINE_SCHEM
 agreement (the link that catches a key rename on either side).
 """
 
+import os
 from datetime import datetime, timedelta
 
 import numpy as np
@@ -26,7 +27,7 @@ import units_def
 
 def _synthetic_history(n_rows=672, noise_amps=25.0, seed=20260908,
                         base_amps=1200.0, trend_amps_per_row=0.0,
-                        varying_weather=False):
+                        varying_weather=False, corridor="AUSTIN_CORPUS_CHRISTI"):
     """
     A deterministic, `historical_archive.ARCHIVE_COLUMNS`-compatible frame
     with hourly `datetime_utc` strings and a `dlr_amps` series built from
@@ -41,6 +42,11 @@ def _synthetic_history(n_rows=672, noise_amps=25.0, seed=20260908,
     SCHEMA`'s ranges) instead of holding them constant — Task 2's
     weather-sensitivity tests need a frame where the weather features
     actually carry signal for the "ml" method to respond to.
+
+    `corridor` (Plan 01-02 Task 2) parameterizes the frame's `corridor`
+    column -- default unchanged (`"AUSTIN_CORPUS_CHRISTI"`) so every
+    pre-existing test is unaffected; the per-corridor isolation tests pass
+    `"MIDLAND_EL_PASO"` to build a second corridor's frame.
     """
     rng = np.random.default_rng(seed)
     base_dt = datetime(2026, 1, 1, 0, 0, 0)
@@ -61,7 +67,7 @@ def _synthetic_history(n_rows=672, noise_amps=25.0, seed=20260908,
 
     return pd.DataFrame({
         "datetime_utc": timestamps,
-        "corridor": ["AUSTIN_CORPUS_CHRISTI"] * n_rows,
+        "corridor": [corridor] * n_rows,
         "air_temp": air_temp,
         "wind_speed": wind_speed,
         "solar_radiation": solar_radiation,
@@ -390,3 +396,126 @@ def test_forecast_ampacity_ml_missing_weather_columns_raises_naming_them():
     message = str(exc_info.value)
     for column in config.FORECAST_ML_FEATURE_WEATHER_COLUMNS:
         assert column in message
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Per-corridor isolation (v1.3 Phase 1 Plan 01-02 Task 2, D-05) — cross-
+# corridor model bleed is ruled out by construction, not by inspection
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _fit_two_distinguishable_models(offset=500_000.0):
+    """
+    Two genuinely fitted `HistGradientBoostingRegressor`s built from the
+    SAME feature frame, differing only in the target's constant offset —
+    "fit each on the same feature frame but against targets offset by a
+    large, unmistakable constant, so their predictions cannot be
+    confused" (01-02-PLAN.md Task 2).
+    """
+    from sklearn.ensemble import HistGradientBoostingRegressor
+
+    history = _synthetic_history(n_rows=672, noise_amps=10.0, varying_weather=True)
+    frame = history.copy()
+    frame.index = pd.to_datetime(frame["datetime_utc"])
+    frame = frame.sort_index()
+
+    features = amp_forecast.build_ml_features(frame)
+    target_a = frame["dlr_amps"].shift(-1)
+    valid = features.notna().all(axis=1) & target_a.notna()
+
+    X = features[valid].to_numpy(dtype=float)
+    y_a = target_a[valid].to_numpy(dtype=float)
+    y_b = y_a + offset
+
+    model_a = HistGradientBoostingRegressor(random_state=20260908).fit(X, y_a)
+    model_b = HistGradientBoostingRegressor(random_state=20260908).fit(X, y_b)
+    return model_a, model_b
+
+
+def test_corridor_isolation_never_serves_wrong_corridor_in_any_call_order(monkeypatch):
+    offset = 500_000.0
+    model_austin, model_midland = _fit_two_distinguishable_models(offset=offset)
+
+    calls = []
+
+    def fake_loader(corridor):
+        calls.append(corridor)
+        return {
+            "AUSTIN_CORPUS_CHRISTI": model_austin,
+            "MIDLAND_EL_PASO": model_midland,
+        }[corridor]
+
+    monkeypatch.setattr(amp_forecast, "_load_corridor_model", fake_loader)
+
+    base_history = _synthetic_history(n_rows=672, noise_amps=10.0, varying_weather=True)
+    history_austin = base_history.copy()
+    history_austin["corridor"] = "AUSTIN_CORPUS_CHRISTI"
+    history_midland = base_history.copy()
+    history_midland["corridor"] = "MIDLAND_EL_PASO"
+
+    # Order 1: Austin, then Midland.
+    result_austin_1 = amp_forecast.forecast_ampacity(history_austin, method="ml")
+    result_midland_1 = amp_forecast.forecast_ampacity(history_midland, method="ml")
+    assert result_midland_1.amps - result_austin_1.amps > offset / 2
+
+    # Order 2: Midland, then Austin — same numbers regardless of call order.
+    result_midland_2 = amp_forecast.forecast_ampacity(history_midland, method="ml")
+    result_austin_2 = amp_forecast.forecast_ampacity(history_austin, method="ml")
+    assert result_austin_2.amps == pytest.approx(result_austin_1.amps)
+    assert result_midland_2.amps == pytest.approx(result_midland_1.amps)
+
+    # One corridor called twice consecutively — never drifts to the other.
+    result_austin_3 = amp_forecast.forecast_ampacity(history_austin, method="ml")
+    result_austin_4 = amp_forecast.forecast_ampacity(history_austin, method="ml")
+    assert result_austin_3.amps == pytest.approx(result_austin_1.amps)
+    assert result_austin_4.amps == pytest.approx(result_austin_1.amps)
+
+    assert set(calls) == {"AUSTIN_CORPUS_CHRISTI", "MIDLAND_EL_PASO"}
+
+
+def test_corridor_model_cache_keyed_per_corridor_not_reloaded(tmp_path, monkeypatch):
+    """
+    Exercises the REAL `_load_corridor_model`/`_MODEL_CACHE` (not a stub)
+    with only `joblib.load` monkeypatched, so the cache behavior under
+    test is the module's own, not a test double's.
+    """
+    import joblib
+
+    monkeypatch.setattr(config, "FORECAST_ML_MODEL_DIR", str(tmp_path))
+    monkeypatch.setattr(amp_forecast, "_MODEL_CACHE", {})
+
+    corridors = sorted(config.CORRIDOR_ENDPOINTS)
+    paths = {c: amp_forecast._model_path_for(c) for c in corridors}
+    for path in paths.values():
+        with open(path, "wb"):
+            pass  # existence is all `_load_corridor_model` checks pre-joblib.load
+
+    fake_models = {c: object() for c in corridors}
+    load_calls = []
+
+    def fake_load(path):
+        load_calls.append(path)
+        for corridor, expected_path in paths.items():
+            if path == expected_path:
+                return fake_models[corridor]
+        raise AssertionError(f"unexpected model path {path!r}")
+
+    monkeypatch.setattr(joblib, "load", fake_load)
+
+    first = amp_forecast._load_corridor_model(corridors[0])
+    second = amp_forecast._load_corridor_model(corridors[0])  # cached -- no reload
+    third = amp_forecast._load_corridor_model(corridors[1])
+
+    assert first is fake_models[corridors[0]]
+    assert second is first
+    assert third is fake_models[corridors[1]]
+    assert load_calls == [paths[corridors[0]], paths[corridors[1]]]
+    assert set(amp_forecast._MODEL_CACHE) == set(corridors)
+
+
+def test_corridor_model_paths_distinct_and_carry_own_corridor_name():
+    paths = {c: amp_forecast._model_path_for(c) for c in config.CORRIDOR_ENDPOINTS}
+    names = list(paths)
+
+    assert paths[names[0]] != paths[names[1]]
+    for corridor, path in paths.items():
+        assert corridor in os.path.basename(path)
