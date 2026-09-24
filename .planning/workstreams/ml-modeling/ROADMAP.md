@@ -137,3 +137,26 @@ and may be executed first or in parallel if that better fits available capacity)
 |-------|----------------|--------|-----------|
 | 1. Forecasting Model | 3/3 | Complete    | 2026-09-24 |
 | 2. Anomaly Detection Model | 0/TBD | Not started | - |
+
+## Backlog
+
+### Phase 999.1: Revisit ml forecast method accuracy vs naive baseline (BACKLOG)
+
+**Goal:** [Captured for future planning]
+**Requirements:** TBD
+**Plans:** 0 plans
+
+Context: Phase 1's bake-off (Plans 01-02/01-03) found both trained candidates
+(`HistGradientBoostingRegressor`, `MLPRegressor`) lost to the naive last-value baseline on
+held-out MAE, for both corridors, at the current 60-minute forecast horizon — see
+`docs/data-science/decisions/forecasting_model.md` and
+`.planning/workstreams/ml-modeling/phases/01-forecasting-model/01-VERIFICATION.md`. Not
+blocking: the live/current DLR rating is computed independently via real-time IEEE 738
+physics and never calls the naive/ewm/ml forecast; `"ml"` is an opt-in, not-yet-wired-in
+feature. Follow-up candidates to try before deciding whether `"ml"` should become the
+recommended forecast method: a longer forecast horizon (naive degrades faster than ML as
+horizon grows, giving ML more room to add value), a longer/richer training window (more
+than the current 3 years), and/or additional features.
+
+Plans:
+- [ ] TBD (promote with /gsd-review-backlog when ready)
