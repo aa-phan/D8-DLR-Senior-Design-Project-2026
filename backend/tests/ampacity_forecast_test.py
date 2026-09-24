@@ -25,7 +25,8 @@ import units_def
 
 
 def _synthetic_history(n_rows=672, noise_amps=25.0, seed=20260908,
-                        base_amps=1200.0, trend_amps_per_row=0.0):
+                        base_amps=1200.0, trend_amps_per_row=0.0,
+                        varying_weather=False):
     """
     A deterministic, `historical_archive.ARCHIVE_COLUMNS`-compatible frame
     with hourly `datetime_utc` strings and a `dlr_amps` series built from
@@ -33,6 +34,13 @@ def _synthetic_history(n_rows=672, noise_amps=25.0, seed=20260908,
     same frame. The default 672 rows is four weeks of hourly data — the
     "larger synthetic fixture" RESEARCH.md's Wave 0 Gaps asked for, and
     enough for a meaningful walk-forward backtest.
+
+    `varying_weather=True` (v1.3 Phase 1) makes `air_temp`/`wind_speed`/
+    `solar_radiation` vary deterministically across rows (a simple
+    diurnal-ish sinusoid, all values kept within `units_def.PIPELINE_
+    SCHEMA`'s ranges) instead of holding them constant — Task 2's
+    weather-sensitivity tests need a frame where the weather features
+    actually carry signal for the "ml" method to respond to.
     """
     rng = np.random.default_rng(seed)
     base_dt = datetime(2026, 1, 1, 0, 0, 0)
@@ -41,12 +49,22 @@ def _synthetic_history(n_rows=672, noise_amps=25.0, seed=20260908,
     noise = rng.normal(loc=0.0, scale=noise_amps, size=n_rows) if noise_amps > 0 else np.zeros(n_rows)
     dlr_amps = base_amps + trend + noise
 
+    if varying_weather:
+        hours = np.arange(n_rows)
+        air_temp = 25.0 + 5.0 * np.sin(2 * np.pi * hours / 24.0)
+        wind_speed = 5.0 + 2.0 * np.cos(2 * np.pi * hours / 48.0)
+        solar_radiation = 500.0 + 200.0 * np.sin(2 * np.pi * hours / 24.0)
+    else:
+        air_temp = np.full(n_rows, 25.0)
+        wind_speed = np.full(n_rows, 5.0)
+        solar_radiation = np.full(n_rows, 500.0)
+
     return pd.DataFrame({
         "datetime_utc": timestamps,
         "corridor": ["AUSTIN_CORPUS_CHRISTI"] * n_rows,
-        "air_temp": [25.0] * n_rows,
-        "wind_speed": [5.0] * n_rows,
-        "solar_radiation": [500.0] * n_rows,
+        "air_temp": air_temp,
+        "wind_speed": wind_speed,
+        "solar_radiation": solar_radiation,
         "dlr_amps": dlr_amps,
         "static_rating": [1200.0] * n_rows,
         "status": ["ok"] * n_rows,
@@ -54,6 +72,37 @@ def _synthetic_history(n_rows=672, noise_amps=25.0, seed=20260908,
         "bottleneck_index": [0] * n_rows,
         "schema_version": [historical_archive.ARCHIVE_SCHEMA_VERSION] * n_rows,
     })
+
+
+@pytest.fixture
+def fitted_ml_model(monkeypatch):
+    """
+    Monkeypatches `ampacity_forecast._load_corridor_model` to return a
+    small, genuinely fitted `HistGradientBoostingRegressor` -- trained
+    in-memory on `build_ml_features` output from a varying-weather
+    `_synthetic_history` frame -- so a test exercises the real prediction
+    path with no disk I/O and no network. Inert for `"naive"`/`"ewm"`
+    (they never call `_load_corridor_model`).
+    """
+    from sklearn.ensemble import HistGradientBoostingRegressor
+
+    history = _synthetic_history(n_rows=672, noise_amps=10.0, varying_weather=True)
+    frame = history.copy()
+    frame.index = pd.to_datetime(frame["datetime_utc"])
+    frame = frame.sort_index()
+
+    features = amp_forecast.build_ml_features(frame)
+    target = frame["dlr_amps"].shift(-1)  # 1-hour horizon == 1 row at hourly cadence
+
+    valid = features.notna().all(axis=1) & target.notna()
+    X = features[valid].to_numpy(dtype=float)
+    y = target[valid].to_numpy(dtype=float)
+
+    model = HistGradientBoostingRegressor(random_state=20260908)
+    model.fit(X, y)
+
+    monkeypatch.setattr(amp_forecast, "_load_corridor_model", lambda corridor: model)
+    return model
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -173,8 +222,8 @@ def test_forecast_returns_none_below_min_history_rows_and_result_at_exactly_min_
 # ──────────────────────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("method", amp_forecast.FORECAST_METHODS)
-def test_band_contains_point_forecast_and_types_are_native(method):
-    history = _synthetic_history(n_rows=672, noise_amps=50.0)
+def test_band_contains_point_forecast_and_types_are_native(method, fitted_ml_model):
+    history = _synthetic_history(n_rows=672, noise_amps=50.0, varying_weather=True)
     result = amp_forecast.forecast_ampacity(history, method=method)
 
     assert result is not None

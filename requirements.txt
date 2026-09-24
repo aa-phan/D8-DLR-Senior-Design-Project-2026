@@ -14,13 +14,15 @@
 # registry -- this file records the environment it was written from, it
 # does not change it.
 #
-# Tier 2 modelling libraries (scikit-learn, statsmodels) are deliberately
-# absent per D-10: there is no historical data yet to justify or validate
-# them against, and both carry unresolved [SUS] legitimacy verdicts in
-# 04-RESEARCH.md's Package Legitimacy Audit. Neither may be added without
-# the human legitimacy checkpoint that audit requires.
+# scikit-learn (Tier 2 modelling, v1.3 Phase 1 / D-02): a new ML dependency
+# was pre-approved by CONTEXT.md D-02 for this phase, skipping the
+# human-legitimacy checkpoint 04-RESEARCH.md's earlier [SUS] verdict would
+# otherwise require -- the legitimacy scan itself still ran (01-RESEARCH.md
+# "Package Legitimacy Audit"). `joblib` arrives as a scikit-learn dependency
+# (used for model persistence) and is not pinned separately.
 pandas==2.3.3
 numpy==2.4.3
 scipy==1.17.1
 pytest==9.0.3
 beautifulsoup4==4.14.3
+scikit-learn==1.9.1

@@ -217,6 +217,49 @@ FORECAST_EWM_HALFLIFE_MIN: float = 180.0
 # convention above.
 HISTORICAL_ARCHIVE_PATH: str = "data/historical/ampacity_history.csv"
 
+# ──────────────────────────────────────────────────────────────────────────────
+# ML forecasting layer (v1.3 Phase 1, "ml" method / FCST-01)
+# ──────────────────────────────────────────────────────────────────────────────
+# Tunables for the new fitted-model Tier-2 method, mirroring this file's own
+# centralization discipline for the predictive layer above.
+
+# Directory for persisted per-corridor model artifacts and the assembled
+# training frame that produced them, mirroring DEFAULT_STATION_SOURCE's
+# relative-to-cwd convention. Git-ignored (/data/models/), generated data.
+FORECAST_ML_MODEL_DIR: str = "data/models"
+
+# {corridor} is formatted in by `ampacity_forecast._model_path_for` after
+# `_corridor_of` has already validated it against `CORRIDOR_ENDPOINTS` --
+# never a caller-supplied path (T-01-03).
+FORECAST_ML_MODEL_FILENAME_TEMPLATE: str = "forecast_{corridor}.joblib"
+
+# The exact real frame that trained a corridor's model, written by
+# `forecast_training.main` so the training run can be replayed through
+# `forecast_ampacity` (e.g. for the Task 1 E2E verify and the FCST-02
+# validation record).
+FORECAST_ML_TRAINING_FRAME_TEMPLATE: str = "training_frame_{corridor}.csv"
+
+# D-04's multivariate weather inputs, spelled with the PIPELINE_SCHEMA
+# column names already used throughout this file/module.
+FORECAST_ML_FEATURE_WEATHER_COLUMNS: tuple[str, ...] = (
+    "air_temp", "wind_speed", "solar_radiation",
+)
+
+# Lagged dlr_amps offsets (hours) `ampacity_forecast.build_ml_features`
+# builds. Deepest lag is 6, so the existing FORECAST_MIN_HISTORY_ROWS (12)
+# still suffices for the "ml" method -- a future deepening of this tuple is
+# a deliberate change to both constants together, not just this one.
+FORECAST_ML_LAG_HOURS: tuple[int, ...] = (1, 2, 3, 6)
+
+# Rolling-mean window (hours) over dlr_amps, shifted by 1 row so the
+# current row's own value is excluded (see build_ml_features).
+FORECAST_ML_ROLLING_WINDOW_HOURS: int = 6
+
+# Open-Meteo backfill depth per city, in complete calendar years, for
+# `forecast_training.fetch_city_weather` (RESEARCH.md Assumption A3's
+# 2-5 year band, fixed at 3 for this phase).
+FORECAST_ML_TRAINING_YEARS: int = 3
+
 # D-06: the anomaly control limit is a per-location dict, not one global
 # scalar — a single global band is the exact shape of the historical
 # RATING_BOUNDS bug documented in
