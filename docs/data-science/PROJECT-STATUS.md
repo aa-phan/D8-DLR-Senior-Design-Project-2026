@@ -70,6 +70,11 @@ file GSD maintains under `.planning/`:
   and `anomaly_detector.AnomalyDetector` are implemented and tested but never invoked from
   `dlr_pipeline.py::run_pipeline` today; they're three disconnected code paths. This is exactly
   what Track 1 (v1.2) closes.
+- **DS → PSS/E interface contract undefined** — the handoff to the Power Systems sub-team is
+  understood informally (a predicted ampacity, evaluated by them against grid conditions for
+  feasibility) but no file format, cadence, or exact field set has ever been agreed. See
+  [`decisions/pss_e_handoff.md`](decisions/pss_e_handoff.md) for the full note — deliberately
+  deferred until an actual cross-team conversation happens.
 - **ERCOT live-pull bug (carried, unrelated to weather work)** — `ercot_data_retriever.py::pull_ercot_data`'s
   live path fails with a deterministic `Bad CRC-32` error inside the third-party `gridstatus`
   library, blocking live ERCOT pulls until upstream fixes it.
