@@ -19,6 +19,7 @@ other workstream's phase numbering.
 
 **Interface contracts this workstream must preserve (owned by Track 1 and the standing
 fail-safe commitment, not renegotiable here):**
+
 - `ampacity_forecast.py::forecast_ampacity(history, horizon_min, method="naive", ...)` — the new
   method must be an additional value in `FORECAST_METHODS` (currently `("naive", "ewm")`), not a
   signature change, and must still return a `ForecastResult` populating the same four
@@ -49,6 +50,7 @@ during phase planning/execution before any new dependency is added.
 ## Phases
 
 **Phase Numbering:**
+
 - Integer phases (1, 2, 3): Planned milestone work
 - Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
 
@@ -58,12 +60,14 @@ during phase planning/execution before any new dependency is added.
 ## Phase Details
 
 ### Phase 1: Forecasting Model
+
 **Goal**: `ampacity_forecast.forecast_ampacity` can produce an ampacity forecast from an actual
 trained model — not just the last observed value or an exponentially-weighted average — and
 that model's accuracy is proven against real historical data rather than assumed.
 **Depends on**: Nothing (first phase in this workstream; independent of Phase 2)
 **Requirements**: FCST-01, FCST-02
 **Success Criteria** (what must be TRUE):
+
   1. `ampacity_forecast.FORECAST_METHODS` includes a new ML-backed method value alongside
      `"naive"` and `"ewm"`, and `forecast_ampacity(history, horizon_min, method=<new-method>)`
      returns a `ForecastResult` populating the same four `PIPELINE_SCHEMA` columns
@@ -81,11 +85,20 @@ that model's accuracy is proven against real historical data rather than assumed
      real data, compared directly against the naive/EWM baselines on the same data, and states
      whether the model met expectations — per FCST-02, not just eyeballed once and discarded.
 **Plans**: 3 plans
+**Wave 1**
+
 - [ ] 01-01-PLAN.md — Tracer: one real end-to-end ML ampacity forecast (scikit-learn pinned, `backend/forecast_training.py` assembling Open-Meteo→IEEE 738 per-corridor data, `method="ml"` returning the same four `PIPELINE_SCHEMA` columns) plus the model-honesty invariants
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 01-02-PLAN.md — D-01 bake-off: regression vs. neural-network candidate scored against each other and against naive/EWM on the identical series via `TimeSeriesSplit`, winner persisted per corridor, both corridors trained and provably served independently
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 01-03-PLAN.md — FCST-02 validation record (`docs/data-science/decisions/forecasting_model.md`) written from the real full-window run, and the stale `C9-ampacity-forecasting.md` spec corrected (D-07)
 
 ### Phase 2: Anomaly Detection Model
+
 **Goal**: The G6 safety gate can be backed by an actual model trained on historical
 per-variable baselines (wind, temp, solar, load) instead of only the rolling mean±k·std /
 forecast-residual heuristics, with the fail-safe contract intact, and that model's
@@ -94,6 +107,7 @@ false-positive/false-negative behavior is proven against real historical data.
 path other than both being consumed by `DLRSafetyMonitor`; may be executed in parallel)
 **Requirements**: ANOM-01, ANOM-02
 **Success Criteria** (what must be TRUE):
+
   1. `AnomalyDetector.check(raw_data, rating)` — however the detector is constructed (base
      constructor or `AnomalyDetector.for_corridor`) — still returns the same
      `(is_anomalous: bool, reason: str)` tuple shape, so `DLRSafetyMonitor`'s G6 call site and
