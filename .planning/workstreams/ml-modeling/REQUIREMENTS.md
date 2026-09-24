@@ -17,12 +17,12 @@ builds the actual trained models the PRD originally scoped.
 
 ### Forecasting
 
-- [ ] **FCST-01**: An ML model (regression or neural network, per PRD §8's original C9 scope
+- [x] **FCST-01**: An ML model (regression or neural network, per PRD §8's original C9 scope
   and the IEEE Trans. Smart Grid prior art in `Prior Art Report.md`) forecasts ampacity ahead
   of real time, dropped in behind `ampacity_forecast.py`'s existing `forecast_ampacity`
   function signature and `PIPELINE_SCHEMA` output columns — replacing or extending, not
   discarding, the current naive/EWM methods.
-- [ ] **FCST-02**: The forecasting model's accuracy and calibration are validated against real
+- [x] **FCST-02**: The forecasting model's accuracy and calibration are validated against real
   historical archive data (not synthetic fixtures) and the results are documented.
 
 ### Anomaly Detection
@@ -52,12 +52,13 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| FCST-01 | Phase 1 | Pending |
-| FCST-02 | Phase 1 | Pending |
+| FCST-01 | Phase 1 | Complete |
+| FCST-02 | Phase 1 | Complete |
 | ANOM-01 | Phase 2 | Pending |
 | ANOM-02 | Phase 2 | Pending |
 
 **Coverage:**
+
 - v1.3 requirements: 4 total
 - Mapped to phases: 4
 - Unmapped: 0 ✓

@@ -1,12 +1,23 @@
 {
   "contract": "1.0.0",
   "flavor": "core",
-  "milestone": null,
-  "phases": [],
+  "milestone": "v1.3 — )",
+  "phases": [
+    {
+      "number": "1",
+      "name": "Forecasting Model",
+      "status": "complete"
+    },
+    {
+      "number": "2",
+      "name": "Anomaly Detection Model",
+      "status": "pending"
+    }
+  ],
   "next": {
-    "command": "/gsd:discuss-phase",
-    "label": "Discuss the first phase",
-    "reason": "Project initialized — plan your first phase"
+    "command": "/gsd:progress --next",
+    "label": "Advance to the next step (plan phase 2)",
+    "reason": "Phase 2 of 2 — needs a plan"
   },
-  "updated_at": "2026-09-14T22:51:31.130Z"
+  "updated_at": "2026-09-24T19:03:12.803Z"
 }
