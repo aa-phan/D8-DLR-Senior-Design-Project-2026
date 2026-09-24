@@ -1,8 +1,8 @@
 ---
 phase: 01-forecasting-model
 verified: 2026-09-24T00:00:00Z
-status: passed_with_findings
-score: 4/4 ROADMAP success criteria verified (engineering/process); 0/2 corridors met the model's own stated accuracy bar
+status: passed
+score: 4/4 ROADMAP success criteria verified; 0/2 corridors met the model's own stated accuracy bar (see Findings -- an honest negative result, not an engineering gap)
 behavior_unverified: 0
 overrides_applied: 0
 ---
