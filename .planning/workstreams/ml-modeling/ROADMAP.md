@@ -84,7 +84,7 @@ that model's accuracy is proven against real historical data rather than assumed
   4. A written validation record documents the new method's measured out-of-sample accuracy on
      real data, compared directly against the naive/EWM baselines on the same data, and states
      whether the model met expectations — per FCST-02, not just eyeballed once and discarded.
-**Plans**: 2/3 plans executed
+**Plans**: 3/3 plans executed
 **Wave 1**
 
 - [x] 01-01-PLAN.md — Tracer: one real end-to-end ML ampacity forecast (scikit-learn pinned, `backend/forecast_training.py` assembling Open-Meteo→IEEE 738 per-corridor data, `method="ml"` returning the same four `PIPELINE_SCHEMA` columns) plus the model-honesty invariants
@@ -95,7 +95,7 @@ that model's accuracy is proven against real historical data rather than assumed
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 01-03-PLAN.md — FCST-02 validation record (`docs/data-science/decisions/forecasting_model.md`) written from the real full-window run, and the stale `C9-ampacity-forecasting.md` spec corrected (D-07)
+- [x] 01-03-PLAN.md — FCST-02 validation record (`docs/data-science/decisions/forecasting_model.md`) written from the real full-window run, and the stale `C9-ampacity-forecasting.md` spec corrected (D-07)
 
 ### Phase 2: Anomaly Detection Model
 
@@ -135,5 +135,5 @@ and may be executed first or in parallel if that better fits available capacity)
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Forecasting Model | 2/3 | In Progress|  |
+| 1. Forecasting Model | 3/3 | In Progress|  |
 | 2. Anomaly Detection Model | 0/TBD | Not started | - |
