@@ -260,6 +260,21 @@ FORECAST_ML_ROLLING_WINDOW_HOURS: int = 6
 # 2-5 year band, fixed at 3 for this phase).
 FORECAST_ML_TRAINING_YEARS: int = 3
 
+# D-01's evidence-based bake-off (v1.3 Phase 1 Plan 01-02): expanding-window
+# fold count for the offline candidate comparison (`forecast_training.
+# bakeoff_corridor`). A small fold count rather than per-row retraining --
+# refitting a real scikit-learn estimator at every row of a multi-year
+# hourly series is the documented cost trap RESEARCH.md Pitfall 1 warns
+# about, while a handful of TimeSeriesSplit folds still preserves the same
+# "train strictly precedes test" guarantee the walk-forward band relies on.
+FORECAST_ML_BAKEOFF_SPLITS: int = 5
+
+# Filename for the bake-off's machine-readable per-corridor comparison
+# report, written under FORECAST_ML_MODEL_DIR (git-ignored, generated
+# evidence). Plan 01-03 transcribes its numbers into the tracked validation
+# record (D-06) -- this JSON file itself is not the artifact of record.
+FORECAST_ML_BAKEOFF_REPORT_NAME: str = "bakeoff_report.json"
+
 # D-06: the anomaly control limit is a per-location dict, not one global
 # scalar — a single global band is the exact shape of the historical
 # RATING_BOUNDS bug documented in
