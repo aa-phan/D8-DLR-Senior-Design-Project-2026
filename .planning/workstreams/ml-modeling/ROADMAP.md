@@ -84,14 +84,14 @@ that model's accuracy is proven against real historical data rather than assumed
   4. A written validation record documents the new method's measured out-of-sample accuracy on
      real data, compared directly against the naive/EWM baselines on the same data, and states
      whether the model met expectations — per FCST-02, not just eyeballed once and discarded.
-**Plans**: 1/3 plans executed
+**Plans**: 2/3 plans executed
 **Wave 1**
 
 - [x] 01-01-PLAN.md — Tracer: one real end-to-end ML ampacity forecast (scikit-learn pinned, `backend/forecast_training.py` assembling Open-Meteo→IEEE 738 per-corridor data, `method="ml"` returning the same four `PIPELINE_SCHEMA` columns) plus the model-honesty invariants
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 01-02-PLAN.md — D-01 bake-off: regression vs. neural-network candidate scored against each other and against naive/EWM on the identical series via `TimeSeriesSplit`, winner persisted per corridor, both corridors trained and provably served independently
+- [x] 01-02-PLAN.md — D-01 bake-off: regression vs. neural-network candidate scored against each other and against naive/EWM on the identical series via `TimeSeriesSplit`, winner persisted per corridor, both corridors trained and provably served independently
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
@@ -135,5 +135,5 @@ and may be executed first or in parallel if that better fits available capacity)
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Forecasting Model | 1/3 | In Progress|  |
+| 1. Forecasting Model | 2/3 | In Progress|  |
 | 2. Anomaly Detection Model | 0/TBD | Not started | - |
