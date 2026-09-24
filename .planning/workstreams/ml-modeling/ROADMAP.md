@@ -80,7 +80,10 @@ that model's accuracy is proven against real historical data rather than assumed
   4. A written validation record documents the new method's measured out-of-sample accuracy on
      real data, compared directly against the naive/EWM baselines on the same data, and states
      whether the model met expectations — per FCST-02, not just eyeballed once and discarded.
-**Plans**: TBD
+**Plans**: 3 plans
+- [ ] 01-01-PLAN.md — Tracer: one real end-to-end ML ampacity forecast (scikit-learn pinned, `backend/forecast_training.py` assembling Open-Meteo→IEEE 738 per-corridor data, `method="ml"` returning the same four `PIPELINE_SCHEMA` columns) plus the model-honesty invariants
+- [ ] 01-02-PLAN.md — D-01 bake-off: regression vs. neural-network candidate scored against each other and against naive/EWM on the identical series via `TimeSeriesSplit`, winner persisted per corridor, both corridors trained and provably served independently
+- [ ] 01-03-PLAN.md — FCST-02 validation record (`docs/data-science/decisions/forecasting_model.md`) written from the real full-window run, and the stale `C9-ampacity-forecasting.md` spec corrected (D-07)
 
 ### Phase 2: Anomaly Detection Model
 **Goal**: The G6 safety gate can be backed by an actual model trained on historical
@@ -118,5 +121,5 @@ and may be executed first or in parallel if that better fits available capacity)
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Forecasting Model | 0/TBD | Not started | - |
+| 1. Forecasting Model | 0/3 | Planned (3 plans, 3 waves) | - |
 | 2. Anomaly Detection Model | 0/TBD | Not started | - |
