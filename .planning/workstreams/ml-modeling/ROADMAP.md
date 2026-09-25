@@ -125,7 +125,33 @@ path other than both being consumed by `DLRSafetyMonitor`; may be executed in pa
      against the existing mean±k·std baseline's trip rate on the same data.
   5. A written validation record documents that false-positive/false-negative measurement and
      states whether the model met expectations — per ANOM-02.
-**Plans**: TBD
+**Plans**: 4 plans
+
+**Wave 1**
+
+- [ ] 02-01-PLAN.md — Tracer: one real end-to-end trained-model anomaly check (`ANOMALY_ML_*`
+  config, `backend/anomaly_training.py` assembling pooled Open-Meteo readings per corridor,
+  an additive `_check_against_model` branch OR-combined into `check()` per D-05/D-06) plus the
+  fail-safe and no-substitution invariants
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 02-02-PLAN.md — ANOM-02 measurement + D-03 bake-off: false-positive rate on a
+  strictly-later real holdout and per-category recall on injected corruption, for all three
+  scikit-learn candidates across a contamination grid and for the existing mean±k·std baseline
+  on identical rows; each corridor's measured winner persisted
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 02-03-PLAN.md — D-02 load half of ANOM-01: per-corridor ERCOT zone load characterized at
+  training time only (`pull_ercot_data` made usable in process, per-calendar-year loop, correct
+  zone mapping per corridor) plus the boundary test keeping load out of `check()`
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 02-04-PLAN.md — ANOM-02 validation record (`docs/data-science/decisions/anomaly_detection_model.md`)
+  written from the real measurement runs per D-07's honesty standard, and the stale
+  `C10-anomaly-detection.md` spec corrected
 
 ## Progress
 
@@ -136,7 +162,7 @@ and may be executed first or in parallel if that better fits available capacity)
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Forecasting Model | 3/3 | Complete    | 2026-09-24 |
-| 2. Anomaly Detection Model | 0/TBD | Not started | - |
+| 2. Anomaly Detection Model | 0/4 | Planned | - |
 
 ## Backlog
 
