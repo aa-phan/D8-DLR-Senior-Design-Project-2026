@@ -15,6 +15,8 @@ here that needs weather data.
 
 import math
 import os
+import subprocess
+import sys
 
 import numpy as np
 import pandas as pd
@@ -425,3 +427,123 @@ def test_validate_candidate_false_positive_and_recall_denominators_are_disjoint(
     assert result["injected_rows_in_range_implausible"] > 0
 
     anomaly_detector._MODEL_CACHE.clear()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# CANDIDATE_ESTIMATORS / no-eager-sklearn-import (v1.3 Phase 2 Plan 02-02, D-03)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_candidate_estimators_has_exactly_three_keys_and_fresh_instances():
+    assert sorted(at.CANDIDATE_ESTIMATORS) == [
+        "EllipticEnvelope", "IsolationForest", "OneClassSVM",
+    ]
+
+    for name, factory in at.CANDIDATE_ESTIMATORS.items():
+        est_1 = factory(0.02)
+        est_2 = factory(0.02)
+        assert est_1 is not est_2, f"{name} factory returned the same instance twice"
+
+
+def test_no_eager_sklearn_import():
+    backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    result = subprocess.run(
+        [sys.executable, "-c",
+         "import sys; import anomaly_training; print('sklearn' in sys.modules)"],
+        capture_output=True, text=True, cwd=backend_dir,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "False"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# select_winner -- deterministic selection rule (v1.3 Phase 2 Plan 02-02, D-04)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def _fake_measurement(candidate, contamination, recall_pooled, false_positive_rate):
+    return {
+        "candidate": candidate,
+        "contamination": contamination,
+        "recall_pooled": recall_pooled,
+        "false_positive_rate": false_positive_rate,
+    }
+
+
+def test_select_winner_returns_highest_eligible_pooled_recall():
+    ceiling = config.ANOMALY_ML_MAX_FALSE_POSITIVE_RATE
+    measurements = [
+        _fake_measurement("IsolationForest", 0.01, 0.80, ceiling - 0.01),
+        _fake_measurement("EllipticEnvelope", 0.01, 0.60, ceiling - 0.02),
+        _fake_measurement("OneClassSVM", 0.01, 0.40, ceiling - 0.005),
+    ]
+    report = {"measurements": measurements}
+
+    winner, contamination, ceiling_met = at.select_winner(report)
+
+    assert winner == "IsolationForest"
+    assert contamination == 0.01
+    assert ceiling_met is True
+
+
+def test_select_winner_falls_back_to_lowest_false_positive_when_none_eligible():
+    ceiling = config.ANOMALY_ML_MAX_FALSE_POSITIVE_RATE
+    measurements = [
+        _fake_measurement("IsolationForest", 0.01, 0.80, ceiling + 0.05),
+        _fake_measurement("EllipticEnvelope", 0.01, 0.60, ceiling + 0.01),
+        _fake_measurement("OneClassSVM", 0.01, 0.40, ceiling + 0.10),
+    ]
+    report = {"measurements": measurements}
+
+    winner, contamination, ceiling_met = at.select_winner(report)
+
+    assert winner == "EllipticEnvelope"
+    assert ceiling_met is False
+
+
+def test_select_winner_recall_tie_breaks_by_false_positive_rate():
+    measurements = [
+        _fake_measurement("IsolationForest", 0.01, 0.70, 0.03),
+        _fake_measurement("EllipticEnvelope", 0.01, 0.70, 0.01),
+        _fake_measurement("OneClassSVM", 0.01, 0.50, 0.02),
+    ]
+    report = {"measurements": measurements}
+
+    winner, contamination, ceiling_met = at.select_winner(report)
+
+    assert winner == "EllipticEnvelope"
+
+
+def test_select_winner_further_tie_breaks_by_insertion_order():
+    measurements = [
+        _fake_measurement("IsolationForest", 0.01, 0.70, 0.02),
+        _fake_measurement("EllipticEnvelope", 0.01, 0.70, 0.02),
+        _fake_measurement("OneClassSVM", 0.01, 0.40, 0.10),
+    ]
+    report = {"measurements": measurements}
+
+    winner, contamination, ceiling_met = at.select_winner(report)
+
+    # CANDIDATE_ESTIMATORS insertion order: IsolationForest, EllipticEnvelope,
+    # OneClassSVM -- IsolationForest wins the further tie.
+    assert winner == "IsolationForest"
+
+
+def test_select_winner_raises_on_missing_or_non_finite_measurement():
+    measurements_missing = [
+        _fake_measurement("IsolationForest", 0.01, 0.70, 0.02),
+        _fake_measurement("EllipticEnvelope", 0.01, 0.70, 0.02),
+        # OneClassSVM missing entirely.
+    ]
+    with pytest.raises(ValueError) as exc_info:
+        at.select_winner({"measurements": measurements_missing})
+    assert "OneClassSVM" in str(exc_info.value)
+
+    measurements_nonfinite = [
+        _fake_measurement("IsolationForest", 0.01, float("nan"), 0.02),
+        _fake_measurement("EllipticEnvelope", 0.01, 0.70, 0.02),
+        _fake_measurement("OneClassSVM", 0.01, 0.40, 0.02),
+    ]
+    with pytest.raises(ValueError) as exc_info:
+        at.select_winner({"measurements": measurements_nonfinite})
+    assert "IsolationForest" in str(exc_info.value)

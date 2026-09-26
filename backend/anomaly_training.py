@@ -641,6 +641,313 @@ def _run_validate(corridors, years):
     print(f"\nvalidation report written to {report_path}")
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# D-03 three-candidate bake-off (v1.3 Phase 2 Plan 02-02, Task 2)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def _make_elliptic_envelope_candidate(contamination):
+    """
+    Unfitted `EllipticEnvelope` factory, parameterized by `contamination`,
+    mirroring `_make_isolation_forest_candidate`'s lazy-import discipline.
+    This arm assumes an elliptical (Gaussian) joint distribution over the
+    three variables, which irradiance's hard night-time zero floor
+    plausibly violates -- 02-RESEARCH.md's own "Alternatives Considered"
+    names this doubt explicitly. It is measured here rather than assumed
+    away, per D-04's instruction to evaluate on real measured rates
+    instead of defaulting out of caution.
+    """
+    from sklearn.covariance import EllipticEnvelope
+
+    return EllipticEnvelope(
+        contamination=contamination, random_state=config.ANOMALY_ML_RANDOM_SEED,
+    )
+
+
+def _make_one_class_svm_candidate(contamination):
+    """
+    Unfitted `OneClassSVM` factory (RBF kernel, `gamma="scale"`, `nu` set
+    to `contamination`), wrapped in `make_pipeline(StandardScaler(),
+    OneClassSVM(...))`. The scaler is present for the same reason Phase
+    1's neural-network bake-off arm wrapped `MLPRegressor`: this estimator
+    is scale-sensitive in a way the tree candidate is not, and the three
+    raw features span metres per second, degrees Celsius, and watts per
+    square metre -- an unscaled fit would measure a missing preprocessing
+    step, not the architecture D-03 is actually asking about.
+    """
+    from sklearn.pipeline import make_pipeline
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.svm import OneClassSVM
+
+    return make_pipeline(
+        StandardScaler(),
+        OneClassSVM(nu=contamination, kernel="rbf", gamma="scale"),
+    )
+
+
+# D-03's three candidates, in the order isolation forest, elliptic
+# envelope, one-class SVM -- a zero-argument-except-contamination
+# factory per entry (never a shared instance), since every contamination
+# grid point must fit a FRESH, never-before-fitted estimator. Order is
+# significant: it is `select_winner`'s last-resort deterministic
+# tiebreak, mirroring `forecast_training.CANDIDATE_ESTIMATORS`'s own
+# insertion-order convention.
+CANDIDATE_ESTIMATORS: dict = {
+    "IsolationForest": _make_isolation_forest_candidate,
+    "EllipticEnvelope": _make_elliptic_envelope_candidate,
+    "OneClassSVM": _make_one_class_svm_candidate,
+}
+
+
+def corridor_report(
+    corridor: str, fit_frame: pd.DataFrame, holdout_frame: pd.DataFrame
+) -> dict:
+    """
+    Runs `validate_candidate` for every (candidate, contamination) pair in
+    the cross product of `CANDIDATE_ESTIMATORS` x `config.ANOMALY_ML_
+    CONTAMINATION_GRID`, returning one mapping carrying the corridor name,
+    the assembled row count, the window start/end (ISO strings), the fit/
+    holdout row counts, the injection rate, the feature column list, and a
+    `measurements` list holding every pair's FULL measurement -- losers
+    included. Recording every attempted pair (and the window span
+    alongside them) is what makes a shortened run or a dropped arm
+    visible in the evidence rather than hidden behind a single score
+    (T-02-09), exactly as `forecast_training.corridor_report` does.
+    """
+    combined = pd.concat([fit_frame, holdout_frame], ignore_index=True)
+
+    measurements = []
+    for name, factory in CANDIDATE_ESTIMATORS.items():
+        for contamination in config.ANOMALY_ML_CONTAMINATION_GRID:
+            measurements.append(
+                validate_candidate(
+                    corridor, fit_frame, holdout_frame, name, factory, contamination,
+                )
+            )
+
+    return {
+        "corridor": corridor,
+        "rows": int(len(combined)),
+        "window_start": pd.Timestamp(combined["datetime_utc"].min()).isoformat(),
+        "window_end": pd.Timestamp(combined["datetime_utc"].max()).isoformat(),
+        "fit_rows": int(len(fit_frame)),
+        "holdout_rows": int(len(holdout_frame)),
+        "injection_rate": float(config.ANOMALY_ML_INJECTION_RATE),
+        "feature_columns": list(config.ANOMALY_ML_FEATURE_COLUMNS),
+        "measurements": measurements,
+    }
+
+
+def select_winner(report: dict) -> tuple[str, float, bool]:
+    """
+    This plan's stated winner-selection rule, verbatim (see the plan's
+    `<objective>`): among the (candidate, contamination) pairs whose
+    measured false-positive rate on the clean holdout is at or below
+    `config.ANOMALY_ML_MAX_FALSE_POSITIVE_RATE`, select the pair with the
+    highest pooled recall across both injection categories; break a tie
+    by the lower false-positive rate, then by `CANDIDATE_ESTIMATORS`
+    insertion order. When NO pair meets the ceiling, select the pair with
+    the lowest measured false-positive rate and mark the returned
+    selection as not meeting the ceiling (D-07 -- shipped and stated
+    plainly, never hidden; per D-05/D-06 the OR-combined branch only ever
+    adds caution regardless of this outcome).
+
+    Reads only `report["measurements"]`. Raises `ValueError` naming the
+    candidate when any expected `CANDIDATE_ESTIMATORS` key is entirely
+    absent from the measurements, or naming the candidate and the
+    offending value when its pooled recall or false-positive rate is not
+    a finite number -- selection never picks a winner on a missing or
+    broken measurement (D-04), mirroring `forecast_training.select_
+    winner`'s own refusal semantics.
+
+    Returns `(winner_candidate_name, selected_contamination, ceiling_met)`.
+    Logs at INFO which tiebreak fired, if one did.
+    """
+    measurements = report.get("measurements", [])
+    candidate_names = list(CANDIDATE_ESTIMATORS)
+
+    present_candidates = {m.get("candidate") for m in measurements}
+    missing = [name for name in candidate_names if name not in present_candidates]
+    if missing:
+        raise ValueError(
+            f"select_winner: report is missing candidate(s) {missing}; "
+            f"present candidates: {sorted(c for c in present_candidates if c)}"
+        )
+
+    validated = []
+    for m in measurements:
+        name = m.get("candidate")
+        contamination = m.get("contamination")
+        recall_pooled = m.get("recall_pooled")
+        fp_rate = m.get("false_positive_rate")
+        try:
+            recall_f = float(recall_pooled)
+        except (TypeError, ValueError):
+            recall_f = math.nan
+        try:
+            fp_f = float(fp_rate)
+        except (TypeError, ValueError):
+            fp_f = math.nan
+        if not math.isfinite(recall_f) or not math.isfinite(fp_f):
+            raise ValueError(
+                f"select_winner: candidate {name!r} at contamination "
+                f"{contamination!r} has a non-finite measurement "
+                f"(recall_pooled={recall_pooled!r}, "
+                f"false_positive_rate={fp_rate!r}) -- refusing to pick a "
+                f"winner on a missing measurement"
+            )
+        validated.append({
+            "candidate": name,
+            "contamination": float(contamination),
+            "recall_pooled": recall_f,
+            "false_positive_rate": fp_f,
+            "order": candidate_names.index(name),
+        })
+
+    eligible = [
+        m for m in validated
+        if m["false_positive_rate"] <= config.ANOMALY_ML_MAX_FALSE_POSITIVE_RATE
+    ]
+
+    if eligible:
+        best_recall = max(m["recall_pooled"] for m in eligible)
+        recall_tied = [m for m in eligible if m["recall_pooled"] == best_recall]
+        if len(recall_tied) > 1:
+            best_fp = min(m["false_positive_rate"] for m in recall_tied)
+            fp_tied = [m for m in recall_tied if m["false_positive_rate"] == best_fp]
+            if len(fp_tied) > 1:
+                fp_tied.sort(key=lambda m: (m["order"], m["contamination"]))
+                winner = fp_tied[0]
+                logger.info(
+                    "select_winner: pooled-recall and false-positive-rate "
+                    "tie between %s broken by CANDIDATE_ESTIMATORS order "
+                    "-> %r",
+                    [(m["candidate"], m["contamination"]) for m in fp_tied],
+                    (winner["candidate"], winner["contamination"]),
+                )
+            else:
+                winner = fp_tied[0]
+                logger.info(
+                    "select_winner: pooled-recall tie between %s broken "
+                    "by false-positive rate -> %r",
+                    [(m["candidate"], m["contamination"]) for m in recall_tied],
+                    (winner["candidate"], winner["contamination"]),
+                )
+        else:
+            winner = recall_tied[0]
+        return winner["candidate"], winner["contamination"], True
+
+    best_fp = min(m["false_positive_rate"] for m in validated)
+    fp_tied = [m for m in validated if m["false_positive_rate"] == best_fp]
+    fp_tied.sort(key=lambda m: (m["order"], m["contamination"]))
+    winner = fp_tied[0]
+    logger.info(
+        "select_winner: no candidate met the false-positive ceiling "
+        "(%.4f); selecting lowest false-positive rate -> %r",
+        config.ANOMALY_ML_MAX_FALSE_POSITIVE_RATE,
+        (winner["candidate"], winner["contamination"]),
+    )
+    return winner["candidate"], winner["contamination"], False
+
+
+def _run_bakeoff(corridors, years):
+    """
+    D-03/D-04's full bake-off entry point, one corridor at a time:
+    assemble the real observation frame, split it chronologically, build
+    the corridor report (every candidate x contamination pair, losers
+    included), select the winner via `select_winner`, refit that winner's
+    factory at its selected contamination on the FULL frame (fit slice
+    plus holdout -- A-08: the persisted artifact uses every real row
+    available, while the report's own scores remain the strictly
+    out-of-sample ones the holdout produced), persist it, and accumulate
+    the report. A failure assembling or scoring one corridor is reported
+    by name and the run continues to the next corridor (mirrors
+    `forecast_training._run_bakeoff`'s own try-and-continue handling).
+    Each corridor also gets one final `SUMMARY:` line.
+    """
+    reports = {}
+    summary_lines = []
+
+    for corridor in corridors:
+        try:
+            frame = corridor_observation_frame(corridor, years)
+        except Exception:
+            logger.exception(
+                "anomaly_training --bakeoff: failed assembling corridor "
+                "%s -- continuing to the next corridor", corridor,
+            )
+            print(f"{corridor}: FAILED to assemble observation frame -- see log")
+            continue
+
+        os.makedirs(config.ANOMALY_ML_MODEL_DIR, exist_ok=True)
+        frame_path = os.path.join(
+            config.ANOMALY_ML_MODEL_DIR,
+            config.ANOMALY_ML_OBSERVATION_FRAME_TEMPLATE.format(corridor=corridor),
+        )
+        frame.to_csv(frame_path, index=False)
+
+        try:
+            fit_frame, holdout_frame = chronological_split(frame)
+            report = corridor_report(corridor, fit_frame, holdout_frame)
+            winner_name, winner_contamination, ceiling_met = select_winner(report)
+
+            X_full = build_feature_matrix(frame)
+            winner_estimator = fit_corridor_model(
+                X_full, CANDIDATE_ESTIMATORS[winner_name](winner_contamination),
+            )
+            model_path = persist_corridor_model(winner_estimator, corridor)
+        except Exception:
+            logger.exception(
+                "anomaly_training --bakeoff: failed scoring/selecting for "
+                "corridor %s -- continuing to the next corridor", corridor,
+            )
+            print(f"{corridor}: FAILED to score/select -- see log")
+            continue
+
+        report["winner"] = winner_name
+        report["selected_contamination"] = winner_contamination
+        report["ceiling_met"] = ceiling_met
+        report["model_path"] = model_path
+        reports[corridor] = report
+
+        start = frame["datetime_utc"].min()
+        end = frame["datetime_utc"].max()
+        print(f"\n{corridor}: {len(frame)} rows, {start} -> {end}")
+        print(
+            f"{'candidate':<20}{'contamination':>14}{'fp_rate':>10}"
+            f"{'baseline_fp':>13}{'recall_pooled':>15}"
+        )
+        for m in report["measurements"]:
+            print(
+                f"{m['candidate']:<20}{m['contamination']:>14.4f}"
+                f"{m['false_positive_rate']:>10.4f}"
+                f"{m['baseline_false_positive_rate']:>13.4f}"
+                f"{m['recall_pooled']:>15.4f}"
+            )
+        print(
+            f"winner: {winner_name} contamination={winner_contamination} "
+            f"ceiling_met={ceiling_met} -> persisted to {model_path}"
+        )
+        summary_lines.append(
+            f"SUMMARY: {corridor} rows={len(frame)} window={start}->{end} "
+            f"winner={winner_name} contamination={winner_contamination} "
+            f"ceiling_met={ceiling_met} path={model_path}"
+        )
+
+    os.makedirs(config.ANOMALY_ML_MODEL_DIR, exist_ok=True)
+    report_path = os.path.join(
+        config.ANOMALY_ML_MODEL_DIR, config.ANOMALY_ML_VALIDATION_REPORT_NAME
+    )
+    with open(report_path, "w") as fh:
+        json.dump(reports, fh, indent=2)
+    print(f"\nbake-off report written to {report_path}")
+
+    if summary_lines:
+        print()
+        for line in summary_lines:
+            print(line)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description=(
@@ -672,9 +979,23 @@ def main(argv=None):
              "config.ANOMALY_ML_CONTAMINATION_GRID, printing a table and "
              "writing config.ANOMALY_ML_VALIDATION_REPORT_NAME.",
     )
+    parser.add_argument(
+        "--bakeoff",
+        action="store_true",
+        help="Run the D-03 three-candidate, contamination-swept bake-off "
+             "(IsolationForest/EllipticEnvelope/OneClassSVM) against the "
+             "rolling baseline, per corridor, select each corridor's own "
+             "measured winner per this plan's stated deterministic rule, "
+             "persist it, and write the accumulated comparison -- losers "
+             "included -- to config.ANOMALY_ML_VALIDATION_REPORT_NAME.",
+    )
     args = parser.parse_args(argv)
 
     corridors = [args.corridor] if args.corridor else sorted(config.CORRIDOR_ENDPOINTS)
+
+    if args.bakeoff:
+        _run_bakeoff(corridors, args.years)
+        return
 
     if args.validate:
         _run_validate(corridors, args.years)
