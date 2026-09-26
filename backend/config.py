@@ -300,6 +300,60 @@ ANOMALY_CONTROL_LIMIT_K_BY_LOCATION: dict[str, float] = {
 DEFAULT_ANOMALY_CONTROL_LIMIT_K: float = 4.0
 
 # ──────────────────────────────────────────────────────────────────────────────
+# ML anomaly-detection layer (v1.3 Phase 2, additive model branch / ANOM-01)
+# ──────────────────────────────────────────────────────────────────────────────
+# Tunables for the new fitted-outlier-estimator third branch in
+# anomaly_detector.py, mirroring this file's FORECAST_ML_* block structure
+# and centralization discipline directly above.
+
+# Directory for persisted per-corridor anomaly model artifacts and the
+# observation frame that produced them. Currently resolves to the same
+# git-ignored directory as FORECAST_ML_MODEL_DIR, but kept as its own
+# constant so the forecasting and anomaly-detection subsystems stay
+# independently configurable if their storage needs ever diverge.
+ANOMALY_ML_MODEL_DIR: str = "data/models"
+
+# {corridor} is formatted in by `anomaly_detector._model_path_for` only
+# after the corridor key has been checked against `CORRIDOR_ENDPOINTS` --
+# never a caller-supplied path (T-02-02).
+ANOMALY_ML_MODEL_FILENAME_TEMPLATE: str = "anomaly_{corridor}.joblib"
+
+# The exact real pooled observation frame that fitted a corridor's model,
+# written by `anomaly_training.main` so a training run can be replayed.
+ANOMALY_ML_OBSERVATION_FRAME_TEMPLATE: str = "anomaly_observations_{corridor}.csv"
+
+# D-01's raw per-variable inputs, spelled with the PIPELINE_SCHEMA/
+# Open-Meteo column names -- the training-time column names the estimator
+# is fitted on, in fit order.
+ANOMALY_ML_FEATURE_COLUMNS: tuple[str, ...] = (
+    "air_temp", "wind_speed", "solar_radiation",
+)
+
+# The `raw_data` key at the same tuple position as the training column
+# above it -- the positional correspondence between this tuple and
+# ANOMALY_ML_FEATURE_COLUMNS is the entire mapping from a live reading to
+# a feature vector (a test asserts their lengths match). No time-of-day
+# and no load feature appears in either tuple: `raw_data` carries neither
+# a timestamp nor a load value at the `check()` call site, and adding
+# either is Track 1's scope, not this phase's (D-01, D-02).
+ANOMALY_ML_RAW_DATA_KEYS: tuple[str, ...] = ("temp", "wind", "solar")
+
+# Open-Meteo backfill depth per endpoint city, in complete calendar years,
+# matching FORECAST_ML_TRAINING_YEARS.
+ANOMALY_ML_TRAINING_YEARS: int = 3
+
+# D-03/D-04: an untuned starting value -- Plan 02-02 replaces this with a
+# value selected from measured false-positive evidence against real clean
+# historical data (see docs/data-science/decisions/ once that record
+# exists). Passed explicitly to IsolationForest rather than left at the
+# estimator's own automatic offset heuristic, so this tracer path has one
+# explicit, inspectable number rather than a hidden default.
+ANOMALY_ML_CONTAMINATION: float = 0.01
+
+# Matches forecast_training.py's fixed-seed reproducibility convention.
+ANOMALY_ML_RANDOM_SEED: int = 20260924
+
+# ──────────────────────────────────────────────────────────────────────────────
 # ASOS 1-minute network station IDs (Phase 7, C4)
 # ──────────────────────────────────────────────────────────────────────────────
 # IEM ASOS network 3-letter FAA identifiers -- NOT the 4-letter ICAO codes

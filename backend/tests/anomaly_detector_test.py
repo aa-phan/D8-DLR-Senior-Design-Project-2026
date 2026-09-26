@@ -19,7 +19,9 @@ asserts, no classes.
 import numpy as np
 import pandas as pd
 import pytest
+from sklearn.ensemble import IsolationForest
 
+import anomaly_detector
 import config
 import thermal_model
 from ampacity_forecast import ForecastResult
@@ -36,6 +38,28 @@ def _forecast(amps=1000.0, ci_lower_amps=900.0, ci_upper_amps=1100.0):
         n_observations=50,
         method="naive",
     )
+
+
+@pytest.fixture
+def fitted_anomaly_model():
+    """
+    A genuinely fitted, small `IsolationForest` over a deterministic
+    synthetic three-column envelope (air_temp, wind_speed,
+    solar_radiation, in `config.ANOMALY_ML_RAW_DATA_KEYS` order) -- a
+    really-fitted estimator, not a hand-written stub prediction method,
+    so these tests exercise the real `predict`/`decision_function` path
+    with no disk I/O and no network.
+    """
+    rng = np.random.default_rng(20260924)
+    n = 300
+    temp = rng.normal(25.0, 5.0, size=n)
+    wind = np.clip(rng.normal(8.0, 3.0, size=n), 0.0, None)
+    solar = np.clip(rng.normal(400.0, 150.0, size=n), 0.0, None)
+    X = np.column_stack([temp, wind, solar])
+
+    model = IsolationForest(n_estimators=50, contamination=0.02, random_state=20260924)
+    model.fit(X)
+    return model
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -222,3 +246,48 @@ def test_anomaly_resolves_through_existing_fallback_contract():
     assert result["fallback"] is True
     assert result["rating"] == monitor.static_rating
     assert result["alerts"][0].startswith("G6 FAIL")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Model branch (v1.3 Phase 2, ANOM-01) -- additive third signal on raw readings
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_model_path_rejects_unknown_corridor_naming_valid_corridors():
+    with pytest.raises(ValueError) as exc_info:
+        anomaly_detector._model_path_for("../../etc/passwd")
+
+    message = str(exc_info.value)
+    assert "AUSTIN_CORPUS_CHRISTI" in message
+    assert "MIDLAND_EL_PASO" in message
+
+
+def test_model_branch_returns_two_tuple_of_bool_and_str(fitted_anomaly_model):
+    detector = AnomalyDetector(model=fitted_anomaly_model)
+
+    result = detector.check({"wind": 8.0, "temp": 25.0, "solar": 400.0}, 1000.0)
+
+    assert isinstance(result, tuple)
+    assert len(result) == 2
+    assert isinstance(result[0], bool)
+    assert isinstance(result[1], str)
+
+
+def test_model_clean_reading_inside_envelope(fitted_anomaly_model):
+    detector = AnomalyDetector(model=fitted_anomaly_model)
+
+    is_anomalous, reason = detector.check({"wind": 8.0, "temp": 25.0, "solar": 400.0}, 1000.0)
+
+    assert is_anomalous is False
+    assert detector.signal == "model_clean"
+
+
+def test_model_trip_reading_far_outside_envelope(fitted_anomaly_model):
+    detector = AnomalyDetector(model=fitted_anomaly_model)
+
+    is_anomalous, reason = detector.check(
+        {"wind": 45.0, "temp": -15.0, "solar": 1350.0}, 1000.0
+    )
+
+    assert is_anomalous is True
+    assert detector.signal == "model_trip"
