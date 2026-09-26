@@ -125,7 +125,7 @@ path other than both being consumed by `DLRSafetyMonitor`; may be executed in pa
      against the existing mean±k·std baseline's trip rate on the same data.
   5. A written validation record documents that false-positive/false-negative measurement and
      states whether the model met expectations — per ANOM-02.
-**Plans**: 3/4 plans executed
+**Plans**: 4/4 plans executed
 
 **Wave 1**
 
@@ -149,7 +149,7 @@ path other than both being consumed by `DLRSafetyMonitor`; may be executed in pa
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 02-04-PLAN.md — ANOM-02 validation record (`docs/data-science/decisions/anomaly_detection_model.md`)
+- [x] 02-04-PLAN.md — ANOM-02 validation record (`docs/data-science/decisions/anomaly_detection_model.md`)
   written from the real measurement runs per D-07's honesty standard, and the stale
   `C10-anomaly-detection.md` spec corrected
 
@@ -162,7 +162,7 @@ and may be executed first or in parallel if that better fits available capacity)
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Forecasting Model | 3/3 | Complete    | 2026-09-24 |
-| 2. Anomaly Detection Model | 3/4 | In Progress|  |
+| 2. Anomaly Detection Model | 4/4 | In Progress|  |
 
 ## Backlog
 
