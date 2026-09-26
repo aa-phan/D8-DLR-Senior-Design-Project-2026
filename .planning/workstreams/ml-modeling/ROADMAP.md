@@ -125,11 +125,11 @@ path other than both being consumed by `DLRSafetyMonitor`; may be executed in pa
      against the existing mean±k·std baseline's trip rate on the same data.
   5. A written validation record documents that false-positive/false-negative measurement and
      states whether the model met expectations — per ANOM-02.
-**Plans**: 4 plans
+**Plans**: 1/4 plans executed
 
 **Wave 1**
 
-- [ ] 02-01-PLAN.md — Tracer: one real end-to-end trained-model anomaly check (`ANOMALY_ML_*`
+- [x] 02-01-PLAN.md — Tracer: one real end-to-end trained-model anomaly check (`ANOMALY_ML_*`
   config, `backend/anomaly_training.py` assembling pooled Open-Meteo readings per corridor,
   an additive `_check_against_model` branch OR-combined into `check()` per D-05/D-06) plus the
   fail-safe and no-substitution invariants
@@ -162,7 +162,7 @@ and may be executed first or in parallel if that better fits available capacity)
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Forecasting Model | 3/3 | Complete    | 2026-09-24 |
-| 2. Anomaly Detection Model | 0/4 | Planned | - |
+| 2. Anomaly Detection Model | 1/4 | In Progress|  |
 
 ## Backlog
 
@@ -185,4 +185,5 @@ horizon grows, giving ML more room to add value), a longer/richer training windo
 than the current 3 years), and/or additional features.
 
 Plans:
+
 - [ ] TBD (promote with /gsd-review-backlog when ready)
