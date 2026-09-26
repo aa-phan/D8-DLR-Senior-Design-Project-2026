@@ -125,7 +125,7 @@ path other than both being consumed by `DLRSafetyMonitor`; may be executed in pa
      against the existing mean±k·std baseline's trip rate on the same data.
   5. A written validation record documents that false-positive/false-negative measurement and
      states whether the model met expectations — per ANOM-02.
-**Plans**: 1/4 plans executed
+**Plans**: 2/4 plans executed
 
 **Wave 1**
 
@@ -136,7 +136,7 @@ path other than both being consumed by `DLRSafetyMonitor`; may be executed in pa
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 02-02-PLAN.md — ANOM-02 measurement + D-03 bake-off: false-positive rate on a
+- [x] 02-02-PLAN.md — ANOM-02 measurement + D-03 bake-off: false-positive rate on a
   strictly-later real holdout and per-category recall on injected corruption, for all three
   scikit-learn candidates across a contamination grid and for the existing mean±k·std baseline
   on identical rows; each corridor's measured winner persisted
@@ -162,7 +162,7 @@ and may be executed first or in parallel if that better fits available capacity)
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Forecasting Model | 3/3 | Complete    | 2026-09-24 |
-| 2. Anomaly Detection Model | 1/4 | In Progress|  |
+| 2. Anomaly Detection Model | 2/4 | In Progress|  |
 
 ## Backlog
 
