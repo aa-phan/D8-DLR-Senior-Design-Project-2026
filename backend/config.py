@@ -402,6 +402,44 @@ ANOMALY_ML_SVM_MAX_TRAIN_ROWS: int = 5000
 ANOMALY_ML_VALIDATION_REPORT_NAME: str = "anomaly_validation_report.json"
 
 # ──────────────────────────────────────────────────────────────────────────────
+# ERCOT load characterization layer (v1.3 Phase 2 Plan 02-03, D-02/ANOM-01)
+# ──────────────────────────────────────────────────────────────────────────────
+# Tunables for anomaly_training.py's characterize_load and
+# ercot_data_retriever.pull_ercot_data's zone-aware, training-time-only
+# ERCOT load characterization. D-02 resolved "load" as a per-variable
+# baseline to training-time-only: raw_data does not carry load at the live
+# check() call site, so none of this reaches the runtime decision path.
+
+# Per-corridor ERCOT weather-zone substring selection for
+# ercot_data_retriever.pull_ercot_data's zone_substrings parameter. These
+# are uppercased substrings matched against ERCOT's real weather-zone
+# column names (Coast, East, Far West, North, North Central, South, South
+# Central, West, ERCOT) -- SOUTH deliberately catches both South and
+# South Central, WEST deliberately catches both West and Far West.
+# Austin and Corpus Christi are nowhere near the west zones, so reusing
+# one filter for both corridors would produce fabricated evidence
+# (02-RESEARCH.md Pitfall 3). Every key in CORRIDOR_ENDPOINTS must appear
+# here -- a test asserts it, so no corridor can silently fall through to
+# a default zone selection.
+ANOMALY_ML_ERCOT_ZONE_SUBSTRINGS_BY_CORRIDOR: dict[str, tuple[str, ...]] = {
+    "AUSTIN_CORPUS_CHRISTI": ("SOUTH",),
+    "MIDLAND_EL_PASO": ("WEST",),
+}
+
+# The load characterization window depth, in complete calendar years.
+# Deliberately shallower than ANOMALY_ML_TRAINING_YEARS -- D-02 scopes
+# load to a training-time sanity check rather than a model input, and
+# each year costs one separate download from the installed gridstatus
+# client.
+ANOMALY_ML_LOAD_YEARS: int = 1
+
+# Filename for the load characterization's machine-readable evidence
+# file, under ANOMALY_ML_MODEL_DIR (git-ignored, generated). Plan 02-04
+# transcribes its numbers into the tracked validation record -- this JSON
+# is not the artifact of record.
+ANOMALY_ML_LOAD_REPORT_NAME: str = "anomaly_load_characterization.json"
+
+# ──────────────────────────────────────────────────────────────────────────────
 # ASOS 1-minute network station IDs (Phase 7, C4)
 # ──────────────────────────────────────────────────────────────────────────────
 # IEM ASOS network 3-letter FAA identifiers -- NOT the 4-letter ICAO codes
