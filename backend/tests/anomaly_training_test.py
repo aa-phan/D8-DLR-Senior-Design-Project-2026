@@ -13,6 +13,7 @@ synthetic inputs seeded through `numpy.random.default_rng`, no network --
 here that needs weather data.
 """
 
+import importlib
 import math
 import os
 import subprocess
@@ -547,3 +548,130 @@ def test_select_winner_raises_on_missing_or_non_finite_measurement():
     with pytest.raises(ValueError) as exc_info:
         at.select_winner({"measurements": measurements_nonfinite})
     assert "IsolationForest" in str(exc_info.value)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# D-02 boundary guard (v1.3 Phase 2 Plan 02-03, ANOM-01): load stays
+# training-time only and never reaches the live check() path
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_load_is_training_time_only_and_never_reaches_check():
+    """
+    Asserts all four halves of the D-02 boundary together, so a partial
+    regression cannot pass:
+
+    1. `backend/anomaly_detector.py`'s own SOURCE (not just its current
+       import state) contains no import of `ercot_data_retriever` or
+       `gridstatus`.
+    2. No name in `config.ANOMALY_ML_FEATURE_COLUMNS` or
+       `config.ANOMALY_ML_RAW_DATA_KEYS` contains "load".
+    3. Freshly importing `anomaly_detector` (with `gridstatus` evicted
+       from `sys.modules` first, so this check is not fooled by an
+       unrelated test module -- e.g. `ercot_data_retriever_test.py` --
+       having already imported `gridstatus` earlier in the same session)
+       leaves `gridstatus` OUT of `sys.modules`.
+    4. An `AnomalyDetector` holding a fitted three-feature model returns
+       a normal `(bool, str)` two-tuple for a `raw_data` carrying exactly
+       `wind`/`temp`/`solar` -- proving the live call site needs no load
+       field.
+    """
+    # Half 1: source-level import ban (not just today's sys.modules state).
+    detector_path = anomaly_detector.__file__
+    with open(detector_path) as fh:
+        detector_source = fh.read()
+    for line in detector_source.splitlines():
+        stripped = line.strip()
+        assert not stripped.startswith("import ercot_data_retriever"), line
+        assert not stripped.startswith("from ercot_data_retriever"), line
+        assert not stripped.startswith("import gridstatus"), line
+        assert not stripped.startswith("from gridstatus"), line
+
+    # Half 2: no "load" name in either config feature tuple.
+    all_names = list(config.ANOMALY_ML_FEATURE_COLUMNS) + list(
+        config.ANOMALY_ML_RAW_DATA_KEYS
+    )
+    assert not any("load" in name.lower() for name in all_names)
+
+    # Half 3: importing anomaly_detector fresh does not pull in gridstatus.
+    sys.modules.pop("gridstatus", None)
+    sys.modules.pop("anomaly_detector", None)
+    importlib.import_module("anomaly_detector")
+    assert "gridstatus" not in sys.modules
+
+    # Half 4: a normal two-tuple verdict on exactly wind/temp/solar.
+    import anomaly_detector as reloaded_anomaly_detector
+    from sklearn.ensemble import IsolationForest
+
+    rng = np.random.default_rng(20260924)
+    model = IsolationForest(
+        n_estimators=10, contamination=0.1, random_state=20260924,
+    ).fit(rng.normal(size=(50, 3)))
+
+    detector = reloaded_anomaly_detector.AnomalyDetector(model=model)
+    result = detector.check({"wind": 5.0, "temp": 20.0, "solar": 300.0}, 1000.0)
+
+    assert isinstance(result, tuple)
+    assert len(result) == 2
+    is_anomalous, reason = result
+    assert isinstance(is_anomalous, bool)
+    assert isinstance(reason, str)
+
+
+def test_characterize_load_reports_the_retrieved_window_not_the_requested_one(
+    monkeypatch, tmp_path,
+):
+    monkeypatch.setattr(config, "ANOMALY_ML_MODEL_DIR", str(tmp_path))
+    corridor = "AUSTIN_CORPUS_CHRISTI"
+
+    # Pre-seed the pooled observation frame on disk so characterize_load
+    # never calls corridor_observation_frame (no live Open-Meteo fetch).
+    obs_frame = _synthetic_observation_frame(n=48)
+    obs_path = os.path.join(
+        config.ANOMALY_ML_MODEL_DIR,
+        config.ANOMALY_ML_OBSERVATION_FRAME_TEMPLATE.format(corridor=corridor),
+    )
+    obs_frame.to_csv(obs_path, index=False)
+
+    # The requested window (config.ANOMALY_ML_LOAD_YEARS=1 by default)
+    # spans a full calendar year, but the fake pull_ercot_data deliberately
+    # returns a much SHORTER span -- the report must reflect what actually
+    # came back, never the request (T-02-12).
+    short_frame = pd.DataFrame({
+        "datetime_utc": pd.to_datetime(obs_frame["datetime_utc"].iloc[:5], utc=True),
+        "ercot_south_load_mw": [1000.0, 1010.0, 1020.0, 1030.0, 1040.0],
+    })
+    short_frame.attrs["load_column"] = "ercot_south_load_mw"
+    short_frame.attrs["zone_columns_matched"] = ["South", "South Central"]
+
+    def _fake_pull(start, end, zone_substrings=None, save=True):
+        return short_frame
+
+    monkeypatch.setattr(at.ercot_data_retriever, "pull_ercot_data", _fake_pull)
+
+    result = at.characterize_load(corridor, years=1)
+
+    assert result["available"] is True
+    assert result["load_rows"] == 5
+    assert result["zone_columns"] == ["South", "South Central"]
+    expected_start = pd.Timestamp(short_frame["datetime_utc"].min()).isoformat()
+    expected_end = pd.Timestamp(short_frame["datetime_utc"].max()).isoformat()
+    assert result["window_start"] == expected_start
+    assert result["window_end"] == expected_end
+    assert set(result["correlations"]) == set(config.ANOMALY_ML_FEATURE_COLUMNS)
+
+
+def test_characterize_load_records_unavailability_without_raising(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "ANOMALY_ML_MODEL_DIR", str(tmp_path))
+    corridor = "MIDLAND_EL_PASO"
+
+    def _raising_pull(start, end, zone_substrings=None, save=True):
+        raise RuntimeError("simulated ERCOT network failure")
+
+    monkeypatch.setattr(at.ercot_data_retriever, "pull_ercot_data", _raising_pull)
+
+    result = at.characterize_load(corridor, years=1)
+
+    assert result["available"] is False
+    assert result["corridor"] == corridor
+    assert "simulated ERCOT network failure" in result["error"]
+    assert "zone_substrings" in result

@@ -19,6 +19,15 @@ bounds or carrying a null/non-finite feature value, fits a `scikit-learn`
 outlier estimator on the survivors, and persists the result atomically for
 `anomaly_detector._load_corridor_model` to load.
 
+v1.3 Phase 2 (02-03, ANOM-01/D-02) also imports `ercot_data_retriever` at
+module scope: `characterize_load` runs D-02's training-time-only ERCOT
+load characterization here, in the offline trainer, where this import is
+legal. `anomaly_detector.py` must never import `ercot_data_retriever` or
+`gridstatus` -- a test in `backend/tests/anomaly_training_test.py` asserts
+this boundary holds, since `raw_data` carries no load value at the live
+`check()` call site and wiring one in is Track 1's scope, not this
+workstream's.
+
 Run directly:
     .venv/bin/python3 backend/anomaly_training.py --corridor AUSTIN_CORPUS_CHRISTI --years 1
 """
@@ -36,6 +45,7 @@ import pandas as pd
 import anomaly_detector
 import config
 import corridor_discretization
+import ercot_data_retriever
 import forecast_training
 import thermal_model
 from DLRSafetyMonitor import DLRSafetyMonitor
@@ -948,6 +958,161 @@ def _run_bakeoff(corridors, years):
             print(line)
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# D-02 training-time-only load characterization (v1.3 Phase 2 Plan 02-03,
+# ANOM-01)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def characterize_load(corridor: str, years: int = None) -> dict:
+    """
+    D-02's training-time-only load characterization for one corridor:
+    pulls `years` complete calendar years (default
+    `config.ANOMALY_ML_LOAD_YEARS`) of the corridor's OWN ERCOT zone
+    load -- resolved from `config.ANOMALY_ML_ERCOT_ZONE_SUBSTRINGS_BY_
+    CORRIDOR`, never a substring shared with the other corridor -- joins
+    it to the corridor's pooled weather observation frame on
+    `datetime_utc`, and reports the Pearson correlation between the load
+    series and each of `config.ANOMALY_ML_FEATURE_COLUMNS`.
+
+    The window ends with the most recent COMPLETE calendar year (the
+    current, still-in-progress year is never included), matching
+    `forecast_training.fetch_city_weather`'s own rule, so the load window
+    and the weather window describe the same period.
+
+    The observation frame is loaded from its CSV path
+    (`config.ANOMALY_ML_OBSERVATION_FRAME_TEMPLATE`) when present,
+    otherwise assembled fresh via `corridor_observation_frame`. Because
+    that frame is POOLED over both endpoint cities, it is collapsed to
+    one row per timestamp by AVERAGING the three feature columns across
+    cities before the join -- this averaging exists ONLY for this
+    correlation summary and never touches the fitted feature matrix
+    (`build_feature_matrix`), which uses each city's own unaveraged
+    reading per D-01.
+
+    The reported window (`window_start`/`window_end`/`load_rows`) always
+    comes from the RETURNED load frame's own extremes, never from the
+    requested range -- a client that silently serves less than was asked
+    for is visible in the evidence this way (T-02-12).
+
+    Only the load pull itself is wrapped in a failure path: a raised
+    exception there resolves to a mapping recording the corridor, the
+    zone substrings that were about to be used, the exception text, and
+    `available: False` -- never a bare `except` around the whole
+    function, and never a silently empty result. D-02 scopes ERCOT
+    network access as training-time-only and non-blocking
+    (02-RESEARCH.md Environment Availability) -- ANOM-01's interface
+    deliverable does not depend on this pull succeeding.
+    """
+    if years is None:
+        years = config.ANOMALY_ML_LOAD_YEARS
+
+    last_complete_year = pd.Timestamp.now(tz="UTC").year - 1
+    start = f"{last_complete_year - years + 1}-01-01"
+    end = f"{last_complete_year}-12-31"
+
+    zone_substrings = config.ANOMALY_ML_ERCOT_ZONE_SUBSTRINGS_BY_CORRIDOR[corridor]
+
+    try:
+        load_frame = ercot_data_retriever.pull_ercot_data(
+            start, end, zone_substrings=zone_substrings, save=False,
+        )
+    except Exception as exc:
+        return {
+            "corridor": corridor,
+            "zone_substrings": list(zone_substrings),
+            "available": False,
+            "error": str(exc),
+        }
+
+    load_col = load_frame.attrs.get("load_column")
+    zone_columns_matched = list(load_frame.attrs.get("zone_columns_matched", []))
+
+    load_frame = load_frame.copy()
+    load_frame["datetime_utc"] = pd.to_datetime(load_frame["datetime_utc"], utc=True)
+
+    window_start = pd.Timestamp(load_frame["datetime_utc"].min()).isoformat()
+    window_end = pd.Timestamp(load_frame["datetime_utc"].max()).isoformat()
+    load_rows = int(len(load_frame))
+
+    obs_path = os.path.join(
+        config.ANOMALY_ML_MODEL_DIR,
+        config.ANOMALY_ML_OBSERVATION_FRAME_TEMPLATE.format(corridor=corridor),
+    )
+    if os.path.exists(obs_path):
+        obs_frame = pd.read_csv(obs_path)
+    else:
+        obs_frame = corridor_observation_frame(corridor, years)
+
+    feature_cols = list(config.ANOMALY_ML_FEATURE_COLUMNS)
+    # Collapse the pooled (two-cities-per-timestamp) observation frame to
+    # one row per timestamp via averaging -- presentation-only for this
+    # correlation summary (A-10), never used to fit the model.
+    collapsed = obs_frame.groupby("datetime_utc", as_index=False)[feature_cols].mean()
+    collapsed["datetime_utc"] = pd.to_datetime(collapsed["datetime_utc"], utc=True)
+
+    joined = pd.merge(load_frame, collapsed, on="datetime_utc", how="inner")
+
+    correlations = {
+        feature: float(joined[load_col].corr(joined[feature]))
+        for feature in feature_cols
+    }
+
+    return {
+        "corridor": corridor,
+        "zone_substrings": list(zone_substrings),
+        "zone_columns": zone_columns_matched,
+        "window_start": window_start,
+        "window_end": window_end,
+        "load_rows": load_rows,
+        "joined_rows": int(len(joined)),
+        "correlations": correlations,
+        "available": True,
+    }
+
+
+def _run_characterize_load(corridors):
+    """
+    D-02's training-time-only load characterization entry point
+    (`--characterize-load`): for each selected corridor, calls
+    `characterize_load` (always with `years=None`, so the load window
+    depth resolves from `config.ANOMALY_ML_LOAD_YEARS` rather than the
+    shared `--years` flag, which governs the weather-training window
+    depth instead), prints one summary line naming the matched zones,
+    the true retrieved window, the joined row count, and the
+    per-variable correlations (or the unavailability message), and
+    writes the accumulated per-corridor mapping to
+    `config.ANOMALY_ML_LOAD_REPORT_NAME` under `config.ANOMALY_ML_MODEL_
+    DIR`. Exits 0 regardless of whether any corridor's load pull
+    succeeded -- D-02 scopes ERCOT network access as training-time-only
+    and non-blocking (02-RESEARCH.md Environment Availability); ANOM-01's
+    interface deliverable does not depend on it.
+    """
+    reports = {}
+    for corridor in corridors:
+        result = characterize_load(corridor, years=None)
+        reports[corridor] = result
+
+        if result.get("available", False):
+            print(
+                f"{corridor}: zones={result['zone_columns']} "
+                f"window={result['window_start']}->{result['window_end']} "
+                f"load_rows={result['load_rows']} "
+                f"joined_rows={result['joined_rows']} "
+                f"correlations={result['correlations']}"
+            )
+        else:
+            print(f"{corridor}: UNAVAILABLE -- {result.get('error')}")
+
+    os.makedirs(config.ANOMALY_ML_MODEL_DIR, exist_ok=True)
+    report_path = os.path.join(
+        config.ANOMALY_ML_MODEL_DIR, config.ANOMALY_ML_LOAD_REPORT_NAME
+    )
+    with open(report_path, "w") as fh:
+        json.dump(reports, fh, indent=2)
+    print(f"\nload characterization report written to {report_path}")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description=(
@@ -989,9 +1154,26 @@ def main(argv=None):
              "persist it, and write the accumulated comparison -- losers "
              "included -- to config.ANOMALY_ML_VALIDATION_REPORT_NAME.",
     )
+    parser.add_argument(
+        "--characterize-load",
+        action="store_true",
+        help="For each selected corridor, run D-02's training-time-only "
+             "ERCOT load characterization (zone-aware per corridor -- "
+             "config.ANOMALY_ML_ERCOT_ZONE_SUBSTRINGS_BY_CORRIDOR), joined "
+             "to the corridor's pooled weather observations, reporting the "
+             "true retrieved window and the Pearson correlation between "
+             "load and each fitted variable to "
+             "config.ANOMALY_ML_LOAD_REPORT_NAME. Exits 0 whether or not "
+             "the ERCOT pull succeeds -- this characterization never "
+             "reaches the live check() path (D-02).",
+    )
     args = parser.parse_args(argv)
 
     corridors = [args.corridor] if args.corridor else sorted(config.CORRIDOR_ENDPOINTS)
+
+    if args.characterize_load:
+        _run_characterize_load(corridors)
+        return
 
     if args.bakeoff:
         _run_bakeoff(corridors, args.years)
