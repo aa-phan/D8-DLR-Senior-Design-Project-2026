@@ -24,7 +24,9 @@ Run directly:
 """
 
 import argparse
+import json
 import logging
+import math
 import os
 import tempfile
 
@@ -33,10 +35,38 @@ import pandas as pd
 
 import anomaly_detector
 import config
+import corridor_discretization
 import forecast_training
+import thermal_model
 from DLRSafetyMonitor import DLRSafetyMonitor
 
 logger = logging.getLogger(__name__)
+
+# Plan 02-02 (ANOM-02): fixed margin by which _out_of_range_value pushes a
+# feature outside its DLRSafetyMonitor bound -- comfortably beyond the
+# gate so the injected value is unambiguously physically impossible
+# rather than marginal.
+_OUT_OF_RANGE_MARGINS: dict = {
+    "wind_speed": 30.0,
+    "air_temp": 35.0,
+    "solar_radiation": 600.0,
+}
+
+# Column -> DLRSafetyMonitor bound, shared by _out_of_range_value and
+# inject_anomalies' in-range-implausible bounds assertions.
+_COLUMN_BOUNDS: dict = {
+    "wind_speed": DLRSafetyMonitor.WIND_BOUNDS,
+    "air_temp": DLRSafetyMonitor.TEMP_BOUNDS,
+    "solar_radiation": DLRSafetyMonitor.SOLAR_BOUNDS,
+}
+
+# The extreme quantiles _implausible_combination draws each component
+# from -- high for solar (bright), low for temp and wind (cold, still) --
+# the classic "clear cold night" combination that is individually
+# plausible on each axis but implausible jointly (02-RESEARCH.md Open
+# Question 2).
+_IMPLAUSIBLE_QUANTILE_HIGH: float = 0.97
+_IMPLAUSIBLE_QUANTILE_LOW: float = 0.03
 
 
 def _make_isolation_forest_candidate(contamination):
@@ -201,6 +231,416 @@ def persist_corridor_model(model, corridor: str) -> str:
     return final_path
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# ANOM-02 measurement machinery (v1.3 Phase 2 Plan 02-02)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def chronological_split(
+    frame: pd.DataFrame, holdout_fraction: float = None
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Split `frame` (any `datetime_utc`-bearing frame this module produces)
+    into a strictly time-ordered (fit, holdout) pair for ROADMAP SC4's
+    false-positive/recall measurement: sorts by `datetime_utc`, splits at
+    `int(len(frame) * (1 - holdout_fraction))`, and resets both sides'
+    indexes. Every fit-slice timestamp is <= the holdout slice's minimum
+    timestamp -- the estimator is measured only against rows strictly
+    later than anything it was fitted on (T-02-08). Called twice on the
+    same frame returns identical slices (pure function of the input).
+
+    Defaults `holdout_fraction` from `config.ANOMALY_ML_VALIDATION_
+    HOLDOUT_FRACTION`. Raises `ValueError` naming the row counts when
+    either resulting side would be empty, or when the fit side would hold
+    fewer rows than `anomaly_detector.ROLLING_BASELINE_MIN_ROWS` -- below
+    that floor the rolling-baseline arm this measurement also scores
+    cannot even be constructed.
+    """
+    if holdout_fraction is None:
+        holdout_fraction = config.ANOMALY_ML_VALIDATION_HOLDOUT_FRACTION
+
+    sorted_frame = frame.sort_values("datetime_utc").reset_index(drop=True)
+    split_index = int(len(sorted_frame) * (1 - holdout_fraction))
+
+    fit = sorted_frame.iloc[:split_index].reset_index(drop=True)
+    holdout = sorted_frame.iloc[split_index:].reset_index(drop=True)
+
+    if len(fit) == 0 or len(holdout) == 0:
+        raise ValueError(
+            f"chronological_split: split produced an empty side "
+            f"(fit={len(fit)}, holdout={len(holdout)}) from "
+            f"{len(sorted_frame)} total row(s) at holdout_fraction="
+            f"{holdout_fraction}"
+        )
+    if len(fit) < anomaly_detector.ROLLING_BASELINE_MIN_ROWS:
+        raise ValueError(
+            f"chronological_split: fit slice has {len(fit)} row(s), below "
+            f"anomaly_detector.ROLLING_BASELINE_MIN_ROWS "
+            f"({anomaly_detector.ROLLING_BASELINE_MIN_ROWS}) -- the "
+            f"rolling-baseline arm cannot be constructed from it"
+        )
+
+    return fit, holdout
+
+
+def _out_of_range_value(column: str) -> float:
+    """
+    A value outside `column`'s `DLRSafetyMonitor` bound by
+    `_OUT_OF_RANGE_MARGINS[column]` -- comfortably beyond the physical
+    gate (never a marginal, borderline value) so the "out_of_range"
+    injection category is unambiguous.
+    """
+    lo, hi = _COLUMN_BOUNDS[column]
+    return hi + _OUT_OF_RANGE_MARGINS[column]
+
+
+def _implausible_combination(fit_frame: pd.DataFrame) -> dict:
+    """
+    The "in_range_implausible" injection category's three-value triple:
+    the high quantile of `solar_radiation`, the low quantile of
+    `air_temp`, and the low quantile of `wind_speed`, each computed from
+    `fit_frame`'s own OBSERVED column values (the nearest-rank quantile,
+    never pandas' default linearly-INTERPOLATED quantile) -- so each
+    component is a value the real data actually contains, and only the
+    simultaneous combination (bright + cold + still) is jointly novel.
+    This is what makes this category test G6's unique multivariate
+    contribution rather than re-testing G3's per-variable range gate
+    (02-RESEARCH.md Open Question 2): every component individually passes
+    the range gate and individually occurs in the record; only the
+    combination does not.
+    """
+
+    def _observed_quantile(series: pd.Series, quantile: float) -> float:
+        sorted_vals = series.sort_values().reset_index(drop=True)
+        idx = int(round(quantile * (len(sorted_vals) - 1)))
+        return float(sorted_vals.iloc[idx])
+
+    return {
+        "solar_radiation": _observed_quantile(
+            fit_frame["solar_radiation"], _IMPLAUSIBLE_QUANTILE_HIGH
+        ),
+        "air_temp": _observed_quantile(
+            fit_frame["air_temp"], _IMPLAUSIBLE_QUANTILE_LOW
+        ),
+        "wind_speed": _observed_quantile(
+            fit_frame["wind_speed"], _IMPLAUSIBLE_QUANTILE_LOW
+        ),
+    }
+
+
+def inject_anomalies(
+    frame: pd.DataFrame,
+    category: str,
+    rng=None,
+    rate: float = None,
+    fit_frame: pd.DataFrame = None,
+) -> tuple[pd.DataFrame, pd.Series]:
+    """
+    Returns a NEW, corrupted copy of `frame` (never mutates the input --
+    T-02-07) plus a boolean `pd.Series` mask (indexed like `frame`) naming
+    which rows were injected. `round(len(frame) * rate)` distinct row
+    positions are selected via `rng.choice(..., replace=False)`.
+
+    `category="out_of_range"`: each injected row has exactly ONE of
+    `config.ANOMALY_ML_FEATURE_COLUMNS` (chosen per-row via `rng`)
+    replaced by `_out_of_range_value` for that column -- a value
+    `DLRSafetyMonitor`'s own G3 range gate would already reject.
+
+    `category="in_range_implausible"`: every injected row has ALL THREE
+    feature values replaced simultaneously by the SAME triple from
+    `_implausible_combination(fit_frame)` -- requires `fit_frame` (raises
+    `ValueError` naming the requirement when omitted for this category).
+
+    `rng` defaults to `numpy.random.default_rng(config.ANOMALY_ML_
+    RANDOM_SEED)`; `rate` defaults to `config.ANOMALY_ML_INJECTION_RATE`.
+    Repeating the call with the same seed and rate reproduces an
+    identical mask and an identical injected frame.
+
+    Raises `ValueError` naming the valid categories for an unrecognized
+    `category`.
+    """
+    valid_categories = ("out_of_range", "in_range_implausible")
+    if category not in valid_categories:
+        raise ValueError(
+            f"inject_anomalies: unknown category {category!r}; valid "
+            f"categories: {valid_categories}"
+        )
+    if category == "in_range_implausible" and fit_frame is None:
+        raise ValueError(
+            "inject_anomalies: category 'in_range_implausible' requires "
+            "fit_frame (the triple is drawn from the FIT slice's own "
+            "extreme quantiles, never the frame being injected into)"
+        )
+
+    if rng is None:
+        rng = np.random.default_rng(config.ANOMALY_ML_RANDOM_SEED)
+    if rate is None:
+        rate = config.ANOMALY_ML_INJECTION_RATE
+
+    n_inject = round(len(frame) * rate)
+    positions = np.sort(rng.choice(len(frame), size=n_inject, replace=False))
+
+    injected = frame.copy(deep=True)
+    mask = pd.Series(False, index=frame.index)
+    mask.iloc[positions] = True
+
+    feature_cols = list(config.ANOMALY_ML_FEATURE_COLUMNS)
+
+    if category == "out_of_range":
+        chosen_cols = rng.choice(feature_cols, size=len(positions))
+        for pos, column in zip(positions, chosen_cols):
+            injected.iloc[
+                pos, injected.columns.get_loc(column)
+            ] = _out_of_range_value(column)
+    else:
+        triple = _implausible_combination(fit_frame)
+        for column, value in triple.items():
+            injected.iloc[positions, injected.columns.get_loc(column)] = value
+
+    return injected, mask
+
+
+def _dlr_amps_for(frame: pd.DataFrame, corridor: str) -> np.ndarray:
+    """
+    Converts `frame`'s three raw feature columns into a `dlr_amps` series
+    using `corridor_discretization.corridor_geometry(corridor)`'s
+    `ConductorConfig` and `thermal_model.ieee738_ampacity`, reproducing
+    `DLRSafetyMonitor._compute_ampacity`'s exact call (`T_amb_c=air_temp`,
+    `wind_perp_ms=wind_speed`, `ghi_wm2=solar_radiation`, default
+    `solar_altitude_deg`) -- the raw `wind_speed` reading IS the value the
+    live pipeline feeds as `wind_perp_ms` (`raw_data` carries no separate
+    direction field, D-01), so this reproduces the monitor's real physics
+    call rather than a separate perpendicular-wind computation. This is
+    the one conversion both the baseline's history and the baseline's
+    scored rows go through, so both sides of the comparison sit on the
+    same physics. Explicit float cast -- `ieee738_ampacity` returns an
+    array even for scalar input (RESEARCH.md Pitfall 2).
+    """
+    geometry = corridor_discretization.corridor_geometry(corridor)
+    amps = thermal_model.ieee738_ampacity(
+        T_amb_c=frame["air_temp"].to_numpy(dtype=float),
+        wind_perp_ms=frame["wind_speed"].to_numpy(dtype=float),
+        ghi_wm2=frame["solar_radiation"].to_numpy(dtype=float),
+        conductor=geometry.conductor,
+    )
+    return np.asarray(amps, dtype=float)
+
+
+def score_model(model, frame: pd.DataFrame) -> np.ndarray:
+    """
+    Boolean array, one entry per row of `frame`, true where `model`'s
+    prediction entry point returns the scikit-learn outlier label (`-1`).
+    Builds the feature matrix through the existing `build_feature_matrix`
+    -- one call on the whole matrix, never a per-row loop.
+    """
+    X = build_feature_matrix(frame)
+    predictions = model.predict(X)
+    return predictions == -1
+
+
+def score_rolling_baseline(
+    corridor: str, fit_frame: pd.DataFrame, frame: pd.DataFrame
+) -> np.ndarray:
+    """
+    Scores `frame` through the EXISTING `AnomalyDetector._check_against_
+    rolling_baseline` branch -- never a reimplementation of its band
+    arithmetic. Builds `AnomalyDetector.for_corridor(corridor, history=
+    <fit_frame with its derived dlr_amps column>, load_model=False)` (so
+    `self.model` stays `None` and only the heuristic baseline can fire),
+    then for each row of `frame` converts that row's raw readings through
+    `_dlr_amps_for` and calls `detector.check({}, rating)`. Passing an
+    empty `raw_data` is correct and deliberate: this arm reads only
+    `rating`, and `load_model=False` guarantees the (possibly-provisioned)
+    model branch cannot contaminate the baseline's own numbers. Returns
+    the boolean verdicts, one per row of `frame`.
+    """
+    history = fit_frame.copy()
+    history["dlr_amps"] = _dlr_amps_for(fit_frame, corridor)
+
+    detector = anomaly_detector.AnomalyDetector.for_corridor(
+        corridor, history=history, load_model=False,
+    )
+
+    ratings = _dlr_amps_for(frame, corridor)
+    verdicts = np.empty(len(frame), dtype=bool)
+    for i, rating in enumerate(ratings):
+        is_anomalous, _ = detector.check({}, float(rating))
+        verdicts[i] = is_anomalous
+    return verdicts
+
+
+def validate_candidate(
+    corridor: str,
+    fit_frame: pd.DataFrame,
+    holdout_frame: pd.DataFrame,
+    name: str,
+    factory,
+    contamination: float,
+) -> dict:
+    """
+    Measures both halves of ANOM-02's bar for one (candidate,
+    contamination) pair, for the model AND for the existing rolling
+    mean-and-standard-deviation baseline, on the IDENTICAL rows:
+
+    - `false_positive_rate` / `baseline_false_positive_rate`: the
+      fraction of the UN-INJECTED `holdout_frame` each detector flags.
+      This is the clean false-positive denominator -- no injected row
+      contributes to it (this plan's own second prohibition).
+    - `recall_out_of_range` / `baseline_recall_out_of_range` and
+      `recall_in_range_implausible` / `baseline_recall_in_range_
+      implausible`: the fraction of each injection category's injected
+      rows each detector flags, computed only over that category's
+      injected mask positions.
+    - `recall_pooled` / `baseline_recall_pooled`: the pooled recall
+      across both injection categories.
+
+    Fits a FRESH `factory(contamination)` estimator on `fit_frame`'s
+    feature matrix. For `name == "OneClassSVM"` only, the training rows
+    are capped at `config.ANOMALY_ML_SVM_MAX_TRAIN_ROWS`, taking the
+    chronologically-earliest rows of `fit_frame` so the cap never
+    reorders time; the actually-used row count is recorded so that arm's
+    score is read with the cap in view.
+    """
+    fit_for_training = fit_frame
+    if name == "OneClassSVM":
+        cap = config.ANOMALY_ML_SVM_MAX_TRAIN_ROWS
+        if len(fit_frame) > cap:
+            fit_for_training = (
+                fit_frame.sort_values("datetime_utc").iloc[:cap].reset_index(drop=True)
+            )
+    train_rows_used = len(fit_for_training)
+
+    X_fit = build_feature_matrix(fit_for_training)
+    estimator = fit_corridor_model(X_fit, factory(contamination))
+
+    # Clean false-positive rate -- the un-injected holdout only.
+    model_fp_flags = score_model(estimator, holdout_frame)
+    baseline_fp_flags = score_rolling_baseline(corridor, fit_frame, holdout_frame)
+    clean_rows = len(holdout_frame)
+
+    seed_rng = np.random.default_rng(config.ANOMALY_ML_RANDOM_SEED)
+    injected_out, mask_out = inject_anomalies(
+        holdout_frame, "out_of_range", rng=seed_rng,
+    )
+    seed_rng_2 = np.random.default_rng(config.ANOMALY_ML_RANDOM_SEED)
+    injected_implausible, mask_implausible = inject_anomalies(
+        holdout_frame, "in_range_implausible", rng=seed_rng_2, fit_frame=fit_frame,
+    )
+
+    mask_out_np = mask_out.to_numpy()
+    mask_implausible_np = mask_implausible.to_numpy()
+
+    model_out_flags = score_model(estimator, injected_out)[mask_out_np]
+    model_implausible_flags = score_model(estimator, injected_implausible)[
+        mask_implausible_np
+    ]
+    baseline_out_flags = score_rolling_baseline(
+        corridor, fit_frame, injected_out
+    )[mask_out_np]
+    baseline_implausible_flags = score_rolling_baseline(
+        corridor, fit_frame, injected_implausible
+    )[mask_implausible_np]
+
+    pooled_model_flags = np.concatenate([model_out_flags, model_implausible_flags])
+    pooled_baseline_flags = np.concatenate(
+        [baseline_out_flags, baseline_implausible_flags]
+    )
+
+    return {
+        "candidate": name,
+        "contamination": float(contamination),
+        "false_positive_rate": float(np.mean(model_fp_flags)),
+        "baseline_false_positive_rate": float(np.mean(baseline_fp_flags)),
+        "recall_out_of_range": float(np.mean(model_out_flags)),
+        "recall_in_range_implausible": float(np.mean(model_implausible_flags)),
+        "recall_pooled": float(np.mean(pooled_model_flags)),
+        "baseline_recall_out_of_range": float(np.mean(baseline_out_flags)),
+        "baseline_recall_in_range_implausible": float(
+            np.mean(baseline_implausible_flags)
+        ),
+        "baseline_recall_pooled": float(np.mean(pooled_baseline_flags)),
+        "fit_rows": int(len(fit_frame)),
+        "holdout_rows": int(len(holdout_frame)),
+        "clean_rows": int(clean_rows),
+        "injected_rows_out_of_range": int(mask_out.sum()),
+        "injected_rows_in_range_implausible": int(mask_implausible.sum()),
+        "train_rows_used": int(train_rows_used),
+    }
+
+
+def _run_validate(corridors, years):
+    """
+    Task 1's single-candidate (`IsolationForest`) measurement loop across
+    `config.ANOMALY_ML_CONTAMINATION_GRID` -- Task 2's `--bakeoff` extends
+    this to the full three-candidate comparison via `corridor_report`/
+    `select_winner`. For each corridor: assemble the real observation
+    frame (written to disk exactly like `main`'s plain training loop),
+    split it chronologically, measure every contamination grid point,
+    print a fixed-width table, and accumulate one JSON report.
+    """
+    reports = {}
+
+    for corridor in corridors:
+        try:
+            frame = corridor_observation_frame(corridor, years)
+        except Exception:
+            logger.exception(
+                "anomaly_training --validate: failed assembling corridor "
+                "%s -- continuing to the next corridor", corridor,
+            )
+            print(f"{corridor}: FAILED to assemble observation frame -- see log")
+            continue
+
+        os.makedirs(config.ANOMALY_ML_MODEL_DIR, exist_ok=True)
+        frame_path = os.path.join(
+            config.ANOMALY_ML_MODEL_DIR,
+            config.ANOMALY_ML_OBSERVATION_FRAME_TEMPLATE.format(corridor=corridor),
+        )
+        frame.to_csv(frame_path, index=False)
+
+        fit_frame, holdout_frame = chronological_split(frame)
+
+        measurements = [
+            validate_candidate(
+                corridor, fit_frame, holdout_frame,
+                "IsolationForest", _make_isolation_forest_candidate, contamination,
+            )
+            for contamination in config.ANOMALY_ML_CONTAMINATION_GRID
+        ]
+
+        reports[corridor] = {
+            "corridor": corridor,
+            "rows": int(len(frame)),
+            "window_start": pd.Timestamp(frame["datetime_utc"].min()).isoformat(),
+            "window_end": pd.Timestamp(frame["datetime_utc"].max()).isoformat(),
+            "fit_rows": int(len(fit_frame)),
+            "holdout_rows": int(len(holdout_frame)),
+            "measurements": measurements,
+        }
+
+        print(f"\n{corridor}: {len(frame)} rows")
+        print(
+            f"{'contamination':<15}{'fp_rate':>10}{'baseline_fp':>13}"
+            f"{'recall_oor':>12}{'recall_irp':>12}{'recall_pooled':>15}"
+        )
+        for m in measurements:
+            print(
+                f"{m['contamination']:<15.4f}{m['false_positive_rate']:>10.4f}"
+                f"{m['baseline_false_positive_rate']:>13.4f}"
+                f"{m['recall_out_of_range']:>12.4f}"
+                f"{m['recall_in_range_implausible']:>12.4f}"
+                f"{m['recall_pooled']:>15.4f}"
+            )
+
+    os.makedirs(config.ANOMALY_ML_MODEL_DIR, exist_ok=True)
+    report_path = os.path.join(
+        config.ANOMALY_ML_MODEL_DIR, config.ANOMALY_ML_VALIDATION_REPORT_NAME
+    )
+    with open(report_path, "w") as fh:
+        json.dump(reports, fh, indent=2)
+    print(f"\nvalidation report written to {report_path}")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description=(
@@ -222,9 +662,23 @@ def main(argv=None):
         help="Complete calendar years of Open-Meteo backfill per endpoint "
              "city (default: config.ANOMALY_ML_TRAINING_YEARS).",
     )
+    parser.add_argument(
+        "--validate",
+        action="store_true",
+        help="For each selected corridor, chronologically split the "
+             "observation frame and measure the default IsolationForest "
+             "candidate's false-positive rate and per-category recall "
+             "(against the rolling baseline) across "
+             "config.ANOMALY_ML_CONTAMINATION_GRID, printing a table and "
+             "writing config.ANOMALY_ML_VALIDATION_REPORT_NAME.",
+    )
     args = parser.parse_args(argv)
 
     corridors = [args.corridor] if args.corridor else sorted(config.CORRIDOR_ENDPOINTS)
+
+    if args.validate:
+        _run_validate(corridors, args.years)
+        return
 
     for corridor in corridors:
         try:

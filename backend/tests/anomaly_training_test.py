@@ -13,6 +13,7 @@ synthetic inputs seeded through `numpy.random.default_rng`, no network --
 here that needs weather data.
 """
 
+import math
 import os
 
 import numpy as np
@@ -24,6 +25,29 @@ import anomaly_training as at
 import config
 import forecast_training
 from DLRSafetyMonitor import DLRSafetyMonitor
+
+
+def _synthetic_observation_frame(n=100, seed=1):
+    """
+    A deterministic, `corridor_observation_frame`-shaped pooled frame
+    (`datetime_utc`, `corridor`, `city`, the three `config.ANOMALY_ML_
+    FEATURE_COLUMNS`), comfortably inside `DLRSafetyMonitor`'s G3 bounds,
+    for the measurement-machinery tests below that don't need a live
+    network fetch -- only `chronological_split`/`inject_anomalies`/
+    `score_rolling_baseline`/`validate_candidate`'s own logic, never
+    `corridor_observation_frame` itself.
+    """
+    rng = np.random.default_rng(seed)
+    base = pd.Timestamp("2026-01-01T00:00:00Z")
+    timestamps = pd.date_range(base, periods=n, freq="h")
+    return pd.DataFrame({
+        "datetime_utc": timestamps,
+        "corridor": "AUSTIN_CORPUS_CHRISTI",
+        "city": np.where(np.arange(n) % 2 == 0, "AUSTIN", "CORPUS_CHRISTI"),
+        "air_temp": 25.0 + rng.normal(0.0, 2.0, n),
+        "wind_speed": 8.0 + rng.normal(0.0, 1.5, n),
+        "solar_radiation": 400.0 + rng.normal(0.0, 50.0, n),
+    })
 
 
 def _synthetic_city_weather_frame(city, n=48, seed=20260924, spike_index=None,
@@ -180,5 +204,224 @@ def test_persist_round_trips_through_detector_loader(tmp_path, monkeypatch):
 
     probe_row = X[:1]
     np.testing.assert_array_equal(fitted.predict(probe_row), loaded.predict(probe_row))
+
+    anomaly_detector._MODEL_CACHE.clear()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# chronological_split (v1.3 Phase 2 Plan 02-02, ANOM-02)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_chronological_split_returns_nonoverlapping_time_ordered_slices():
+    frame = _synthetic_observation_frame(n=100, seed=101)
+    shuffled = frame.sample(frac=1.0, random_state=7).reset_index(drop=True)
+
+    fit, holdout = at.chronological_split(shuffled, holdout_fraction=0.25)
+
+    assert len(fit) + len(holdout) == len(shuffled)
+    assert fit["datetime_utc"].max() <= holdout["datetime_utc"].min()
+    assert set(fit["datetime_utc"]).isdisjoint(set(holdout["datetime_utc"]))
+
+    # Pure function of the input -- called twice, identical slices.
+    fit2, holdout2 = at.chronological_split(shuffled, holdout_fraction=0.25)
+    pd.testing.assert_frame_equal(fit, fit2)
+    pd.testing.assert_frame_equal(holdout, holdout2)
+
+
+def test_chronological_split_raises_on_empty_or_undersized_fit_slice():
+    # Fit slice below anomaly_detector.ROLLING_BASELINE_MIN_ROWS (24).
+    tiny_frame = _synthetic_observation_frame(n=10, seed=102)
+    with pytest.raises(ValueError):
+        at.chronological_split(tiny_frame, holdout_fraction=0.25)
+
+    # holdout_fraction=0.0 forces an empty holdout side.
+    with pytest.raises(ValueError):
+        at.chronological_split(
+            _synthetic_observation_frame(n=50, seed=103), holdout_fraction=0.0
+        )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# inject_anomalies -- non-mutation, category construction, reproducibility
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_inject_anomalies_out_of_range_leaves_input_unmutated_and_masks_correct_count():
+    frame = _synthetic_observation_frame(n=200, seed=111)
+    pre_call_copy = frame.copy(deep=True)
+
+    injected, mask = at.inject_anomalies(
+        frame, "out_of_range", rng=np.random.default_rng(20260924), rate=0.02,
+    )
+
+    pd.testing.assert_frame_equal(frame, pre_call_copy)
+    assert int(mask.sum()) == round(len(frame) * 0.02)
+    assert len(injected) == len(frame)
+
+
+def test_inject_anomalies_out_of_range_values_are_outside_bounds():
+    frame = _synthetic_observation_frame(n=200, seed=112)
+
+    injected, mask = at.inject_anomalies(
+        frame, "out_of_range", rng=np.random.default_rng(20260924), rate=0.05,
+    )
+
+    bound_pairs = (
+        ("wind_speed", DLRSafetyMonitor.WIND_BOUNDS),
+        ("air_temp", DLRSafetyMonitor.TEMP_BOUNDS),
+        ("solar_radiation", DLRSafetyMonitor.SOLAR_BOUNDS),
+    )
+    injected_rows = injected.loc[mask]
+    assert len(injected_rows) > 0
+    for _, row in injected_rows.iterrows():
+        outside = [not (lo <= row[col] <= hi) for col, (lo, hi) in bound_pairs]
+        assert any(outside), f"row {row.to_dict()} has no out-of-bounds feature"
+
+
+def test_inject_anomalies_in_range_implausible_components_are_observed_but_combination_is_not():
+    frame = _synthetic_observation_frame(n=300, seed=113)
+    fit_frame, holdout_frame = at.chronological_split(frame, holdout_fraction=0.25)
+
+    injected, mask = at.inject_anomalies(
+        holdout_frame, "in_range_implausible",
+        rng=np.random.default_rng(20260924), rate=0.2, fit_frame=fit_frame,
+    )
+
+    bound_pairs = {
+        "wind_speed": DLRSafetyMonitor.WIND_BOUNDS,
+        "air_temp": DLRSafetyMonitor.TEMP_BOUNDS,
+        "solar_radiation": DLRSafetyMonitor.SOLAR_BOUNDS,
+    }
+    injected_rows = injected.loc[mask]
+    assert len(injected_rows) > 0
+    for column, (lo, hi) in bound_pairs.items():
+        assert injected_rows[column].between(lo, hi).all()
+        assert injected_rows[column].min() >= fit_frame[column].min()
+        assert injected_rows[column].max() <= fit_frame[column].max()
+
+    # All injected rows carry the SAME triple; that exact triple must be
+    # absent from the fit slice at every timestamp.
+    triple = tuple(
+        injected_rows[["air_temp", "wind_speed", "solar_radiation"]].iloc[0]
+    )
+    fit_triples = set(
+        map(tuple, fit_frame[["air_temp", "wind_speed", "solar_radiation"]].to_numpy())
+    )
+    assert triple not in fit_triples
+
+
+def test_inject_anomalies_unknown_category_raises():
+    frame = _synthetic_observation_frame(n=50, seed=114)
+    with pytest.raises(ValueError) as exc_info:
+        at.inject_anomalies(frame, "not_a_real_category")
+    assert "not_a_real_category" in str(exc_info.value)
+
+
+def test_inject_anomalies_in_range_implausible_without_fit_frame_raises():
+    frame = _synthetic_observation_frame(n=50, seed=115)
+    with pytest.raises(ValueError) as exc_info:
+        at.inject_anomalies(frame, "in_range_implausible")
+    assert "fit_frame" in str(exc_info.value)
+
+
+def test_inject_anomalies_reproducible_with_same_seed():
+    frame = _synthetic_observation_frame(n=200, seed=116)
+
+    injected_1, mask_1 = at.inject_anomalies(
+        frame, "out_of_range", rng=np.random.default_rng(42), rate=0.02,
+    )
+    injected_2, mask_2 = at.inject_anomalies(
+        frame, "out_of_range", rng=np.random.default_rng(42), rate=0.02,
+    )
+
+    pd.testing.assert_series_equal(mask_1, mask_2)
+    pd.testing.assert_frame_equal(injected_1, injected_2)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# score_rolling_baseline_arm -- provenance: the real branch ran, model is None
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_score_rolling_baseline_arm_uses_real_branch_and_bare_model(monkeypatch):
+    corridor = "AUSTIN_CORPUS_CHRISTI"
+    frame = _synthetic_observation_frame(n=200, seed=121)
+    fit_frame, holdout_frame = at.chronological_split(frame, holdout_fraction=0.25)
+
+    anomaly_detector._MODEL_CACHE.clear()
+
+    captured = {}
+    original_for_corridor = anomaly_detector.AnomalyDetector.for_corridor.__func__
+
+    def _capturing_for_corridor(cls, *args, **kwargs):
+        detector = original_for_corridor(cls, *args, **kwargs)
+        captured["detector"] = detector
+        return detector
+
+    monkeypatch.setattr(
+        anomaly_detector.AnomalyDetector,
+        "for_corridor",
+        classmethod(_capturing_for_corridor),
+    )
+
+    flags = at.score_rolling_baseline(corridor, fit_frame, holdout_frame)
+
+    assert captured["detector"].model is None
+    assert captured["detector"].signal == "rolling_baseline"
+    assert isinstance(flags, np.ndarray)
+    assert flags.dtype == bool
+    assert len(flags) == len(holdout_frame)
+
+    anomaly_detector._MODEL_CACHE.clear()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# validate_candidate -- shape, finiteness, disjoint denominators
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_validate_candidate_returns_all_expected_finite_rate_keys():
+    corridor = "AUSTIN_CORPUS_CHRISTI"
+    frame = _synthetic_observation_frame(n=400, seed=131)
+    fit_frame, holdout_frame = at.chronological_split(frame, holdout_fraction=0.25)
+
+    anomaly_detector._MODEL_CACHE.clear()
+    result = at.validate_candidate(
+        corridor, fit_frame, holdout_frame,
+        "IsolationForest", at._make_isolation_forest_candidate, 0.02,
+    )
+
+    expected_keys = (
+        "false_positive_rate", "baseline_false_positive_rate",
+        "recall_out_of_range", "recall_in_range_implausible", "recall_pooled",
+        "baseline_recall_out_of_range", "baseline_recall_in_range_implausible",
+        "baseline_recall_pooled",
+    )
+    for key in expected_keys:
+        assert key in result
+        assert math.isfinite(result[key]), f"{key} is not finite: {result[key]!r}"
+        assert 0.0 <= result[key] <= 1.0, f"{key} is outside [0, 1]: {result[key]!r}"
+
+    anomaly_detector._MODEL_CACHE.clear()
+
+
+def test_validate_candidate_false_positive_and_recall_denominators_are_disjoint():
+    corridor = "AUSTIN_CORPUS_CHRISTI"
+    frame = _synthetic_observation_frame(n=400, seed=132)
+    fit_frame, holdout_frame = at.chronological_split(frame, holdout_fraction=0.25)
+
+    anomaly_detector._MODEL_CACHE.clear()
+    result = at.validate_candidate(
+        corridor, fit_frame, holdout_frame,
+        "IsolationForest", at._make_isolation_forest_candidate, 0.02,
+    )
+
+    assert result["clean_rows"] == len(holdout_frame)
+    assert result["injected_rows_out_of_range"] == round(
+        len(holdout_frame) * config.ANOMALY_ML_INJECTION_RATE
+    )
+    assert result["injected_rows_out_of_range"] > 0
+    assert result["injected_rows_in_range_implausible"] > 0
 
     anomaly_detector._MODEL_CACHE.clear()
