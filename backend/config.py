@@ -354,6 +354,54 @@ ANOMALY_ML_CONTAMINATION: float = 0.01
 ANOMALY_ML_RANDOM_SEED: int = 20260924
 
 # ──────────────────────────────────────────────────────────────────────────────
+# ML anomaly-detection measurement layer (v1.3 Phase 2 Plan 02-02, ANOM-02)
+# ──────────────────────────────────────────────────────────────────────────────
+# Tunables for anomaly_training.py's measurement/bake-off machinery, which
+# turns the tracer's single fitted estimator above into a measured,
+# evidence-selected one.
+
+# The fraction of each corridor's chronologically-latest rows reserved for
+# false-positive/recall measurement. The split is by TIME and NEVER
+# shuffled: a shuffled split would let the estimator see rows adjacent in
+# time to the ones it is scored on and understate the live false-positive
+# rate (T-02-08).
+ANOMALY_ML_VALIDATION_HOLDOUT_FRACTION: float = 0.25
+
+# D-03/D-04: the contamination values Plan 02-02's bake-off sweeps for
+# every candidate (02-RESEARCH.md Pitfall 4), replacing the single
+# untuned ANOMALY_ML_CONTAMINATION value above with whichever grid point
+# the measurement selects.
+ANOMALY_ML_CONTAMINATION_GRID: tuple[float, ...] = (0.001, 0.005, 0.01, 0.02, 0.05)
+
+# The fraction of holdout rows corrupted per injection category. No
+# labelled real anomalies exist in this project's data sources
+# (02-RESEARCH.md Pitfall 1), so recall is only measurable against
+# deliberate injection.
+ANOMALY_ML_INJECTION_RATE: float = 0.02
+
+# The false-positive-rate ceiling a (candidate, contamination) pair must
+# meet to be selection-eligible, citing ANOMALY_CONTROL_LIMIT_K_BY_LOCATION's
+# own recorded preference for fewer false trips over higher sensitivity.
+# Failing this ceiling does not block shipping the OR-combined branch
+# (D-05/D-06) -- it is recorded as not met (D-07).
+ANOMALY_ML_MAX_FALSE_POSITIVE_RATE: float = 0.05
+
+# The cap on rows handed to the kernel-based (OneClassSVM) candidate
+# during the bake-off sweep, taken as the chronologically-earliest rows
+# of the fit slice so the cap never reorders time. That estimator's
+# training cost grows superlinearly in sample count and an uncapped
+# multi-year hourly fit would dominate the run; the cap's effect on that
+# candidate's score is recorded per-measurement so it is read with the
+# cap in view, not compared as if uncapped.
+ANOMALY_ML_SVM_MAX_TRAIN_ROWS: int = 5000
+
+# The machine-readable evidence file under ANOMALY_ML_MODEL_DIR,
+# git-ignored generated data. Mirrors FORECAST_ML_BAKEOFF_REPORT_NAME's
+# own convention: this JSON is not the artifact of record -- Plan 02-04
+# transcribes its numbers into the tracked validation record.
+ANOMALY_ML_VALIDATION_REPORT_NAME: str = "anomaly_validation_report.json"
+
+# ──────────────────────────────────────────────────────────────────────────────
 # ASOS 1-minute network station IDs (Phase 7, C4)
 # ──────────────────────────────────────────────────────────────────────────────
 # IEM ASOS network 3-letter FAA identifiers -- NOT the 4-letter ICAO codes
