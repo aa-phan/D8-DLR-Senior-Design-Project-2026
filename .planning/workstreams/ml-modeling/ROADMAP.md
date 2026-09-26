@@ -125,7 +125,7 @@ path other than both being consumed by `DLRSafetyMonitor`; may be executed in pa
      against the existing mean±k·std baseline's trip rate on the same data.
   5. A written validation record documents that false-positive/false-negative measurement and
      states whether the model met expectations — per ANOM-02.
-**Plans**: 2/4 plans executed
+**Plans**: 3/4 plans executed
 
 **Wave 1**
 
@@ -143,7 +143,7 @@ path other than both being consumed by `DLRSafetyMonitor`; may be executed in pa
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 02-03-PLAN.md — D-02 load half of ANOM-01: per-corridor ERCOT zone load characterized at
+- [x] 02-03-PLAN.md — D-02 load half of ANOM-01: per-corridor ERCOT zone load characterized at
   training time only (`pull_ercot_data` made usable in process, per-calendar-year loop, correct
   zone mapping per corridor) plus the boundary test keeping load out of `check()`
 
@@ -162,7 +162,7 @@ and may be executed first or in parallel if that better fits available capacity)
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Forecasting Model | 3/3 | Complete    | 2026-09-24 |
-| 2. Anomaly Detection Model | 2/4 | In Progress|  |
+| 2. Anomaly Detection Model | 3/4 | In Progress|  |
 
 ## Backlog
 
