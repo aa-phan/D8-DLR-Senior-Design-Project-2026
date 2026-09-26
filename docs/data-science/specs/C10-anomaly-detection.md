@@ -1,22 +1,71 @@
 # C10 — Learned Anomaly Detection
 
-**Phase:** 4 (Predictive) · **Effort:** L · **Status:** Not started. The System Design Report claims a model is "currently being trained and tuned" (§3.2, "Data Integrity") — this claim is inaccurate; see `PRD.md` §9 Documentation Discrepancies. No model, training script, or training dataset exists anywhere in the repo.
+**Phase:** 4 (Predictive) · **Effort:** L · **Status:** Implemented. Shipped in **v1.3 Phase 2**
+of the independent `ml-modeling` workstream (ANOM-01, ANOM-02). The System Design Report's claim
+that a model was "currently being trained and tuned" (§3.2, "Data Integrity") was **inaccurate at
+the time it was written** — `PRD.md` §9 Documentation Discrepancies records that discrepancy, and
+correcting this section's status now does not erase that earlier claim was wrong when made.
 
-**Responsibility:** Replace or augment `DLRSafetyMonitor`'s (C7) deterministic threshold gates with a model trained on historical baselines per variable (wind, temp, solar, load), so anomaly detection can catch patterns that fixed range/delta thresholds miss — while preserving C7's non-negotiable fail-safe-to-static behavior.
+## Responsibility
+
+Replace or augment `DLRSafetyMonitor`'s (C7) deterministic threshold gates with a model trained on historical baselines per variable (wind, temp, solar, load), so anomaly detection can catch patterns that fixed range/delta thresholds miss — while preserving C7's non-negotiable fail-safe-to-static behavior.
 
 ## Current Implementation
 
-None. `backend/DLRSafetyMonitor.py` (C7) is entirely deterministic threshold/range gating (G1–G5) — no learned component anywhere.
+`backend/anomaly_detector.py::AnomalyDetector.check(raw_data, rating)` dispatches across three
+branches, combined via logical OR (D-05/D-06 — a trip on any branch trips the whole check, no
+branch can suppress another):
+
+- **`_check_against_forecast`** — the primary signal when a `ForecastResult` (C9) is available:
+  widens C9's own confidence band by a per-location control-limit multiplier and flags a rating
+  outside it.
+- **`_check_against_rolling_baseline`** — the cold-start fallback when no forecast is available
+  yet: a rolling mean ± k·standard-deviation band over archived `dlr_amps` history.
+- **`_check_against_model`** (v1.3 Phase 2, ANOM-01) — a genuinely trained, per-corridor
+  `scikit-learn` outlier estimator (`OneClassSVM`, selected via a three-candidate bake-off) that
+  judges the **raw** `wind`/`temp`/`solar` readings in `raw_data` — never the derived `rating`
+  the two branches above judge — against a learned per-variable envelope.
+
+`backend/anomaly_training.py` is the offline training/measurement entry point: it assembles a
+real, pooled per-corridor Open-Meteo backfill series, runs the bake-off, measures false-positive
+and recall rates against synthetically injected corruption, and persists each corridor's
+evidence-selected winner to `data/models/anomaly_{corridor}.joblib` (git-ignored generated data —
+a clean checkout has no model until this script is run). See
+`docs/data-science/decisions/anomaly_detection_model.md` for the measured false-positive/recall
+evidence — this section does not restate those numbers.
+
+`backend/DLRSafetyMonitor.py`'s G1–G5 deterministic gates and its G6 call site/fail-safe wiring
+were **not changed** by this phase.
 
 ## Interface & Data Contract
 
-Not yet designed. Should be additive to C7's `run_check` result shape (`status`, `rating`, `fallback`, `alerts`), not a replacement of its interface — a learned anomaly signal should be able to trigger the same fallback path C7 already implements, not introduce a second, parallel fallback mechanism.
+The settled contract, read off `backend/anomaly_detector.py`:
+
+- **Function:** `AnomalyDetector.check(raw_data: dict, rating: float) -> tuple[bool, str]` —
+  returns `(is_anomalous, reason)`, unchanged since before this phase.
+- **Fail-safe resolution:** `DLRSafetyMonitor` resolves both a detected trip and any exception
+  raised anywhere inside `check` (a broken model, a corrupt artifact, a feature-count mismatch)
+  through its own existing G6 `except Exception -> _fallback` path, to the corridor's static
+  rating. `AnomalyDetector` never builds `DLRSafetyMonitor`'s own `{status, rating, fallback,
+  alerts}` result mapping and never imports `DLRSafetyMonitor` — the coupling runs one direction
+  only.
+- This is exactly the additive-to-C7's-interface, not-a-replacement shape this section originally
+  called for — the original guidance here was right, and it is what was built.
 
 ## Blocked by
 
-**C7** — needs the gating framework (and, once fixed, a correct ampacity computation to detect anomalies against) to exist first. This is a hard dependency: a learned model that flags "this rating looks wrong" only makes sense once there's an agreed-correct rating to compare against, which is exactly what C7's dependency on C5 establishes.
+**C7** — the gating framework this component's learned signal plugs into. Already shipped and
+unchanged as this component's dependency; the model judges raw sensor readings directly (D-01),
+not the C7-computed rating, so it did not additionally require C7's own correctness to be
+re-verified.
 
-Also depends on **accumulated historical data**, same lead-time concern as C9 — see `ROADMAP.md` Finding 5.
+The **accumulated historical data** blocker this section originally anticipated (same lead-time
+concern as C9's own Finding 5) was resolved the same way C9's was: rather than waiting for the
+live `historical_archive.py` archive to accrue — it remains empty today, since Track 1 (Pipeline
+Integration) has not executed — this phase assembled its own real (non-synthetic) series
+**offline**, directly from Open-Meteo Archive API backfill (plus real ERCOT historical load for
+the D-02 training-time characterization). See
+`docs/data-science/decisions/anomaly_detection_model.md` for the full data-provenance detail.
 
 ## Blocks
 
@@ -28,18 +77,65 @@ Nothing else in this roadmap depends on C10 — it's the last component in the d
 
 ## Known Issues
 
-Not applicable — no implementation exists yet. (C7's Known Issues — particularly the placeholder ampacity formula — are a prerequisite blocker, not a C10 issue directly, but worth re-reading before starting this component, since training against C7's current placeholder rating instead of C5's real one would bake in the same defect this whole roadmap is trying to remove.)
+Sourced from `docs/data-science/decisions/anomaly_detection_model.md`'s Limitations section:
+
+- The corridor-level training set is a **pooled two-city envelope** (both endpoint cities'
+  readings concatenated), not per-city models — `raw_data` carries no location identifier at the
+  live `check()` call site that could key a per-city selector.
+- **No time-of-day feature** — `raw_data` carries no timestamp at the `check()` call site, so a
+  reading implausible at 2am but normal at 2pm is judged by the same learned envelope either way.
+- Per **D-02**, ERCOT historical load is a **training-time-only** signal — a real, executed
+  characterization exists (per-corridor zone-matched correlations), but it never reaches the live
+  `check()` call, and wiring it in is Track 1's scope, not this component's.
+- A clean checkout has **no persisted model artifact** until
+  `.venv/bin/python3 backend/anomaly_training.py --bakeoff` (or `--corridor <name>`) is run —
+  `data/models/` is git-ignored, generated data. Until then, the model branch is simply **absent**
+  (one logged warning, `model=None`), and the two heuristic branches (`_check_against_forecast`/
+  `_check_against_rolling_baseline`) carry G6 alone, exactly as they did before this phase.
 
 ## Acceptance Criteria
 
-Adapted from System Design Report §3.3's stated (but not yet implemented) validation plan:
+Adapted from System Design Report §3.3's stated validation plan, annotated with how each is now
+evidenced by `docs/data-science/decisions/anomaly_detection_model.md`:
 
-- Injecting corrupted or out-of-range values into weather/operating data streams (e.g. sudden temperature spikes, impossible wind speeds) is correctly identified as anomalous.
-- Zero false positives on clean historical data.
-- Automatic fallback to SLR is confirmed upon every detected anomaly — this must go through C7's existing fallback path, not a separate one.
+- Injecting corrupted or out-of-range values into weather/operating data streams (e.g. sudden
+  temperature spikes, impossible wind speeds) is correctly identified as anomalous. **Evidenced**
+  by the record's two labelled injection categories (`out_of_range`, `in_range_implausible`): the
+  selected `OneClassSVM` model caught 100.00% of both categories on real held-out data, for both
+  corridors. Note the record's own caveat — `out_of_range` values are already rejected by C7's G3
+  range gate upstream in the live pipeline, so `in_range_implausible` (a value each component
+  passes G3 with, but whose joint combination is implausible) is the category that actually
+  demonstrates this model's unique multivariate contribution.
+- Zero false positives on clean historical data. **Not fully met** by the measurement: the
+  selected model's false-positive rate on real, clean, held-out data is 3.77%
+  (`AUSTIN_CORPUS_CHRISTI`) and 0.53% (`MIDLAND_EL_PASO`) — nonzero, though at or below the
+  configured ceiling (`config.ANOMALY_ML_MAX_FALSE_POSITIVE_RATE`, 5.00%). The record's Verdict
+  states this plainly as the real cost of the added caution the model buys, rather than reporting
+  a pass this criterion's literal "zero" wording does not support.
+- Automatic fallback to SLR is confirmed upon every detected anomaly — this must go through C7's
+  existing fallback path, not a separate one. **Evidenced** by
+  `backend/tests/anomaly_detector_test.py::test_model_failure_resolves_to_static_rating` and
+  `test_model_exception_propagates_out_of_check`, proving a detector exception propagates
+  uncaught to `DLRSafetyMonitor`'s existing G6 `except Exception -> _fallback` handler; also
+  confirmed by `git diff --quiet HEAD -- backend/DLRSafetyMonitor.py` reporting zero diff across
+  this entire phase.
 
 ## Open Questions
 
-- Model type — unspecified in any existing doc.
-- Does this run instead of C7's deterministic gates, alongside them (belt-and-suspenders), or only for anomaly types the deterministic gates structurally can't catch (e.g. plausible-but-wrong values within range)?
-- Training data provenance — same historical-accumulation question as C9, but specifically needs *labeled* anomalies or a synthetic-injection strategy (per the acceptance criteria above) rather than just raw historical weather.
+- ~~Model type~~ — **answered, on measured evidence.** Per
+  `docs/data-science/decisions/anomaly_detection_model.md`, `OneClassSVM` was selected over
+  `IsolationForest`/`EllipticEnvelope` for both corridors via a three-candidate, five-contamination-
+  point bake-off — see the record's Measured results for every candidate's numbers, losers
+  included.
+- ~~Does this run instead of C7's deterministic gates, alongside them, or only for anomaly types
+  the deterministic gates structurally can't catch?~~ — **answered.** Alongside, additively,
+  OR-combined (D-05/D-06) — the model branch can only ever add a trip on top of an existing
+  branch's verdict, never suppress one. The "plausible-but-wrong-values-within-range" case this
+  question raised is precisely what the `in_range_implausible` injection category was built to
+  measure, and it is the category on which the deterministic gates structurally have zero recall.
+- Training data provenance — **answered by the synthetic-injection strategy this section itself
+  proposed**: no labelled real anomaly exists in any project data source, so false-negative/recall
+  rate is measured against deliberately injected synthetic corruption on real historical weather,
+  exactly as this criterion anticipated. Still genuinely open: whether real, labelled anomalies
+  will ever exist once Track 1's live pipeline archive accrues enough history to observe an actual
+  sensor fault, which would let a future validation record measure recall without injection.
