@@ -219,6 +219,35 @@ def test_the_two_corridors_zone_selections_differ():
     assert len(set(selections)) == len(selections)
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Frame attributes -- caller does not have to guess the resolved column
+# name or the real zone columns actually matched (Plan 02-03 Task 2 reads
+# these in anomaly_training.characterize_load)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_frame_attrs_expose_load_column_and_matched_zones(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    _make_fake_ercot(monkeypatch)
+
+    result = edr.pull_ercot_data(
+        "2025-01-01", "2025-01-02", zone_substrings=("SOUTH",), save=False,
+    )
+
+    assert result.attrs["load_column"] == "ercot_south_load_mw"
+    assert sorted(result.attrs["zone_columns_matched"]) == ["South", "South Central"]
+
+
+def test_frame_attrs_record_empty_matched_zones_on_fallback(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    _make_fake_ercot(monkeypatch)
+
+    result = edr.pull_ercot_data(
+        "2025-01-01", "2025-01-02", zone_substrings=("NONEXISTENT_ZONE",), save=False,
+    )
+
+    assert result.attrs["zone_columns_matched"] == []
+
+
 # Note: every test above monkeypatches `edr.gridstatus.Ercot` before calling
 # `pull_ercot_data` -- none constructs a real client or issues a network
 # request (this suite's own required convention, mirrored from

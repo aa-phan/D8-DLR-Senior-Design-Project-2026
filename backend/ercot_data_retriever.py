@@ -114,6 +114,15 @@ def pull_ercot_data(
     # Clean up the final dataframe for the merger script
     final_df = summer_df[[time_col, out_col]].rename(columns={time_col: "datetime_utc"})
 
+    # Expose the resolved output column name and the real zone columns
+    # that were actually matched (empty when the no-match fallback fired)
+    # as frame attributes -- so a caller (e.g.
+    # anomaly_training.characterize_load) can report which zones a
+    # corridor was actually characterized against without re-deriving or
+    # guessing the selection logic itself.
+    final_df.attrs["load_column"] = out_col
+    final_df.attrs["zone_columns_matched"] = list(zone_cols)
+
     if save:
         os.makedirs("outputs/ercot_data", exist_ok=True)
         start_tag = str(start).replace(":", "").replace(" ", "_")
