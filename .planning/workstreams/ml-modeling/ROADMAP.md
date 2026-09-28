@@ -125,7 +125,7 @@ path other than both being consumed by `DLRSafetyMonitor`; may be executed in pa
      against the existing mean±k·std baseline's trip rate on the same data.
   5. A written validation record documents that false-positive/false-negative measurement and
      states whether the model met expectations — per ANOM-02.
-**Plans**: 4/4 plans executed
+**Plans**: 5 plans (4 executed, 1 gap closure pending)
 
 **Wave 1**
 
@@ -152,6 +152,14 @@ path other than both being consumed by `DLRSafetyMonitor`; may be executed in pa
 - [x] 02-04-PLAN.md — ANOM-02 validation record (`docs/data-science/decisions/anomaly_detection_model.md`)
   written from the real measurement runs per D-07's honesty standard, and the stale
   `C10-anomaly-detection.md` spec corrected
+
+**Wave 5** *(gap closure — blocked on Wave 4 completion)*
+
+- [ ] 02-05-PLAN.md — Close 02-VERIFICATION.md's single failed must-have (P8 / 02-REVIEW.md CR-01):
+  `anomaly_training.py`'s three corridor-scopable report writers overwrite
+  `anomaly_validation_report.json` with a corridor-scoped subset, silently deleting the other
+  corridor's measurement history; replaced by one load-merge-atomic-write helper with entry-level
+  provenance so a shortened run is visible in the evidence rather than erasing it (restores T-02-09)
 
 ## Progress
 
