@@ -731,7 +731,26 @@ def _run_validate(corridors, years):
     `select_winner`. For each corridor: assemble the real observation
     frame (written to disk exactly like `main`'s plain training loop),
     split it chronologically, measure every contamination grid point,
-    print a fixed-width table, and accumulate one JSON report.
+    print a fixed-width table, and accumulate one JSON report. Persistence
+    goes through `merge_corridor_report` (v1.3 Phase 2 Plan 02-05, CR-01),
+    same as `_run_bakeoff`: a corridor absent from `corridors` is carried
+    forward, not deleted.
+
+    One consequence of sharing the merge helper with `_run_bakeoff`,
+    documented here rather than engineered around: `--validate` and
+    `--bakeoff` write structurally different entries into the same file
+    (this function's entries carry no `winner`/`selected_contamination`/
+    `ceiling_met`/`model_path`). Merging a `--validate` run over a
+    corridor whose entry came from `--bakeoff` REPLACES that winner-
+    bearing entry with one that has no winner -- a correct wholesale
+    replacement of that corridor's record by the command the operator
+    actually ran, made legible afterwards by the `produced_by` stamp. It
+    will make Plan 02-04's `TRANSCRIPTION_OK` gate fail for that corridor,
+    which is the gate doing its job: telling the operator the tracked
+    record no longer matches the evidence. This function does not add a
+    shape-compatibility shim, a field backfill, or a refusal to merge
+    across entry points -- any of those would hide a real divergence
+    between the record and the evidence.
     """
     reports = {}
 
@@ -787,12 +806,9 @@ def _run_validate(corridors, years):
                 f"{m['recall_pooled']:>15.4f}"
             )
 
-    os.makedirs(config.ANOMALY_ML_MODEL_DIR, exist_ok=True)
-    report_path = os.path.join(
-        config.ANOMALY_ML_MODEL_DIR, config.ANOMALY_ML_VALIDATION_REPORT_NAME
+    report_path = merge_corridor_report(
+        config.ANOMALY_ML_VALIDATION_REPORT_NAME, reports, "validate",
     )
-    with open(report_path, "w") as fh:
-        json.dump(reports, fh, indent=2)
     print(f"\nvalidation report written to {report_path}")
 
 
@@ -1233,7 +1249,15 @@ def _run_characterize_load(corridors):
     DIR`. Exits 0 regardless of whether any corridor's load pull
     succeeded -- D-02 scopes ERCOT network access as training-time-only
     and non-blocking (02-RESEARCH.md Environment Availability); ANOM-01's
-    interface deliverable does not depend on it.
+    interface deliverable does not depend on it. Persistence goes through
+    `merge_corridor_report` (v1.3 Phase 2 Plan 02-05, CR-01), same as
+    `_run_bakeoff`/`_run_validate`: a corridor absent from `corridors` is
+    carried forward, not deleted. An unavailable-corridor entry (the ones
+    carrying `available: False` and an error string) merges exactly like
+    any other entry -- a corridor whose ERCOT pull failed this run
+    replaces its own previous entry, which is correct: the current truth
+    about that corridor is that the pull failed, and the provenance stamp
+    dates it.
     """
     reports = {}
     for corridor in corridors:
@@ -1251,12 +1275,9 @@ def _run_characterize_load(corridors):
         else:
             print(f"{corridor}: UNAVAILABLE -- {result.get('error')}")
 
-    os.makedirs(config.ANOMALY_ML_MODEL_DIR, exist_ok=True)
-    report_path = os.path.join(
-        config.ANOMALY_ML_MODEL_DIR, config.ANOMALY_ML_LOAD_REPORT_NAME
+    report_path = merge_corridor_report(
+        config.ANOMALY_ML_LOAD_REPORT_NAME, reports, "characterize_load",
     )
-    with open(report_path, "w") as fh:
-        json.dump(reports, fh, indent=2)
     print(f"\nload characterization report written to {report_path}")
 
 

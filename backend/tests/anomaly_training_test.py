@@ -788,3 +788,151 @@ def test_bakeoff_rerun_for_one_corridor_preserves_the_other_corridors_entry(
     assert "selected_contamination" in after["MIDLAND_EL_PASO"]
 
     anomaly_detector._MODEL_CACHE.clear()
+
+
+def test_validate_rerun_for_one_corridor_preserves_the_other_corridors_entry(
+    monkeypatch, tmp_path,
+):
+    monkeypatch.setattr(config, "ANOMALY_ML_MODEL_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        forecast_training,
+        "fetch_city_weather",
+        _fake_fetch_city_weather_factory(n=150, seed_offset=100),
+    )
+    anomaly_detector._MODEL_CACHE.clear()
+
+    corridors = ["AUSTIN_CORPUS_CHRISTI", "MIDLAND_EL_PASO"]
+    at._run_validate(corridors, years=1)
+
+    report_path = os.path.join(
+        str(tmp_path), config.ANOMALY_ML_VALIDATION_REPORT_NAME
+    )
+    with open(report_path) as fh:
+        snapshot = json.load(fh)
+
+    assert set(snapshot) == set(corridors)
+
+    time.sleep(0.01)
+    at._run_validate(["MIDLAND_EL_PASO"], years=1)
+
+    with open(report_path) as fh:
+        after = json.load(fh)
+
+    assert set(after) == set(corridors)
+    assert after["AUSTIN_CORPUS_CHRISTI"] == snapshot["AUSTIN_CORPUS_CHRISTI"]
+    assert after["MIDLAND_EL_PASO"]["produced_by"] == "validate"
+    assert (
+        after["MIDLAND_EL_PASO"]["generated_at"]
+        > after["AUSTIN_CORPUS_CHRISTI"]["generated_at"]
+    )
+
+    anomaly_detector._MODEL_CACHE.clear()
+
+
+def test_characterize_load_rerun_for_one_corridor_preserves_the_other_corridors_entry(
+    monkeypatch, tmp_path,
+):
+    monkeypatch.setattr(config, "ANOMALY_ML_MODEL_DIR", str(tmp_path))
+
+    corridors = ["AUSTIN_CORPUS_CHRISTI", "MIDLAND_EL_PASO"]
+    for i, corridor in enumerate(corridors):
+        obs_frame = _synthetic_observation_frame(n=48, seed=300 + i)
+        obs_path = os.path.join(
+            str(tmp_path),
+            config.ANOMALY_ML_OBSERVATION_FRAME_TEMPLATE.format(corridor=corridor),
+        )
+        obs_frame.to_csv(obs_path, index=False)
+
+    def _fake_pull(start, end, zone_substrings=None, save=True):
+        base_timestamps = _synthetic_observation_frame(n=48)["datetime_utc"]
+        frame = pd.DataFrame({
+            "datetime_utc": pd.to_datetime(base_timestamps, utc=True),
+            "ercot_south_load_mw": np.linspace(1000.0, 1100.0, 48),
+        })
+        frame.attrs["load_column"] = "ercot_south_load_mw"
+        frame.attrs["zone_columns_matched"] = ["South", "South Central"]
+        return frame
+
+    monkeypatch.setattr(at.ercot_data_retriever, "pull_ercot_data", _fake_pull)
+
+    at._run_characterize_load(corridors)
+
+    report_path = os.path.join(str(tmp_path), config.ANOMALY_ML_LOAD_REPORT_NAME)
+    with open(report_path) as fh:
+        snapshot = json.load(fh)
+
+    assert set(snapshot) == set(corridors)
+
+    time.sleep(0.01)
+    at._run_characterize_load(["MIDLAND_EL_PASO"])
+
+    with open(report_path) as fh:
+        after = json.load(fh)
+
+    assert set(after) == set(corridors)
+    assert after["AUSTIN_CORPUS_CHRISTI"] == snapshot["AUSTIN_CORPUS_CHRISTI"]
+    assert after["MIDLAND_EL_PASO"]["produced_by"] == "characterize_load"
+    assert (
+        after["MIDLAND_EL_PASO"]["generated_at"]
+        > after["AUSTIN_CORPUS_CHRISTI"]["generated_at"]
+    )
+
+
+def test_merge_corridor_report_quarantines_an_unreadable_existing_report(
+    monkeypatch, tmp_path, capsys,
+):
+    monkeypatch.setattr(config, "ANOMALY_ML_MODEL_DIR", str(tmp_path))
+    report_name = "corrupt_report.json"
+    report_path = os.path.join(str(tmp_path), report_name)
+
+    corrupt_bytes = b"{not valid json at all"
+    with open(report_path, "wb") as fh:
+        fh.write(corrupt_bytes)
+
+    new_entries = {"AUSTIN_CORPUS_CHRISTI": {"measurements": []}}
+
+    result_path = at.merge_corridor_report(report_name, new_entries, "bakeoff")
+
+    with open(result_path) as fh:
+        written = json.load(fh)
+    assert set(written) == {"AUSTIN_CORPUS_CHRISTI"}
+
+    quarantine_candidates = [
+        f for f in os.listdir(str(tmp_path)) if ".unreadable-" in f
+    ]
+    assert len(quarantine_candidates) == 1
+    quarantine_path = os.path.join(str(tmp_path), quarantine_candidates[0])
+    with open(quarantine_path, "rb") as fh:
+        assert fh.read() == corrupt_bytes
+
+    captured = capsys.readouterr()
+    assert report_path in captured.out
+    assert quarantine_path in captured.out
+
+
+def test_merge_corridor_report_drops_entries_for_corridors_absent_from_config(
+    monkeypatch, tmp_path, capsys,
+):
+    monkeypatch.setattr(config, "ANOMALY_ML_MODEL_DIR", str(tmp_path))
+    report_name = "pruning_report.json"
+    report_path = os.path.join(str(tmp_path), report_name)
+
+    seeded = {
+        "AUSTIN_CORPUS_CHRISTI": {"measurements": ["real"]},
+        "ZOMBIE_CORRIDOR": {"measurements": ["stale"]},
+    }
+    with open(report_path, "w") as fh:
+        json.dump(seeded, fh)
+
+    new_entries = {"MIDLAND_EL_PASO": {"measurements": ["new"]}}
+
+    at.merge_corridor_report(report_name, new_entries, "bakeoff")
+
+    with open(report_path) as fh:
+        written = json.load(fh)
+
+    assert set(written) == {"AUSTIN_CORPUS_CHRISTI", "MIDLAND_EL_PASO"}
+    assert written["AUSTIN_CORPUS_CHRISTI"] == seeded["AUSTIN_CORPUS_CHRISTI"]
+
+    captured = capsys.readouterr()
+    assert "ZOMBIE_CORRIDOR" in captured.out
