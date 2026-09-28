@@ -1,39 +1,17 @@
 ---
 phase: 02-anomaly-detection-model
-verified: 2026-09-26T23:59:00Z
-status: gaps_found
-score: 17/18 must-haves verified
+verified: 2026-09-28T15:26:00Z
+status: passed
+score: 18/18 must-haves verified
 behavior_unverified: 0
 overrides_applied: 0
-gaps:
-  - truth: "A single machine-readable report at config.ANOMALY_ML_VALIDATION_REPORT_NAME holds every number Plan 02-04's validation record transcribes, keyed by corridor, candidate and contamination... so a shortened run is visible in the evidence rather than hidden behind a score (02-02-PLAN.md must_haves)"
-    status: failed
-    reason: >
-      Confirmed by live reproduction: `_run_validate` and `_run_bakeoff` in
-      backend/anomaly_training.py both initialize `reports = {}` as a fresh, empty dict scoped
-      only to the corridors passed to that invocation, then unconditionally `json.dump` it over
-      `data/models/anomaly_validation_report.json` with no read-merge step first. Running
-      `backend/anomaly_training.py --bakeoff --years 1` (both corridors, 2 keys in the report)
-      followed by `backend/anomaly_training.py --bakeoff --years 1 --corridor MIDLAND_EL_PASO`
-      (single corridor) leaves the report file containing ONLY `MIDLAND_EL_PASO` --
-      `AUSTIN_CORPUS_CHRISTI`'s entire measurement history (all candidate x contamination
-      numbers, selected winner, ceiling-met flag) is silently deleted, with no warning and no
-      diff visible to the operator beyond the file shrinking. This is the opposite of "a
-      shortened run is visible in the evidence" -- it is a shortened run *replacing* the evidence
-      silently. It also directly contradicts the phase's own threat register entry T-02-09, whose
-      stated mitigation is exactly this visibility guarantee. `docs/data-science/decisions/
-      anomaly_detection_model.md` is a direct transcription of this JSON file, so any future
-      single-corridor retrain-and-refresh workflow (e.g. after a data update) performed between
-      validation-record updates would corrupt the source-of-truth evidence without any error
-      surfacing. This was independently confirmed during this verification pass (not merely
-      trusted from 02-REVIEW.md's CR-01 finding) and the report was restored to its full
-      two-corridor state afterward so no residual repository state was altered.
-    artifacts:
-      - path: "backend/anomaly_training.py"
-        issue: "_run_validate (~line 591) and _run_bakeoff (~line 878) build `reports = {}` fresh and never load the existing report file before overwriting it, so any corridor absent from the current invocation's corridor list is silently dropped from the persisted report"
-    missing:
-      - "Load the existing anomaly_validation_report.json (if present) before populating `reports`, merge only the corridors actually processed in this invocation into it, then write -- mirroring the fix already proposed in 02-REVIEW.md's CR-01"
-      - "Apply the identical fix to any other report-writing entry point in anomaly_training.py that scopes to a corridor subset (--validate)"
+re_verification:
+  previous_status: gaps_found
+  previous_score: 17/18
+  gaps_closed:
+    - "P8 / CR-01: `anomaly_training.py`'s three corridor-scopable report writers no longer build a fresh, empty accumulator and overwrite `anomaly_validation_report.json` / `anomaly_load_characterization.json`; a single `merge_corridor_report` helper loads the existing report, stamps entry-level `produced_by`/`generated_at` provenance, prunes unconfigured corridors, carries forward untouched corridors, and writes atomically. Independently reproduced live in this verification pass: a full unscoped `--bakeoff --years 1` followed by a scoped `--bakeoff --years 1 --corridor MIDLAND_EL_PASO` now leaves BOTH corridor keys in the report, `AUSTIN_CORPUS_CHRISTI`'s entry byte-identical to the full-run snapshot, `MIDLAND_EL_PASO` stamped `produced_by: bakeoff` with a strictly later `generated_at`."
+  gaps_remaining: []
+  regressions: []
 human_verification: []
 ---
 
@@ -44,154 +22,210 @@ per-variable baselines (wind, temp, solar, load) instead of only the rolling mea
 forecast-residual heuristics, with the fail-safe contract intact, and that model's
 false-positive/false-negative behavior is proven against real historical data.
 
-**Verified:** 2026-09-26
-**Status:** gaps_found
-**Re-verification:** No — initial verification
+**Verified:** 2026-09-28
+**Status:** passed
+**Re-verification:** Yes — after gap closure (Plan 02-05, closing 02-VERIFICATION.md's single
+failed must-have, P8 / 02-REVIEW.md CR-01)
 
 ## Goal Achievement
+
+### Re-Verification Scope
+
+This pass re-verifies the single truth that failed in the 2026-09-26 initial verification
+(P8 / CR-01, the report-merge overwrite defect), spot-checks the previously-passing must-haves
+most at risk of regressing from Plan 02-05's changes (SC4, P6, P8-adjacent evidence, D-03
+bake-off measurement integrity, D-02/load boundary, the fail-safe contract, requirements
+currency), and runs the full test suite once. It does not redo the full from-scratch depth of
+the original 18-must-have pass for items Plan 02-05 could not have touched (its own frontmatter
+prohibits editing `anomaly_detector.py`, `DLRSafetyMonitor.py`, and the validation-record
+markdown, and `git diff` confirms none of the three was touched).
+
+### CR-01 Re-Verification (the previously-failed must-have)
+
+Independently reproduced 02-VERIFICATION.md's exact two-command sequence in this working tree
+(not merely trusted from 02-05-SUMMARY.md's transcription of its own worktree run — see note
+below on why this independent re-run mattered):
+
+| Step | Command | Result |
+|---|---|---|
+| 1 | Backed up the pre-existing `data/models/anomaly_validation_report.json` to `/tmp` | Both corridors present, no `produced_by`/`generated_at` fields (predates this fix ever running in this checkout — see note) |
+| 2 | `.venv/bin/python3 backend/anomaly_training.py --bakeoff --years 1` (full, unscoped) | Both corridors written: `AUSTIN_CORPUS_CHRISTI` → OneClassSVM/0.001, `MIDLAND_EL_PASO` → OneClassSVM/0.005 — identical winners/contaminations to the original 2026-09-26 verification and to 02-02/02-03-SUMMARY.md. Printed `report merge: ... refreshed: ['AUSTIN_CORPUS_CHRISTI', 'MIDLAND_EL_PASO'], carried forward: [], dropped: []` |
+| 3 | Snapshotted the resulting report to `/tmp` | 2 keys, 15 measurements each (3 candidates × 5 contaminations), losers retained |
+| 4 | `.venv/bin/python3 backend/anomaly_training.py --bakeoff --years 1 --corridor MIDLAND_EL_PASO` (scoped) | Printed `report merge: data/models/anomaly_validation_report.json -- refreshed: ['MIDLAND_EL_PASO'], carried forward: ['AUSTIN_CORPUS_CHRISTI'], dropped: []` |
+| 5 | Assert against the snapshot (Plan 02-05's own Task 3 gate script, re-run independently) | `CR01_CLOSED`: both keys present; `AUSTIN_CORPUS_CHRISTI`'s entry byte-identical to the full-run snapshot; `MIDLAND_EL_PASO` stamped `produced_by="bakeoff"` with `generated_at` strictly later than `AUSTIN_CORPUS_CHRISTI`'s; `MIDLAND_EL_PASO`'s measurement count unchanged (15) |
+| 6 | Re-ran Plan 02-04's `TRANSCRIPTION_OK` script against the regenerated report | `TRANSCRIPTION_OK` — the published `anomaly_detection_model.md` still transcribes every selected-winner rate and candidate name |
+| 7 | Restored `data/models/anomaly_validation_report.json` to its pre-reproduction bytes (`diff` confirmed byte-identical) | No residual repo state change (the file is git-ignored, so `git status` was clean before and after regardless, but the restore mirrors the discipline both the original verification and Plan 02-05 used) |
+
+**Note on why the independent re-run mattered, not just trusted transcription:** the report file
+present in this checkout *before* this verification's reproduction (mtime 2026-09-26, prior to
+Plan 02-05's 2026-09-28 execution window) carried no `produced_by`/`generated_at` fields at all —
+i.e., it predates the fix. Plan 02-05's SUMMARY documents that its Task 3 live reproduction ran
+in "a fresh worktree" (a pattern this phase's prior plans also used, per the 02-04 merge commit
+message referencing an "isolated worktree"); since the generated `data/models/*.json` files are
+git-ignored, that worktree's regenerated report never propagated into this main checkout via git,
+and no other worktree currently exists (`git worktree list` shows only this one at the current
+HEAD) to inspect directly. This verification therefore did not accept the SUMMARY's Task 3
+artifact claims as given — it ran the exact reproduction itself, in this checkout, against the
+live Open-Meteo Archive API, and confirmed the fix holds. The code that makes it hold
+(`merge_corridor_report`, wired into all three writers) is committed and tracked, so this is a
+property of the code, not of one worktree's transient generated file.
+
+**P8 truth (restated): ✓ VERIFIED** — a corridor-scoped re-run now positively preserves and
+visibly provenance-stamps the other corridor's evidence, discharging both the negative
+("must not delete") and the positive ("must be visible") halves of the original must-have.
 
 ### Observable Truths (ROADMAP Success Criteria — primary contract)
 
 | # | Truth | Status | Evidence |
 |---|---|---|---|
-| SC1 | `AnomalyDetector.check(raw_data, rating)` — any construction path — still returns the same `(bool, str)` tuple shape; `DLRSafetyMonitor` requires zero changes | ✓ VERIFIED | `inspect.signature(AnomalyDetector.check)` confirms params `['self','raw_data','rating']` unchanged; `git diff HEAD~30 -- backend/DLRSafetyMonitor.py` is empty; `git status --porcelain backend docs` clean at verification time |
-| SC2 | At least one decision path is backed by an actual model trained on historical per-variable baselines (wind, temp, solar, load) | ✓ VERIFIED | Live re-run of `backend/anomaly_training.py --corridor AUSTIN_CORPUS_CHRISTI --years 1` against the real Open-Meteo Archive API produced a real fitted `OneClassSVM`; `AnomalyDetector.for_corridor(...)` loaded it (`model is not None`, `model_source` matches the persisted path) and `check()` returned a real `(False, "model judged reading ... within the learned per-variable envelope ...")` verdict with `signal == "model_clean"` on a real historical row. Load (the fourth named variable) is discharged via `characterize_load` at training time only (see SC4/D-02 below) |
-| SC3 | A trained-model failure still resolves to the corridor's static rating via G6's existing `_fallback` handling | ✓ VERIFIED | Ran the named tests directly: `test_model_failure_resolves_to_static_rating` and `test_model_exception_propagates_out_of_check` both pass (`14 passed` for the full fail-safe/OR-combination named-test set). Confirmed no exception handler exists anywhere in `anomaly_detector.py` (`grep -nE '^[[:space:]]*(try:|except )'` finds nothing) so a raising model has no local catch to short-circuit G6 |
-| SC4 | The trained model is evaluated against real historical data (Open-Meteo backfill + real ERCOT load), not synthetic fixtures, for FP/FN trip rate vs. the existing baseline on the same data | ✓ VERIFIED | Live re-run of `--bakeoff --years 1` (both corridors, real Open-Meteo data) and `--characterize-load` (real ERCOT `gridstatus` client) reproduced the exact same winners/contaminations/correlations already recorded in 02-02/02-03-SUMMARY.md and the validation record — genuine reproducibility confirmed, not merely trusted. The rolling baseline is scored through the real `_check_against_rolling_baseline` branch (`load_model=False`), not a re-implementation |
-| SC5 | A written validation record documents the FP/FN measurement and states whether the model met expectations | ✓ VERIFIED | `docs/data-science/decisions/anomaly_detection_model.md` exists, tracked, `## Expectation` (line 164) precedes `## Verdict` (line 270); an independent transcription check (re-run, not trusted from SUMMARY) confirms every selected-winner rate and every measured candidate name appears verbatim in the doc, matching the freshly-regenerated `anomaly_validation_report.json` |
+| SC1 | `AnomalyDetector.check(raw_data, rating)` — any construction path — still returns the same `(bool, str)` tuple shape; `DLRSafetyMonitor` requires zero changes | ✓ VERIFIED (regression, unchanged) | `git diff bd40ec9 HEAD -- backend/anomaly_detector.py backend/DLRSafetyMonitor.py` is empty — zero diff across the entire gap-closure plan, confirming Plan 02-05 never touched the runtime files as its own prohibitions required |
+| SC2 | At least one decision path is backed by an actual model trained on historical per-variable baselines | ✓ VERIFIED (regression, unchanged) | Not re-exercised end-to-end this pass (no code change possible in `anomaly_detector.py` per the zero-diff check above); carried forward from the 2026-09-26 verification's live confirmation |
+| SC3 | A trained-model failure still resolves to the corridor's static rating via G6's `_fallback` | ✓ VERIFIED (regression, unchanged) | `anomaly_detector.py` has zero diff; full suite includes `test_model_failure_resolves_to_static_rating` and `test_model_exception_propagates_out_of_check`, both pass in this run's `473 passed` result |
+| SC4 | The trained model is evaluated against real historical data (Open-Meteo + real ERCOT load), not synthetic fixtures | ✓ VERIFIED (re-confirmed live) | This verification's own live `--bakeoff --years 1` run (Step 2 above) pulled real Open-Meteo data and reproduced the exact same winners/contaminations as the original verification and the published record — genuine reproducibility re-confirmed, not merely trusted |
+| SC5 | A written validation record documents the FP/FN measurement and states whether the model met expectations | ✓ VERIFIED (regression, unchanged) | `docs/data-science/decisions/anomaly_detection_model.md` has zero diff since the prior verification (Plan 02-05's prohibitions forbid editing it); `TRANSCRIPTION_OK` re-run in this pass against the freshly-regenerated report confirms it still transcribes correctly |
 
 **Score:** 5/5 ROADMAP success criteria verified.
 
-### Plan-Level Must-Haves (selected, representing the phase's own stated risk surface)
+### Plan-Level Must-Haves
 
 | # | Truth (paraphrased) | Status | Evidence |
 |---|---|---|---|
-| P1 | Model branch judges raw wind/temp/solar, never derived rating; feature/raw-key tuples contain no `hour`/`load`/`dlr_amps`/`rating` | ✓ VERIFIED | `config.ANOMALY_ML_FEATURE_COLUMNS == ('air_temp','wind_speed','solar_radiation')`, `ANOMALY_ML_RAW_DATA_KEYS == ('temp','wind','solar')`, both length 3, no forbidden substrings — confirmed live |
-| P2 | Additive OR-combination; model can only add a trip, never suppress one | ✓ VERIFIED | `test_model_cannot_suppress_existing_trip` / `test_model_can_trip_on_its_own` pass |
-| P3 | No exception handler, no imputation call, no `DLRSafetyMonitor` import anywhere in `anomaly_detector.py`; `import anomaly_detector` pulls in neither `sklearn` nor `joblib` | ✓ VERIFIED | All four grep/import guards re-run live, all pass |
-| P4 | Model artifact path built only from closed `CORRIDOR_ENDPOINTS` set, atomic persistence (tempfile + `os.replace`) | ✓ VERIFIED | Code inspected; `persist_corridor_model` uses tempfile+`os.replace`; `_model_path_for` validates against `CORRIDOR_ENDPOINTS` before any path join |
-| P5 | Both corridors trained/scored/persisted independently; both artifacts loadable | ✓ VERIFIED | Live `--bakeoff --years 1` produced both `.joblib` files; both load with non-`None` model via `for_corridor` |
-| P6 | D-03: all three candidates (IsolationForest, EllipticEnvelope, OneClassSVM) measured across the same contamination grid; losers' numbers retained, never dropped | ✓ VERIFIED | Live regenerated report has 15 measurements per corridor (3×5), losers (`EllipticEnvelope`, low-contamination `IsolationForest`) present alongside the winner |
-| P7 | Winner selected by single deterministic rule, never architecture preference; `select_winner` refuses on missing/non-finite measurement | ✓ VERIFIED (via test) | `test_select_winner_*` suite (7 named tests) passes, covering the eligible-pick, fallback, tie-break, and refusal paths |
-| P8 | A single machine-readable validation report holds every number, "so a shortened run is visible in the evidence rather than hidden behind a score" | ✗ **FAILED** | See Gaps — CR-01, confirmed by live reproduction: a corridor-scoped re-run silently deletes other corridors' evidence instead of making the scope change visible |
-| P9 | Injection never mutates the real assembled frame; clean/injected denominators disjoint | ✓ VERIFIED (via test) | `test_inject_anomalies_*` non-mutation and disjoint-denominator tests pass |
-| P10 | `backend/anomaly_detector.py` unchanged by Plans 02-02/02-03/02-04 (measurement/docs plans touch no runtime code) | ✓ VERIFIED | `git diff HEAD -- backend/anomaly_detector.py` empty at verification time; each plan's own `DETECTOR_UNTOUCHED`/`NO_CODE_CHANGED` gates independently re-run and pass |
-| P11 | D-02: load characterized at training time only; `anomaly_detector.py` never imports `ercot_data_retriever`/`gridstatus`; no `load` name in either feature tuple; `check()` still works on wind/temp/solar-only `raw_data` | ✓ VERIFIED | `test_load_is_training_time_only_and_never_reaches_check` passes; `grep` confirms no import; live `characterize_load` run produced distinct zone matches per corridor (`South`/`South Central` vs. `Far West`/`West`) |
-| P12 | Validation record states Expectation before Verdict; reports both FP-rate and recall as separate numbers; never presents `out_of_range` recall as evidence of unique model value | ✓ VERIFIED | Section order confirmed; doc explicitly labels `out_of_range` as "redundant with G3" and points to `in_range_implausible` as the real evidence |
-| P13 | C10 spec no longer claims the component doesn't exist; sections describe what shipped; acceptance criteria annotated with evidence, including an honest "not fully met" on the literal zero-false-positive wording | ✓ VERIFIED | All four stale strings absent; spec names `anomaly_detector.py`, `anomaly_training.py`, `anomaly_detection_model.md`; "zero false positives" criterion explicitly marked **Not fully met** rather than whitewashed |
+| P1 | Model branch judges raw wind/temp/solar only | ✓ VERIFIED (regression, unchanged) | `anomaly_detector.py` zero diff |
+| P2 | Additive OR-combination; model can only add a trip | ✓ VERIFIED (regression, unchanged) | Full suite green (includes `test_model_cannot_suppress_existing_trip`) |
+| P3 | No exception handler/imputation/monitor-import in `anomaly_detector.py`; no sklearn/joblib import | ✓ VERIFIED (regression, unchanged) | `anomaly_detector.py` zero diff |
+| P4 | Model artifact path built only from `CORRIDOR_ENDPOINTS`, atomic persistence | ✓ VERIFIED (regression, unchanged) | `anomaly_detector.py` zero diff; `persist_corridor_model` untouched |
+| P5 | Both corridors trained/scored/persisted independently | ✓ VERIFIED (re-confirmed live) | This pass's live `--bakeoff --years 1` produced and persisted both `.joblib` artifacts |
+| P6 | D-03: all three candidates measured across the same contamination grid; losers' numbers retained | ✓ VERIFIED (re-confirmed live) | This pass's live run printed 15 measurements per corridor (3×5); `EllipticEnvelope` and low-contamination `IsolationForest` losers present alongside the `OneClassSVM` winner, at both the full-run and the post-merge scoped-run stage |
+| P7 | Winner selected by single deterministic rule | ✓ VERIFIED (regression, unchanged) | `select_winner` untouched by Plan 02-05 (not in its `files_modified` list, confirmed by reading the diff — only `merge_corridor_report` and the three writers' persistence tails changed); full suite's `test_select_winner_*` pass |
+| **P8** | **A single machine-readable report holds every number, visible rather than hidden behind a shortened run** | **✓ VERIFIED (gap closed this pass)** | See "CR-01 Re-Verification" above — independently reproduced, not trusted from SUMMARY |
+| P9 | Injection never mutates the real assembled frame; disjoint denominators | ✓ VERIFIED (regression, unchanged) | Injection functions (`validate_candidate`, `inject_anomalies`) not modified by Plan 02-05; full suite's injection tests pass |
+| P10 | `backend/anomaly_detector.py` unchanged by measurement/docs plans | ✓ VERIFIED (re-confirmed) | `git diff bd40ec9 HEAD -- backend/anomaly_detector.py` empty |
+| P11 | D-02: load characterized at training time only; boundary held | ✓ VERIFIED (regression, unchanged) | `characterize_load`'s measurement logic untouched by Plan 02-05 (only its report-writer tail, `_run_characterize_load`, was rewired to call `merge_corridor_report`); `test_load_is_training_time_only_and_never_reaches_check` passes in the full suite; `anomaly_detector.py` has no `ercot_data_retriever`/`gridstatus` import (zero diff) |
+| P12 | Validation record states Expectation before Verdict, reports FP-rate and recall separately | ✓ VERIFIED (regression, unchanged) | `anomaly_detection_model.md` zero diff (explicitly prohibited from editing) |
+| P13 | C10 spec corrected, no stale claims | ✓ VERIFIED (regression, unchanged) | Spec file not in Plan 02-05's scope or `files_modified`; not re-inspected this pass (low regression risk — no code path touches it) |
 
-**Score (plan-level detail):** 12/13 verified, 1 failed (P8 / CR-01).
+**Score (plan-level):** 13/13 verified (12 regression-confirmed unchanged, 1 gap newly closed).
+
+### New Must-Haves Introduced by Plan 02-05 (from its own frontmatter)
+
+| # | Truth | Status | Evidence |
+|---|---|---|---|
+| N1 | A shortened run is positively visible via entry-level `produced_by`/`generated_at` provenance | ✓ VERIFIED | Confirmed live in the CR-01 reproduction above: `MIDLAND_EL_PASO`'s refreshed entry carries `produced_by="bakeoff"` and a `generated_at` strictly later than the carried-forward `AUSTIN_CORPUS_CHRISTI` entry |
+| N2 | Regression: a full unscoped run still writes every corridor with every candidate/contamination measurement, losers included, and `TRANSCRIPTION_OK` still passes | ✓ VERIFIED | Confirmed live: full run produced 2×15 measurements; `TRANSCRIPTION_OK` re-run passed against the regenerated report |
+| N3 | Every corridor-scopable writer (`_run_bakeoff`, `_run_validate`, `_run_characterize_load`) goes through one shared `merge_corridor_report` helper; no entry point serializes on its own | ✓ VERIFIED | `grep -c 'json.dump(' backend/anomaly_training.py` → 1 (only inside the helper); `grep -c 'merge_corridor_report(' backend/anomaly_training.py` → 4 (1 definition + 3 call sites); all three writers inspected directly and confirmed calling the helper |
+| N4 | A corrupt/non-object existing report is quarantined (bytes preserved, both paths announced), never silently swallowed into an empty report | ✓ VERIFIED (via test) | `test_merge_corridor_report_quarantines_an_unreadable_existing_report` read directly — seeds unparseable bytes, asserts the written report contains only the new entry, a `.unreadable-`-suffixed sibling exists with the original corrupt bytes intact, and stdout names both paths. Passes. |
+| N5 | A carried-forward entry whose key is no longer in `config.CORRIDOR_ENDPOINTS` is dropped and the drop is printed | ✓ VERIFIED (via test) | `test_merge_corridor_report_drops_entries_for_corridors_absent_from_config` read directly — seeds a `ZOMBIE_CORRIDOR` key, asserts it is absent from the written report and named in captured stdout. Passes. |
+| N6 | The report write is atomic (temp file + `os.replace`), mirroring `persist_corridor_model`'s T-02-06 discipline | ✓ VERIFIED | `merge_corridor_report` source inspected directly: `tempfile.mkstemp(dir=config.ANOMALY_ML_MODEL_DIR, suffix=".json.tmp")`, write, `os.replace`, `os.remove` the temp file and re-raise on any exception |
+| N7 | `anomaly_detector.py` and `DLRSafetyMonitor.py` unchanged by this plan | ✓ VERIFIED | `git diff bd40ec9 HEAD -- backend/anomaly_detector.py backend/DLRSafetyMonitor.py` empty |
+| N8 | `REQUIREMENTS.md` records ANOM-01/ANOM-02 as satisfied in both the checkbox list and the traceability table | ✓ VERIFIED | Read directly: `- [x] **ANOM-01**...`, `- [x] **ANOM-02**...`; traceability table rows read `| ANOM-01 | Phase 2 | Complete |` / `| ANOM-02 | Phase 2 | Complete |`; footer updated to "2026-09-28 — ANOM-01/ANOM-02 marked Complete per Phase 2 verification (02-VERIFICATION.md) and Plan 02-05's CR-01 gap closure" |
+
+**Score (Plan 02-05's own must-haves):** 8/8 verified.
+
+### Prohibitions (Plan 02-05 frontmatter)
+
+| Prohibition | Status | Evidence |
+|---|---|---|
+| MUST NOT remove/disable the `--corridor` flag | ✓ Held | `--corridor` flag present and functional; scoped run in the reproduction used it successfully |
+| MUST NOT field-level/deep-merge an existing entry with a new one | ✓ Held | Code inspected: `merged.update({key: stamped_entries[key] for key in refreshed})` — wholesale replacement, no field splicing; `test_merge_corridor_report_carries_forward_corridors_absent_from_this_run` asserts exact equality (no blend) |
+| MUST NOT add any top-level report key other than corridor keys | ✓ Held | Provenance stamped inside each entry (`stamped["produced_by"]`, `stamped["generated_at"]`), never at `merged`'s top level; `TRANSCRIPTION_OK` (which indexes top-level items directly as corridor entries) still passes |
+| MUST NOT silently substitute an empty mapping for an unreadable report | ✓ Held | Quarantine-and-continue confirmed by direct test and code read |
+| MUST NOT edit `anomaly_detector.py`, `DLRSafetyMonitor.py`, or `anomaly_detection_model.md` | ✓ Held | All three confirmed zero diff via `git diff bd40ec9 HEAD` |
+| MUST NOT scope-creep into WR-01..WR-05/IN-01..IN-04 | ✓ Held | None of those files/functions (`chronological_split`, `ercot_data_retriever.py`'s date mask, `validate_candidate`'s RNG seeding, `_check_against_model`'s error message) appear in Plan 02-05's diff |
 
 ### Combined Score
 
-17/18 must-haves verified (5 ROADMAP SC + 12 of 13 sampled plan-level truths); 1 failed.
+**18/18 must-haves verified** (5 ROADMAP SC + 13 sampled plan-level truths, all now passing) —
+plus Plan 02-05's own 8 new must-haves and 6 prohibitions, all independently confirmed. The
+phase's single outstanding gap from the 2026-09-26 initial verification is closed.
 
 ### Required Artifacts
 
 | Artifact | Expected | Status | Details |
 |---|---|---|---|
-| `backend/anomaly_detector.py` | Additive third branch, unchanged contract | ✓ VERIFIED | 460 lines, `_check_against_model` present ×5 refs, no handler/imputation/monitor-import |
-| `backend/anomaly_training.py` | Offline trainer/bake-off/measurement/load-characterization | ✓ VERIFIED (with CR-01 defect) | 1219 lines, all exported functions present and exercised; report-merge defect confirmed (see Gaps) |
-| `backend/config.py` | `ANOMALY_ML_*` tunables | ✓ VERIFIED | All named constants present with expected shapes |
-| `backend/ercot_data_retriever.py` | Additive return value, zone selection, per-year loop | ✓ VERIFIED | `pull_ercot_data` returns frame; per-corridor zone substrings confirmed distinct in live run (WR-02 date-boundary truncation noted as pre-existing, non-blocking, see Anti-Patterns) |
-| `backend/tests/anomaly_detector_test.py` | Model-branch + fail-safe + OR-combination tests | ✓ VERIFIED | 32 tests, all pass |
-| `backend/tests/anomaly_training_test.py` | Offline assembly + measurement + bake-off + D-02 boundary invariants | ✓ VERIFIED | Present, all pass |
-| `backend/tests/ercot_data_retriever_test.py` | Offline retriever tests | ✓ VERIFIED | 254 lines, present, all pass, no network |
-| `docs/data-science/decisions/anomaly_detection_model.md` | ANOM-02 validation record | ✓ VERIFIED | 406 lines, all required sections present, transcription re-confirmed against a freshly-regenerated report |
-| `docs/data-science/specs/C10-anomaly-detection.md` | Corrected spec | ✓ VERIFIED | 141 lines, stale claims removed, evidence-annotated |
+| `backend/anomaly_training.py` | `merge_corridor_report` helper wired into all three corridor-scopable writers | ✓ VERIFIED | 1391 lines; helper present with full load/quarantine/stamp/prune/merge/atomic-write behavior; `_run_bakeoff`/`_run_validate`/`_run_characterize_load` all call it; exactly one `json.dump(` site remains, inside the helper |
+| `backend/tests/anomaly_training_test.py` | 6 new regression tests for the merge fix | ✓ VERIFIED | All 6 named tests present, read directly, non-trivial (seed real corruption bytes, real zombie keys, real two-invocation re-runs), and pass |
+| `.planning/workstreams/ml-modeling/REQUIREMENTS.md` | ANOM-01/ANOM-02 marked Complete | ✓ VERIFIED | Checkbox list and traceability table both updated; footer dated 2026-09-28 |
+| `backend/anomaly_detector.py` | Zero diff from pre-gap-closure state | ✓ VERIFIED | `git diff bd40ec9 HEAD` empty |
+| `backend/DLRSafetyMonitor.py` | Zero diff from pre-gap-closure state | ✓ VERIFIED | `git diff bd40ec9 HEAD` empty |
+| `docs/data-science/decisions/anomaly_detection_model.md` | Zero diff (prohibited from editing); still transcribes the regenerated report | ✓ VERIFIED | Zero diff; `TRANSCRIPTION_OK` re-run passes |
 
 ### Key Link Verification
 
 | From | To | Via | Status | Details |
 |---|---|---|---|---|
-| `anomaly_detector.py` | `config.py` | Path built only from `ANOMALY_ML_MODEL_DIR`+`ANOMALY_ML_MODEL_FILENAME_TEMPLATE` | ✓ WIRED | `_model_path_for` validates corridor before path assembly |
-| `anomaly_detector.py` | `data/models/anomaly_<corridor>.joblib` | `_load_corridor_model`/`_load_corridor_model_or_none` | ✓ WIRED | Live-loaded both corridors' artifacts successfully |
-| `anomaly_detector.py` | `DLRSafetyMonitor.py` | Raises rather than handles; G6 is the sole fail-safe boundary | ✓ WIRED | Confirmed via passing `model_failure_resolves_to_static_rating` test and zero diff on `DLRSafetyMonitor.py` |
-| `anomaly_training.py` | `backend/open_meteo_provider.py` (via `forecast_training.fetch_city_weather`) | Real historical weather source, reused | ✓ WIRED | Live E2E run pulled 17,520 real hourly rows per corridor |
-| `anomaly_training.py` | `anomaly_detector.py` | `persist_corridor_model` writes onto `anomaly_detector._model_path_for(corridor)` | ✓ WIRED | Path convention shared and confirmed via successful load-after-persist |
-| `anomaly_training.py` | `backend/ercot_data_retriever.py` | `characterize_load` calls `pull_ercot_data` with corridor-specific zones | ✓ WIRED | Live run confirmed distinct zone matches per corridor |
-| `anomaly_detector.py` | `backend/ercot_data_retriever.py` | NO link — asserted absent (D-02 boundary) | ✓ VERIFIED ABSENT | `test_load_is_training_time_only_and_never_reaches_check` passes; grep confirms no import |
-| `anomaly_training.py` | `data/models/anomaly_validation_report.json` | `corridor_report`/`--bakeoff` write path | ⚠️ **WIRED BUT DEFECTIVE** | Writes correctly for a full-corridor-set run; silently destructive for a corridor-scoped run (CR-01) |
+| `_run_bakeoff` | `merge_corridor_report` | persistence tail rewired | ✓ WIRED | Confirmed by direct read and by the live reproduction's printed `report merge:` line |
+| `_run_validate` | `merge_corridor_report` | persistence tail rewired | ✓ WIRED | Confirmed by direct read; regression test exercises it |
+| `_run_characterize_load` | `merge_corridor_report` | persistence tail rewired, on `ANOMALY_ML_LOAD_REPORT_NAME` | ✓ WIRED | Confirmed by direct read; regression test exercises it |
+| `merge_corridor_report` | `data/models/anomaly_validation_report.json` / `anomaly_load_characterization.json` | temp file + `os.replace` | ✓ WIRED | Code inspected; atomic-write discipline matches `persist_corridor_model`'s |
+| `anomaly_training.py` | `anomaly_detector.py` / `DLRSafetyMonitor.py` | NO link — asserted absent for this plan's changes | ✓ VERIFIED ABSENT | `git diff bd40ec9 HEAD` on both files is empty |
 
-### Behavioral Spot-Checks
+### Behavioral Spot-Checks (this verification pass)
 
 | Behavior | Command | Result | Status |
 |---|---|---|---|
-| Full test suite | `.venv/bin/python3 -m pytest -q` | `467 passed, 0 failed` | ✓ PASS |
-| Fail-safe/OR-combination named tests | `pytest -k "model_failure_resolves_to_static_rating or ... non_finite_rating_still_skips_model_branch"` | `14 passed` | ✓ PASS |
-| Live E2E tracer | `anomaly_training.py --corridor AUSTIN_CORPUS_CHRISTI --years 1` + manual `check()` call | Real `(bool,str)` verdict, `signal='model_clean'`, `model_source` matches | ✓ PASS |
-| Live D-03 bake-off, both corridors | `anomaly_training.py --bakeoff --years 1` | Both corridors reproduced identical winners/contaminations to the SUMMARY | ✓ PASS |
-| Live D-02 load characterization | `anomaly_training.py --characterize-load` | Reproduced identical zone matches/correlations to the SUMMARY | ✓ PASS |
-| Validation-record transcription | Independent re-run of the plan's own `TRANSCRIPTION_OK` script against a freshly-regenerated report | `TRANSCRIPTION_OK` | ✓ PASS |
-| Report-merge integrity (CR-01 reproduction) | `--bakeoff --years 1` (both) then `--bakeoff --years 1 --corridor MIDLAND_EL_PASO` | Report shrank from 2 keys to 1 key — `AUSTIN_CORPUS_CHRISTI` silently dropped | ✗ **FAIL** — confirms 02-REVIEW.md CR-01 |
-| Non-numeric raw value error message | `check({'wind':'bad',...})` | `ValueError: could not convert string to float: 'bad'` (does not name the field per docstring contract) | ⚠️ Confirms 02-REVIEW.md WR-04 (does not gate; ValueError still propagates uncaught) |
+| Full test suite | `.venv/bin/python3 -m pytest -q` | `473 passed, 0 failed` (467 pre-phase baseline + 6 new merge tests) | ✓ PASS |
+| Six named merge/regression tests | `pytest backend/tests/anomaly_training_test.py -k "merge_corridor_report or preserves_the_other_corridors_entry"` | `6 passed` | ✓ PASS |
+| Live CR-01 reproduction (independent, this pass) | full `--bakeoff --years 1` then scoped `--bakeoff --years 1 --corridor MIDLAND_EL_PASO` | `CR01_CLOSED` — both corridors present, carried entry byte-identical, refreshed entry provenance-stamped and strictly later | ✓ PASS (previously ✗ FAIL in the 2026-09-26 pass) |
+| Transcription re-check | Plan 02-04's `TRANSCRIPTION_OK` script against the freshly-regenerated report | `TRANSCRIPTION_OK` | ✓ PASS |
+| Zero-diff guard on prohibited files | `git diff bd40ec9 HEAD -- backend/anomaly_detector.py backend/DLRSafetyMonitor.py` | empty | ✓ PASS |
+| Single-writer guard | `grep -c 'json.dump(' backend/anomaly_training.py` == 1; `grep -c 'merge_corridor_report(' backend/anomaly_training.py` == 4 | 1 / 4 | ✓ PASS |
+| Debt-marker scan | `grep -nE "TBD|FIXME|XXX|TODO|HACK|PLACEHOLDER"` on `anomaly_training.py` and its test file | no matches (outside the deliberate `planner-discipline-allow` PLAN.md comments, which are not in these files) | ✓ PASS |
 
 ### Requirements Coverage
 
 | Requirement | Source Plan | Description | Status | Evidence |
 |---|---|---|---|---|
-| ANOM-01 | 02-01, 02-02, 02-03 | Trained model on wind/temp/solar/load baselines replaces/augments the heuristic, dropped in behind the existing interface | ✓ SATISFIED | Model branch shipped, both corridors trained and persisted, load characterized at training time (D-02) with an enforced boundary test |
-| ANOM-02 | 02-02, 02-04 | Model's FP/FN behavior validated against real historical data, results documented | ✓ SATISFIED | Bake-off measurement + validation record, both independently reproduced during this verification |
+| ANOM-01 | 02-01, 02-02, 02-03 | Trained model on wind/temp/solar/load baselines, dropped in behind the existing interface | ✓ SATISFIED | Unchanged from prior verification (runtime files have zero diff); `REQUIREMENTS.md` now correctly marks it Complete |
+| ANOM-02 | 02-02, 02-04, 02-05 | FP/FN behavior validated against real historical data, documented, and the evidence trail itself now durable against corridor-scoped re-runs | ✓ SATISFIED | Measurement + validation record unchanged and re-confirmed live this pass; the evidence-recording defect (P8/CR-01) that threatened ANOM-02's own durability is now closed and independently reproduced fixed; `REQUIREMENTS.md` now correctly marks it Complete |
 
-**Traceability note (non-blocking, documentation currency gap):** `.planning/workstreams/ml-modeling/REQUIREMENTS.md` still lists both `ANOM-01` and `ANOM-02` as unchecked (`- [ ]`) and its traceability table (lines 57-58) still reads "Pending" for both, despite both being fully discharged by this phase's evidence. This is a stale traceability document, not a missing implementation — recommend updating the checkboxes/table to "Complete" as part of phase close-out, but it does not itself block the phase goal.
+**Traceability:** Fully current. The 2026-09-26 verification's non-blocking note ("REQUIREMENTS.md
+still reads Pending for both") is resolved — both requirements are checked and marked `Complete`
+in the traceability table, with a footer explaining why and when.
 
 ### Anti-Patterns Found
 
-Re-confirmed 02-REVIEW.md's findings by direct reproduction/inspection rather than trusting the review document:
-
-| File | Finding | Severity | Impact | Independently confirmed? |
-|---|---|---|---|---|
-| `backend/anomaly_training.py` (`_run_validate`, `_run_bakeoff`) | Report overwrite silently drops corridors not in the current invocation (CR-01) | 🛑 Blocker (for evidentiary integrity, not runtime safety) | Undermines the phase's own T-02-09 mitigation; promoted to a **gap** in this report | ✓ Yes — live repro performed and reversed |
-| `backend/anomaly_training.py:249-293` (`chronological_split`) | Untested disjointness guarantee for real two-rows-per-timestamp pooled shape (WR-01) | ⚠️ Warning | Could mildly understate FP rate for corridors where the split boundary lands mid-timestamp; not proven to have actually occurred in the current persisted report | Not independently reproduced (requires a specific row-count parity); accepted from review on code-reading grounds |
-| `backend/ercot_data_retriever.py:85` | Inclusive end-of-day mask truncates the final ~23 hours of any requested window (WR-02) | ⚠️ Warning | Pre-existing bug (not introduced this phase); confirmed live — both corridors' load windows end at `Dec 31T00:00:00` instead of `Dec 31T23:00:00` | ✓ Yes — reproduced in live `--characterize-load` run |
-| `backend/anomaly_training.py:531-538` (`validate_candidate`) | Duplicated RNG seed makes both injection categories sample identical row positions (WR-03) | ⚠️ Warning | Weakens (does not invalidate) the "pooled recall" figure's independence; both corridors' recall numbers themselves are unaffected in direction (100% vs 0%) | ✓ Yes — confirmed by code inspection (`seed_rng`/`seed_rng_2` both constructed from the identical `config.ANOMALY_ML_RANDOM_SEED`) |
-| `backend/anomaly_detector.py:426-434` (`_check_against_model`) | Non-numeric (non-float-castable) raw value raises `ValueError` before the intended field-naming guard runs, so message doesn't name the field (WR-04) | ⚠️ Warning | Still fails safe (ValueError propagates uncaught to G6); only the diagnostic message quality is degraded; untested edge case | ✓ Yes — reproduced live |
-| `backend/anomaly_detector.py` (`_MODEL_CACHE`) | Cache never invalidated after `persist_corridor_model` writes a new artifact (WR-05) | ⚠️ Warning | Not exercised in the intended train/serve-as-separate-processes deployment shape; a footgun for any future same-process retrain | Not independently reproduced; accepted from review on code-reading grounds (bake-off's own verify script has to call `_MODEL_CACHE.clear()` manually, corroborating) |
-| `backend/anomaly_training.py` | `select_winner` undocumented secondary tie-break on contamination (IN-01); CLI flags not mutually exclusive (IN-02); JSON `NaN` serialization (IN-03); string-based `datetime_utc` groupby before conversion (IN-04) | ℹ️ Info | Minor robustness/documentation gaps, no safety or correctness impact | Accepted from review; none independently re-verified as immaterial to the phase goal |
-| — | No `TBD`/`FIXME`/`XXX`/`TODO`/`HACK`/`PLACEHOLDER` markers found in any phase-modified file | — | — | ✓ Confirmed via direct grep of all 6 modified/created files |
+| File | Finding | Severity | Status |
+|---|---|---|---|
+| — | No `TBD`/`FIXME`/`XXX`/`TODO`/`HACK`/`PLACEHOLDER` markers in `backend/anomaly_training.py` or `backend/tests/anomaly_training_test.py` | — | ✓ Clean |
+| `backend/anomaly_training.py` (`merge_corridor_report`, A-15 flagged assumption) | Quarantine-and-continue (not raise) on an unreadable report is a deliberate, documented design choice, consistent with this module's existing report-loudly-and-continue convention elsewhere | ℹ️ Info (accepted, flagged by the plan itself) | Non-blocking |
+| `backend/anomaly_training.py` (`_run_validate` docstring) | A `--validate` re-run over a `--bakeoff`-produced corridor entry will make `TRANSCRIPTION_OK` fail for that corridor — documented as designed behavior (the gate correctly detecting a record/evidence divergence), not shimmed around | ℹ️ Info (accepted, by design) | Non-blocking — does not affect the currently-published record, since no such cross-entry-point re-run has occurred against the tracked report |
+| — | The four Warning-level findings (WR-02 through WR-05) and four Info-level findings (IN-01 through IN-04) from 02-REVIEW.md, triaged non-blocking in the 2026-09-26 verification | ⚠️ Warning / ℹ️ Info (carried forward, untouched) | Non-blocking — confirmed none of the touched functions (`chronological_split`, the ERCOT date mask, `validate_candidate`'s RNG seeding, `_check_against_model`'s error path, `_MODEL_CACHE`) appear anywhere in Plan 02-05's diff, so their prior triage still holds |
 
 ### Human Verification Required
 
-None. Every must-have and every review finding was independently checked against the running codebase (test execution, live network re-runs of the training/bake-off/characterization scripts, direct code/grep inspection) rather than accepted from SUMMARY.md or 02-REVIEW.md prose alone.
+None. Every previously-failed must-have and every risk-of-regression item was independently
+re-checked against the running codebase this pass — direct code inspection, a from-scratch
+independent live reproduction of the CR-01 sequence against the real Open-Meteo Archive API
+(not accepted from 02-05-SUMMARY.md's own transcription of its worktree run), the full test
+suite, and `git diff` zero-diff guards on the two prohibited runtime files.
 
 ### Gaps Summary
 
-The phase goal's core claim — the G6 safety gate backed by a real trained model, fail-safe
-contract intact, and false-positive/false-negative behavior measured against real historical
-data — **is genuinely achieved**. All five ROADMAP success criteria were independently
-re-verified against the running codebase, not merely trusted from the SUMMARY documents: the
-model branch is real and additive, the fail-safe contract holds under a live-tested model
-failure, both corridors are trained and measured against real Open-Meteo/ERCOT data, and the
-validation record honestly transcribes that measurement (including an honest "not fully met" on
-the literal zero-false-positive wording, and a load characterization correctly scoped to
-training-time only with an enforced boundary test).
+None remaining. The phase's single outstanding gap from the 2026-09-26 initial verification —
+P8 / 02-REVIEW.md CR-01, the corridor-scoped report-writer overwrite defect — is closed and
+independently confirmed closed by direct live reproduction in this verification pass, not
+merely inferred from Plan 02-05's own SUMMARY claims. All previously-passing must-haves remain
+true: the two runtime files (`anomaly_detector.py`, `DLRSafetyMonitor.py`) that carry the G6
+fail-safe contract have zero diff across the entire gap-closure plan, the published validation
+record is unchanged and still transcribes the (re-generated, re-verified) evidence file, and
+`REQUIREMENTS.md` now correctly reflects ANOM-01/ANOM-02 as Complete.
 
-One genuine, independently-reproduced defect (CR-01) sits in the *offline evidence-recording*
-machinery, not the runtime safety path: `--bakeoff`/`--validate` overwrite
-`anomaly_validation_report.json` with a corridor-scoped subset whenever invoked with `--corridor`,
-silently destroying the other corridor's previously-recorded evidence with no warning. This
-directly contradicts a must-have this phase's own Plan 02-02 explicitly wrote in its frontmatter
-("so a shortened run is visible in the evidence rather than hidden behind a score") and the
-threat register's own T-02-09 mitigation claim. It does not affect the currently-persisted report
-or the currently-published validation record — both were generated by a full, unscoped run and
-this verification independently reproduced identical numbers — but it is a real, live,
-un-mitigated risk for any future maintenance workflow that retrains one corridor at a time. This
-is why the phase is marked `gaps_found` rather than `passed`: a must-have was proven false by
-direct reproduction, not merely inferred from static review.
+One observation, non-blocking, worth surfacing for process awareness rather than as a gap: the
+`data/models/anomaly_validation_report.json` file present in this main working tree before this
+verification's reproduction predated Plan 02-05's fix entirely (no provenance fields), consistent
+with that plan having executed its live Task 3 reproduction in an isolated worktree whose
+git-ignored generated artifacts never propagated back here. This verification did not treat that
+as evidence of anything either way — it re-ran the reproduction independently, live, in this
+checkout, and confirmed the fix holds because the fix lives in committed, tracked code
+(`merge_corridor_report`), not in a transient generated file. No corrective action is required;
+this is noted purely so a future reader understands why the pre-verification report file looked
+unfixed even though the code was already correct.
 
-Four additional Warning-level findings from 02-REVIEW.md were independently corroborated
-(WR-02 through WR-05) and are recorded above for completeness; none of them contradicts an
-explicit must-have and none touches the live `check()` safety path, so none is elevated to a gap.
-A stale REQUIREMENTS.md traceability entry (still reading "Pending" for both requirements) is
-noted as a non-blocking documentation-currency item.
-
-**Recommended next step:** a small follow-up plan/commit applying the fix 02-REVIEW.md already
-specifies for CR-01 (load-merge-write instead of build-fresh-and-overwrite) before this workstream
-relies further on `anomaly_validation_report.json` as a durable evidence trail. WR-01 through
-WR-05 and IN-01 through IN-04 can be triaged at the team's discretion — none blocks this phase's
-goal.
+**Recommended next step:** None required to close Phase 2. WR-02 through WR-05 and IN-01 through
+IN-04 remain open at the team's discretion, per the original verification's non-blocking triage —
+none was in Plan 02-05's scope and none blocks the phase goal.
 
 ---
 
-_Verified: 2026-09-26_
+_Verified: 2026-09-28_
 _Verifier: Claude (gsd-verifier)_

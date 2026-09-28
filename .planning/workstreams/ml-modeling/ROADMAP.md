@@ -55,7 +55,7 @@ during phase planning/execution before any new dependency is added.
 - Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
 
 - [x] **Phase 1: Forecasting Model** - Replace/extend `ampacity_forecast.py`'s naive/EWM methods with a trained regression or neural-network model, validated against real historical data (completed 2026-09-24)
-- [ ] **Phase 2: Anomaly Detection Model** - Replace/augment `anomaly_detector.py`'s mean±k·std threshold with a trained model on historical per-variable baselines, validated against real historical data
+- [x] **Phase 2: Anomaly Detection Model** - Replace/augment `anomaly_detector.py`'s mean±k·std threshold with a trained model on historical per-variable baselines, validated against real historical data (completed 2026-09-28)
 
 ## Phase Details
 
@@ -125,7 +125,7 @@ path other than both being consumed by `DLRSafetyMonitor`; may be executed in pa
      against the existing mean±k·std baseline's trip rate on the same data.
   5. A written validation record documents that false-positive/false-negative measurement and
      states whether the model met expectations — per ANOM-02.
-**Plans**: 5 plans (4 executed, 1 gap closure pending)
+**Plans**: 5/5 plans complete (4 build/validation plans + 1 gap closure)
 
 **Wave 1**
 
@@ -155,7 +155,7 @@ path other than both being consumed by `DLRSafetyMonitor`; may be executed in pa
 
 **Wave 5** *(gap closure — blocked on Wave 4 completion)*
 
-- [ ] 02-05-PLAN.md — Close 02-VERIFICATION.md's single failed must-have (P8 / 02-REVIEW.md CR-01):
+- [x] 02-05-PLAN.md — Close 02-VERIFICATION.md's single failed must-have (P8 / 02-REVIEW.md CR-01):
   `anomaly_training.py`'s three corridor-scopable report writers overwrite
   `anomaly_validation_report.json` with a corridor-scoped subset, silently deleting the other
   corridor's measurement history; replaced by one load-merge-atomic-write helper with entry-level
@@ -170,7 +170,7 @@ and may be executed first or in parallel if that better fits available capacity)
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Forecasting Model | 3/3 | Complete    | 2026-09-24 |
-| 2. Anomaly Detection Model | 4/4 | In Progress|  |
+| 2. Anomaly Detection Model | 5/5 | Complete   | 2026-09-28 |
 
 ## Backlog
 
