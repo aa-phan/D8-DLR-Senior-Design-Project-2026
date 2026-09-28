@@ -27,11 +27,11 @@ builds the actual trained models the PRD originally scoped.
 
 ### Anomaly Detection
 
-- [ ] **ANOM-01**: A trained model — trained on historical per-variable baselines (wind, temp,
+- [x] **ANOM-01**: A trained model — trained on historical per-variable baselines (wind, temp,
   solar, load), per PRD §8's original C10 scope — replaces or augments the `mean ± k·std`
   threshold in `anomaly_detector.py`, dropped in behind the existing `AnomalyDetector` interface
   so it plugs into `DLRSafetyMonitor`'s G6 gate unchanged.
-- [ ] **ANOM-02**: The anomaly-detection model's false-positive/false-negative behavior is
+- [x] **ANOM-02**: The anomaly-detection model's false-positive/false-negative behavior is
   validated against real historical data and the results are documented.
 
 ## Out of Scope
@@ -54,8 +54,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 |-------------|-------|--------|
 | FCST-01 | Phase 1 | Complete |
 | FCST-02 | Phase 1 | Complete |
-| ANOM-01 | Phase 2 | Pending |
-| ANOM-02 | Phase 2 | Pending |
+| ANOM-01 | Phase 2 | Complete |
+| ANOM-02 | Phase 2 | Complete |
 
 **Coverage:**
 
@@ -65,4 +65,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 ---
 *Requirements defined: 2026-09-14*
-*Last updated: 2026-09-14 after ROADMAP.md creation (2 phases, 100% coverage)*
+*Last updated: 2026-09-28 — ANOM-01/ANOM-02 marked Complete per Phase 2 verification (02-VERIFICATION.md) and Plan 02-05's CR-01 gap closure*
