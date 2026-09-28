@@ -14,10 +14,12 @@ here that needs weather data.
 """
 
 import importlib
+import json
 import math
 import os
 import subprocess
 import sys
+import time
 
 import numpy as np
 import pandas as pd
@@ -675,3 +677,114 @@ def test_characterize_load_records_unavailability_without_raising(monkeypatch, t
     assert result["corridor"] == corridor
     assert "simulated ERCOT network failure" in result["error"]
     assert "zone_substrings" in result
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# merge_corridor_report (v1.3 Phase 2 Plan 02-05, CR-01): a corridor-scoped
+# re-run must carry forward, never delete, the other corridor's evidence.
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def _fake_fetch_city_weather_factory(n=150, seed_offset=0):
+    """
+    A `forecast_training.fetch_city_weather`-shaped stand-in covering all
+    four endpoint cities in `config.CORRIDOR_ENDPOINTS`, so `_run_bakeoff`/
+    `_run_validate` can run for both corridors with no network access.
+    """
+    frames_by_city = {
+        "AUSTIN": _synthetic_city_weather_frame("AUSTIN", n=n, seed=500 + seed_offset),
+        "CORPUS_CHRISTI": _synthetic_city_weather_frame(
+            "CORPUS_CHRISTI", n=n, seed=501 + seed_offset
+        ),
+        "MIDLAND": _synthetic_city_weather_frame("MIDLAND", n=n, seed=502 + seed_offset),
+        "EL_PASO": _synthetic_city_weather_frame("EL_PASO", n=n, seed=503 + seed_offset),
+    }
+
+    def _fetch(city, years):
+        return frames_by_city[city].copy()
+
+    return _fetch
+
+
+def test_merge_corridor_report_carries_forward_corridors_absent_from_this_run(
+    monkeypatch, tmp_path,
+):
+    monkeypatch.setattr(config, "ANOMALY_ML_MODEL_DIR", str(tmp_path))
+    report_name = "fake_merge_report.json"
+    report_path = os.path.join(str(tmp_path), report_name)
+
+    seeded = {
+        "AUSTIN_CORPUS_CHRISTI": {"measurements": [1, 2, 3], "winner": "OneClassSVM"},
+        "MIDLAND_EL_PASO": {"measurements": [4, 5], "winner": "IsolationForest"},
+    }
+    with open(report_path, "w") as fh:
+        json.dump(seeded, fh)
+
+    new_entries = {
+        "MIDLAND_EL_PASO": {"measurements": [9, 9, 9], "winner": "EllipticEnvelope"},
+    }
+
+    result_path = at.merge_corridor_report(report_name, new_entries, "bakeoff")
+
+    assert result_path == report_path
+    with open(report_path) as fh:
+        written = json.load(fh)
+
+    assert set(written) == {"AUSTIN_CORPUS_CHRISTI", "MIDLAND_EL_PASO"}
+    # Untouched corridor carried forward verbatim.
+    assert written["AUSTIN_CORPUS_CHRISTI"] == seeded["AUSTIN_CORPUS_CHRISTI"]
+    # Processed corridor replaced wholesale, not field-blended with the old entry.
+    assert written["MIDLAND_EL_PASO"]["measurements"] == [9, 9, 9]
+    assert written["MIDLAND_EL_PASO"]["winner"] == "EllipticEnvelope"
+    assert written["MIDLAND_EL_PASO"]["produced_by"] == "bakeoff"
+    assert "generated_at" in written["MIDLAND_EL_PASO"]
+
+
+def test_bakeoff_rerun_for_one_corridor_preserves_the_other_corridors_entry(
+    monkeypatch, tmp_path,
+):
+    monkeypatch.setattr(config, "ANOMALY_ML_MODEL_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        forecast_training,
+        "fetch_city_weather",
+        _fake_fetch_city_weather_factory(n=150, seed_offset=0),
+    )
+    anomaly_detector._MODEL_CACHE.clear()
+
+    corridors = ["AUSTIN_CORPUS_CHRISTI", "MIDLAND_EL_PASO"]
+    at._run_bakeoff(corridors, years=1)
+
+    report_path = os.path.join(
+        str(tmp_path), config.ANOMALY_ML_VALIDATION_REPORT_NAME
+    )
+    with open(report_path) as fh:
+        snapshot = json.load(fh)
+
+    assert set(snapshot) == set(corridors)
+    for corridor in corridors:
+        assert "measurements" in snapshot[corridor]
+        assert "winner" in snapshot[corridor]
+        assert "selected_contamination" in snapshot[corridor]
+
+    time.sleep(0.01)
+    at._run_bakeoff(["MIDLAND_EL_PASO"], years=1)
+
+    with open(report_path) as fh:
+        after = json.load(fh)
+
+    assert set(after) == set(corridors)
+    # The unprocessed corridor's entry is identical to the snapshot -- carried
+    # forward, not regenerated and not field-blended.
+    assert after["AUSTIN_CORPUS_CHRISTI"] == snapshot["AUSTIN_CORPUS_CHRISTI"]
+    # The re-measured corridor is stamped with this run's provenance, and its
+    # transcription-gate fields (Plan 02-04's TRANSCRIPTION_OK) survive.
+    assert after["MIDLAND_EL_PASO"]["produced_by"] == "bakeoff"
+    assert (
+        after["MIDLAND_EL_PASO"]["generated_at"]
+        > after["AUSTIN_CORPUS_CHRISTI"]["generated_at"]
+    )
+    assert "measurements" in after["MIDLAND_EL_PASO"]
+    assert "winner" in after["MIDLAND_EL_PASO"]
+    assert "selected_contamination" in after["MIDLAND_EL_PASO"]
+
+    anomaly_detector._MODEL_CACHE.clear()

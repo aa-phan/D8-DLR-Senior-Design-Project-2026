@@ -33,6 +33,7 @@ Run directly:
 """
 
 import argparse
+import datetime
 import json
 import logging
 import math
@@ -232,6 +233,150 @@ def persist_corridor_model(model, corridor: str) -> str:
     os.close(fd)
     try:
         joblib.dump(model, tmp_path)
+        os.replace(tmp_path, final_path)
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
+
+    return final_path
+
+
+def merge_corridor_report(report_name: str, new_entries: dict, produced_by: str) -> str:
+    """
+    The single load-merge-atomic-write path for every corridor-scopable
+    report writer in this module (`_run_bakeoff`, `_run_validate`,
+    `_run_characterize_load`). Resolves the final path as
+    `os.path.join(config.ANOMALY_ML_MODEL_DIR, report_name)`, reading
+    `config` at call time so a test redirecting `ANOMALY_ML_MODEL_DIR` is
+    honored.
+
+    Why the read-merge exists at all: `main`'s `--corridor` flag makes a
+    corridor subset a first-class supported invocation (`corridors =
+    [args.corridor] if args.corridor else sorted(config.CORRIDOR_
+    ENDPOINTS)`), so a writer that builds a fresh accumulator scoped only
+    to the corridors it just processed and unconditionally overwrites the
+    persisted report with it silently destroys every OTHER corridor's
+    measurement history on every scoped re-run -- no warning, no error,
+    just a smaller file (02-REVIEW.md CR-01, confirmed live in
+    02-VERIFICATION.md). That is the exact opposite of the visibility
+    T-02-09 claims as its mitigation.
+
+    In order:
+
+    1. Load. A missing final path is the ordinary first-run-on-a-fresh-
+       checkout case, not an anomaly -- the base starts as an empty
+       mapping and nothing is quarantined. If the path exists but its
+       bytes do not deserialize as JSON, or they deserialize to something
+       other than a mapping, the existing file is moved aside (via
+       `os.replace`, so the bytes are preserved rather than destroyed) to
+       a sibling quarantine path built from the final path plus
+       `.unreadable-` plus a compact UTC timestamp
+       (`%Y%m%dT%H%M%SZ`); one line is logged and printed naming both
+       paths and stating the run continues from an empty base. Silently
+       substituting an empty mapping for an unreadable file would
+       reproduce this exact evidence-loss bug, just triggered by
+       corruption instead of by `--corridor`.
+    2. Stamp provenance. Every entry in `new_entries` gets two keys set
+       INSIDE that entry -- never at the top level, since Plan 02-04's
+       `TRANSCRIPTION_OK` gate iterates the loaded report's top-level
+       items and indexes measurement fields on each one:
+       `produced_by` (the caller-supplied entry-point label) and
+       `generated_at` (a timezone-aware UTC ISO-8601 timestamp). Fixed-
+       format UTC ISO-8601 strings sort lexicographically, which is what
+       lets a reader -- and a re-run's own comparison -- order a carried-
+       forward entry against a freshly refreshed one.
+    3. Prune, then merge. The loaded base's keys partition into three
+       groups: also present in `new_entries` (refreshed this run),
+       absent from `new_entries` but present in
+       `config.CORRIDOR_ENDPOINTS` (carried forward untouched), and
+       absent from both (no longer a configured corridor -- dropped
+       rather than accumulated forever as a zombie entry). A corridor
+       processed by this invocation gets its entry REPLACED wholesale;
+       fields from an old entry are never spliced onto a new one, because
+       the result would describe a measurement run that never happened.
+    4. Report what happened. One line, prefixed `report merge:`, names
+       the final path and the three sorted lists (refreshed / carried
+       forward / dropped) -- the operator-facing half of "a shortened run
+       is visible in the evidence"; the provenance keys are the file-
+       facing half.
+    5. Write atomically. Mirrors `persist_corridor_model`'s T-02-06
+       discipline exactly: `os.makedirs` the model directory,
+       `tempfile.mkstemp` into that same directory with a `.json.tmp`
+       suffix, serialize the merged mapping with `indent=2`, then
+       `os.replace` onto the final path. On any failure the temp file is
+       removed and the error re-raised.
+
+    Returns the final path.
+    """
+    final_path = os.path.join(config.ANOMALY_ML_MODEL_DIR, report_name)
+
+    base = {}
+    if os.path.exists(final_path):
+        quarantine_reason = None
+        loaded = None
+        try:
+            with open(final_path) as fh:
+                loaded = json.load(fh)
+        except Exception as exc:
+            quarantine_reason = f"did not deserialize as JSON ({exc})"
+        else:
+            if not isinstance(loaded, dict):
+                quarantine_reason = (
+                    f"deserialized to {type(loaded).__name__}, not an object"
+                )
+
+        if quarantine_reason is not None:
+            timestamp = datetime.datetime.now(datetime.timezone.utc).strftime(
+                "%Y%m%dT%H%M%SZ"
+            )
+            quarantine_path = f"{final_path}.unreadable-{timestamp}"
+            os.replace(final_path, quarantine_path)
+            message = (
+                f"merge_corridor_report: {final_path} is unreadable "
+                f"({quarantine_reason}); preserved at {quarantine_path} -- "
+                f"continuing this run from an empty base"
+            )
+            logger.error(message)
+            print(message)
+        else:
+            base = loaded
+
+    generated_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    stamped_entries = {}
+    for corridor, entry in new_entries.items():
+        stamped = dict(entry)
+        stamped["produced_by"] = produced_by
+        stamped["generated_at"] = generated_at
+        stamped_entries[corridor] = stamped
+
+    refreshed = sorted(stamped_entries)
+    carried_forward = sorted(
+        key for key in base
+        if key not in stamped_entries and key in config.CORRIDOR_ENDPOINTS
+    )
+    dropped = sorted(
+        key for key in base
+        if key not in stamped_entries and key not in config.CORRIDOR_ENDPOINTS
+    )
+
+    merged = {key: base[key] for key in carried_forward}
+    merged.update({key: stamped_entries[key] for key in refreshed})
+    merged = dict(sorted(merged.items()))
+
+    print(
+        f"report merge: {final_path} -- refreshed: {refreshed}, "
+        f"carried forward: {carried_forward}, dropped: {dropped}"
+    )
+
+    os.makedirs(config.ANOMALY_ML_MODEL_DIR, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(
+        dir=config.ANOMALY_ML_MODEL_DIR, suffix=".json.tmp"
+    )
+    os.close(fd)
+    try:
+        with open(tmp_path, "w") as fh:
+            json.dump(merged, fh, indent=2)
         os.replace(tmp_path, final_path)
     except Exception:
         if os.path.exists(tmp_path):
@@ -873,7 +1018,12 @@ def _run_bakeoff(corridors, years):
     the report. A failure assembling or scoring one corridor is reported
     by name and the run continues to the next corridor (mirrors
     `forecast_training._run_bakeoff`'s own try-and-continue handling).
-    Each corridor also gets one final `SUMMARY:` line.
+    Each corridor also gets one final `SUMMARY:` line. Persistence goes
+    through `merge_corridor_report` (v1.3 Phase 2 Plan 02-05, CR-01): this
+    function no longer builds the report path or serializes it itself --
+    a corridor absent from `corridors` (e.g. a `--corridor`-scoped re-run)
+    is carried forward from the existing report rather than silently
+    dropped.
     """
     reports = {}
     summary_lines = []
@@ -944,12 +1094,9 @@ def _run_bakeoff(corridors, years):
             f"ceiling_met={ceiling_met} path={model_path}"
         )
 
-    os.makedirs(config.ANOMALY_ML_MODEL_DIR, exist_ok=True)
-    report_path = os.path.join(
-        config.ANOMALY_ML_MODEL_DIR, config.ANOMALY_ML_VALIDATION_REPORT_NAME
+    report_path = merge_corridor_report(
+        config.ANOMALY_ML_VALIDATION_REPORT_NAME, reports, "bakeoff",
     )
-    with open(report_path, "w") as fh:
-        json.dump(reports, fh, indent=2)
     print(f"\nbake-off report written to {report_path}")
 
     if summary_lines:
