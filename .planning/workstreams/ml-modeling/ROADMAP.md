@@ -197,7 +197,47 @@ FCST-01/FCST-02's existing "ml" method, not new project scope
      matching the existing 9-section structure) states which approach wins on the held-out test
      set, or states plainly that none beat persistence — with the Expectation section committed
      before the test-set run, per this workstream's existing no-peeking discipline.
-**Plans**: 0 plans (run `/gsd-plan-phase 3 ml-modeling` to break down)
+**Plans**: 7 plans across 5 waves
+
+**Wave 1**
+
+- [ ] 03-01-PLAN.md — Tracer: one city end-to-end at a gate-verified 1-hour lead — the pinned-model
+  forecast-archive provider, the hard lead-time calibration gate (which correctly FAILS on the unfiltered
+  series and passes only on the exact-1h-lead subset), the three-way calendar split generalizing
+  `anomaly_training.chronological_split`, and persistence vs. raw-forecast-through-IEEE-738 scored on
+  identical test timestamps with the idealized-latency caveat on every output surface
+- [ ] 03-02-PLAN.md — Building blocks: `wind_vector` u/v decomposition proven to agree with
+  `perpendicular_wind`, the additive `thermal_model` convective-term extraction plus `q_conv_override`
+  (behind a `checkpoint:decision`, gated bit-for-bit by `np.array_equal` against a pre-refactor golden
+  array), and the `corridor_weakest_link` extraction preserving its non-obvious tie-break
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 03-03-PLAN.md — Corridor lift for both corridors through the single shared weakest-link reduction,
+  plus arm 1 (NWP-wind-delta, provably reading only issue-time information) and arm 6 (oracle, quarantined
+  in its own report key and structurally unrankable)
+- [ ] 03-04-PLAN.md — `forecast_corrections.py`: the two ML correction families, with arm 3's pooling mode
+  and arm 4's target parameterization each selected on the validation set across all options and all scores
+  recorded (resolves both CONTEXT open questions on evidence)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 03-05-PLAN.md — The Expectation bar committed BEFORE any scoring machinery exists (SC5 no-peeking,
+  enforced by commit order), then arms 3/4/5 wired, byte-identical test-index enforcement, the direct
+  leakage suite (SC3), proof the leakage-carrying production artifact is never loaded, and paired bootstrap
+  confidence intervals on every difference
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 03-06-PLAN.md — The two sensitivity passes: an operationally realizable 24-hour-lead re-score via the
+  Previous Runs API, and a re-score restricted to the gate-verifiable window from 2024-03-14 — both
+  quarantined from the primary ranking, with a sign-disagreement flag
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [ ] 03-07-PLAN.md — The live full run (blocking human checkpoint), the completed 9-section decision record
+  judged against the untouched pre-committed bar, one appended cross-reference bullet in
+  `forecasting_model.md`, and the ECE 464 `ACKNOWLEDGEMENTS.md` disclosure
 
 ## Progress
 
