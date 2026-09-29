@@ -112,7 +112,7 @@ def test_measure_lead_alignment_counts_boundary_skip_and_continues(monkeypatch):
 
     calls = {"n": 0}
 
-    def fake_single(lat, lon, run):
+    def fake_single(lat, lon, run, hourly_vars=None, forecast_days=None):
         calls["n"] += 1
         run_ts = pd.Timestamp(run)
         if run_ts.hour == 6:
@@ -138,7 +138,7 @@ def test_measure_lead_alignment_propagates_malformed_run_error(monkeypatch):
     def fake_bulk(lat, lon, start, end):
         return _bulk_frame(date)
 
-    def fake_single(lat, lon, run):
+    def fake_single(lat, lon, run, hourly_vars=None, forecast_days=None):
         raise ValueError("cannot parse run timestamp")
 
     monkeypatch.setattr(cal.provider, "fetch_historical_forecast", fake_bulk)
@@ -158,7 +158,7 @@ def test_measure_lead_alignment_reports_per_lead_match_and_compared_counts(monke
     def fake_bulk(lat, lon, start, end):
         return bulk.copy()
 
-    def fake_single(lat, lon, run):
+    def fake_single(lat, lon, run, hourly_vars=None, forecast_days=None):
         run_ts = pd.Timestamp(run)
         # matches bulk exactly for the first MOD hours, diverges after
         idx = pd.date_range(run_ts, periods=MOD + 2, freq="h")

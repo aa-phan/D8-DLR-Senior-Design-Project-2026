@@ -307,7 +307,7 @@ def fetch_historical_forecast(lat: float, lon: float, start: str, end: str) -> p
     )
 
 
-def fetch_single_run(lat: float, lon: float, run, hourly_vars=None) -> pd.DataFrame:
+def fetch_single_run(lat: float, lon: float, run, hourly_vars=None, forecast_days=None) -> pd.DataFrame:
     """
     Fetch one exact model run from the Single-Runs API, in exactly one HTTP
     request, with `models` pinned to `FORECAST_MODEL_ID`.
@@ -325,12 +325,27 @@ def fetch_single_run(lat: float, lon: float, run, hourly_vars=None) -> pd.DataFr
     `"Bad Request"` a malformed run timestamp produces -- is a bug and
     propagates as the underlying `requests.HTTPError`.
 
+    A single run's response array is fixed-length (live-measured 168 hours
+    -- 7 days -- for `ecmwf_ifs`) regardless of the model's actual forecast
+    depth; hours beyond the model's real output are null-padded rather than
+    omitted (the same out-of-horizon null behavior Pitfall 3 documents for
+    the bulk endpoint). `forecast_days` truncates the request to the given
+    number of days via the endpoint's own `forecast_days` parameter
+    (live-confirmed: `forecast_days=1` returns exactly the first 24 hours,
+    null-free) -- callers who only need a few leading hours (e.g. this
+    module's own calibration gate, which never looks past lead 11) should
+    pass a small value so the completeness check never has to reject
+    tail-padding nulls it was never going to use.
+
     Args:
         lat, lon: The target point's coordinates.
         run: An ISO-8601 timestamp, bare-date string, or `pd.Timestamp`
             naming the model run's initialization time.
         hourly_vars: The provider variable keys to request. Defaults to
             `OPEN_METEO_HOURLY_VARS`.
+        forecast_days: Optional truncation of the response to this many
+            days from `run`. Omitted (the default) requests the endpoint's
+            own default full-length response.
 
     Returns:
         A DataFrame with `datetime_utc` plus one column per requested
@@ -357,6 +372,8 @@ def fetch_single_run(lat: float, lon: float, run, hourly_vars=None) -> pd.DataFr
         "timezone": "UTC",
         "models": FORECAST_MODEL_ID,
     }
+    if forecast_days is not None:
+        params["forecast_days"] = forecast_days
     r = requests.get(
         OPEN_METEO_SINGLE_RUNS_BASE,
         params=params,
@@ -386,6 +403,29 @@ def fetch_single_run(lat: float, lon: float, run, hourly_vars=None) -> pd.DataFr
             f"open_meteo_forecast_provider: single-run response body "
             f"could not be parsed as JSON: {exc}"
         ) from exc
+
+    # Live-observed archive-boundary condition beyond the documented HTTP
+    # 400 case: a well-formed, in-range `run` can also come back HTTP 200
+    # with EVERY requested variable's array fully null -- the run simply
+    # was never archived for this model, and the endpoint reports that
+    # with a null-filled 200 rather than a "not available" 400. This is
+    # only checked when every requested variable is null for its entire
+    # array (never a single variable or a partial gap, which stays a hard
+    # failure via _completeness_check below) -- a total-null response is
+    # the boundary condition; a partial one is still a failed fetch.
+    hourly = data.get("hourly") if isinstance(data, dict) else None
+    if isinstance(hourly, dict):
+        arrays = [hourly.get(key) for key in hourly_vars]
+        if arrays and all(
+            isinstance(arr, list) and len(arr) > 0 and all(v is None for v in arr)
+            for arr in arrays
+        ):
+            raise SingleRunUnavailable(
+                f"open_meteo_forecast_provider: model run not available -- "
+                f"model={FORECAST_MODEL_ID!r} run={run_ts!r}: HTTP 200 with "
+                f"every requested variable fully null (archive gap, not "
+                f"surfaced as an HTTP 400 by this endpoint)"
+            )
 
     return _parse_hourly_response(
         data, hourly_vars, context=f"single-run fetch (run={run_ts!r})",

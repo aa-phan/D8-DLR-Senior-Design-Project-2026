@@ -90,7 +90,20 @@ def measure_lead_alignment(lat, lon, days, model=None) -> dict:
         for run_hour in range(0, 24, modulus):
             run_ts = pd.Timestamp(date, tz="UTC") + pd.Timedelta(hours=run_hour)
             try:
-                single = provider.fetch_single_run(lat, lon, run_ts)
+                # Request wind_speed only (03-RESEARCH.md: "compare on
+                # wind_speed -- it is the variable every correction arm in
+                # this phase depends on"), and truncate to 1 day
+                # (forecast_days=1, live-confirmed null-free) -- this gate
+                # never looks past lead modulus*2-1, so there is no reason
+                # to pull the full 168-hour response and risk tripping the
+                # null-completeness gate on out-of-horizon tail padding
+                # this module was never going to use (Pitfall 3's
+                # out-of-horizon-null behavior, live-observed here even on
+                # wind_speed: 23/168 null past the model's real depth).
+                single = provider.fetch_single_run(
+                    lat, lon, run_ts,
+                    hourly_vars=("wind_speed_10m",), forecast_days=1,
+                )
             except provider.SingleRunUnavailable:
                 boundary_skips += 1
                 continue

@@ -258,9 +258,64 @@ def test_fetch_single_run_does_not_send_start_or_end_date(monkeypatch):
     assert recorder["params"]["models"] == "ecmwf_ifs"
 
 
+def test_fetch_single_run_forecast_days_param_is_passed_when_given(monkeypatch):
+    recorder = {}
+    _mock_get(monkeypatch, payload=_forecast_payload(n_hours=4), recorder=recorder)
+
+    open_meteo_forecast_provider.fetch_single_run(
+        30.2711, -97.7437, "2025-07-01T00:00", forecast_days=1
+    )
+
+    assert recorder["params"]["forecast_days"] == 1
+
+
+def test_fetch_single_run_omits_forecast_days_by_default(monkeypatch):
+    recorder = {}
+    _mock_get(monkeypatch, payload=_forecast_payload(n_hours=4), recorder=recorder)
+
+    open_meteo_forecast_provider.fetch_single_run(30.2711, -97.7437, "2025-07-01T00:00")
+
+    assert "forecast_days" not in recorder["params"]
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # Archive-boundary vs. malformed-request 400 distinction (Pitfall 4)
 # ──────────────────────────────────────────────────────────────────────────
+
+
+def test_fully_null_200_response_raises_single_run_unavailable(monkeypatch):
+    # Live-observed archive gap: a well-formed run returns HTTP 200 with
+    # every requested variable's array entirely null, rather than an HTTP
+    # 400 "not available" body.
+    payload = _forecast_payload(n_hours=24)
+    for key in payload["hourly"]:
+        if key != "time":
+            payload["hourly"][key] = [None] * 24
+    _mock_get(monkeypatch, payload=payload, status_code=200)
+
+    with pytest.raises(open_meteo_forecast_provider.SingleRunUnavailable) as excinfo:
+        open_meteo_forecast_provider.fetch_single_run(
+            30.2711, -97.7437, "2025-08-07T06:00", hourly_vars=("wind_speed_10m",),
+        )
+
+    assert "archive gap" in str(excinfo.value) or "not available" in str(excinfo.value)
+
+
+def test_partially_null_200_response_still_raises_value_error(monkeypatch):
+    # A PARTIAL null (some but not all requested variables/rows null) must
+    # stay a hard failure via _completeness_check -- only a FULLY null
+    # response for every requested variable is the boundary condition.
+    payload = _forecast_payload(n_hours=24)
+    payload["hourly"]["wind_speed_10m"] = [None] * 24
+    _mock_get(monkeypatch, payload=payload, status_code=200)
+
+    with pytest.raises(ValueError) as excinfo:
+        open_meteo_forecast_provider.fetch_single_run(
+            30.2711, -97.7437, "2025-08-07T06:00",
+            hourly_vars=("wind_speed_10m", "temperature_2m"),
+        )
+
+    assert not isinstance(excinfo.value, open_meteo_forecast_provider.SingleRunUnavailable)
 
 
 def test_unavailable_model_run_raises_single_run_unavailable(monkeypatch):
