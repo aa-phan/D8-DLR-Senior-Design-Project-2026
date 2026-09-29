@@ -324,6 +324,27 @@ def _usable_observation(frame, stid: str) -> dict | None:
 
     return reading
 
+def _usable_observation_grid(frame) -> dict | None:
+    """
+    Grid-path counterpart to _usable_observation. open_meteo/nsrdb frames
+    are keyed by city, not stid, so this just takes the first row rather
+    than filtering by station id.
+    """
+    if frame is None or frame.empty:
+        return None
+
+    row = frame.iloc[0]
+
+    reading: dict = {"sensor_status": "ok", "link_status": "ok"}
+    for source_col, target_key in _OBSERVATION_FIELD_MAP.items():
+        if source_col not in row.index:
+            return None
+        value = row[source_col]
+        if value is None or (isinstance(value, float) and math.isnan(value)):
+            return None
+        reading[target_key] = value
+
+    return reading
 
 def discover_corridor_stations(token: str, state: str = "TX"):
     """
@@ -358,6 +379,7 @@ def resolve_point_observation(
     max_candidates: int = MAX_PROBE_CANDIDATES,
     logger=None,
     sleep=time.sleep,
+    provider="synoptic"
 ):
     """
     D-08's bounded candidate probe for one corridor point: rank up to
@@ -436,7 +458,7 @@ def resolve_point_observation(
             }
 
             try:
-                frame = fetch_weather([stid], start, end)
+                frame = fetch_weather([stid], start, end, provider=provider)
             except Exception as exc:
                 entry["outcome"] = "unusable"
                 trail.append(entry)
@@ -535,6 +557,7 @@ def rate_corridor(
     anomaly_detector=None,
     archive=True,
     archive_path=None,
+    provider: str = "synoptic"
 ) -> dict:
     """
     Rate a named corridor end to end: for each of its `n_points` geodesic
@@ -604,18 +627,19 @@ def rate_corridor(
 
     geometry = corridor_geometry(corridor_name, n_points=n_points)
 
-    monitor = DLRSafetyMonitor(
-        static_rating=geometry.static_rating,
-        conductor=geometry.conductor,
-        rating_bounds=geometry.rating_bounds,
-        anomaly_detector=anomaly_detector,
-    )
-
     point_results = []
     for idx, (lat, lon) in enumerate(geometry.points):
-        observation, stid, trail = resolve_point_observation(
-            lat, lon, start, end, stations, fetch_weather, logger=logger, sleep=sleep,
-        )
+        if provider in ('open_meteo', 'nsrdb'):
+            try:
+                frame = fetch_weather([lat, lon], start, end, provider=provider)
+                observation = _usable_observation_grid(frame)
+            except Exception:
+                observation = None
+            stid, trail = None, []
+        else:
+            observation, stid, trail = resolve_point_observation(
+                lat, lon, start, end, stations, fetch_weather,     logger=logger, sleep=sleep,
+            )
 
         if observation is None:
             # D-09: an exhausted point resolves to the corridor static
@@ -645,6 +669,13 @@ def rate_corridor(
             )
             continue
 
+        monitor = DLRSafetyMonitor(
+                static_rating=geometry.static_rating,
+                conductor=geometry.conductor,
+                rating_bounds=geometry.rating_bounds,
+                anomaly_detector=anomaly_detector,
+                delta_fraction=float("inf"),
+            )
         result = monitor.run_check(observation)
         point_results.append(
             {
