@@ -234,6 +234,35 @@ original halt report could offer) a precise, dated, multi-city-confirmed boundar
 "2024 fails, 2025 mostly holds."
 
 ---
+
+## Addendum (Plan 03-01 execution session, same day): this boundary was incomplete
+
+**This document's "corrected verified-good window: 2024-11-13 through the present" is NOT the
+final window.** This investigation's method (Section 1) compared bulk against the **00Z single
+run only**. The user's decision to narrow the window to 2024-11-13 was made on that basis. When
+the plan's execution resumed and re-ran the ACTUAL calibration gate
+(`forecast_leadtime_calibration.measure_lead_alignment`, which samples all four six-hourly runs —
+00Z/06Z/12Z/18Z — not just 00Z), the live gate still FAILED at 2024-11-13. A follow-up daily
+-resolution sweep (same method as Section 3, both AUSTIN and EL_PASO) found the 06Z/18Z runs carry
+their OWN separate, later, equally sharp cutover: uniform failure through 2025-09-30, uniform
+success from 2025-10-01 onward. The 00Z/12Z runs were reliable throughout the 2024-11-13 ->
+2025-09-30 gap; only 06Z/18Z were not — invisible to this document's 00Z-only method.
+
+`config.FORECAST_EXPERIMENT_WINDOW_START` was corrected a second time, to **2025-10-01** (the
+later of the two boundaries — both must hold for all four daily `hour % 6 == 1` scored rows, which
+draw one row each from all four runs). See `backend/config.py`'s own comment on that constant for
+the full two-boundary history, and `03-01-SUMMARY.md` for the live re-verification transcript.
+
+A second, independent, and more consequential finding also emerged during that same re
+-verification and is unrelated to lead-time alignment: Open-Meteo's bulk `historical-forecast-api`
+response was found to be **empirically bit-identical** to `archive-api`'s reanalysis "truth" for
+every hour tested, across all four project cities and the full corrected window — not merely
+close. This is documented in `forecast_experiment.EXPERIMENT_LEAD_REALIZABILITY_CAVEAT` and in
+full in `03-01-SUMMARY.md`; it was not something this boundary investigation was scoped to find
+(it only characterized bulk-vs-single-run lead alignment, never bulk-vs-archive content), but a
+future reader relying on this document alone should know it exists.
+
+---
 *Phase: 03-ampacity-forecast-correction-experiment-compare-persistence*
 *Plan: 01 (investigation addendum — Task 3 still not executed)*
 *Investigation completed: 2026-09-29*
