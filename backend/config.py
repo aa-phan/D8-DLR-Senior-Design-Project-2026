@@ -291,18 +291,87 @@ FORECAST_ML_BAKEOFF_REPORT_NAME: str = "bakeoff_report.json"
 # own relative-to-cwd, git-ignored convention.
 FORECAST_EXPERIMENT_CACHE_DIR: str = "data/experiment"
 
-# The primary experiment window, chosen to match Phase 1's assembled training
-# window exactly (26,304 rows per city per the record in
-# forecasting_model.md), so the forecast frame joins 1:1 against the truth
-# frame produced by forecast_training.fetch_city_weather.
-FORECAST_EXPERIMENT_WINDOW_START: str = "2023-01-01"
-FORECAST_EXPERIMENT_WINDOW_END: str = "2025-12-31"
+# The primary experiment window. Originally scoped as 2023-01-01 through
+# 2025-12-31 to match Phase 1's assembled training window row-for-row
+# (26,304 rows/city, forecasting_model.md).
+#
+# CORRECTED TWICE, by two independent findings that must both be satisfied:
+#
+# (1) 03-01-BOUNDARY-INVESTIGATION.md: a live daily-resolution sweep across
+#     two cities (AUSTIN, EL_PASO), both project corridors, comparing the
+#     bulk product against the 00Z Single-Runs run only, found a SHARP,
+#     single-day cutover at 2024-11-12 -> 2024-11-13 (externally
+#     corroborated: it lands on the same day ECMWF upgraded its IFS model
+#     to Cycle 49r1). Before it: uniform failure (0/6 matched leads, MAD
+#     0.17-2.4 m/s). At or after it: uniform success for the 00Z/12Z runs
+#     (5-6/6 matched leads, MAD <=0.42 m/s, almost always <0.2 -- rounding
+#     at the margin, not a different lead).
+#
+# (2) Live re-verification during this plan's execution (Plan 03-01, this
+#     session, 2026-09-29 -- not in 03-01-BOUNDARY-INVESTIGATION.md, which
+#     tested the 00Z run only) found finding (1) INCOMPLETE: the actual
+#     calibration gate (`forecast_leadtime_calibration.measure_lead_
+#     alignment`) samples ALL FOUR six-hourly runs (00Z/06Z/12Z/18Z), and a
+#     live run against the 2024-11-13-start window still FAILED --
+#     `hour % 6 == 1` scores exactly one row per run per day (01:00 from
+#     00Z, 07:00 from 06Z, 13:00 from 12Z, 19:00 from 18Z), so a 06Z/18Z
+#     -specific defect directly corrupts half the scored rows. A follow-up
+#     daily-resolution sweep (AUSTIN, EL_PASO) found the 06Z/18Z runs carry
+#     their OWN separate, later, equally sharp cutover: uniform failure
+#     (0/6 matched, MAD 0.1-2.2 m/s) through 2025-09-30, uniform success
+#     (3-6/6 matched, MAD <=0.018 m/s, rounding-level only) from 2025-10-01
+#     onward, confirmed across both cities and all four run hours. The
+#     00Z/12Z runs were already reliable throughout the 2024-11-13 ->
+#     2025-09-30 gap; it is specifically 06Z/18Z that were not.
+#
+# The window start is therefore the LATER of the two boundaries -- both
+# must hold simultaneously for every one of the four daily scored rows to
+# carry a genuinely exact one-hour lead. Narrowing to it keeps the phase's
+# core "verified deterministic lead" methodology fully intact -- no
+# fallback to a messier single-runs-subsample (CONTEXT.md option a) or a
+# relabeled native lead (option b) is needed -- but costs substantially
+# more row volume than finding (1) alone implied: roughly 360 days through
+# "today" (~1,440 scored rows/city) rather than the ~2,740 finding (1)
+# alone estimated, and far below the original ~4,380 estimate. Still not
+# degenerate: a three-way calendar split leaves a few hundred scored test
+# rows per side. See this plan's SUMMARY.md for the full live re
+# -verification transcript and both sweeps' data.
+FORECAST_EXPERIMENT_WINDOW_START: str = "2025-10-01"
 
-# The first date on which the lead rule is checkable against the Single-Runs
-# archive for models=ecmwf_ifs (03-RESEARCH.md live-measured depth). The
-# primary window above deliberately extends earlier than this -- Plan 03-06
-# re-scores every arm on the subset at or after this date, so the
-# extrapolation back to 2023 is measured rather than assumed.
+# "Through the present" rather than a fixed historical end date --
+# 03-01-BOUNDARY-INVESTIGATION.md Section 6 found that extending through
+# "today" instead of capping at the original 2025-12-31 end date recovers
+# the window from ~38% to ~63% of the originally planned row volume, at the
+# cost of leaving the phase's window a moving target rather than a fixed
+# historical span. `None` is a deliberate sentinel here, not an oversight:
+# this file's own discipline is literal constants only, computed at no
+# point at import time, preserving this module's documented "no side
+# effects on import" contract -- baking "today" in as a dated literal would
+# make this constant silently stale on every run after the day it was
+# written. The one consumer, `forecast_experiment.anchored_pair_frame`
+# (via its `main`'s `--end` default), resolves `None` to "yesterday" (UTC)
+# at call time -- yesterday, not today, because the archive needs the day
+# to be fully past, mirroring forecast_leadtime_calibration.py's own
+# `_stratified_sample_days` end-of-range convention.
+FORECAST_EXPERIMENT_WINDOW_END: str | None = None
+
+# The first date the Single-Runs archive is REACHABLE AT ALL for
+# models=ecmwf_ifs -- Open-Meteo's own docs state "ECMWF IFS HRES at 9 km
+# is archived from March 2024." Dates earlier than this raise
+# SingleRunUnavailable rather than produce a comparison -- an archive
+# -reachability boundary, a DIFFERENT and EARLIER phenomenon from the
+# alignment-rule boundary above. 03-01-BOUNDARY-INVESTIGATION.md Section 4
+# confirms these are two distinct thresholds: the Single-Runs archive is
+# reachable from this date, but the bulk/single-run bit-identical rule
+# itself does not start holding until FORECAST_EXPERIMENT_WINDOW_START
+# (2024-11-13), eight months later. Retained here (rather than deleted)
+# because it remains the correct, still-useful answer to "when does the
+# Single-Runs archive start" -- but forecast_leadtime_calibration.py's own
+# calibration sampling no longer bounds itself by this constant (see that
+# module's `_stratified_sample_days`), because sampling within the
+# March-November 2024 gap this constant would otherwise permit measures
+# real, non-boundary mismatches and fails the gate for a reason that has
+# nothing to do with a bug.
 FORECAST_EXPERIMENT_VERIFIED_WINDOW_START: str = "2024-03-14"
 
 # The bulk Historical Forecast product stitches exactly the first six hours

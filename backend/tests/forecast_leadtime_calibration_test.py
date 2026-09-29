@@ -183,6 +183,71 @@ def test_measure_lead_alignment_reports_per_lead_match_and_compared_counts(monke
     assert alignment["per_lead"][MOD]["matched"] == 0
 
 
+def test_measure_lead_alignment_tolerates_rounding_noise_within_tolerance(monkeypatch):
+    """
+    A value within `_MATCH_TOLERANCE_MS` of the bulk value counts as
+    matched -- live evidence (Plan 03-01 window re-verification) found
+    two-decimal rounding noise of ~0.01-0.06 m/s between the two
+    independently-serialized API responses even for values that are, for
+    the phase's purposes, the same underlying model output.
+    """
+    date = "2025-07-01"
+    bulk = _bulk_frame(date)
+
+    def fake_bulk(lat, lon, start, end):
+        return bulk.copy()
+
+    def fake_single(lat, lon, run, hourly_vars=None, forecast_days=None):
+        run_ts = pd.Timestamp(run)
+        idx = pd.date_range(run_ts, periods=MOD, freq="h")
+        vals = []
+        for ts in idx:
+            base = float(bulk.set_index("datetime_utc").loc[ts, "wind_speed"])
+            vals.append(base + 0.05)  # within tolerance (0.1)
+        return pd.DataFrame({"datetime_utc": idx, "wind_speed": vals})
+
+    monkeypatch.setattr(cal.provider, "fetch_historical_forecast", fake_bulk)
+    monkeypatch.setattr(cal.provider, "fetch_single_run", fake_single)
+    monkeypatch.setattr(
+        cal, "_stratified_sample_days", lambda days: [pd.Timestamp(date).date()]
+    )
+
+    alignment = cal.measure_lead_alignment(30.27, -97.74, days=1)
+
+    for lead in range(MOD):
+        assert alignment["per_lead"][lead]["matched"] == alignment["per_lead"][lead]["compared"]
+
+
+def test_measure_lead_alignment_still_rejects_values_beyond_tolerance(monkeypatch):
+    """A value outside `_MATCH_TOLERANCE_MS` still counts as a mismatch --
+    the tolerance absorbs rounding noise, it does not widen the rule."""
+    date = "2025-07-01"
+    bulk = _bulk_frame(date)
+
+    def fake_bulk(lat, lon, start, end):
+        return bulk.copy()
+
+    def fake_single(lat, lon, run, hourly_vars=None, forecast_days=None):
+        run_ts = pd.Timestamp(run)
+        idx = pd.date_range(run_ts, periods=MOD, freq="h")
+        vals = []
+        for ts in idx:
+            base = float(bulk.set_index("datetime_utc").loc[ts, "wind_speed"])
+            vals.append(base + 0.2)  # beyond tolerance (0.1)
+        return pd.DataFrame({"datetime_utc": idx, "wind_speed": vals})
+
+    monkeypatch.setattr(cal.provider, "fetch_historical_forecast", fake_bulk)
+    monkeypatch.setattr(cal.provider, "fetch_single_run", fake_single)
+    monkeypatch.setattr(
+        cal, "_stratified_sample_days", lambda days: [pd.Timestamp(date).date()]
+    )
+
+    alignment = cal.measure_lead_alignment(30.27, -97.74, days=1)
+
+    for lead in range(MOD):
+        assert alignment["per_lead"][lead]["matched"] == 0
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # Import-time no-side-effects
 # ──────────────────────────────────────────────────────────────────────────
