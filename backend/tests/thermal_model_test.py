@@ -246,6 +246,82 @@ def test_perpendicular_wind_matches_full_perpendicular_case(default_conductor):
     assert perp == pytest.approx(10.0, rel=1e-6)
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# 3. Convective-heat-loss extraction equality gate (Phase 3 Plan 02, D-03)
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# The gate is bit-for-bit exact equality (`np.array_equal`), never a
+# tolerance-based comparator (`allclose`/`approx`/`isclose`). This is pure
+# code motion -- the extraction must not change a single bit of the
+# output. An automated check greps this section for a tolerant comparator
+# to prove it never sneaks in.
+
+@pytest.fixture(scope="module")
+def golden_thermal_fixture():
+    import os
+
+    path = os.path.join(
+        os.path.dirname(__file__), "thermal_model_pre_refactor_golden.npz"
+    )
+    return np.load(path)
+
+
+def test_ieee738_ampacity_is_bit_identical_to_pre_refactor_golden(
+    golden_thermal_fixture,
+):
+    g = golden_thermal_fixture
+    conductor = tm.ConductorConfig()
+    live = tm.ieee738_ampacity(
+        g["T_amb_c"], g["wind_perp_ms"], g["ghi_wm2"], conductor
+    )
+    assert np.array_equal(live, g["ampacity"]), (
+        "the convective-term extraction changed ieee738_ampacity output -- "
+        "this is code motion, so it must be bit-identical, not merely close"
+    )
+
+
+def test_convective_heat_loss_matches_pre_refactor_golden(golden_thermal_fixture):
+    g = golden_thermal_fixture
+    conductor = tm.ConductorConfig()
+    live = tm.convective_heat_loss(g["T_amb_c"], g["wind_perp_ms"], conductor)
+    assert np.array_equal(live, g["q_conv"]), (
+        "convective_heat_loss does not reproduce the pre-refactor "
+        "convective term exactly"
+    )
+
+
+def test_q_conv_override_defaults_to_true_no_op(golden_thermal_fixture):
+    g = golden_thermal_fixture
+    conductor = tm.ConductorConfig()
+    no_kwarg = tm.ieee738_ampacity(g["T_amb_c"], g["wind_perp_ms"], g["ghi_wm2"], conductor)
+    explicit_none = tm.ieee738_ampacity(
+        g["T_amb_c"], g["wind_perp_ms"], g["ghi_wm2"], conductor,
+        q_conv_override=None,
+    )
+    assert np.array_equal(no_kwarg, explicit_none), (
+        "the new keyword is not a true no-op at its default"
+    )
+
+
+def test_q_conv_override_changes_the_result(golden_thermal_fixture):
+    g = golden_thermal_fixture
+    conductor = tm.ConductorConfig()
+    baseline = tm.ieee738_ampacity(g["T_amb_c"], g["wind_perp_ms"], g["ghi_wm2"], conductor)
+    bumped = tm.ieee738_ampacity(
+        g["T_amb_c"], g["wind_perp_ms"], g["ghi_wm2"], conductor,
+        q_conv_override=g["q_conv"] * 1.5,
+    )
+    assert not np.array_equal(baseline, bumped), (
+        "an explicit convective override did not change the result -- the "
+        "override is not wired to the heat balance"
+    )
+
+
+def test_natural_convection_is_strictly_positive_below_conductor_max(default_conductor):
+    result = tm.natural_convection(np.array([-10.0, 0.0, 30.0, 74.0]), default_conductor)
+    assert (result > 0).all()
+
+
 def test_module_importable_with_no_env_or_io():
     """
     Guards the C5 extraction goal: thermal_model must be importable and its

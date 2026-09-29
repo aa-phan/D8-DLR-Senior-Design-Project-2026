@@ -101,33 +101,62 @@ def _thermal_conductivity(T_film_c: float) -> float:
     return 2.42e-2 + 7.2e-5 * T_film_c
 
 
-def ieee738_ampacity(
+def natural_convection(
     T_amb_c: Union[float, np.ndarray],
-    wind_perp_ms: Union[float, np.ndarray],
-    ghi_wm2: Union[float, np.ndarray],
     conductor: ConductorConfig,
-    solar_altitude_deg: float = 45.0,
 ) -> np.ndarray:
     """
-    IEEE 738 steady-state ampacity (A) given weather conditions.
+    Natural-convection heat loss (W/m).
 
-    Returns current rating in Amperes for each observation.
+    Moved verbatim from `ieee738_ampacity`'s pre-extraction inline body
+    (Phase 3 Plan 02, D-03): the ambient-temperature coercion, the
+    air-density lookup, and the natural-convection expression itself are
+    unchanged line-for-line. Used both as `convective_heat_loss`'s
+    natural-convection floor (the elementwise maximum against forced
+    convection -- IEEE 738's convention for very-low-wind conditions) and
+    directly wherever a caller needs the natural-convection term alone.
+    """
+    T_a = np.asarray(T_amb_c, dtype=float)
+    T_c = conductor.T_max
+    rho_f = _air_density(conductor.elev)
 
-    Note on `solar_altitude_deg`: this function computes the solar term
-    using `sin(solar_altitude_deg)` as a stand-in for the standard's
-    `sin(theta)`, where theta is the *angle of incidence* of solar rays on
-    the conductor. IEEE Std 738's real geometry accounts for both solar
-    position AND the line's azimuth relative to the sun; this function does
-    not independently compute that angle — it trusts the caller to have
-    already supplied the effective incidence angle here. Passing the raw
-    solar altitude (rather than the true incidence angle) will overstate or
-    understate solar gain depending on line orientation. This is a known
-    modeling simplification (see docs/data-science/specs/C5-thermal-model.md),
-    not something fixed in this pass.
+    # Natural convection (when wind is very low, use max of forced/natural)
+    Q_cn = 3.645 * rho_f**0.5 * conductor.D**0.75 * (T_c - T_a)**1.25
+    return Q_cn
+
+
+def convective_heat_loss(
+    T_amb_c: Union[float, np.ndarray],
+    wind_perp_ms: Union[float, np.ndarray],
+    conductor: ConductorConfig,
+) -> np.ndarray:
+    """
+    Convective heat-loss term (W/m): the elementwise maximum of forced and
+    natural convection.
+
+    Moved verbatim from `ieee738_ampacity`'s pre-extraction inline body
+    (Phase 3 Plan 02, D-03): the ambient/wind coercions, film temperature,
+    air density, inline dynamic viscosity, inline thermal conductivity,
+    Reynolds number, and the branching forced-convection expression
+    (including its bug-fix comment block) are unchanged line-for-line.
+
+    Deliberately does NOT delegate the air-property computations to this
+    module's own air-property helper functions. Those helpers group their
+    floating-point terms in a different association order than the inline
+    code below -- the helper's viscosity denominator is built as the
+    absolute temperature plus 110.4, while the inline code below instead
+    forms the film temperature plus 110.4 plus 273.15, left to right.
+    Floating-point addition is not associative, so delegating to the
+    helpers would change the result by about one unit in the last place --
+    invisible to the eye, but enough to fail this module's exact-equality
+    regression gate (`backend/tests/thermal_model_test.py`) against the
+    golden array captured from the pre-extraction source, in a way that
+    reads as a physics bug rather than the code-motion error it would
+    actually be. Do not "tidy" this arithmetic or call those helpers from
+    here.
     """
     T_a  = np.asarray(T_amb_c,     dtype=float)
     Vw   = np.asarray(wind_perp_ms, dtype=float)
-    Q_s  = np.asarray(ghi_wm2,     dtype=float)
 
     T_c  = conductor.T_max
     T_f  = (T_c + T_a) / 2          # film temperature
@@ -155,10 +184,59 @@ def ieee738_ampacity(
         k_f * 0.754 * N_Re**0.6 * (T_c - T_a)
     )
 
-    # Natural convection (when wind is very low, use max of forced/natural)
-    Q_cn = 3.645 * rho_f**0.5 * conductor.D**0.75 * (T_c - T_a)**1.25
+    Q_cn = natural_convection(T_amb_c, conductor)
 
     Q_conv = np.maximum(Q_cf, Q_cn)
+    return Q_conv
+
+
+def ieee738_ampacity(
+    T_amb_c: Union[float, np.ndarray],
+    wind_perp_ms: Union[float, np.ndarray],
+    ghi_wm2: Union[float, np.ndarray],
+    conductor: ConductorConfig,
+    solar_altitude_deg: float = 45.0,
+    q_conv_override: Union[float, np.ndarray, None] = None,
+) -> np.ndarray:
+    """
+    IEEE 738 steady-state ampacity (A) given weather conditions.
+
+    Returns current rating in Amperes for each observation.
+
+    Note on `solar_altitude_deg`: this function computes the solar term
+    using `sin(solar_altitude_deg)` as a stand-in for the standard's
+    `sin(theta)`, where theta is the *angle of incidence* of solar rays on
+    the conductor. IEEE Std 738's real geometry accounts for both solar
+    position AND the line's azimuth relative to the sun; this function does
+    not independently compute that angle — it trusts the caller to have
+    already supplied the effective incidence angle here. Passing the raw
+    solar altitude (rather than the true incidence angle) will overstate or
+    understate solar gain depending on line orientation. This is a known
+    modeling simplification (see docs/data-science/specs/C5-thermal-model.md),
+    not something fixed in this pass.
+
+    `q_conv_override` (Phase 3 Plan 02, D-03): an optional seam for an
+    offline experiment that corrects the convective heat-loss term
+    directly and needs to push the corrected value back through this same
+    heat balance rather than reimplementing it. Defaults to `None`, in
+    which case the convective term is computed by `convective_heat_loss`
+    exactly as before this keyword existed -- the default path is
+    bit-identical to the pre-refactor behavior, proven by an exact-equality
+    regression test against a golden array captured before this keyword
+    was added. No runtime caller passes this argument. When given, it is
+    coerced with `np.asarray(..., dtype=float)` and substituted for the
+    computed convective term at the single heat-balance consumption site
+    below.
+    """
+    T_a  = np.asarray(T_amb_c, dtype=float)
+    Q_s  = np.asarray(ghi_wm2, dtype=float)
+
+    T_c  = conductor.T_max
+
+    if q_conv_override is None:
+        Q_conv = convective_heat_loss(T_amb_c, wind_perp_ms, conductor)
+    else:
+        Q_conv = np.asarray(q_conv_override, dtype=float)
 
     # Radiated heat loss (Stefan–Boltzmann linearized)
     T_c_k = T_c + 273.15
