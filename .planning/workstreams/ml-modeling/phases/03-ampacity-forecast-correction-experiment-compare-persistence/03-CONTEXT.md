@@ -98,6 +98,56 @@ see Open Questions.
   capability) so the practical reversal cost is low. Flagged for a `checkpoint:decision` if
   `--no-reversibility-gates` is not set.
 
+### D-04 (SUPERSEDES D-01's 1-hour lead as primary): Pivot to the 24-hour realizable lead via
+Open-Meteo's Previous Runs API as the phase's primary comparison; the 1-hour idealized-lead arm
+(D-01) is downgraded to a documented, non-primary curiosity.
+
+**What happened.** Plan 03-01 executed D-01 fully: it built the bulk-forecast provider, the
+lead-time calibration gate, found and precisely characterized a real deterministic-lead boundary
+(sharp cutover, further refined to 2025-10-01 once all four daily six-hourly runs were checked, not
+just 00Z), corrected the experiment window accordingly, and then ran the first real scored slice
+(persistence vs. raw-forecast-through-IEEE-738 for one city). That run surfaced a second, more
+fundamental problem no prior document anticipated: **for the corrected (necessarily recent) window,
+Open-Meteo's "forecast" bulk product is empirically bit-identical to the "truth" archive/reanalysis
+product** — confirmed independently via raw HTTP requests bypassing all repo code, across three
+cities. Arm 2 (raw forecast) consequently scored an exact 0.000 MAE against truth — not because a
+1-hour-lead forecast is skillful, but because in this data source, at this lead, for this recent
+window, "forecast" and "truth" are the same number. Best-effort root cause: Open-Meteo's Archive API
+likely serves provisional/near-real-time analysis data (not final delayed reanalysis) for anything
+this recent, so both endpoints draw from the same underlying source — and the lead-alignment rule
+that forced the window to be this recent may be structurally incompatible with genuine
+forecast/truth independence at a 1-hour lead from this provider.
+
+**Resolution (user decision, 2026-09-29):** rather than keep chasing a window where both constraints
+hold simultaneously at 1-hour lead (which may not exist), **promote the 24-hour realizable-lead
+arm — previously scoped as a secondary "sensitivity pass" in the old Plan 03-06 — to the phase's
+PRIMARY comparison.** Open-Meteo's Previous Runs API (`previous-runs-api.open-meteo.com`) gives an
+exact, unambiguous lead by construction (`<var>_previous_dayN` columns, N=1..7 days), is
+bulk-batched (no per-run HTTP calls, no calibration gate needed at all — the lead is correct by
+API contract, not something to empirically verify), and at 24 hours out, forecast and truth should
+genuinely diverge (real NWP skill differs meaningfully from persistence and from the eventual
+observation at that horizon) — sidestepping the bit-identity problem entirely rather than fighting
+it. Archive coverage for this endpoint begins ~2024-01-15/20 (per 03-RESEARCH.md's own live
+verification), giving a much longer, simpler-to-assemble window than the fragile 1-hour dataset.
+
+**What carries over unchanged:** `backend/wind_vector.py`, the `thermal_model.py`
+`convective_heat_loss`/`q_conv_override` extraction, and `backend/forecast_training.py`'s
+`corridor_weakest_link` extraction (all from Plan 03-02) are lead-time-agnostic and fully reusable.
+The provider adapter (`open_meteo_forecast_provider.py`) needs a new `fetch_previous_runs` function
+(already sketched in 03-RESEARCH.md's Pattern 4, not yet implemented) rather than a redesign.
+
+**What needs replanning:** the anchored-pair-frame contract, `forecast_experiment.py`'s arm-scoring
+machinery, and Plans 03-03 through 03-07 were all designed around the 1-hour idealized lead as
+primary. These need re-design around the 24-hour Previous-Runs-API lead as primary instead — a
+much simpler data-assembly story (no calibration gate, no lead-alignment sweep, no anchor/filter
+distinction since Previous Runs already gives a clean, uniform, exact lead for every row).
+
+**Disposition of the 1-hour arm:** keep it as a documented, explicitly-labeled non-primary
+curiosity (the code already exists and is committed, don't delete working tested code) — report its
+result in the final decision record with the bit-identity caveat prominently attached, but do not
+treat it as a competing candidate against persistence in the phase's primary verdict. — **Not a
+requirements change:** still no new FCST/ANOM ID (D-03's original reasoning holds unchanged).
+
 </decisions>
 
 <verified_facts>

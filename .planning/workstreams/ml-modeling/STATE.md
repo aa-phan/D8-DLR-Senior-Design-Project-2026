@@ -5,7 +5,7 @@ milestone_name: )
 current_phase: 03
 current_phase_name: Ampacity Forecast Correction Experiment
 status: pending
-stopped_at: Phase 3 promoted from backlog (999.1) — needs planning
+stopped_at: Phase 3 Wave 1 complete; D-04 pivot to 24h realizable lead — Waves 2-5 need replanning
 last_updated: "2026-09-29T00:41:39.539Z"
 last_activity: 2026-09-29
 last_activity_desc: Promoted backlog Phase 999.1 to Phase 3 (Ampacity Forecast Correction Experiment)
@@ -34,10 +34,11 @@ this phase determines what should replace it via a rigorous forecast-vs-physics 
 
 ## Current Position
 
-Phase: 03 (Ampacity Forecast Correction Experiment) — NEEDS PLANNING
-Plan: 0 of ? (not yet planned)
-Status: Promoted from backlog, awaiting /gsd-plan-phase
-Last activity: 2026-09-29 — Promoted backlog Phase 999.1 to Phase 3
+Phase: 03 (Ampacity Forecast Correction Experiment) — WAVE 1 COMPLETE, REPLANNING
+Plan: 2 of 2 (Wave 1: 03-01, 03-02) executed; Waves 2-5 superseded by D-04, need replanning
+Status: D-04 pivot — 1h idealized lead hit a bit-identical forecast/truth data-source limit;
+promoted the 24h Previous-Runs-API lead to primary. Run /gsd-plan-phase 3 ml-modeling next.
+Last activity: 2026-09-29 — Wave 1 executed; D-04 pivot decided and recorded
 
 Progress: [███████░░░] 67%
 
