@@ -2,20 +2,20 @@
 gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: )
-current_phase: 02
-current_phase_name: Anomaly Detection Model
-status: complete
-stopped_at: Phase 2 complete — gap closure (02-05/CR-01) verified, 18/18 must-haves passed
-last_updated: "2026-09-28T00:00:00.000Z"
-last_activity: 2026-09-28
-last_activity_desc: Phase 02 gap closure (02-05) executed and re-verified passed
-state_head: 102bab78c131ef624c2b346ca4855e16a48268e3
+current_phase: 03
+current_phase_name: Ampacity Forecast Correction Experiment
+status: pending
+stopped_at: Phase 3 promoted from backlog (999.1) — needs planning
+last_updated: "2026-09-29T00:41:39.539Z"
+last_activity: 2026-09-29
+last_activity_desc: Promoted backlog Phase 999.1 to Phase 3 (Ampacity Forecast Correction Experiment)
+state_head: 7a58597
 progress:
-  total_phases: 2
+  total_phases: 3
   completed_phases: 2
   total_plans: 8
   completed_plans: 8
-  percent: 100
+  percent: 67
 ---
 
 # Project State
@@ -28,17 +28,18 @@ See: .planning/PROJECT.md (updated 2026-09-10) and this workstream's
 **Core value:** The end-to-end pipeline produces valid ampacity forecasts and runs without manual
 intervention, while never letting an unreliable input silently overstate what a line can safely
 carry.
-**Current focus:** Phase 02 — Anomaly Detection Model
-naive/EWM methods with a trained model, validated against real historical data)
+**Current focus:** Phase 03 — Ampacity Forecast Correction Experiment (promoted from backlog
+Phase 999.1: Phase 1's "ml" forecasting method lost to naive persistence at the 60-min horizon;
+this phase determines what should replace it via a rigorous forecast-vs-physics comparison)
 
 ## Current Position
 
-Phase: 02 (Anomaly Detection Model) — COMPLETE
-Plan: 5 of 5 (02-05 gap closure)
-Status: Phase 02 complete, 18/18 must-haves verified
-Last activity: 2026-09-28 — Phase 02 gap closure (02-05/CR-01) executed and re-verified passed
+Phase: 03 (Ampacity Forecast Correction Experiment) — NEEDS PLANNING
+Plan: 0 of ? (not yet planned)
+Status: Promoted from backlog, awaiting /gsd-plan-phase
+Last activity: 2026-09-29 — Promoted backlog Phase 999.1 to Phase 3
 
-Progress: [██████████] 100%
+Progress: [███████░░░] 67%
 
 ## Performance Metrics
 

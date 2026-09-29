@@ -56,6 +56,7 @@ during phase planning/execution before any new dependency is added.
 
 - [x] **Phase 1: Forecasting Model** - Replace/extend `ampacity_forecast.py`'s naive/EWM methods with a trained regression or neural-network model, validated against real historical data (completed 2026-09-24)
 - [x] **Phase 2: Anomaly Detection Model** - Replace/augment `anomaly_detector.py`'s mean±k·std threshold with a trained model on historical per-variable baselines, validated against real historical data (completed 2026-09-28)
+- [ ] **Phase 3: Ampacity Forecast Correction Experiment** - Determine what should replace the current lagged-ampacity `"ml"` method: compare persistence, raw-forecast-through-IEEE-738, ML-corrected-wind, and ML-corrected-cooling approaches (plus an oracle diagnostic) against a real, empirically lead-time-calibrated weather forecast archive on a fixed chronological train/val/test split (supersedes backlog Phase 999.1)
 
 ## Phase Details
 
@@ -161,6 +162,43 @@ path other than both being consumed by `DLRSafetyMonitor`; may be executed in pa
   corridor's measurement history; replaced by one load-merge-atomic-write helper with entry-level
   provenance so a shortened run is visible in the evidence rather than erasing it (restores T-02-09)
 
+### Phase 3: Ampacity Forecast Correction Experiment
+
+**Goal**: Determine, on real evidence rather than assumption, what should replace the current
+lagged-ampacity `"ml"` forecasting method — a reproducible experiment comparing persistence,
+a raw-forecast-through-IEEE-738 approach, an NWP-wind-delta baseline, two ML-correction
+approaches (wind-only via u/v decomposition; convective-heat-loss-term), the current `"ml"`
+model refit for a fair comparison, and a non-forecast oracle diagnostic that bounds the maximum
+benefit wind correction could capture.
+**Depends on**: Nothing new (independent of Phase 1/2 — this is Phase 1's own forecasting method
+under revisit, not a new model class; supersedes backlog Phase 999.1, which found both trained
+candidates lost to naive persistence at the 60-minute horizon — see
+`docs/data-science/decisions/forecasting_model.md`)
+**Requirements**: TBD — no new FCST/ANOM requirement ID; this is a methodology investigation for
+FCST-01/FCST-02's existing "ml" method, not new project scope
+**Success Criteria** (what must be TRUE):
+
+  1. A historical forecast archive (Open-Meteo Historical Forecast API, NOT reanalysis) is
+     assembled with its actual effective lead time empirically measured against Open-Meteo's
+     Single-Runs API (exact issue times) — never trusted from documentation alone — and the
+     60-minute-horizon claim is either confirmed or explicitly relabeled/adjusted before any
+     approach is scored.
+  2. All seven approaches (persistence, NWP-wind-delta, raw-forecast, ML-wind-correction,
+     ML-cooling-correction, refit reference `"ml"`, oracle) are scored on identical held-out
+     chronological test timestamps — a fixed calendar train/val/test split, not the existing
+     walk-forward-only evaluation machinery — with the oracle labeled as non-forecast in every
+     output surface.
+  3. No approach's prediction or regime label can be shown to depend on any post-issue-time
+     information (a leakage test suite proves this directly, not just by construction).
+  4. `backend/thermal_model.py::ieee738_ampacity` and `backend/anomaly_detector.py` are
+     unchanged in observable behavior (any refactor — e.g. exposing a substitutable convective
+     term — is proven behavior-identical via an equality test against the pre-refactor output).
+  5. A written decision record (`docs/data-science/decisions/forecast_correction_experiment.md`,
+     matching the existing 9-section structure) states which approach wins on the held-out test
+     set, or states plainly that none beat persistence — with the Expectation section committed
+     before the test-set run, per this workstream's existing no-peeking discipline.
+**Plans**: 0 plans (run `/gsd-plan-phase 3 ml-modeling` to break down)
+
 ## Progress
 
 **Execution Order:**
@@ -171,27 +209,8 @@ and may be executed first or in parallel if that better fits available capacity)
 |-------|----------------|--------|-----------|
 | 1. Forecasting Model | 3/3 | Complete    | 2026-09-24 |
 | 2. Anomaly Detection Model | 5/5 | Complete   | 2026-09-28 |
+| 3. Ampacity Forecast Correction Experiment | 0/? | Not Started | |
 
 ## Backlog
 
-### Phase 999.1: Revisit ml forecast method accuracy vs naive baseline (BACKLOG)
-
-**Goal:** [Captured for future planning]
-**Requirements:** TBD
-**Plans:** 0 plans
-
-Context: Phase 1's bake-off (Plans 01-02/01-03) found both trained candidates
-(`HistGradientBoostingRegressor`, `MLPRegressor`) lost to the naive last-value baseline on
-held-out MAE, for both corridors, at the current 60-minute forecast horizon — see
-`docs/data-science/decisions/forecasting_model.md` and
-`.planning/workstreams/ml-modeling/phases/01-forecasting-model/01-VERIFICATION.md`. Not
-blocking: the live/current DLR rating is computed independently via real-time IEEE 738
-physics and never calls the naive/ewm/ml forecast; `"ml"` is an opt-in, not-yet-wired-in
-feature. Follow-up candidates to try before deciding whether `"ml"` should become the
-recommended forecast method: a longer forecast horizon (naive degrades faster than ML as
-horizon grows, giving ML more room to add value), a longer/richer training window (more
-than the current 3 years), and/or additional features.
-
-Plans:
-
-- [ ] TBD (promote with /gsd-review-backlog when ready)
+*(none — Phase 999.1 promoted to Phase 3 above, 2026-09-28)*
