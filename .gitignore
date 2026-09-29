@@ -7,6 +7,10 @@
 # Generated model artifacts and assembled training frames (v1.3 Phase 1) --
 # like /data/historical/, not source; regenerable via forecast_training.py.
 /data/models/
+# Generated experiment caches and reports (v1.3 Phase 3) -- like
+# /data/models/, not source; regenerable via forecast_leadtime_calibration.py
+# and forecast_experiment.py.
+/data/experiment/
 .env
 __pycache__/
 *.pyc
