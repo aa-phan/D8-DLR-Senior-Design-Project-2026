@@ -1,30 +1,42 @@
 # Deferred Items — Phase 03 (Ampacity Forecast Correction Experiment)
 
-## Pre-existing `backend/tests/corridor_discretization_test.py` failures (out of scope for Plan 03-02)
+Items discovered during execution that are out of scope for the discovering plan
+(pre-existing, unrelated to the plan's `files_modified`) and therefore not auto-fixed
+per the executor's scope-boundary rule.
 
-**Found during:** Plan 03-02, Task 1 (baseline full-suite run before any edit).
+## Pre-existing `corridor_discretization_test.py` failures (23 tests)
 
-**Issue:** 23 tests in `backend/tests/corridor_discretization_test.py` fail on the plan's own base
-commit (`0fa8ffd42fd04b03b9673a7d5c5d326241cdc7d9`), reproducible when the file is run in complete
-isolation (`.venv/bin/python3 -m pytest -q backend/tests/corridor_discretization_test.py` ->
-23 failed, 29 passed). This is not caused by, and not related to, any file Plan 03-02 touches
-(`backend/wind_vector.py`, `backend/thermal_model.py`, `backend/forecast_training.py`, and their
-test files) — `corridor_discretization.py` and its test file carry zero diff from this plan.
+**Found during:** Plan 03-01 (Task 1 full-suite verification) and independently confirmed
+during Plan 03-02 (Task 1 baseline run) — both plans hit the same 23 failures on the same base
+commit, in complete isolation, unrelated to anything either plan touches.
 
-Symptoms span several unrelated assertion families in the same file (probe-trail sequencing,
-bottleneck-index selection, archive-write `FileNotFoundError`s against `tmp_path`), suggesting a
-single shared root cause internal to `corridor_discretization.py` or a fixture in its own test
-file, not something introduced by this plan.
+**Symptom:** 23 tests in `backend/tests/corridor_discretization_test.py` fail on this workstream's
+current base commit, reproducible when the file is run alone
+(`.venv/bin/python3 -m pytest -q backend/tests/corridor_discretization_test.py` -> 23 failed,
+29 passed). Representative failures:
+- `assert 0 == 5` (fetcher call count) — several `test_rate_corridor_*` and `test_probe_*` tests,
+  suggesting the injected fake fetcher is never invoked.
+- `FileNotFoundError: [Errno 2] No such file or directory: '/private/var/folde...'` on
+  `test_rate_corridor_archives_one_row_per_call` and two siblings — the archive-path fixture
+  (`_isolate_historical_archive`, `tmp_path`-scoped) is not resolving as expected.
+- `assert True is False` on `fallback` key checks.
 
-**Disposition:** Not fixed — out of scope per the executor's scope-boundary rule ("Only auto-fix
-issues DIRECTLY caused by the current task's changes"). `corridor_discretization.py` is not in
-Plan 03-02's `files_modified` list and touching it would violate this plan's D-03 boundary anyway.
+**Root cause, confirmed by the orchestrator (not the executors) via direct investigation:** this is
+**not** an environment/worktree artifact. The same 23 failures reproduce identically against
+`origin/main`'s own merged version of `corridor_discretization.py` (commit `6dae229`, the
+`track-1-updates-v2` PR merge) — i.e. Track 1's own merged code broke its own tests, before either
+Plan 03-01 or 03-02 started. Confirmed via `git diff --quiet` that neither plan modifies
+`corridor_discretization.py` or its test file.
+
+**Disposition:** Not fixed by either plan — out of scope per each executor's scope-boundary rule
+and this phase's D-03 no-unrelated-file-change boundary. `corridor_discretization.py` is not in
+either plan's `files_modified` list. Whoever owns Track 1 should pick this up as a dedicated
+debugging pass; it predates Phase 3 entirely.
 
 **Recorded:** `.planning/WINDOWS.md` (kind: deviation, phase 03) for cross-phase tracking.
 
-**Verification that Plan 03-02's own work is unaffected:** All three of Plan 03-02's own task-level
-`<verify>` commands (scoped to `wind_vector_test.py`, `thermal_model_test.py`,
-`forecast_training_test.py`) pass cleanly. The plan's own full-suite `<verify>` gates
-(`.venv/bin/python3 -m pytest -q`) are documented in `03-02-SUMMARY.md` as passing net-new tests
-while the pre-existing 23-failure baseline is unchanged before and after this plan's edits — i.e.
-this plan introduces zero new failures.
+**Verification that Phase 3's own work is unaffected:** every plan's own task-level `<verify>`
+commands pass cleanly; the 23-failure baseline is unchanged before and after each plan's edits —
+i.e. neither plan introduces any new failure, and the two known-full-suite-failure counts recorded
+during execution (Plan 03-01: 470 passed/23 failed; Plan 03-02: 450→468 passed, 23 failed
+throughout) are consistent with each other and with the pre-existing baseline.

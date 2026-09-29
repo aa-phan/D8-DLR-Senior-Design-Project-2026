@@ -275,6 +275,58 @@ FORECAST_ML_BAKEOFF_SPLITS: int = 5
 # record (D-06) -- this JSON file itself is not the artifact of record.
 FORECAST_ML_BAKEOFF_REPORT_NAME: str = "bakeoff_report.json"
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Ampacity forecast correction experiment (v1.3 Phase 3, methodology
+# investigation of FCST-01's "ml" method -- not a new runtime capability)
+# ──────────────────────────────────────────────────────────────────────────────
+# Tunables for open_meteo_forecast_provider.py, forecast_leadtime_calibration.py
+# and forecast_experiment.py. D-03 locks this phase to zero behavior change in
+# any existing runtime file, so every new tunable this phase needs lives here
+# rather than as a literal buried in the new modules, mirroring this file's own
+# centralization discipline for the FORECAST_ML_* block above.
+
+# Git-ignored generated data. The warmed fetches (assembled anchored pair
+# frames, calibration reports, experiment reports) land here as CSV/JSON so a
+# test run never re-issues an HTTP request, mirroring FORECAST_ML_MODEL_DIR's
+# own relative-to-cwd, git-ignored convention.
+FORECAST_EXPERIMENT_CACHE_DIR: str = "data/experiment"
+
+# The primary experiment window, chosen to match Phase 1's assembled training
+# window exactly (26,304 rows per city per the record in
+# forecasting_model.md), so the forecast frame joins 1:1 against the truth
+# frame produced by forecast_training.fetch_city_weather.
+FORECAST_EXPERIMENT_WINDOW_START: str = "2023-01-01"
+FORECAST_EXPERIMENT_WINDOW_END: str = "2025-12-31"
+
+# The first date on which the lead rule is checkable against the Single-Runs
+# archive for models=ecmwf_ifs (03-RESEARCH.md live-measured depth). The
+# primary window above deliberately extends earlier than this -- Plan 03-06
+# re-scores every arm on the subset at or after this date, so the
+# extrapolation back to 2023 is measured rather than assumed.
+FORECAST_EXPERIMENT_VERIFIED_WINDOW_START: str = "2024-03-14"
+
+# The bulk Historical Forecast product stitches exactly the first six hours
+# of each six-hourly ecmwf_ifs run (03-RESEARCH.md Pattern 2, live-verified
+# bit-identical to the Single-Runs value at leads 0-5, divergent at lead>=6
+# across three cities and three seasons). A valid time whose UTC hour leaves
+# remainder FORECAST_EXPERIMENT_LEAD_FILTER_REMAINDER on division by
+# FORECAST_EXPERIMENT_LEAD_FILTER_MODULUS is therefore an exactly-one-hour
+# -lead forecast, giving 4 rows/day/city. Both values are read from config
+# rather than written as literals so a change in the upstream stitching depth
+# is a one-line correction here, not a search-and-replace across modules.
+FORECAST_EXPERIMENT_LEAD_FILTER_MODULUS: int = 6
+FORECAST_EXPERIMENT_LEAD_FILTER_REMAINDER: int = 1
+
+# Matches open_meteo_provider.fetch_open_meteo's own requests.get timeout
+# convention -- the new provider is a sibling, not a fork, of that module's
+# HTTP discipline.
+FORECAST_EXPERIMENT_HTTP_TIMEOUT_S: int = 60
+
+# The stratified day count forecast_leadtime_calibration.py's gate samples,
+# citing 03-RESEARCH.md Assumption A1's "expand the gate's sample to at
+# least 30 stratified days."
+FORECAST_EXPERIMENT_CALIBRATION_SAMPLE_DAYS: int = 30
+
 # D-06: the anomaly control limit is a per-location dict, not one global
 # scalar — a single global band is the exact shape of the historical
 # RATING_BOUNDS bug documented in
