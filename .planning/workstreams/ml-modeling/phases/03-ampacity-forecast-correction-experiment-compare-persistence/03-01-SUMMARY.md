@@ -250,3 +250,18 @@ None - no external service configuration required.
 *Plan: 01*
 *Completed: 2026-09-29*
 *Status: halted -- see Issues Encountered*
+
+## Self-Check: PASSED
+
+- `backend/open_meteo_forecast_provider.py` - FOUND
+- `backend/forecast_leadtime_calibration.py` - FOUND
+- `backend/tests/open_meteo_forecast_provider_test.py` - FOUND
+- `backend/tests/forecast_leadtime_calibration_test.py` - FOUND
+- `.planning/workstreams/ml-modeling/phases/03-ampacity-forecast-correction-experiment-compare-persistence/deferred-items.md` - FOUND
+- Commit `1c60934` (feat: provider adapter) - FOUND in `git log --oneline --all`
+- Commit `1a43c84` (feat: calibration gate) - FOUND in `git log --oneline --all`
+- Commit `fcaf180` (fix: live-observed archive gaps) - FOUND in `git log --oneline --all`
+- Commit `5c98e05` (fix: .gitignore) - FOUND in `git log --oneline --all`
+- Commit `f3b412c` (docs: this SUMMARY.md) - FOUND in `git log --oneline --all`
+- `.venv/bin/python3 -m pytest -q backend/tests/open_meteo_forecast_provider_test.py backend/tests/forecast_leadtime_calibration_test.py` - 32 passed
+- Full suite: 504 passed, 23 failed (all 23 pre-existing/unrelated, logged in `deferred-items.md`, reproduced in isolation independent of this plan's changes; count includes the 22 passing WIP Task 3 tests, uncommitted)
