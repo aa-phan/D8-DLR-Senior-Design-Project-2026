@@ -171,6 +171,130 @@ def test_corridor_training_frame_weakest_link_min_matches_convention(monkeypatch
     assert set(expected_bottleneck.tolist()) == {0, 1}
 
 
+def test_corridor_training_frame_matches_pre_refactor_golden_capture(monkeypatch):
+    """
+    Rebuild `corridor_training_frame` from the SAME deterministic synthetic
+    fixture the golden capture used (Phase 3 Plan 02, D-03) and assert its
+    `dlr_amps` and `bottleneck_index` columns are exactly equal to the
+    golden CSV's, including the tie row -- the equality gate for the
+    `corridor_weakest_link` extraction.
+    """
+    corridor = "AUSTIN_CORPUS_CHRISTI"
+    city_a, city_b = config.CORRIDOR_ENDPOINTS[corridor]
+
+    n = 24
+    base_dt = datetime(2024, 6, 1, 0, 0, 0)
+    timestamps = pd.to_datetime(
+        [(base_dt + timedelta(hours=i)).isoformat() + "Z" for i in range(n)], utc=True
+    )
+
+    hot_temp, mild_temp = 40.0, 20.0
+    temp_a = np.array([hot_temp if i % 2 == 0 else mild_temp for i in range(n)])
+    temp_b = np.array([mild_temp if i % 2 == 0 else hot_temp for i in range(n)])
+    # Exact tie at index 5, matching the golden capture's own fixture.
+    temp_a[5] = 30.0
+    temp_b[5] = 30.0
+
+    wind_speed = np.full(n, 5.0)
+    wind_direction = np.full(n, 90.0)
+    solar_radiation = np.full(n, 500.0)
+    relative_humidity = np.full(n, 50.0)
+
+    def _frame(temp):
+        return pd.DataFrame({
+            "datetime_utc": timestamps,
+            "air_temp": temp,
+            "wind_speed": wind_speed,
+            "wind_direction": wind_direction,
+            "solar_radiation": solar_radiation,
+            "relative_humidity": relative_humidity,
+        })
+
+    frame_a = _frame(temp_a)
+    frame_b = _frame(temp_b)
+
+    def _fake_fetch(city, years):
+        if city == city_a:
+            return frame_a.copy()
+        if city == city_b:
+            return frame_b.copy()
+        raise AssertionError(f"unexpected city {city!r}")
+
+    monkeypatch.setattr(ft, "fetch_city_weather", _fake_fetch)
+
+    result = ft.corridor_training_frame(corridor, years=1)
+
+    golden_path = __file__.rsplit("/", 1)[0] + "/forecast_training_pre_refactor_golden.csv"
+    # `float_precision="round_trip"`: pandas' default C float parser can
+    # introduce a 1-ULP rounding error versus the exact value the text
+    # represents (confirmed live: the default parser reads this fixture's
+    # own bit-exact values back 1 ULP off, which would make an honest
+    # exact-equality gate fail on a parsing artifact rather than a real
+    # extraction defect -- the "round_trip" parser matches Python's own
+    # correctly-rounded `float()`).
+    golden = pd.read_csv(golden_path, float_precision="round_trip")
+
+    assert len(result) == len(golden)
+    np.testing.assert_array_equal(
+        result["dlr_amps"].to_numpy(dtype=float), golden["dlr_amps"].to_numpy(dtype=float)
+    )
+    np.testing.assert_array_equal(
+        result["bottleneck_index"].to_numpy(dtype=int),
+        golden["bottleneck_index"].to_numpy(dtype=int),
+    )
+    # The tie row (index 5) must resolve to city A (index 0), exactly as
+    # the golden capture recorded.
+    assert result.iloc[5]["bottleneck_index"] == 0
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# corridor_weakest_link — direct unit tests of the extracted helper
+# (Phase 3 Plan 02, D-03)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_corridor_weakest_link_exact_tie_resolves_to_city_a():
+    a = np.array([100.0, 200.0, 150.0, 150.0])
+    b = np.array([120.0, 180.0, 150.0, 140.0])
+
+    amps, idx, cols = ft.corridor_weakest_link(
+        a, b,
+        {"air_temp": np.array([1.0, 2.0, 3.0, 4.0])},
+        {"air_temp": np.array([9.0, 8.0, 7.0, 6.0])},
+    )
+
+    assert np.array_equal(amps, np.minimum(a, b))
+    assert int(idx[2]) == 0, (
+        "an exact ampacity tie must resolve to city A, matching "
+        "rate_corridor's first-match convention"
+    )
+    assert list(idx) == [0, 1, 0, 1]
+
+
+def test_corridor_weakest_link_returns_winning_citys_own_weather():
+    a = np.array([100.0, 200.0, 150.0, 150.0])
+    b = np.array([120.0, 180.0, 150.0, 140.0])
+
+    _amps, _idx, cols = ft.corridor_weakest_link(
+        a, b,
+        {"air_temp": np.array([1.0, 2.0, 3.0, 4.0])},
+        {"air_temp": np.array([9.0, 8.0, 7.0, 6.0])},
+    )
+
+    assert list(cols["air_temp"]) == [1.0, 8.0, 3.0, 6.0], (
+        "the reduction did not carry the winning city's own weather"
+    )
+
+
+def test_corridor_training_frame_has_no_duplicate_reduction():
+    """`corridor_training_frame`'s own body must not keep a second,
+    independent elementwise-minimum reduction alongside the extracted
+    helper call -- two copies of a non-obvious tie-break rule will drift."""
+    import inspect
+
+    source = inspect.getsource(ft.corridor_training_frame)
+    assert "np.minimum" not in source
+
+
 def test_corridor_training_frame_invalid_row_dropped_before_fit(monkeypatch, caplog):
     corridor = "AUSTIN_CORPUS_CHRISTI"
     city_a, city_b = config.CORRIDOR_ENDPOINTS[corridor]

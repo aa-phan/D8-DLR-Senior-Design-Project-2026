@@ -109,6 +109,67 @@ def fetch_city_weather(city: str, years: int) -> pd.DataFrame:
     return combined.sort_values("datetime_utc").reset_index(drop=True)
 
 
+def corridor_weakest_link(
+    amps_a: np.ndarray,
+    amps_b: np.ndarray,
+    columns_a: dict,
+    columns_b: dict,
+) -> tuple:
+    """
+    The codebase's one weakest-link corridor reduction (Phase 3 Plan 02,
+    D-03): given each endpoint city's ampacity array and a mapping of
+    column name to that city's own values for the same rows, return the
+    elementwise-minimum ampacity, an integer bottleneck-city index array
+    (0 for city A, 1 for city B), and a mapping of column name to the
+    WINNING (lower-ampacity) city's own values for each row -- never an
+    average and never the losing city's value.
+
+    Moved verbatim from `corridor_training_frame`'s pre-extraction inline
+    body (formerly its own `np.minimum`/`np.where` block). The tie-break
+    on an exact ampacity tie points at the lower index (city A)
+    deliberately, mirroring `corridor_discretization.rate_corridor`'s own
+    `ratings.index(min_rating)` first-match convention -- not an arbitrary
+    choice. This helper exists so the production trainer
+    (`corridor_training_frame`) and the new experiment harness share ONE
+    reduction rather than maintaining two independent copies of a rule
+    that is easy to get subtly wrong.
+
+    Args:
+        amps_a: city A's ampacity array.
+        amps_b: city B's ampacity array (same shape as `amps_a`).
+        columns_a: mapping of column name -> city A's own values for the
+            same rows (e.g. `{"air_temp": ..., "wind_speed": ...}`).
+        columns_b: mapping of the same column names -> city B's own
+            values for the same rows.
+
+    Returns:
+        (dlr_amps, bottleneck_index, winning_columns) -- `dlr_amps` is the
+        elementwise minimum; `bottleneck_index` is an int array (0 or 1);
+        `winning_columns` has the same keys as `columns_a`/`columns_b`,
+        each value selected from the winning city for that row.
+    """
+    amps_a = np.asarray(amps_a, dtype=float)
+    amps_b = np.asarray(amps_b, dtype=float)
+
+    dlr_amps = np.minimum(amps_a, amps_b)
+    # Tie-break toward the lower index (city A), matching corridor_
+    # discretization.rate_corridor's own `ratings.index(min_rating)`
+    # first-match convention.
+    bottleneck_index = np.where(amps_a <= amps_b, 0, 1)
+
+    winning_a = bottleneck_index == 0
+    winning_columns = {}
+    for name, values_a in columns_a.items():
+        values_b = columns_b[name]
+        winning_columns[name] = np.where(
+            winning_a,
+            np.asarray(values_a, dtype=float),
+            np.asarray(values_b, dtype=float),
+        )
+
+    return dlr_amps, bottleneck_index.astype(int), winning_columns
+
+
 def corridor_training_frame(corridor: str, years: int) -> pd.DataFrame:
     """
     Assemble a real, `historical_archive.ARCHIVE_COLUMNS`-shaped training
@@ -172,21 +233,22 @@ def corridor_training_frame(corridor: str, years: int) -> pd.DataFrame:
         dtype=float,
     )
 
-    dlr_amps = np.minimum(amps_a, amps_b)
-    # Tie-break toward the lower index (city A), matching corridor_
-    # discretization.rate_corridor's own `ratings.index(min_rating)`
-    # first-match convention.
-    bottleneck_index = np.where(amps_a <= amps_b, 0, 1)
-
-    winning_a = bottleneck_index == 0
-    air_temp = np.where(winning_a, merged["air_temp_a"].to_numpy(dtype=float),
-                         merged["air_temp_b"].to_numpy(dtype=float))
-    wind_speed = np.where(winning_a, merged["wind_speed_a"].to_numpy(dtype=float),
-                           merged["wind_speed_b"].to_numpy(dtype=float))
-    solar_radiation = np.where(
-        winning_a, merged["solar_radiation_a"].to_numpy(dtype=float),
-        merged["solar_radiation_b"].to_numpy(dtype=float),
+    dlr_amps, bottleneck_index, winning_columns = corridor_weakest_link(
+        amps_a, amps_b,
+        {
+            "air_temp": merged["air_temp_a"].to_numpy(dtype=float),
+            "wind_speed": merged["wind_speed_a"].to_numpy(dtype=float),
+            "solar_radiation": merged["solar_radiation_a"].to_numpy(dtype=float),
+        },
+        {
+            "air_temp": merged["air_temp_b"].to_numpy(dtype=float),
+            "wind_speed": merged["wind_speed_b"].to_numpy(dtype=float),
+            "solar_radiation": merged["solar_radiation_b"].to_numpy(dtype=float),
+        },
     )
+    air_temp = winning_columns["air_temp"]
+    wind_speed = winning_columns["wind_speed"]
+    solar_radiation = winning_columns["solar_radiation"]
 
     frame = pd.DataFrame({
         "datetime_utc": merged["datetime_utc"],
