@@ -92,6 +92,126 @@ def test_build_training_matrix_no_future_leakage():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# build_training_matrix — additive horizon_minutes parameter (Phase 3 Plan 05,
+# D-03, RESEARCH.md Pitfall 4). The equality gate below is pure parameter
+# plumbing, not a numerical reformulation, so it is an exact-equality check
+# (np.array_equal) against a golden capture taken from the UNMODIFIED source
+# -- never a tolerance comparator.
+# ──────────────────────────────────────────────────────────────────────────────
+
+@pytest.fixture(scope="module")
+def golden_horizon_fixture():
+    import os
+
+    path = os.path.join(
+        os.path.dirname(__file__), "forecast_training_pre_horizon_param_golden.npz"
+    )
+    return np.load(path, allow_pickle=True)
+
+
+def test_build_training_matrix_default_path_is_bit_identical_to_pre_horizon_param_golden(
+    golden_horizon_fixture,
+):
+    g = golden_horizon_fixture
+    frame = _synthetic_corridor_frame(n=150, seed=20260924)
+
+    X, y = ft.build_training_matrix(frame)
+
+    assert list(X.columns) == list(g["X_columns"]), (
+        "the additive horizon_minutes parameter changed the feature column "
+        "set at its default -- this is pure parameter plumbing and must not"
+    )
+    assert np.array_equal(X.to_numpy(dtype=float), g["X_values"]), (
+        "the default path's feature matrix is not bit-identical to the "
+        "pre-edit golden capture"
+    )
+    assert np.array_equal(X.index.to_numpy(), g["X_index"]), (
+        "the default path's feature index is not bit-identical to the "
+        "pre-edit golden capture"
+    )
+    assert np.array_equal(y.to_numpy(dtype=float), g["y_values"]), (
+        "the default path's target series is not bit-identical to the "
+        "pre-edit golden capture"
+    )
+    assert np.array_equal(y.index.to_numpy(), g["y_index"]), (
+        "the default path's target index is not bit-identical to the "
+        "pre-edit golden capture"
+    )
+
+
+def test_build_training_matrix_1440_minute_horizon_shifts_target_by_exactly_24_hours():
+    # The direct refutation of RESEARCH.md Pitfall 4's failure mode: a
+    # target still shifted by one row (the production 60-minute default)
+    # would produce a plausible-looking arm-5 score that means nothing.
+    # Asserting on the returned index values -- not merely on prose -- is
+    # what makes the 24-hour shift inspectable.
+    frame = _synthetic_corridor_frame(n=150, seed=20260924)
+
+    X, y = ft.build_training_matrix(frame, horizon_minutes=1440)
+
+    assert len(X) > 0
+    assert (y.index - X.index == pd.Timedelta(hours=24)).all()
+
+
+def test_build_training_matrix_1440_minute_horizon_drops_exactly_23_more_rows_than_default():
+    """
+    `build_ml_features` is causal-only (lag/rolling-mean columns look
+    backward, never forward), so its trailing edge never carries a NaN --
+    every row through the frame's own last row has valid features. The
+    ONLY reason any trailing row is dropped is a NaN target from the
+    horizon shift.
+
+    At the default 60-minute (1-row) horizon, exactly the frame's own
+    last row lacks a target -- 1 row dropped for that reason. At a
+    1440-minute (24-row) horizon, the last 24 rows lack a target -- 24
+    rows dropped for that reason. Both drop ranges sit entirely inside
+    the same feature-valid trailing edge (feature validity never changes
+    with the horizon), so the row count at 1440 minutes is fewer than the
+    row count at 60 minutes by exactly 24 - 1 = 23 rows, NOT 24: the
+    60-minute path was already dropping one of those same trailing rows,
+    so counting it a second time when comparing the two horizons would
+    double-count it. Asserted directly from both returned frames' lengths
+    rather than assumed from the naive "24 trailing rows now lack a
+    target" framing, which is the exact "verify the horizon/lag
+    assumption explicitly, don't trust it" discipline this phase has
+    already applied twice before (thermal_model, corridor_weakest_link).
+    """
+    frame = _synthetic_corridor_frame(n=150, seed=20260924)
+
+    X_60, y_60 = ft.build_training_matrix(frame)
+    X_1440, y_1440 = ft.build_training_matrix(frame, horizon_minutes=1440)
+
+    assert len(X_60) - len(X_1440) == 23
+    assert len(y_60) - len(y_1440) == 23
+
+
+def test_build_training_matrix_non_whole_multiple_horizon_raises_and_names_value():
+    frame = _synthetic_corridor_frame(n=150, seed=20260924)
+
+    with pytest.raises(ValueError, match="90"):
+        ft.build_training_matrix(frame, horizon_minutes=90)
+
+
+def test_build_training_matrix_production_call_sites_remain_single_positional():
+    """
+    Both production call sites (`main`, `_run_bakeoff`) call
+    `build_training_matrix(frame)` with the frame passed positionally and
+    no keyword -- a direct source-level guard that the additive parameter
+    was appended last with a default that requires no call-site change.
+    """
+    import inspect
+    import re
+
+    source = inspect.getsource(ft)
+    calls = re.findall(r"build_training_matrix\(([^)]*)\)", source)
+    # Exclude the function's own definition line and this test's imports.
+    call_sites = [c for c in calls if c.strip() == "frame"]
+    assert len(call_sites) >= 2, (
+        f"expected at least 2 single-positional call sites, found: {calls}"
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # corridor_training_frame — weakest-link min() reduction (RESEARCH.md
 # Pattern 3) and the drop-invalid-row-before-fit invariant (T-01-01)
 # ──────────────────────────────────────────────────────────────────────────────
