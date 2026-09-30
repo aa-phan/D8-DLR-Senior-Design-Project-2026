@@ -186,9 +186,91 @@ distinguishable margin than by a small or null one.
 
 ## Measured results
 
-*Plan 03-06's Task 3 pastes the single test-set run's results here, verbatim, after the Expectation
-above has been committed and the leakage probe has demonstrated power. Not yet run as of this
-commit.*
+Transcribed verbatim from the SINGLE held-out test-set invocation (`PYTHONPATH=backend
+.venv/bin/python3 backend/forecast_experiment.py --lead-hours 24 --split test`), run once, both
+corridors, after the Expectation above was committed (`4d964cf`) and the leakage probe had
+demonstrated power (`2ad9971`). No arm, feature, hyperparameter, or filter was adjusted after
+seeing this output — the plan's checkpoint was approved by explicit human authorization, and this
+is the record's one honest read of the test split. Every margin below is `mean(|persistence_24h's
+error|) - mean(|arm's error|)` on the byte-identical 786-row test index; positive means the arm's
+mean absolute error is lower than persistence's. The 95% interval is a paired bootstrap on the
+per-row absolute-error difference series (`scipy.stats.bootstrap`, `BCa`, 10,000 resamples, fixed
+seed `config.FORECAST_EXPERIMENT_CORRECTION_RANDOM_STATE`) — "excludes zero" means the ENTIRE
+interval favors the arm, i.e. the margin is statistically distinguishable from noise at this
+sample size, which is a distinct claim from the amperes-scale practical-significance threshold the
+Expectation above committed to before this number was seen.
+
+**AUSTIN_CORPUS_CHRISTI** (23,592 assembled rows; 786 rows scored; window 2024-01-20 →
+2026-09-29; test split starts 2026-03-17)
+
+| Candidate | MAE (A) | RMSE (A) | Rows | Margin vs. persistence (A) | 95% CI (paired bootstrap) | Excludes zero favorably? |
+|---|---|---|---|---|---|---|
+| persistence_24h (baseline) | 108.665 | 144.295 | 786 | — (reference) | — | — |
+| nwp_wind_delta | 120.269 | 164.937 | 786 | -11.604 | [-18.906, -4.408] | No — worse than persistence, and distinguishably so |
+| raw_forecast | 98.856 | 135.293 | 786 | 9.809 | [1.923, 17.500] | Yes |
+| ml_wind_corrected | 94.024 | 127.544 | 786 | 14.641 | [7.696, 21.420] | Yes |
+| **ml_cooling_corrected** | **83.803** | **114.164** | 786 | **24.862** | **[18.771, 30.776]** | **Yes — largest margin** |
+| reference_ml_refit_24h | 90.847 | 118.608 | 786 | 17.818 | [11.905, 23.614] | Yes |
+
+Resolved verdict field (machine-computed from the intervals above, not this record's own Verdict
+section below): *"multiple candidates beat persistence (ml_cooling_corrected (24.862),
+reference_ml_refit_24h (17.818), ml_wind_corrected (14.641), raw_forecast (9.809)); resolved to
+'ml_cooling_corrected' by largest point margin (24.862)"*.
+
+Truth-group corridor bottleneck: AUSTIN 629 rows / CORPUS_CHRISTI 157 rows. Arm 1's
+(`nwp_wind_delta`) physical zero-floor clamp hit 37 of 786 rows.
+
+> **oracle_observed_future_wind — NON-FORECAST DIAGNOSTIC, never a candidate.** MAE 16.035, RMSE
+> 24.395, rows 786, margin vs. persistence 92.630 A (95% CI [86.235, 99.283], excludes zero). This
+> substitutes OBSERVED FUTURE wind into the forecast's thermal inputs — no real forecast could ever
+> have had this input. It bounds the maximum benefit any wind correction could ever achieve; it is
+> never compared against persistence or any candidate as though it were an achievable method.
+
+**MIDLAND_EL_PASO** (23,592 assembled rows; 786 rows scored; window 2024-01-20 → 2026-09-29;
+test split starts 2026-03-17)
+
+| Candidate | MAE (A) | RMSE (A) | Rows | Margin vs. persistence (A) | 95% CI (paired bootstrap) | Excludes zero favorably? |
+|---|---|---|---|---|---|---|
+| persistence_24h (baseline) | 163.535 | 206.285 | 786 | — (reference) | — | — |
+| nwp_wind_delta | 188.613 | 237.038 | 786 | -25.078 | [-36.364, -13.861] | No — worse than persistence, and distinguishably so |
+| raw_forecast | 163.125 | 211.820 | 786 | 0.410 | [-11.058, 11.834] | No — statistically indistinguishable from zero |
+| ml_wind_corrected | 142.207 | 184.719 | 786 | 21.328 | [10.898, 31.466] | Yes |
+| **ml_cooling_corrected** | **132.865** | **170.869** | 786 | **30.671** | **[22.347, 39.107]** | **Yes — largest margin** |
+| reference_ml_refit_24h | 133.525 | 166.668 | 786 | 30.010 | [22.343, 37.984] | Yes |
+
+Resolved verdict field: *"multiple candidates beat persistence (ml_cooling_corrected (30.671),
+reference_ml_refit_24h (30.010), ml_wind_corrected (21.328)); resolved to 'ml_cooling_corrected' by
+largest point margin (30.671)"*.
+
+Truth-group corridor bottleneck: MIDLAND 91 rows / EL_PASO 695 rows. Arm 1's (`nwp_wind_delta`)
+physical zero-floor clamp hit 93 of 786 rows.
+
+> **oracle_observed_future_wind — NON-FORECAST DIAGNOSTIC, never a candidate.** MAE 17.700, RMSE
+> 25.661, rows 786, margin vs. persistence 145.835 A (95% CI [137.270, 154.905], excludes zero).
+> This substitutes OBSERVED FUTURE wind into the forecast's thermal inputs — no real forecast could
+> ever have had this input. It bounds the maximum benefit any wind correction could ever achieve;
+> it is never compared against persistence or any candidate as though it were an achievable method.
+
+**24-HOUR LEAD AND STRONG-BASELINE QUALIFIERS (apply to every table above, per
+`PRIMARY_24H_LEAD_CAVEAT`, emitted verbatim on this run's report and printed summary):**
+
+> PRIMARY 24-HOUR LEAD (D-04): this lead is exactly 24.0 hours ONLY because the scored rows are
+> filtered to the six-hourly cycle hours (hour % 6 == 0) — verified against the Single-Runs product
+> (`forecast_leadtime_calibration.assert_exact_offset_lead`), NOT taken from Open-Meteo's or D-04's
+> own "exact by construction, no calibration gate needed" framing, which is contradicted by direct
+> measurement for the other 5 of every 6 hours (25-29h lead). A 24-hour persistence baseline is
+> DIURNALLY SELF-ALIGNED and is therefore a genuinely STRONG day-ago-same-hour baseline, not the
+> weak one a "longer horizon is easier to beat" intuition would suggest (03-RESEARCH.md Pattern 4)
+> — do not expect the correction arms to beat it as easily as that intuition implies. This is the
+> phase's PRIMARY comparison (D-04); the 1-hour arm is a labelled non-primary curiosity whose
+> raw-forecast score is an artifact of a bit-identical data source, never a competing candidate
+> against this arm's result.
+
+**Test set scored once.** No re-run was necessary: the single invocation above produced finite,
+physically plausible numbers for both corridors on the first attempt (no exception, no empty
+split, no negative ampacity), so no defect fix was required and the "same-run" rule (a second run
+is permitted only to reproduce an identical number after a non-scoring code change) was never
+invoked.
 
 ## Verdict
 
