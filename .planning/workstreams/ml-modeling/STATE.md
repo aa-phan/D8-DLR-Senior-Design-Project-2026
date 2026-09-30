@@ -4,12 +4,12 @@ milestone: v1.3
 milestone_name: )
 current_phase: 04
 current_phase_name: Forecast Correction Follow-up Audit
-status: complete
+status: executing
 stopped_at: Phase 3 complete — ml_cooling_corrected wins distinguishably at both corridors on the held-out 24h-lead test set
-last_updated: "2026-09-30T22:25:55.666Z"
+last_updated: "2026-09-30T22:47:24.453Z"
 last_activity: 2026-09-30
-last_activity_desc: Phase 3 Waves 2-5 executed after D-04 pivot; decision record complete
-state_head: e17822450ea60be23e7ada0f78d06ec4aff3d3d5
+last_activity_desc: Phase 04 execution started
+state_head: c14111866e76f101adb5183d151d48142ea1094b
 progress:
   total_phases: 4
   completed_phases: 3
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-09-10) and this workstream's
 **Core value:** The end-to-end pipeline produces valid ampacity forecasts and runs without manual
 intervention, while never letting an unreliable input silently overstate what a line can safely
 carry.
-**Current focus:** None — all three phases of milestone v1.3 are complete. Phase 03 (Ampacity
+**Current focus:** Phase 04 — Forecast Correction Follow-up Audit
 Forecast Correction Experiment, promoted from backlog Phase 999.1) determined what should replace
 Phase 1's "ml" forecasting method: `ml_cooling_corrected` (a 24-hour-lead physics-plus-ML-corrected
 approach) beat persistence with a statistically distinguishable margin at both corridors on the
@@ -36,14 +36,14 @@ held-out test set — see `docs/data-science/decisions/forecast_correction_exper
 
 ## Current Position
 
-Phase: 04 (Forecast Correction Follow-up Audit) — READY TO EXECUTE
-Plan: 7 of 7
-Status: Decision record complete. Winner: ml_cooling_corrected (24h lead), +24.86A/+30.67A margin
+Phase: 04 (Forecast Correction Follow-up Audit) — EXECUTING
+Plan: 1 of 6
+Status: Executing Phase 04
 vs. persistence at AUSTIN_CORPUS_CHRISTI/MIDLAND_EL_PASO, both 95% CIs excluding zero. The original
 1-hour approach (Wave 1) hit a bit-identical forecast/truth data-source dead end and was pivoted
 (D-04) to a 24-hour lead via Previous Runs API — kept in the record as a labeled non-primary
 curiosity, not a competing result.
-Last activity: 2026-09-30 — Phase 3 Waves 2-5 executed; decision record, ROADMAP, and disclosure
+Last activity: 2026-09-30 — Phase 04 execution started
 finalized. Milestone v1.3 (all 3 phases) now complete.
 
 Progress: [██████████] 100%
