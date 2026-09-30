@@ -249,6 +249,179 @@ def test_measure_lead_alignment_still_rejects_values_beyond_tolerance(monkeypatc
 
 
 # ──────────────────────────────────────────────────────────────────────────
+# D-04's PRIMARY 24-hour offset-lead verification (Plan 03-03 Task 2)
+# ──────────────────────────────────────────────────────────────────────────
+
+PRIMARY_LEAD = config.FORECAST_EXPERIMENT_PRIMARY_LEAD_HOURS
+PRIMARY_REM = config.FORECAST_EXPERIMENT_24H_LEAD_FILTER_REMAINDER
+
+
+def test_previous_runs_and_legacy_rule_descriptions_are_distinct():
+    assert cal.PREVIOUS_RUNS_LEAD_RULE_DESCRIPTION != cal.LEAD_RULE_DESCRIPTION
+    assert isinstance(cal.PREVIOUS_RUNS_LEAD_RULE_DESCRIPTION, str)
+    assert isinstance(cal.LEAD_RULE_DESCRIPTION, str)
+
+
+def _healthy_offset_alignment():
+    """
+    A synthetic 24-hour-offset alignment reproducing the measured shape:
+    match at every offset in the stitched band [PRIMARY_LEAD, PRIMARY_LEAD
+    + MOD - 1] (24-29 for the default lead/modulus).
+    """
+    per_offset = {
+        PRIMARY_LEAD + k: {"matched": 40, "compared": 40, "mad": 0.0} for k in range(MOD)
+    }
+    return {
+        "model": "gfs_seamless",
+        "sampled_dates": ["2026-09-20"],
+        "per_offset": per_offset,
+        "boundary_skips": 0,
+        "lead_rule": cal.PREVIOUS_RUNS_LEAD_RULE_DESCRIPTION,
+    }
+
+
+def test_offset_gate_passes_on_exact_lead_filtered_healthy_alignment():
+    alignment = _healthy_offset_alignment()
+    hour_filter = [h for h in range(24) if h % MOD == PRIMARY_REM]
+
+    result = cal.assert_exact_offset_lead(alignment, hour_filter=hour_filter)
+
+    assert result["lead_min_hours"] == float(PRIMARY_LEAD)
+    assert result["lead_max_hours"] == float(PRIMARY_LEAD)
+
+
+def test_offset_gate_fails_on_unfiltered_healthy_alignment():
+    alignment = _healthy_offset_alignment()
+
+    with pytest.raises(ValueError) as excinfo:
+        cal.assert_exact_offset_lead(alignment)
+
+    message = str(excinfo.value)
+    assert f"{float(PRIMARY_LEAD):.1f}" in message or str(PRIMARY_LEAD) in message
+    assert f"{float(PRIMARY_LEAD + MOD - 1):.1f}" in message
+
+
+def test_offset_gate_raises_when_offset_below_stitching_depth_matches_poorly_even_filtered():
+    alignment = _healthy_offset_alignment()
+    exact_offset = PRIMARY_LEAD + PRIMARY_REM
+    alignment["per_offset"][exact_offset] = {"matched": 2, "compared": 40, "mad": 1.2}
+    hour_filter = [h for h in range(24) if h % MOD == PRIMARY_REM]
+
+    with pytest.raises(ValueError) as excinfo:
+        cal.assert_exact_offset_lead(alignment, hour_filter=hour_filter)
+
+    assert f"offset {exact_offset}" in str(excinfo.value)
+
+
+def test_offset_gate_raises_naming_offending_offset_on_unfiltered_unhealthy_alignment():
+    alignment = _healthy_offset_alignment()
+    bad_offset = PRIMARY_LEAD + 3
+    alignment["per_offset"][bad_offset] = {"matched": 1, "compared": 40, "mad": 1.5}
+
+    with pytest.raises(ValueError) as excinfo:
+        cal.assert_exact_offset_lead(alignment)
+
+    assert f"offset {bad_offset}" in str(excinfo.value)
+
+
+def test_offset_gate_raises_on_empty_sample_under_hour_filter():
+    alignment = _healthy_offset_alignment()
+    # A filter selecting only offsets far outside the stitched band leaves
+    # no compared rows.
+    with pytest.raises(ValueError):
+        cal.assert_exact_offset_lead(alignment, hour_filter=[])
+
+
+def _previous_runs_bulk_frame(date: str, n_hours: int = 24):
+    idx = pd.date_range(f"{date}T00:00:00Z", periods=n_hours, freq="h")
+    return pd.DataFrame({"datetime_utc": idx, "wind_speed": [5.0 + (i % 6) for i in range(n_hours)]})
+
+
+def test_measure_previous_runs_alignment_counts_boundary_skip_and_continues(monkeypatch):
+    date = "2026-09-20"
+    bulk = _previous_runs_bulk_frame(date)
+
+    def fake_bulk(lat, lon, start, end, previous_day=None):
+        return bulk.copy()
+
+    calls = {"n": 0}
+
+    def fake_single(lat, lon, run, hourly_vars=None, forecast_days=None, model=None):
+        calls["n"] += 1
+        run_ts = pd.Timestamp(run)
+        if run_ts.hour == 6:
+            raise provider.SingleRunUnavailable("not available")
+        idx = pd.date_range(run_ts, periods=48, freq="h")
+        return pd.DataFrame({"datetime_utc": idx, "wind_speed": [5.0] * 48})
+
+    monkeypatch.setattr(cal.provider, "fetch_previous_runs", fake_bulk)
+    monkeypatch.setattr(cal.provider, "fetch_single_run", fake_single)
+
+    alignment = cal.measure_previous_runs_alignment(30.27, -97.74, dates=[date])
+
+    assert alignment["boundary_skips"] == 1
+    assert calls["n"] == 4  # 4 preceding-day runs sampled, one skipped
+    assert alignment["lead_rule"] == cal.PREVIOUS_RUNS_LEAD_RULE_DESCRIPTION
+    assert alignment["sampled_dates"] == [date]
+
+
+def test_measure_previous_runs_alignment_propagates_non_boundary_error(monkeypatch):
+    date = "2026-09-20"
+    bulk = _previous_runs_bulk_frame(date)
+
+    def fake_bulk(lat, lon, start, end, previous_day=None):
+        return bulk.copy()
+
+    def fake_single(lat, lon, run, hourly_vars=None, forecast_days=None, model=None):
+        raise ValueError("cannot parse run timestamp")
+
+    monkeypatch.setattr(cal.provider, "fetch_previous_runs", fake_bulk)
+    monkeypatch.setattr(cal.provider, "fetch_single_run", fake_single)
+
+    with pytest.raises(ValueError, match="cannot parse run timestamp"):
+        cal.measure_previous_runs_alignment(30.27, -97.74, dates=[date])
+
+
+def test_measure_previous_runs_alignment_reports_per_offset_match_and_compared_counts(monkeypatch):
+    date = "2026-09-20"
+    bulk = _previous_runs_bulk_frame(date)
+    bulk_indexed = bulk.set_index("datetime_utc")["wind_speed"]
+
+    def fake_bulk(lat, lon, start, end, previous_day=None):
+        return bulk.copy()
+
+    def fake_single(lat, lon, run, hourly_vars=None, forecast_days=None, model=None):
+        run_ts = pd.Timestamp(run)
+        idx = pd.date_range(run_ts, periods=48, freq="h")
+        vals = []
+        for ts in idx:
+            offset = int((ts - run_ts) / pd.Timedelta(hours=1))
+            if ts in bulk_indexed.index and PRIMARY_LEAD <= offset < PRIMARY_LEAD + MOD:
+                vals.append(float(bulk_indexed.loc[ts]))
+            else:
+                vals.append(999.0)
+        return pd.DataFrame({"datetime_utc": idx, "wind_speed": vals})
+
+    monkeypatch.setattr(cal.provider, "fetch_previous_runs", fake_bulk)
+    monkeypatch.setattr(cal.provider, "fetch_single_run", fake_single)
+
+    alignment = cal.measure_previous_runs_alignment(30.27, -97.74, dates=[date])
+
+    for offset in range(PRIMARY_LEAD, PRIMARY_LEAD + MOD):
+        counts = alignment["per_offset"][offset]
+        assert counts["compared"] > 0
+        assert counts["matched"] == counts["compared"]
+
+
+def test_measure_previous_runs_alignment_accepts_explicit_dates_not_a_day_count():
+    import inspect
+
+    sig = inspect.signature(cal.measure_previous_runs_alignment)
+    assert "dates" in sig.parameters
+    assert "days" not in sig.parameters
+
+
+# ──────────────────────────────────────────────────────────────────────────
 # Import-time no-side-effects
 # ──────────────────────────────────────────────────────────────────────────
 
