@@ -16,13 +16,18 @@
     {
       "number": "3",
       "name": "Ampacity Forecast Correction Experiment",
+      "status": "complete"
+    },
+    {
+      "number": "4",
+      "name": "Forecast Correction Follow-up Audit",
       "status": "pending"
     }
   ],
   "next": {
-    "command": "/gsd-plan-phase 3 ml-modeling",
-    "label": "Plan Phase 3",
-    "reason": "Phase 3 of 3 · promoted from backlog · needs planning"
+    "command": "/gsd-plan-phase 4 ml-modeling",
+    "label": "Plan Phase 4",
+    "reason": "Phase 4 of 4 · added this session · needs planning"
   },
-  "updated_at": "2026-09-29T00:41:39.539Z"
+  "updated_at": "2026-09-30T20:17:54.493Z"
 }

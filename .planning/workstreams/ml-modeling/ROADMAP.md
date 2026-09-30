@@ -57,6 +57,7 @@ during phase planning/execution before any new dependency is added.
 - [x] **Phase 1: Forecasting Model** - Replace/extend `ampacity_forecast.py`'s naive/EWM methods with a trained regression or neural-network model, validated against real historical data (completed 2026-09-24)
 - [x] **Phase 2: Anomaly Detection Model** - Replace/augment `anomaly_detector.py`'s mean±k·std threshold with a trained model on historical per-variable baselines, validated against real historical data (completed 2026-09-28)
 - [x] **Phase 3: Ampacity Forecast Correction Experiment** - Determine what should replace the current lagged-ampacity `"ml"` method: compare persistence, raw-forecast-through-IEEE-738, ML-corrected-wind, and ML-corrected-cooling approaches (plus an oracle diagnostic) against a real, empirically lead-time-calibrated weather forecast archive on a fixed chronological train/val/test split (supersedes backlog Phase 999.1) (completed 2026-09-30)
+- [ ] **Phase 4: Forecast Correction Follow-up Audit** - Adversarial follow-up audit of Phase 3's frozen results: data provenance/leakage re-check, strengthened statistical comparison (block-bootstrap, direct pairwise, RMSE), conservative-rating/overrating analysis with calibrated quantiles, corrected verdict language, and integration-readiness scoping — does not replace the production model or re-run the frozen test set
 
 ## Phase Details
 
@@ -267,6 +268,50 @@ per D-04's disposition.
   read against the unedited Expectation, the legacy 1-hour arm as a labelled curiosity with its
   bit-identity caveat, honest limitations, and the phase's closing records
 
+### Phase 4: Forecast Correction Follow-up Audit
+
+**Goal**: An adversarial, independent follow-up audit of Phase 3's frozen decision record answers
+whether `ml_cooling_corrected` or the refit `reference_ml_refit_24h` model actually warrants
+production integration — auditing data provenance/leakage, strengthening the statistical comparison
+beyond "beats persistence," quantifying conservative-rating/overrating behavior, correcting any
+overstated language in the original record, and producing a concrete integration-readiness plan.
+This phase does NOT replace the production model and does NOT re-run or re-score the original
+held-out test set — Phase 3's results are frozen and treated as already-seen evidence; all new
+analysis is labeled as follow-up work on a fresh basis (a reserved chronological holdout, ablations,
+provenance re-checks), never a second look at the same test rows.
+**Depends on**: Phase 3 (audits its artifacts; makes no changes to them)
+**Requirements**: TBD — methodology/audit investigation, not new capability scope (mirrors Phase 3's
+own no-new-requirement-ID reasoning)
+**Success Criteria** (what must be TRUE):
+
+  1. Data provenance and leakage are independently re-audited: the exact Archive API "truth" source
+     is identified and distinguished from local observational validation; forecast availability is
+     checked at decision time (not just init-to-valid lead); every feature is checked against
+     decision time, not just at/after valid time; hourly lag features are confirmed to retain their
+     intended time offsets after the six-hourly filter.
+  2. The comparison is strengthened: paired block-bootstrap CIs (with block-length sensitivity)
+     replace or supplement the original i.i.d. bootstrap where temporal dependence matters; cooling
+     correction is directly compared against raw forecast, wind correction, and the refit MLP (not
+     only against persistence); both MAE and RMSE are reported at both corridors; the multiple-
+     comparisons/selection-on-test-set issue is acknowledged and a fresh chronological holdout is
+     reserved for confirming any revised method.
+  3. Conservative-rating behavior is measured: overrating frequency/magnitude/duration by regime
+     (including low-wind), calibrated lower-ampacity quantiles (pinball loss, calibration period
+     separate from the audit), and retained-capacity comparisons at matched overrating rates — with
+     any reliability claim explicitly scoped to the reanalysis-based verification data used, not
+     conductor-level safety.
+  4. Overstated language from the original record is corrected: cooling is described as the lowest-
+     observed-MAE candidate, not an established unique winner; the 30A practical threshold claim is
+     scoped honestly for Midland; the future-wind oracle is treated as a diagnostic, not a rigorous
+     ceiling; correction headroom is measured relative to raw forecast; the invalid 1-hour experiment
+     stays excluded; low-wind sensitivity is distinguished from numerical instability.
+  5. A concrete next-integration-phase plan exists: candidates named, MLP ablations scoped, the
+     minimum data contract needed from the pipeline team specified, ML-track-now vs.
+     needs-that-dataset work split, and packaging/runtime-fetch/fallback/shadow-eval/monitoring/
+     rollback outlined — with the 60-minute-vs-24-hour-vs-both product question named explicitly as
+     unresolved rather than assumed.
+**Plans**: 0 plans (run `/gsd-plan-phase 4 ml-modeling` to break down)
+
 ## Progress
 
 **Execution Order:**
@@ -278,7 +323,10 @@ and may be executed first or in parallel if that better fits available capacity)
 | 1. Forecasting Model | 3/3 | Complete    | 2026-09-24 |
 | 2. Anomaly Detection Model | 5/5 | Complete   | 2026-09-28 |
 | 3. Ampacity Forecast Correction Experiment | 7/7 | Complete   | 2026-09-30 |
+| 4. Forecast Correction Follow-up Audit | 0/? | Not Started | |
 
 ## Backlog
 
 *(none — Phase 999.1 promoted to Phase 3 above, 2026-09-28)*
+
+- [ ] TBD (run /gsd-plan-phase 4 to break down)
