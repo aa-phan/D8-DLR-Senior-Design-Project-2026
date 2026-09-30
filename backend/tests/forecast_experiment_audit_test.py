@@ -23,10 +23,12 @@ Module-level plain-assert functions, no test classes, mirroring
 
 import json
 
+import numpy as np
 import pandas as pd
 import pytest
 
 import config
+import corridor_discretization
 import forecast_experiment_audit as fea
 
 
@@ -484,3 +486,190 @@ def test_frame_time_reference_groups_corridor_frame_fully_classified_and_differs
     assert groups["forecast_valid_at_decision_time"] == []
     assert "nwp_wind_delta_clamped_a" in groups["index_and_diagnostic_columns"]
     assert "nwp_wind_delta_clamped_b" in groups["index_and_diagnostic_columns"]
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 04-02 Task 2: leakage_probe_coverage_report. Network-free -- patches
+# `forecast_experiment_audit.forecast_experiment.anchored_pair_frame` (the
+# per-city assembly helper both `corridor_anchored_pair_frame` and
+# `_stacked_pair_frame` call internally), on the AUDIT MODULE's own
+# reference to the harness module object, exactly like Plan 04-01's own
+# `_patch_harness_assembly`. Patching one level lower than that (at
+# `anchored_pair_frame` rather than `corridor_anchored_pair_frame`/
+# `_stacked_pair_frame` directly) makes the REAL harness code responsible
+# for corridor-level reduction and stacking, so Mode A's corridor-level
+# frame and Mode B's per-city frames are guaranteed internally consistent
+# (built from the identical underlying synthetic per-city series) without
+# hand-duplicating that reduction logic in this test file.
+# ──────────────────────────────────────────────────────────────────────────
+
+_LEAKAGE_TEST_CORRIDOR = "AUSTIN_CORPUS_CHRISTI"
+_LEAKAGE_TEST_LEAD_HOURS = 24
+
+
+def _synthetic_anchored_pair_frame(city: str, *, periods=24 * 220, start="2024-01-01", seed: int) -> pd.DataFrame:
+    """
+    A deterministic, fully-populated hourly per-city frame carrying the
+    REAL `anchored_pair_frame` schema (truth_*/anchor_*/fcst_*/fcst_anchor_*,
+    `datetime_utc`/`anchor_datetime_utc`/`fcst_anchor_datetime_utc`,
+    `hour_mod_remainder`) with the SAME anchor-group semantics the real
+    function uses (the anchor group is the truth series shifted forward by
+    `lead_hours` -- built here via `.shift(lead_hours)` on a contiguous
+    hourly index, which is equivalent since the synthetic index has no
+    gaps). `truth_dlr_amps` is computed through the REAL
+    `forecast_experiment._city_ampacity` physics, never reinvented, so
+    arm 5's real training pipeline sees a physically coherent target.
+    """
+    idx = pd.date_range(start, periods=periods, freq="h", tz="UTC")
+    t = np.arange(len(idx), dtype=float)
+    rng = np.random.default_rng(seed)
+    lead_td = pd.Timedelta(hours=_LEAKAGE_TEST_LEAD_HOURS)
+
+    corridor = next(
+        c for c, cities in config.CORRIDOR_ENDPOINTS.items() if city in cities
+    )
+    geometry = corridor_discretization.corridor_geometry(corridor)
+
+    truth_air_temp = 25.0 + 8.0 * np.sin(t / 24.0)
+    truth_wind_speed = 3.0 + rng.random(len(idx)) * 2.0
+    truth_wind_direction = (t * 7.0) % 360.0
+    truth_solar_radiation = np.clip(600.0 * np.sin(t / 24.0), 0.0, None)
+    truth_relative_humidity = 50.0 + rng.random(len(idx)) * 10.0
+    truth_dlr_amps = fea.forecast_experiment._city_ampacity(
+        truth_air_temp, truth_wind_speed, truth_wind_direction, truth_solar_radiation, geometry,
+    )
+
+    frame = pd.DataFrame({"datetime_utc": idx})
+    frame["truth_air_temp"] = truth_air_temp
+    frame["truth_wind_speed"] = truth_wind_speed
+    frame["truth_wind_direction"] = truth_wind_direction
+    frame["truth_solar_radiation"] = truth_solar_radiation
+    frame["truth_relative_humidity"] = truth_relative_humidity
+    frame["truth_dlr_amps"] = truth_dlr_amps
+
+    frame["fcst_air_temp"] = truth_air_temp + rng.normal(0, 0.5, len(idx))
+    frame["fcst_wind_speed"] = np.clip(truth_wind_speed + rng.normal(0, 0.3, len(idx)), 0.0, None)
+    frame["fcst_wind_direction"] = truth_wind_direction
+    frame["fcst_solar_radiation"] = truth_solar_radiation
+    frame["fcst_relative_humidity"] = truth_relative_humidity
+
+    for col in ("air_temp", "wind_speed", "wind_direction", "solar_radiation", "relative_humidity", "dlr_amps"):
+        frame[f"anchor_{col}"] = frame[f"truth_{col}"].shift(_LEAKAGE_TEST_LEAD_HOURS)
+    for col in ("air_temp", "wind_speed", "wind_direction", "solar_radiation", "relative_humidity"):
+        frame[f"fcst_anchor_{col}"] = frame[f"fcst_{col}"].shift(_LEAKAGE_TEST_LEAD_HOURS)
+
+    frame["anchor_datetime_utc"] = frame["datetime_utc"] - lead_td
+    frame["fcst_anchor_datetime_utc"] = frame["datetime_utc"] - lead_td
+    frame["hour_mod_remainder"] = (
+        frame["datetime_utc"].dt.hour % config.FORECAST_EXPERIMENT_LEAD_FILTER_MODULUS
+    )
+    return frame.dropna().reset_index(drop=True)
+
+
+def _patch_leakage_test_assembly(monkeypatch, *, periods=24 * 220):
+    city_a, city_b = config.CORRIDOR_ENDPOINTS[_LEAKAGE_TEST_CORRIDOR]
+    frames = {
+        city_a: _synthetic_anchored_pair_frame(city_a, periods=periods, seed=20260930),
+        city_b: _synthetic_anchored_pair_frame(city_b, periods=periods, seed=20260931),
+    }
+
+    def fake_anchored_pair_frame(city, start=None, end=None, *, lead_hours):
+        return frames[city].copy()
+
+    monkeypatch.setattr(fea.forecast_experiment, "anchored_pair_frame", fake_anchored_pair_frame)
+
+
+def test_leakage_probe_coverage_report_refuses_unknown_corridor():
+    with pytest.raises(ValueError) as exc_info:
+        fea.leakage_probe_coverage_report("NOT_A_REAL_CORRIDOR")
+    message = str(exc_info.value)
+    for name in config.CORRIDOR_ENDPOINTS:
+        assert name in message, message
+
+
+def test_leakage_probe_coverage_report_runs_and_returns_documented_shape(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "FORECAST_EXPERIMENT_CACHE_DIR", str(tmp_path))
+    _patch_leakage_test_assembly(monkeypatch)
+
+    report_path = str(tmp_path / "leakage_report.json")
+    report = fea.leakage_probe_coverage_report(_LEAKAGE_TEST_CORRIDOR, report_path=report_path)
+
+    for key in ("mode_a", "mode_b", "comparison", "finding"):
+        assert key in report, sorted(report)
+    for mode_key in ("mode_a", "mode_b"):
+        mode = report[mode_key]
+        assert "arms" in mode and "frozen_window_guard_passed" in mode
+        assert mode["frozen_window_guard_passed"] is True
+
+    b_arms = report["mode_b"]["arms"]
+    assert len(b_arms) >= 8, sorted(b_arms)
+    sabotaged = [n for n in b_arms if "sabotag" in n]
+    assert sabotaged, sorted(b_arms)
+    assert b_arms[sabotaged[0]]["changed"] is True
+
+    oracle_name = fea.forecast_experiment.ORACLE_ARM_NAME
+    assert b_arms[oracle_name]["changed"] is True
+    for name, res in b_arms.items():
+        if name == oracle_name or "sabotag" in name:
+            continue
+        assert res["changed"] is False, (name, res)
+
+    assert isinstance(report["finding"], str) and report["finding"].strip()
+    assert "oracle_distinguished" in report["comparison"]
+
+    # Report round-trips through JSON.
+    with open(report_path) as fh:
+        reloaded = json.load(fh)
+    assert reloaded["corridor"] == _LEAKAGE_TEST_CORRIDOR
+    assert set(reloaded["mode_b"]["arms"]) == set(b_arms)
+
+
+def test_leakage_probe_coverage_report_mode_a_shows_no_power_via_column_reader_shape(monkeypatch, tmp_path):
+    """
+    Mode A's callable shape (a reader of an already-computed pred_<arm>
+    column) is structurally blind to sabotaging truth_* columns -- every
+    arm, including the oracle, must report unchanged.
+    """
+    monkeypatch.setattr(config, "FORECAST_EXPERIMENT_CACHE_DIR", str(tmp_path))
+    _patch_leakage_test_assembly(monkeypatch)
+
+    report = fea.leakage_probe_coverage_report(_LEAKAGE_TEST_CORRIDOR)
+    a_arms = report["mode_a"]["arms"]
+    for name, res in a_arms.items():
+        assert res["changed"] is False, (name, res)
+    assert report["comparison"]["oracle_distinguished"] is False
+    assert report["comparison"]["mode_a_all_unchanged_including_oracle"] is True
+
+
+def test_leakage_probe_coverage_report_guard_runs_before_probe(monkeypatch, tmp_path):
+    """
+    Prove the frozen-window guard executes BEFORE `leakage_probe` by
+    forcing the guard to raise on its first invocation and tracking whether
+    `leakage_probe` was ever reached. If the guard truly runs first,
+    `leakage_probe` must never be called.
+    """
+    monkeypatch.setattr(config, "FORECAST_EXPERIMENT_CACHE_DIR", str(tmp_path))
+
+    def _fake_corridor_frame(corridor, start, end, *, lead_hours):
+        idx = pd.date_range("2024-01-01", periods=24 * 40, freq="h", tz="UTC")
+        return pd.DataFrame({"datetime_utc": idx})
+
+    monkeypatch.setattr(fea.forecast_experiment, "corridor_anchored_pair_frame", _fake_corridor_frame)
+
+    probe_called = {"value": False}
+    real_probe = fea.forecast_experiment.leakage_probe
+
+    def _tracking_probe(frame, arms):
+        probe_called["value"] = True
+        return real_probe(frame, arms)
+
+    monkeypatch.setattr(fea.forecast_experiment, "leakage_probe", _tracking_probe)
+
+    def _raising_guard(frame, *, basis):
+        raise ValueError("forced frozen-window violation for ordering test")
+
+    monkeypatch.setattr(fea, "assert_basis_excludes_frozen_test_rows", _raising_guard)
+
+    with pytest.raises(ValueError, match="forced frozen-window violation"):
+        fea.leakage_probe_coverage_report(_LEAKAGE_TEST_CORRIDOR)
+    assert probe_called["value"] is False, "leakage_probe was reached despite the guard raising first"

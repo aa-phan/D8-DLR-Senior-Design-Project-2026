@@ -268,6 +268,83 @@ assembly function currently performs) would reopen this question, and `frame_tim
 would report that column as `unclassified` rather than silently mis-filing it, which is what makes
 this assertion re-checkable rather than a one-time snapshot.
 
+### Finding 6 — leakage-probe coverage, re-run on real data in both callable shapes (D-01 bullet 3, second half)
+
+**Verdict: the frozen test-set scoring path never actually ran the leakage probe against a callable
+shape the probe could fail on — Mode A (the shape the frozen numbers were produced through) reports
+every arm unchanged, including the oracle, and that silence is not evidence of an absence of
+leakage; Mode B (live-recomputing callables on real rows) demonstrates the probe has genuine power,
+and this task's own re-run is the remediation.**
+
+`leakage_probe`'s own docstring caveat (`backend/forecast_experiment.py:1157-1162`, read directly
+this session) states plainly that `arms` must be a mapping of LIVE-RECOMPUTING callables, and that "a
+callable that looks up a precomputed prediction by timestamp would trivially (and meaninglessly)
+report no change regardless of sabotage." The frozen test-set scoring path
+(`_run_corridor`, `backend/forecast_experiment.py:1881-1980`) never invokes `leakage_probe` at all —
+confirmed by reading the function in full, not assumed — and builds every one of its seven `ALL_ARMS`
+callables as `_corridor_arm_reader(name)` (`backend/forecast_experiment.py:1202-1217`), a column
+reader over `pred_<arm_name>`, the exact shape the probe's own docstring warns is meaningless to
+sabotage-test.
+
+**Two-mode outcome, re-run on real ABLATION-basis rows for both corridors (784 validation rows per
+corridor, matching `data/experiment/audit_basis_manifest.json`'s measured ABLATION basis exactly —
+no new window invented):**
+
+| Mode | Callable shape | Oracle | Sabotaged arm | Every genuine candidate |
+|---|---|---|---|---|
+| A | `_corridor_arm_reader` — reads the already-computed `pred_<arm>` column (the shape `_run_corridor` actually built) | **unchanged** (`changed=False`, `max_abs_change=0`) | *(not applicable — Mode A has no sabotaged arm; it re-runs the harness's OWN seven-arm registry as-is)* | unchanged |
+| B | Live-recomputing callables (`NON_FITTED_ARMS` factories, `_wind_corrected_ampacity`, `_cooling_corrected_ampacity`, a live arm-5 callable reindexing a feature table onto each frame's own `anchor_datetime_utc`), plus one arm reading `truth_wind_speed` directly | **changed** (`changed=True`) | **changed** (`changed=True`) | unchanged |
+
+Mode A reports **zero** arms changed — the oracle included — for both corridors
+(`data/experiment/leakage_probe_coverage_report_AUSTIN_CORPUS_CHRISTI.json`,
+`..._MIDLAND_EL_PASO.json`, both git-ignored evidence). This is the measurement, not a null result to
+explain away: the oracle (`_make_oracle_arm`, `backend/forecast_experiment.py:485-509`) is the one
+arm in the entire registry DESIGNED to consume truth wind at the valid time, specifically so a
+leakage probe has something guaranteed to move when sabotage is real. Its silence under Mode A proves
+the callable shape itself — not any property of the seven real arms — is what produced the "no
+change" result. `_corridor_arm_reader`'s reader function (`backend/forecast_experiment.py:1214-1215`)
+returns `frame[f"pred_{arm_name}"]` directly; that column was computed and attached to the frame
+*before* `leakage_probe` ever sabotages `frame`'s `truth_*` columns, so no amount of sabotage can
+reach it. A probe run in this shape certifies nothing, favorably or unfavorably, about whether the
+underlying arms read truth at the valid time.
+
+Mode B, run per endpoint city (AUSTIN, CORPUS_CHRISTI, MIDLAND, EL_PASO — all four cities, both
+corridors) on the SAME real ABLATION-basis rows with arms 3/4/5 fit on the ABLATION train rows only
+(`WIND_CONFIGURATION`/`COOLING_CONFIGURATION`, never re-selected), demonstrates the probe DOES have
+power on real, non-synthetic data: the oracle changed, the deliberately sabotaged arm
+(`sabotaged_reads_truth_wind_directly`, reading `truth_wind_speed` unmodified) changed, and every one
+of the six genuine candidates (`persistence_24h`, `nwp_wind_delta`, `raw_forecast`,
+`ml_wind_corrected`, `ml_cooling_corrected`, `reference_ml_refit_24h`) did not — for both corridors,
+with zero exceptions. This is the same qualitative result
+`forecast_experiment_test.py::test_leakage_probe_passes_on_real_arms_flags_oracle_and_flags_a_sabotaged_arm`
+already established on synthetic data; this task's contribution is running the identical shape on
+real ABLATION rows, closing the "only demonstrated on synthetic data" gap.
+
+**What the frozen record's Limitations section does and does not currently disclose.** The record's
+existing leakage-probe limitation (`docs/data-science/decisions/forecast_correction_experiment.md`,
+"The leakage probe's coverage is partial by design") states that the probe "does not, and was never
+designed to, detect a leak through a model that was trained on rows inside the test window" — a
+DIFFERENT failure mode (a model **trained on test rows**), covered instead by arm 5's from-scratch
+refit and `assert_filtered_split_disjoint`. That disclosure is accurate and this finding does not
+contradict it. But the frozen record's Verdict section implicitly credits the leakage probe with
+certifying Success Criterion 3 ("no arm depends on truth at or after the valid time") for the actual
+scored run — and the mode the probe was DEMONSTRATED to have power in (Mode B, live-recomputing
+callables, `forecast_experiment_test.py`'s own power test) is not the mode the frozen numbers were
+produced through (Mode A, `_corridor_arm_reader`). The frozen record does not currently distinguish
+these two callable shapes anywhere, and a reader who assumes "the probe has demonstrated power,
+therefore the scored run is leak-free" has conflated a claim about the probe's general capability
+with a claim about the specific run that produced the numbers in this record's Verdict.
+
+**Remediation performed by this task.** `leakage_probe_coverage_report(corridor)` re-runs the probe on
+real ABLATION-basis rows in both callable shapes for both corridors, writes a git-ignored two-mode
+report, and every frame either mode uses passes `assert_basis_excludes_frozen_test_rows` under
+`basis="ABLATION"` before the probe runs on it (`frozen_window_guard_passed: true` for both modes, in
+both reports) — no frozen test-window row entered this re-run. This does not change what the frozen
+record's Success Criterion 3 disposition says about the SEVEN REAL ARMS (Mode B's real-data re-run
+found no evidence any of them leaks); it changes what evidence the record can cite for that
+disposition — the record's Verdict should cite Mode B's real-data re-run (this task) rather than
+implying Mode A's own silent pass certified it.
+
 ## Strengthened comparison (D-02)
 
 Placeholder — filled by Plan 04-03 (block-bootstrap confidence intervals with block-length
