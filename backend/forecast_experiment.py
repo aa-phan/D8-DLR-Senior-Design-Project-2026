@@ -5,8 +5,23 @@ Ampacity Forecast Experiment Harness -- Anchored Pair Frame + Arm Scoring
 Standalone offline entry point -- NOT imported by the runtime pipeline,
 mirroring `forecast_training.py`/`anomaly_training.py`'s own convention.
 Imports `ampacity_forecast`, `config`, `corridor_discretization`,
-`experiment_splits`, `open_meteo_forecast_provider`, `open_meteo_provider`,
+`experiment_splits`, `forecast_training` (for `corridor_weakest_link` only --
+Plan 03-04, the repository's ONE weakest-link reduction, never a second
+copy), `open_meteo_forecast_provider`, `open_meteo_provider`,
 `thermal_model`; nothing imports this module.
+
+CORRIDOR-LEVEL SCORING (Plan 03-04, D-02): `corridor_anchored_pair_frame`
+assembles BOTH endpoint cities' `anchored_pair_frame`s, inner-joins them on
+`datetime_utc`, and reduces the TRUTH group, the ANCHOR group, and each of
+`NON_FITTED_ARMS`' four predictions INDEPENDENTLY through `forecast_
+training.corridor_weakest_link` -- per column group AT ITS OWN TIME, since
+the bottleneck city at the anchor time twenty-four hours earlier is not
+necessarily the bottleneck at the valid time. `main`'s default mode (no
+`--city`) scores every corridor this way; `--city` retains Plan 03-03's
+single-city tracer path unchanged. The oracle (`ORACLE_ARM_NAME`) is scored
+alongside the three genuine candidates but `corridor_experiment_report`
+ALWAYS pops it into its own top-level `oracle_diagnostic` key -- structural
+isolation, not caller discipline (ROADMAP Success Criterion 2).
 
 THE ANCHORED-PAIR-FRAME CONTRACT (this plan's central invariant, inherited
 by every later plan in this phase, now GENERALIZED by a `lead_hours`
@@ -99,6 +114,7 @@ import ampacity_forecast
 import config
 import corridor_discretization
 import experiment_splits
+import forecast_training
 import open_meteo_forecast_provider
 import open_meteo_provider
 import thermal_model
@@ -681,6 +697,167 @@ def filter_to_exact_lead(frame: pd.DataFrame, *, lead_hours: int) -> pd.DataFram
     return frame[selected].reset_index(drop=True)
 
 
+def _strip_city_suffix(merged: pd.DataFrame, suffix: str) -> pd.DataFrame:
+    """
+    Recover one endpoint city's own per-row columns from `merged` (the
+    result of `frame_a.merge(frame_b, on="datetime_utc", suffixes=("_a",
+    "_b"))`) by keeping only the columns ending in `suffix` and stripping
+    it, then re-attaching the unsuffixed `datetime_utc` merge key. The
+    returned frame has exactly the same column names `anchored_pair_frame`
+    produces for a single city, so `NON_FITTED_ARMS`' factories can be
+    applied to it unchanged.
+    """
+    cols = [c for c in merged.columns if c.endswith(suffix)]
+    renamed = merged[cols].rename(columns=lambda c: c[: -len(suffix)])
+    renamed.insert(0, "datetime_utc", merged["datetime_utc"].to_numpy())
+    return renamed
+
+
+def _bottleneck_counts(bottleneck_index, corridor: str) -> dict:
+    """
+    Given a `bottleneck_index` array (0 for the corridor's first endpoint
+    city, 1 for its second, `forecast_training.corridor_weakest_link`'s own
+    convention) and `corridor`, return `{city_name: count}` for both
+    endpoints -- the per-corridor bottleneck distribution Task 2's report
+    extension carries.
+    """
+    city_a, city_b = config.CORRIDOR_ENDPOINTS[corridor]
+    idx = np.asarray(bottleneck_index)
+    return {city_a: int(np.sum(idx == 0)), city_b: int(np.sum(idx == 1))}
+
+
+def corridor_anchored_pair_frame(corridor: str, start=None, end=None, *, lead_hours: int) -> pd.DataFrame:
+    """
+    Assemble the corridor-level scoring frame for `corridor` at
+    `lead_hours`: each endpoint city's own `anchored_pair_frame` is built
+    independently (same window, same lead), inner-joined on `datetime_utc`,
+    and reduced through `forecast_training.corridor_weakest_link` -- the
+    repository's ONE weakest-link reduction (D-03's extraction), never a
+    second elementwise-minimum written here.
+
+    The reduction is applied PER COLUMN GROUP AT ITS OWN TIME, not once
+    globally:
+      - the TRUTH group (`truth_dlr_amps`, at the valid time T) is reduced
+        on the two cities' truth ampacities; the accompanying `truth_*`
+        weather columns are the LOSING (bottleneck) city's own values.
+      - the ANCHOR group (`anchor_dlr_amps`, at T - lead_hours) is reduced
+        independently on the two cities' anchor ampacities -- the
+        bottleneck city at the anchor time is NOT necessarily the
+        bottleneck at the valid time twenty-four hours later; collapsing
+        both to one selection would attribute one city's anchor
+        observation to the other city's valid-time rating.
+      - each of `NON_FITTED_ARMS`' four predictions is reduced
+        INDEPENDENTLY again, computed from each city's own per-row weather
+        under the SAME corridor geometry (mirroring `forecast_training.
+        corridor_training_frame`'s own per-corridor-geometry,
+        per-city-weather convention) -- never derived from the truth or
+        anchor group's own winning-city selection, since an arm's own
+        bottleneck city need not match either of those.
+    On an exact ampacity tie in any group, the bottleneck resolves to the
+    first endpoint city (`config.CORRIDOR_ENDPOINTS[corridor][0]`), matching
+    `corridor_weakest_link`'s own documented tie-break.
+
+    Returns a DataFrame with `datetime_utc`, `anchor_datetime_utc`,
+    `hour_mod_remainder`, `truth_dlr_amps`/`bottleneck_index_truth`/winning
+    `truth_*` weather, `anchor_dlr_amps`/`bottleneck_index_anchor`/winning
+    `anchor_*` weather, `pred_<arm_name>`/`bottleneck_index_<arm_name>` for
+    every `NON_FITTED_ARMS` entry, and `nwp_wind_delta_clamped_a`/`_b`
+    (per-row booleans recording whether that ENDPOINT city's own pre-clamp
+    wind-delta arm input was negative -- `main`'s corridor path sums these
+    into the report's visible clamp-hit count).
+
+    Logs a warning naming the corridor and both row counts if the inner
+    join on `datetime_utc` drops rows relative to either city's own
+    assembled frame -- never silently.
+    """
+    city_a, city_b = config.CORRIDOR_ENDPOINTS[corridor]
+    frame_a = anchored_pair_frame(city_a, start, end, lead_hours=lead_hours)
+    frame_b = anchored_pair_frame(city_b, start, end, lead_hours=lead_hours)
+
+    merged = frame_a.merge(frame_b, on="datetime_utc", how="inner", suffixes=("_a", "_b"))
+    if len(merged) < min(len(frame_a), len(frame_b)):
+        logger.warning(
+            "corridor_anchored_pair_frame: inner join for %s dropped rows -- "
+            "%s has %d row(s), %s has %d row(s), joined has %d row(s)",
+            corridor, city_a, len(frame_a), city_b, len(frame_b), len(merged),
+        )
+
+    geometry = corridor_discretization.corridor_geometry(corridor)
+
+    result = pd.DataFrame({"datetime_utc": merged["datetime_utc"]})
+    result["anchor_datetime_utc"] = merged["anchor_datetime_utc_a"]
+    result["hour_mod_remainder"] = merged["hour_mod_remainder_a"]
+
+    truth_amps, truth_bottleneck, truth_winning = forecast_training.corridor_weakest_link(
+        merged["truth_dlr_amps_a"].to_numpy(dtype=float),
+        merged["truth_dlr_amps_b"].to_numpy(dtype=float),
+        {c: merged[f"{c}_a"].to_numpy(dtype=float) for c in (
+            "truth_air_temp", "truth_wind_speed", "truth_wind_direction", "truth_solar_radiation",
+        )},
+        {c: merged[f"{c}_b"].to_numpy(dtype=float) for c in (
+            "truth_air_temp", "truth_wind_speed", "truth_wind_direction", "truth_solar_radiation",
+        )},
+    )
+    result["truth_dlr_amps"] = truth_amps
+    result["bottleneck_index_truth"] = truth_bottleneck
+    for name, values in truth_winning.items():
+        result[name] = values
+
+    anchor_amps, anchor_bottleneck, anchor_winning = forecast_training.corridor_weakest_link(
+        merged["anchor_dlr_amps_a"].to_numpy(dtype=float),
+        merged["anchor_dlr_amps_b"].to_numpy(dtype=float),
+        {c: merged[f"{c}_a"].to_numpy(dtype=float) for c in (
+            "anchor_air_temp", "anchor_wind_speed", "anchor_wind_direction", "anchor_solar_radiation",
+        )},
+        {c: merged[f"{c}_b"].to_numpy(dtype=float) for c in (
+            "anchor_air_temp", "anchor_wind_speed", "anchor_wind_direction", "anchor_solar_radiation",
+        )},
+    )
+    result["anchor_dlr_amps"] = anchor_amps
+    result["bottleneck_index_anchor"] = anchor_bottleneck
+    for name, values in anchor_winning.items():
+        result[name] = values
+
+    sub_a = _strip_city_suffix(merged, "_a")
+    sub_b = _strip_city_suffix(merged, "_b")
+
+    # Arm 1's clamp visibility, per endpoint city, BEFORE any corridor
+    # reduction -- recorded here since sub_a/sub_b (each city's own
+    # unsuffixed columns) only exist inside this function.
+    result["nwp_wind_delta_clamped_a"] = _nwp_wind_delta_raw_wind_speed(sub_a) < 0.0
+    result["nwp_wind_delta_clamped_b"] = _nwp_wind_delta_raw_wind_speed(sub_b) < 0.0
+
+    for arm_name, factory in NON_FITTED_ARMS.items():
+        arm_fn = factory(geometry)
+        pred_a = np.asarray(arm_fn(sub_a), dtype=float)
+        pred_b = np.asarray(arm_fn(sub_b), dtype=float)
+        pred_amps, pred_bottleneck, _ = forecast_training.corridor_weakest_link(
+            pred_a, pred_b, {}, {},
+        )
+        result[f"pred_{arm_name}"] = pred_amps
+        result[f"bottleneck_index_{arm_name}"] = pred_bottleneck
+
+    return result
+
+
+def _corridor_arm_reader(arm_name: str):
+    """
+    A `score_arms`-compatible callable reading `corridor_anchored_pair_
+    frame`'s already-reduced `pred_<arm_name>` column -- corridor-level arm
+    predictions are computed ONCE, per-city, inside `corridor_anchored_pair_
+    frame` itself (each arm needs each city's OWN weather columns before
+    reduction, which a post-hoc frame no longer carries), so the callable
+    passed to `score_arms` for the corridor path is a column read, not a
+    recomputation through `_city_ampacity`.
+    """
+    column = f"pred_{arm_name}"
+
+    def reader(frame: pd.DataFrame) -> np.ndarray:
+        return frame[column].to_numpy(dtype=float)
+
+    return reader
+
+
 def score_arms(test_frame: pd.DataFrame, arms: dict) -> dict:
     """
     Score every callable in `arms` (mapping of arm name -> a callable
@@ -743,22 +920,39 @@ def _default_split_boundaries(frame: pd.DataFrame, val_fraction=0.2, test_fracti
     return experiment_splits.SplitBoundaries(val_start, test_start)
 
 
-def corridor_experiment_report(city, start, end, assembled_frame, filtered_frame,
-                                boundaries, scored, *, lead_hours: int) -> dict:
+def corridor_experiment_report(
+    label, start, end, assembled_frame, filtered_frame, boundaries, scored,
+    *, lead_hours: int, split: str = "val", bottleneck_distribution: dict | None = None,
+    nwp_wind_delta_clamp_count: int | None = None, id_key: str = "city",
+) -> dict:
     """
-    Assemble the report mapping: the city, the window start and end, the
-    assembled and scored row counts, the split boundaries, the ACTUAL
-    `lead_hours` (never a hardcoded 1.0 -- exact by construction of
-    `filter_to_exact_lead`, which only ever passes through rows whose
-    anchor gap matches this value), the caveat and filter remainder that
-    match THIS lead (`_lead_source_config(lead_hours)`, never the other
-    lead's), and the per-arm scores (`scored["candidates"]`, unpacked so
-    this key matches `forecast_training.corridor_report`'s own
-    `candidates` shape).
+    Assemble the report mapping: `label` under `id_key` (`"city"` for Plan
+    03-03's single-city tracer path, `"corridor"` for Plan 03-04's
+    corridor-level path -- same function, the key name records which), the
+    window start and end, the assembled and scored row counts, the split
+    boundaries, the ACTUAL `lead_hours` (never a hardcoded value -- exact by
+    construction of `filter_to_exact_lead`, which only ever passes through
+    rows whose anchor gap matches this value), the caveat and filter
+    remainder that match THIS lead (`_lead_source_config(lead_hours)`,
+    never the other lead's), the split side actually scored, the
+    per-corridor bottleneck distribution and arm 1's clamp-hit count when
+    supplied, and the per-arm scores.
+
+    STRUCTURAL ORACLE ISOLATION (T-03-04-02): if `scored["candidates"]`
+    contains `ORACLE_ARM_NAME`, this function ALWAYS pops it out of the
+    emitted `candidates` mapping into its own top-level `oracle_diagnostic`
+    key (with an attached non-forecast statement) -- regardless of whether
+    the caller remembered to exclude it. The isolation is a property of
+    THIS FUNCTION, not caller discipline: any later winner-selection step
+    iterating `report["candidates"]` structurally cannot reach the oracle
+    (ROADMAP Success Criterion 2).
     """
     lead_cfg = _lead_source_config(lead_hours)
-    return {
-        "city": city,
+    candidates = dict(scored["candidates"])
+    oracle_entry = candidates.pop(ORACLE_ARM_NAME, None)
+
+    report = {
+        id_key: label,
         "window_start": str(start),
         "window_end": str(end),
         "rows_assembled": int(len(assembled_frame)),
@@ -770,48 +964,40 @@ def corridor_experiment_report(city, start, end, assembled_frame, filtered_frame
         "measured_lead_hours": float(lead_hours),
         "filter_remainder": lead_cfg.filter_remainder,
         "caveat": lead_cfg.caveat,
-        "candidates": scored["candidates"],
+        "split": split,
+        "candidates": candidates,
     }
 
+    if oracle_entry is not None:
+        report["oracle_diagnostic"] = {
+            "score": oracle_entry,
+            "statement": (
+                "This substitutes OBSERVED FUTURE wind into the forecast's "
+                "thermal inputs -- it is NOT a forecast, no real system "
+                "could ever have had this input, and it must never be "
+                "compared against persistence or any candidate as though "
+                "it were a competing method. It bounds the maximum benefit "
+                "any wind correction could ever achieve."
+            ),
+        }
+    if bottleneck_distribution is not None:
+        report["bottleneck_distribution"] = bottleneck_distribution
+    if nwp_wind_delta_clamp_count is not None:
+        report["nwp_wind_delta_clamp_count"] = nwp_wind_delta_clamp_count
 
-def main(argv=None):
-    parser = argparse.ArgumentParser(
-        description="Assemble the anchored pair frame for one city at "
-        "--lead-hours and score persistence against raw-forecast-through-"
-        "IEEE-738 on an identical held-out VALIDATION-split-timestamp "
-        "index (never the test split -- Success Criterion 5's no-peeking "
-        "discipline).",
-    )
-    parser.add_argument(
-        "--city", choices=sorted(config.CITY_COORDINATES), required=True,
-        help="City to score.",
-    )
-    parser.add_argument(
-        "--start", default=None,
-        help="Window start (default: the --lead-hours-appropriate default "
-        "window start -- config.FORECAST_EXPERIMENT_PREVIOUS_RUNS_WINDOW_"
-        "START for the 24h primary lead, config.FORECAST_EXPERIMENT_"
-        "WINDOW_START for the legacy 1h lead).",
-    )
-    parser.add_argument(
-        "--end", default=None,
-        help="Window end (default: config.FORECAST_EXPERIMENT_WINDOW_END, "
-        "resolved to yesterday UTC when unset).",
-    )
-    parser.add_argument(
-        "--lead-hours", type=int, default=config.FORECAST_EXPERIMENT_PRIMARY_LEAD_HOURS,
-        help="Which lead to score: 1 (legacy non-primary curiosity) or "
-        f"{config.FORECAST_EXPERIMENT_PRIMARY_LEAD_HOURS} (D-04 primary, "
-        "the default).",
-    )
-    args = parser.parse_args(argv)
+    return report
 
-    city = args.city
-    lead_hours = args.lead_hours
-    lead_cfg = _lead_source_config(lead_hours)
-    start = args.start if args.start is not None else lead_cfg.default_window_start
-    end = _resolve_window_end(args.end if args.end is not None else config.FORECAST_EXPERIMENT_WINDOW_END)
 
+def _run_city_tracer(city, start, end, lead_hours, lead_cfg):
+    """
+    Plan 03-03's single-city tracer path, UNCHANGED: assemble one city's
+    anchored pair frame, score `persistence`/`raw_forecast` (never the
+    full `NON_FITTED_ARMS` registry -- this path predates it and Plan
+    03-03's live gate depends on its exact output shape), and write a
+    per-city JSON report. Kept working verbatim so Plan 03-03's own
+    live-network gate is never broken by this plan's corridor-level
+    addition.
+    """
     frame = anchored_pair_frame(city, start, end, lead_hours=lead_hours)
     assert_exact_lead(frame, lead_hours=lead_hours)
 
@@ -820,11 +1006,11 @@ def main(argv=None):
 
     filtered = filter_to_exact_lead(frame, lead_hours=lead_hours)
 
-    # Success Criterion 5's no-peeking discipline: this plan's own main()
-    # scores the VALIDATION split only. The guard call below is a no-op
-    # for "val" -- it documents, in the code path itself, that a future
-    # change routing this call through "test" would be mechanically
-    # refused while _TEST_SPLIT_UNLOCKED is False.
+    # Success Criterion 5's no-peeking discipline: this path scores the
+    # VALIDATION split only. The guard call below is a no-op for "val" --
+    # it documents, in the code path itself, that a future change routing
+    # this call through "test" would be mechanically refused while
+    # _TEST_SPLIT_UNLOCKED is False.
     _guard_test_split_access("val")
     val_scored = filter_to_exact_lead(val, lead_hours=lead_hours)
     assert_exact_lead(val_scored, lead_hours=lead_hours)
@@ -876,6 +1062,142 @@ def main(argv=None):
         f"rows_scored={len(val_scored)} window={start}->{end} split=val "
         f"{candidate_summary} caveat_present=True"
     )
+
+
+def _run_corridor(corridor, start, end, lead_hours, lead_cfg, split):
+    """
+    Plan 03-04's corridor-level path (the default, and the phase's PRIMARY
+    comparison as of this plan): assemble both endpoint cities, reduce
+    through `corridor_anchored_pair_frame`'s per-group weakest-link
+    reduction, score ALL FOUR `NON_FITTED_ARMS` entries (including the
+    oracle) on the requested split, and write a per-corridor JSON report
+    with the oracle structurally isolated by `corridor_experiment_report`.
+    """
+    frame = corridor_anchored_pair_frame(corridor, start, end, lead_hours=lead_hours)
+    assert_exact_lead(frame, lead_hours=lead_hours)
+
+    boundaries = _default_split_boundaries(frame)
+    train, val, test = experiment_splits.calendar_split(frame, boundaries)
+
+    # Success Criterion 5's no-peeking discipline, routed through the
+    # command line's own --split rather than around it: requesting "test"
+    # while the module-level lock is engaged raises here, before any test
+    # row is ever filtered or scored.
+    _guard_test_split_access(split)
+    split_frame = {"val": val, "test": test}[split]
+    scored_frame = filter_to_exact_lead(split_frame, lead_hours=lead_hours)
+    assert_exact_lead(scored_frame, lead_hours=lead_hours)
+
+    arms = {name: _corridor_arm_reader(name) for name in NON_FITTED_ARMS}
+    scored = score_arms(scored_frame, arms)
+
+    bottleneck_distribution = {
+        "truth": _bottleneck_counts(scored_frame["bottleneck_index_truth"], corridor),
+        "anchor": _bottleneck_counts(scored_frame["bottleneck_index_anchor"], corridor),
+    }
+    clamp_count = int(
+        (scored_frame["nwp_wind_delta_clamped_a"] | scored_frame["nwp_wind_delta_clamped_b"]).sum()
+    )
+
+    report = corridor_experiment_report(
+        corridor, start, end, frame, scored_frame, boundaries, scored,
+        lead_hours=lead_hours, split=split, bottleneck_distribution=bottleneck_distribution,
+        nwp_wind_delta_clamp_count=clamp_count, id_key="corridor",
+    )
+
+    os.makedirs(config.FORECAST_EXPERIMENT_CACHE_DIR, exist_ok=True)
+    report_path = os.path.join(
+        config.FORECAST_EXPERIMENT_CACHE_DIR, f"experiment_report_{corridor}.json",
+    )
+    with open(report_path, "w") as fh:
+        json.dump(report, fh, indent=2, default=str)
+
+    print(f"\n{corridor}: assembled {len(frame)} rows, scored {len(scored_frame)} {split} rows, "
+          f"lead {lead_hours}h, window {start} -> {end}")
+    print(f"{'candidate':<24}{'mae':>12}{'rmse':>12}{'rows':>10}")
+    for name, s in report["candidates"].items():
+        print(f"{name:<24}{s['mae']:>12.3f}{s['rmse']:>12.3f}{s['rows']:>10d}")
+    oracle_score = report["oracle_diagnostic"]["score"]
+    print("-" * 58)
+    print(
+        f"{ORACLE_ARM_NAME:<24}{oracle_score['mae']:>12.3f}{oracle_score['rmse']:>12.3f}"
+        f"{oracle_score['rows']:>10d}  <- NON-FORECAST DIAGNOSTIC, never a candidate"
+    )
+    print(f"\n{lead_cfg.caveat}")
+    print(f"report written to {report_path}")
+
+    candidate_summary = " ".join(
+        f"{name}_mae={s['mae']:.3f}" for name, s in report["candidates"].items()
+    )
+    print(
+        f"\nSUMMARY: {corridor} lead_hours={lead_hours} rows_assembled={len(frame)} "
+        f"rows_scored={len(scored_frame)} window={start}->{end} split={split} "
+        f"{candidate_summary} oracle_mae={oracle_score['mae']:.3f} caveat_present=True"
+    )
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        description="Score the D-02 non-fitted arms on an identical "
+        "held-out timestamp index. Corridor-level scoring (the default, "
+        "and the phase's PRIMARY comparison) reduces both endpoint cities "
+        "through the repository's one weakest-link helper and scores all "
+        "four NON_FITTED_ARMS entries, with the oracle structurally "
+        "isolated from the candidate mapping. --city retains Plan 03-03's "
+        "single-city tracer path (persistence/raw_forecast only) "
+        "unchanged.",
+    )
+    parser.add_argument(
+        "--city", choices=sorted(config.CITY_COORDINATES), default=None,
+        help="Legacy single-city tracer mode (Plan 03-03). When omitted "
+        "(the default), this module scores at CORRIDOR level instead.",
+    )
+    parser.add_argument(
+        "--corridor", choices=sorted(config.CORRIDOR_ENDPOINTS), default=None,
+        help="Corridor to score in corridor-level mode. Default: every "
+        "corridor in config.CORRIDOR_ENDPOINTS. Ignored when --city is given.",
+    )
+    parser.add_argument(
+        "--start", default=None,
+        help="Window start (default: the --lead-hours-appropriate default "
+        "window start -- config.FORECAST_EXPERIMENT_PREVIOUS_RUNS_WINDOW_"
+        "START for the 24h primary lead, config.FORECAST_EXPERIMENT_"
+        "WINDOW_START for the legacy 1h lead).",
+    )
+    parser.add_argument(
+        "--end", default=None,
+        help="Window end (default: config.FORECAST_EXPERIMENT_WINDOW_END, "
+        "resolved to yesterday UTC when unset).",
+    )
+    parser.add_argument(
+        "--lead-hours", type=int, default=config.FORECAST_EXPERIMENT_PRIMARY_LEAD_HOURS,
+        help="Which lead to score: 1 (legacy non-primary curiosity) or "
+        f"{config.FORECAST_EXPERIMENT_PRIMARY_LEAD_HOURS} (D-04 primary, "
+        "the default).",
+    )
+    parser.add_argument(
+        "--split", choices=["val", "test"], default="val",
+        help="Which split to score (corridor-level mode only -- the "
+        "--city tracer path always scores 'val'). Routes through the "
+        "module's test-split lock: requesting 'test' while "
+        "_TEST_SPLIT_UNLOCKED is False raises, naming Plan 03-06 as the "
+        "unlock (Success Criterion 5's no-peeking discipline). Default: "
+        "val.",
+    )
+    args = parser.parse_args(argv)
+
+    lead_hours = args.lead_hours
+    lead_cfg = _lead_source_config(lead_hours)
+    start = args.start if args.start is not None else lead_cfg.default_window_start
+    end = _resolve_window_end(args.end if args.end is not None else config.FORECAST_EXPERIMENT_WINDOW_END)
+
+    if args.city is not None:
+        _run_city_tracer(args.city, start, end, lead_hours, lead_cfg)
+        return
+
+    corridors = [args.corridor] if args.corridor else sorted(config.CORRIDOR_ENDPOINTS)
+    for corridor in corridors:
+        _run_corridor(corridor, start, end, lead_hours, lead_cfg, args.split)
 
 
 if __name__ == "__main__":

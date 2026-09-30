@@ -21,6 +21,9 @@ exact prior behavior and keeping these tests scoped to it (per Plan
 03-03's Task 3 instruction). The 24-hour-primary section below is new.
 """
 
+import json
+import os
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -831,6 +834,308 @@ def test_score_arms_scores_the_full_non_fitted_arm_registry(monkeypatch, tmp_pat
     assert set(scored["candidates"]) == set(fe.NON_FITTED_ARMS)
     for name, s in scored["candidates"].items():
         assert s["rows"] == len(filtered)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 03-04 Task 2: corridor-level assembly, weakest-link reduction (via
+# forecast_training.corridor_weakest_link, never a second np.minimum), and
+# the oracle's structural isolation from report["candidates"].
+# ──────────────────────────────────────────────────────────────────────────
+
+AUSTIN_LATLON = config.CITY_COORDINATES["AUSTIN"]
+CC_LATLON = config.CITY_COORDINATES["CORPUS_CHRISTI"]
+CORRIDOR = "AUSTIN_CORPUS_CHRISTI"
+
+
+def _patch_two_city_24h_fetches(monkeypatch, truth_by_latlon, fcst_by_latlon):
+    """
+    Route `open_meteo_provider.fetch_open_meteo`/`open_meteo_forecast_
+    provider.fetch_previous_runs` to different synthetic frames per
+    (lat, lon) -- the corridor path fetches both endpoint cities, so a
+    single-return-value patch (`_patch_fetches_24h`) cannot distinguish them.
+    """
+
+    def fake_truth_fetch(lat, lon, start, end):
+        return truth_by_latlon[(lat, lon)].copy()
+
+    def fake_fcst_fetch(lat, lon, start, end, previous_day=None):
+        return fcst_by_latlon[(lat, lon)].copy()
+
+    monkeypatch.setattr(fe.open_meteo_provider, "fetch_open_meteo", fake_truth_fetch)
+    monkeypatch.setattr(
+        fe.open_meteo_forecast_provider, "fetch_previous_runs", fake_fcst_fetch
+    )
+
+
+def _flat_weather_frame(wind_speed, wind_direction=90.0, air_temp=25.0,
+                         solar_radiation=300.0, start="2025-10-01", periods=24 * 10):
+    """A weather frame with every column held FLAT except wind_speed, so
+    ampacity ordering between two such frames is driven by wind_speed alone
+    -- used by the mixed-bottleneck and tie-break tests below, where the
+    test needs to CONTROL which city is the bottleneck at a given time."""
+    idx = pd.date_range(start, periods=periods, freq="h", tz="UTC")
+    n = len(idx)
+    return pd.DataFrame({
+        "datetime_utc": idx,
+        "air_temp": np.full(n, air_temp),
+        "wind_speed": np.asarray(wind_speed, dtype=float),
+        "wind_direction": np.full(n, wind_direction),
+        "solar_radiation": np.full(n, solar_radiation),
+        "relative_humidity": np.full(n, 55.0),
+    })
+
+
+def test_corridor_anchored_pair_frame_assembles_from_both_endpoints_and_inner_joins(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(config, "FORECAST_EXPERIMENT_CACHE_DIR", str(tmp_path))
+    truth_a = _synthetic_weather_frame(periods=24 * 30)
+    truth_b = _synthetic_weather_frame(periods=24 * 30)
+    fcst_a = _synthetic_weather_frame(periods=24 * 30)
+    fcst_b = _synthetic_weather_frame(periods=24 * 30)
+    _patch_two_city_24h_fetches(
+        monkeypatch,
+        {AUSTIN_LATLON: truth_a, CC_LATLON: truth_b},
+        {AUSTIN_LATLON: fcst_a, CC_LATLON: fcst_b},
+    )
+
+    frame = fe.corridor_anchored_pair_frame(
+        CORRIDOR, "2025-10-01", "2025-10-30", lead_hours=PRIMARY_LEAD,
+    )
+    city_a_frame = fe.anchored_pair_frame("AUSTIN", "2025-10-01", "2025-10-30", lead_hours=PRIMARY_LEAD)
+    city_b_frame = fe.anchored_pair_frame(
+        "CORPUS_CHRISTI", "2025-10-01", "2025-10-30", lead_hours=PRIMARY_LEAD
+    )
+
+    assert len(frame) > 0
+    assert len(frame) <= min(len(city_a_frame), len(city_b_frame))
+    assert set(frame["datetime_utc"]) <= set(city_a_frame["datetime_utc"])
+    assert set(frame["datetime_utc"]) <= set(city_b_frame["datetime_utc"])
+
+
+def test_corridor_truth_reduction_matches_forecast_training_corridor_weakest_link(
+    monkeypatch, tmp_path
+):
+    import forecast_training
+
+    monkeypatch.setattr(config, "FORECAST_EXPERIMENT_CACHE_DIR", str(tmp_path))
+    truth_a = _synthetic_weather_frame(periods=24 * 30)
+    truth_b = _synthetic_weather_frame(periods=24 * 30)
+    fcst_a = _synthetic_weather_frame(periods=24 * 30)
+    fcst_b = _synthetic_weather_frame(periods=24 * 30)
+    _patch_two_city_24h_fetches(
+        monkeypatch,
+        {AUSTIN_LATLON: truth_a, CC_LATLON: truth_b},
+        {AUSTIN_LATLON: fcst_a, CC_LATLON: fcst_b},
+    )
+
+    frame = fe.corridor_anchored_pair_frame(
+        CORRIDOR, "2025-10-01", "2025-10-30", lead_hours=PRIMARY_LEAD,
+    )
+    city_a_frame = fe.anchored_pair_frame("AUSTIN", "2025-10-01", "2025-10-30", lead_hours=PRIMARY_LEAD)
+    city_b_frame = fe.anchored_pair_frame(
+        "CORPUS_CHRISTI", "2025-10-01", "2025-10-30", lead_hours=PRIMARY_LEAD
+    )
+    merged = city_a_frame.merge(city_b_frame, on="datetime_utc", suffixes=("_a", "_b"))
+
+    expected_amps, expected_bottleneck, expected_winning = forecast_training.corridor_weakest_link(
+        merged["truth_dlr_amps_a"].to_numpy(dtype=float),
+        merged["truth_dlr_amps_b"].to_numpy(dtype=float),
+        {"truth_air_temp": merged["truth_air_temp_a"].to_numpy(dtype=float)},
+        {"truth_air_temp": merged["truth_air_temp_b"].to_numpy(dtype=float)},
+    )
+
+    np.testing.assert_allclose(frame["truth_dlr_amps"].to_numpy(), expected_amps)
+    np.testing.assert_array_equal(
+        frame["bottleneck_index_truth"].to_numpy(), expected_bottleneck
+    )
+    np.testing.assert_allclose(
+        frame["truth_air_temp"].to_numpy(), expected_winning["truth_air_temp"]
+    )
+
+
+def test_corridor_truth_tie_resolves_to_the_first_endpoint_city(monkeypatch, tmp_path):
+    """When both endpoint cities' truth ampacity is IDENTICAL on every row
+    (an exact tie), the bottleneck must resolve to the first endpoint city
+    (AUSTIN, index 0 in config.CORRIDOR_ENDPOINTS[CORRIDOR]) -- matching
+    forecast_training.corridor_weakest_link's own documented tie-break."""
+    monkeypatch.setattr(config, "FORECAST_EXPERIMENT_CACHE_DIR", str(tmp_path))
+    identical_truth = _flat_weather_frame(wind_speed=np.full(24 * 10, 5.0), periods=24 * 10)
+    identical_fcst = identical_truth.copy()
+    _patch_two_city_24h_fetches(
+        monkeypatch,
+        {AUSTIN_LATLON: identical_truth, CC_LATLON: identical_truth},
+        {AUSTIN_LATLON: identical_fcst, CC_LATLON: identical_fcst},
+    )
+
+    frame = fe.corridor_anchored_pair_frame(
+        CORRIDOR, "2025-10-01", "2025-10-10", lead_hours=PRIMARY_LEAD,
+    )
+    assert len(frame) > 0
+    assert (frame["bottleneck_index_truth"].to_numpy() == 0).all()
+
+
+def test_corridor_mixed_bottleneck_between_anchor_and_valid_time_selected_per_group(
+    monkeypatch, tmp_path
+):
+    """
+    Construct two cities whose wind speed is a 48-hour sinusoid, exactly
+    out of phase with each other: city A's wind at time t equals city B's
+    wind at t - 24h, and vice versa. Since 24h is exactly half the 48h
+    period, this GUARANTEES the bottleneck city at the anchor time
+    (T - 24h) differs from the bottleneck city at the valid time T for
+    every row except a sine zero-crossing -- the exact "mixed bottleneck"
+    shape this task's own reduction discipline exists to handle correctly
+    (never collapsing both groups to one selection).
+    """
+    monkeypatch.setattr(config, "FORECAST_EXPERIMENT_CACHE_DIR", str(tmp_path))
+    periods = 24 * 10
+    t = np.arange(periods, dtype=float)
+    omega = 2.0 * np.pi / 48.0
+    wind_a = 10.0 + 5.0 * np.sin(omega * t)
+    wind_b = 10.0 - 5.0 * np.sin(omega * t)
+
+    truth_a = _flat_weather_frame(wind_a, periods=periods)
+    truth_b = _flat_weather_frame(wind_b, periods=periods)
+    fcst_a = truth_a.copy()
+    fcst_b = truth_b.copy()
+    _patch_two_city_24h_fetches(
+        monkeypatch,
+        {AUSTIN_LATLON: truth_a, CC_LATLON: truth_b},
+        {AUSTIN_LATLON: fcst_a, CC_LATLON: fcst_b},
+    )
+
+    frame = fe.corridor_anchored_pair_frame(
+        CORRIDOR, "2025-10-01", "2025-10-10", lead_hours=PRIMARY_LEAD,
+    )
+    assert len(frame) > 0
+
+    mismatched = frame["bottleneck_index_anchor"] != frame["bottleneck_index_truth"]
+    assert mismatched.sum() > 0, (
+        "test construction did not actually produce a row whose anchor-time "
+        "bottleneck differs from its valid-time bottleneck"
+    )
+    # Most rows should mismatch (only sine zero-crossings coincide) --
+    # confirms the two groups are genuinely reduced independently, not
+    # accidentally sharing one selection.
+    assert mismatched.sum() > len(frame) * 0.5
+
+
+def test_corridor_anchored_pair_frame_has_pred_and_bottleneck_columns_for_every_arm(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(config, "FORECAST_EXPERIMENT_CACHE_DIR", str(tmp_path))
+    truth_a = _synthetic_weather_frame(periods=24 * 20)
+    truth_b = _synthetic_weather_frame(periods=24 * 20)
+    fcst_a = _synthetic_weather_frame(periods=24 * 20)
+    fcst_b = _synthetic_weather_frame(periods=24 * 20)
+    _patch_two_city_24h_fetches(
+        monkeypatch,
+        {AUSTIN_LATLON: truth_a, CC_LATLON: truth_b},
+        {AUSTIN_LATLON: fcst_a, CC_LATLON: fcst_b},
+    )
+
+    frame = fe.corridor_anchored_pair_frame(
+        CORRIDOR, "2025-10-01", "2025-10-20", lead_hours=PRIMARY_LEAD,
+    )
+    for arm_name in fe.NON_FITTED_ARMS:
+        assert f"pred_{arm_name}" in frame.columns
+        assert f"bottleneck_index_{arm_name}" in frame.columns
+        assert np.isfinite(frame[f"pred_{arm_name}"].to_numpy()).all()
+
+
+def test_corridor_experiment_report_pops_oracle_into_its_own_key():
+    """
+    Direct, network-free unit test of the structural isolation itself: even
+    a hand-built `scored["candidates"]` mapping that INCLUDES the oracle is
+    reduced to exactly 3 candidates in the emitted report, with the oracle
+    moved to its own top-level key -- the isolation is a property of
+    `corridor_experiment_report`, not caller discipline.
+    """
+    idx = pd.date_range("2025-10-01", periods=5, freq="h", tz="UTC")
+    frame = pd.DataFrame({"datetime_utc": idx})
+    boundaries = fe._default_split_boundaries(frame)
+    scored = {
+        "candidates": {
+            "persistence_24h": {"mae": 1.0, "rmse": 1.0, "rows": 5},
+            "raw_forecast": {"mae": 2.0, "rmse": 2.0, "rows": 5},
+            "nwp_wind_delta": {"mae": 3.0, "rmse": 3.0, "rows": 5},
+            fe.ORACLE_ARM_NAME: {"mae": 0.0, "rmse": 0.0, "rows": 5},
+        },
+        "test_index": list(range(5)),
+    }
+
+    report = fe.corridor_experiment_report(
+        CORRIDOR, "2025-10-01", "2025-10-05", frame, frame, boundaries, scored,
+        lead_hours=PRIMARY_LEAD, split="val", id_key="corridor",
+    )
+
+    assert fe.ORACLE_ARM_NAME not in report["candidates"]
+    assert len(report["candidates"]) == 3
+    assert set(report["candidates"]) == {"persistence_24h", "raw_forecast", "nwp_wind_delta"}
+    assert "oracle_diagnostic" in report
+    assert report["oracle_diagnostic"]["score"] == scored["candidates"][fe.ORACLE_ARM_NAME]
+    assert "not a forecast" in report["oracle_diagnostic"]["statement"].lower()
+    assert report["corridor"] == CORRIDOR
+    assert report["split"] == "val"
+
+
+def test_corridor_experiment_report_omits_oracle_key_when_no_oracle_scored():
+    """The city-level tracer path never scores the oracle -- the report
+    must not gain an oracle_diagnostic key it has nothing to fill."""
+    idx = pd.date_range("2025-10-01", periods=5, freq="h", tz="UTC")
+    frame = pd.DataFrame({"datetime_utc": idx})
+    boundaries = fe._default_split_boundaries(frame)
+    scored = {
+        "candidates": {"persistence": {"mae": 1.0, "rmse": 1.0, "rows": 5}},
+        "test_index": list(range(5)),
+    }
+    report = fe.corridor_experiment_report(
+        "AUSTIN", "2025-10-01", "2025-10-05", frame, frame, boundaries, scored, lead_hours=1,
+    )
+    assert "oracle_diagnostic" not in report
+
+
+def test_main_scores_both_corridors_from_one_invocation(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(config, "FORECAST_EXPERIMENT_CACHE_DIR", str(tmp_path))
+
+    frames = {}
+    for city in config.CITY_COORDINATES:
+        frames[config.CITY_COORDINATES[city]] = _synthetic_weather_frame(
+            periods=24 * 90, start="2025-10-01"
+        )
+
+    def fake_truth_fetch(lat, lon, start, end):
+        return frames[(lat, lon)].copy()
+
+    def fake_fcst_fetch(lat, lon, start, end, previous_day=None):
+        return frames[(lat, lon)].copy()
+
+    monkeypatch.setattr(fe.open_meteo_provider, "fetch_open_meteo", fake_truth_fetch)
+    monkeypatch.setattr(
+        fe.open_meteo_forecast_provider, "fetch_previous_runs", fake_fcst_fetch
+    )
+
+    fe.main([
+        "--lead-hours", str(PRIMARY_LEAD), "--start", "2025-10-01", "--end", "2025-12-30",
+    ])
+
+    captured = capsys.readouterr()
+    assert captured.out.count("SUMMARY: ") == len(config.CORRIDOR_ENDPOINTS)
+    for corridor in config.CORRIDOR_ENDPOINTS:
+        assert corridor in captured.out
+    assert "split=val" in captured.out
+    assert fe.ORACLE_ARM_NAME in captured.out
+    assert "NON-FORECAST DIAGNOSTIC" in captured.out
+
+    for corridor in config.CORRIDOR_ENDPOINTS:
+        report_path = os.path.join(str(tmp_path), f"experiment_report_{corridor}.json")
+        assert os.path.exists(report_path)
+        with open(report_path) as fh:
+            report = json.load(fh)
+        assert len(report["candidates"]) == 3
+        assert fe.ORACLE_ARM_NAME not in report["candidates"]
+        assert "oracle_diagnostic" in report
 
 
 # ──────────────────────────────────────────────────────────────────────────
