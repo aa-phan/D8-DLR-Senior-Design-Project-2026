@@ -56,7 +56,7 @@ during phase planning/execution before any new dependency is added.
 
 - [x] **Phase 1: Forecasting Model** - Replace/extend `ampacity_forecast.py`'s naive/EWM methods with a trained regression or neural-network model, validated against real historical data (completed 2026-09-24)
 - [x] **Phase 2: Anomaly Detection Model** - Replace/augment `anomaly_detector.py`'s mean±k·std threshold with a trained model on historical per-variable baselines, validated against real historical data (completed 2026-09-28)
-- [ ] **Phase 3: Ampacity Forecast Correction Experiment** - Determine what should replace the current lagged-ampacity `"ml"` method: compare persistence, raw-forecast-through-IEEE-738, ML-corrected-wind, and ML-corrected-cooling approaches (plus an oracle diagnostic) against a real, empirically lead-time-calibrated weather forecast archive on a fixed chronological train/val/test split (supersedes backlog Phase 999.1)
+- [x] **Phase 3: Ampacity Forecast Correction Experiment** - Determine what should replace the current lagged-ampacity `"ml"` method: compare persistence, raw-forecast-through-IEEE-738, ML-corrected-wind, and ML-corrected-cooling approaches (plus an oracle diagnostic) against a real, empirically lead-time-calibrated weather forecast archive on a fixed chronological train/val/test split (supersedes backlog Phase 999.1) (completed 2026-09-30)
 
 ## Phase Details
 
@@ -220,7 +220,7 @@ investigation of FCST-01/FCST-02's existing "ml" method, not new project scope.
      (`4d964cf`) that unlocked the held-out test split (Plan 03-06); the Verdict (Plan 03-07) states
      `ml_cooling_corrected` wins distinguishably at both corridors, read against that unedited
      Expectation.
-**Plans**: 7 plans across 5 waves — all complete. Wave 1's originally-scoped Waves 2-5 (designed
+**Plans**: 7/7 plans complete across 5 waves — all complete. Wave 1's originally-scoped Waves 2-5 (designed
 around a 1-hour idealized lead) were redesigned around D-04's pivot to a 24-hour realizable lead
 after Wave 1 discovered the 1-hour data source was bit-identical to truth for the necessarily-recent
 calibration window; the redesigned Waves 2-5 (Plans 03-03 through 03-07) are the waves documented
@@ -277,7 +277,7 @@ and may be executed first or in parallel if that better fits available capacity)
 |-------|----------------|--------|-----------|
 | 1. Forecasting Model | 3/3 | Complete    | 2026-09-24 |
 | 2. Anomaly Detection Model | 5/5 | Complete   | 2026-09-28 |
-| 3. Ampacity Forecast Correction Experiment | 7/7 | Complete | 2026-09-30 |
+| 3. Ampacity Forecast Correction Experiment | 7/7 | Complete   | 2026-09-30 |
 
 ## Backlog
 
