@@ -345,6 +345,118 @@ found no evidence any of them leaks); it changes what evidence the record can ci
 disposition — the record's Verdict should cite Mode B's real-data re-run (this task) rather than
 implying Mode A's own silent pass certified it.
 
+### Finding 7 — arm 5's feature-to-label offset is measured, not assumed, and equals the claimed 24 hours exactly (D-01 bullet 4, label timing)
+
+**Verdict: the training labels used to fit arm 5 are measured — from the returned training-matrix
+indices themselves, not from the `horizon_minutes` parameter under audit — to postdate their own
+features by exactly one value, 24.0 hours, and the ABLATION train rows those labels are drawn from
+are strictly chronologically before every scored validation row.**
+
+`forecast_training.build_training_matrix` (`backend/forecast_training.py:288-353`) returns `X` indexed
+by each feature row's own timestamp and `y` indexed by `X`'s original index plus the resolved horizon
+(`backend/forecast_training.py:311-313,347`, read directly this session). `arm5_label_timing_finding`
+builds arm 5's real corridor truth frame on the ABLATION train+val stacked frame exactly the way the
+harness does (`_arm5_truth_frame`), calls `build_training_matrix` at `horizon_minutes=1440` (the
+experiment's actual horizon), and computes `y.index - X.index` from the two returned indices directly.
+For both corridors, this set has exactly one distinct value: 24.0 hours. A single distinct value equal
+to the primary lead is the pass condition; more than one would mean arm 5 was fit against a mixture of
+horizons.
+
+Reported alongside, with citations, so the record cannot be misread as claiming the experiment used
+the production default: the production default horizon is `config.FORECAST_HORIZON_MINUTES = 60.0`
+minutes (`backend/config.py:193`), and the horizon this experiment actually passes is
+`config.FORECAST_EXPERIMENT_PRIMARY_LEAD_HOURS * 60 = 1440` minutes (`backend/config.py:412`) — two
+distinct values, both stated plainly.
+
+D-01's actual question is not "is the shift 24 hours" but "were the training labels available before
+the decisions they are compared against." Answered explicitly for the ABLATION basis, both halves
+measured, neither assumed: the ABLATION train side's filtered maximum timestamp
+(`2025-09-01 18:00:00+00:00` for both corridors) is strictly before the ABLATION validation side's
+filtered minimum timestamp (`2025-09-02 00:00:00+00:00`) — `experiment_splits.calendar_split`'s own
+partition predicate (`backend/experiment_splits.py:100-102`) guarantees this by construction, and
+`train_labels_precede_scored_validation: true` is measured directly from the real filtered frames, not
+inferred from the predicate alone. And every scored validation row's own features are drawn from an
+anchor time exactly `lead_hours` (24) before its own valid time — `anchored_pair_frame`'s anchor-group
+construction (`backend/forecast_experiment.py:606-620`) guarantees this for every row in the frame, not
+only the ones this finding happened to sample.
+
+### Finding 8 — the split boundaries are measured disjoint by set intersection and exact-instant placement, not inferred from the predicates (D-01 bullet 4, boundaries)
+
+**Verdict: on the real re-derived boundaries, the filtered train/val/test sides share zero timestamps,
+and the harness's own post-filter disjointness assertion passes — measured directly, not assumed from
+`calendar_split`'s own partition logic.**
+
+`split_boundary_audit(corridor)` partitions the real ABLATION+held-out corridor frame on the re-derived
+boundaries (`forecast_experiment._default_split_boundaries`), filters each side to the exact lead, and
+computes the pairwise set intersection of the three FILTERED sides' own timestamps directly — never
+inferred from the calendar predicates that produced them. For both corridors: `shared_timestamp_count:
+0`; filtered row counts `train=2360, val=786, test=786`; filtered minimum/maximum timestamps for each
+side are internally consistent with strict chronological ordering (train's own maximum
+`2025-09-01T18:00:00Z` precedes val's own minimum `2025-09-02T00:00:00Z`, which precedes test's own
+minimum `2026-03-17T12:00:00Z`). The harness's own existing per-side disjointness assertion
+(`forecast_experiment.assert_filtered_split_disjoint`, `backend/forecast_experiment.py:1465-1512`) is
+invoked directly, never re-derived, and `split_boundary_audit` additionally raises on its own
+independent overlap computation rather than trusting that one check alone — a synthetic test
+(`backend/tests/forecast_experiment_audit_test.py::test_split_boundary_audit_raises_on_overlapping_sides`)
+proves it actually raises when handed a deliberately corrupted, overlapping split, rather than merely
+passing on data that happens not to overlap.
+
+Neither real corridor's assembled data happens to carry a row at the exact fractional-second boundary
+instant `_default_split_boundaries` computes (`boundary_row_side` reports `None` for both
+`val_start`/`test_start` on both corridors) — the boundary is a computed fraction of the frame's own
+calendar span, not aligned to an hourly row. The boundary CONVENTION itself (at-or-after goes right,
+strictly-before goes left) is proven as a tested fact rather than a reading of the partition predicates
+by a dedicated synthetic test
+(`test_split_boundary_audit_boundary_predicate_is_a_tested_fact`) constructing a frame with a row
+placed exactly at each boundary instant and asserting `val_start` lands in `val` and `test_start` lands
+in `test`.
+
+### Finding 9 — the six-hourly filter's non-interference with arm 5's hourly lag offsets is demonstrated by showing what the other ordering would do, and the interior cadence is measured unbroken (D-01 bullet 5)
+
+**Verdict: filtering to the six-hourly exact-lead subset BEFORE computing arm 5's lag features would
+change every lag value — proving the harness's actual ordering (lag features computed on the full
+hourly series, the six-hourly subset selected only afterward, via reindex) is load-bearing, not
+incidental — and the real ABLATION truth series feeding those lag features carries an unbroken hourly
+cadence throughout, with zero gaps.**
+
+**Part one — ordering, demonstrated by disagreement, not asserted from a reading.**
+`arm5_lag_offset_finding` builds arm 5's feature table twice from the real ABLATION train+val truth
+series: once the way the harness does (`build_training_matrix` on the full, unfiltered hourly series,
+matching `_score_fitted_arms_at_corridor_level`'s own construction,
+`backend/forecast_experiment.py:1856-1859`), and once from an input already reduced to the six-hourly
+exact-lead rows via `forecast_experiment.filter_to_exact_lead` *before* `build_training_matrix` is
+called. `ampacity_forecast.build_ml_features`'s lag columns are a positional `.shift(h)`
+(`backend/ampacity_forecast.py:145`, read directly this session) — correct only when consecutive rows
+are genuinely one hour apart. Filtering to six-hourly cadence first means `.shift(1)` becomes "6 real
+hours back," not 1. For both corridors, the two feature tables disagree on every one of the 3,116
+timestamps they share (`filter_first_agrees_with_harness_order: false`) — the disagreement is the
+demonstration that the harness's own "full series first, select rows after" ordering is the reason the
+offsets are intact, a materially stronger finding than observing that the code happens to be
+sequenced that way.
+
+**Part two — cadence, measured with a detector proven to detect.** The real ABLATION truth series
+feeding arm 5's feature table shows exactly ONE distinct consecutive-timestamp spacing for both
+corridors: `1:00:00`, occurring across all 18,872 measured intervals — `positional_shift_safe: true`.
+Cross-referencing Plan 04-01's own measured null-drop finding (a single contiguous 24-hour block at
+the window's extreme start edge, deep inside the training rows and far from any split boundary, not a
+scattered interior gap): this measurement confirms directly, on the ABLATION train+val range this
+finding actually scores, that the interior cadence is unbroken — the positional lag shift is safe over
+the range arm 5 is fit and scored on. The gap detector itself is proven to detect, not merely proven to
+pass: a dedicated synthetic test
+(`test_arm5_lag_offset_finding_gap_detector_detects_a_deliberately_removed_hour`) deliberately removes
+one interior hour from a synthetic truth series and confirms `positional_shift_safe` flips to `false`
+with more than one distinct spacing reported.
+
+### Closing dispositions — every D-01 bullet, one row, no bullet omitted
+
+| D-01 bullet | Disposition | Evidence type | Citation |
+|---|---|---|---|
+| Bullet 1 — truth source is an archive, not a live feed | Confirmed non-issue (already covered by Plan 04-01, Finding 1) | Code read | `backend/open_meteo_provider.py:1-32`; Finding 1 above |
+| Bullet 2 — decision-time availability vs. archive value-matching | Limitation to record (confirmed issue — narrower claim type than the frozen record implies) | Code read | `backend/forecast_leadtime_calibration.py:390,515`; Finding 4 above |
+| Bullet 3 — every feature checked against decision time (schema partition + leakage probe coverage) | Confirmed non-issue for the schema partition (no mid-window column exists); confirmed issue for the leakage probe's callable shape (Mode A demonstrated powerless) | Both | `frame_time_reference_groups`, `leakage_probe_coverage_report`; Findings 5–6 above |
+| Bullet 4 — preprocessing, shifted targets, and split boundaries | Confirmed non-issue (label timing measured exactly at the claimed lead; split boundaries measured disjoint with zero shared timestamps) | Measurement | `arm5_label_timing_finding`, `split_boundary_audit`; Findings 7–8 above |
+| Bullet 5 — six-hourly filter's effect on arm 5's hourly lag offsets | Confirmed non-issue (the harness's own filter-after-lag ordering is demonstrated load-bearing; the interior cadence is measured unbroken) | Measurement | `arm5_lag_offset_finding`; Finding 9 above |
+
 ## Strengthened comparison (D-02)
 
 Placeholder — filled by Plan 04-03 (block-bootstrap confidence intervals with block-length

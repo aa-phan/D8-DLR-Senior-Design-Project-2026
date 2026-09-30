@@ -1307,3 +1307,323 @@ def leakage_probe_coverage_report(
     os.replace(tmp_path, report_path)
 
     return report
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 04-02 Task 3: arm 5's label timing, the split boundaries, and whether
+# the six-hourly filter really leaves the hourly lag offsets alone (D-01
+# bullets 4 and 5). Every function below builds its own ABLATION-only
+# (train+val) stacked frame exactly as Task 2 does, and discards any
+# stacked test-range rows immediately -- this section never assembles
+# against Phase 3's frozen held-out test window either, with ONE sanctioned
+# exception: `split_boundary_audit` reads the test split's own TIMESTAMPS
+# (never `truth_dlr_amps` or any other value) to audit the boundary itself,
+# exactly the precedent `assert_filtered_split_disjoint`'s own docstring
+# and Plan 04-01's `_build_corridor_basis_entry` both already established
+# as non-no-peeking calendar-boundary arithmetic.
+# ──────────────────────────────────────────────────────────────────────────
+
+def _ablation_train_val_stacked(corridor: str, *, lead_hours: int):
+    """
+    Shared setup for this section: the real ABLATION-basis corridor frame,
+    its re-derived split boundaries, and the stacked train+val-only frame
+    (never stacked_test, discarded immediately) -- the same construction
+    Task 2 uses, factored out so Task 3's three functions do not each
+    re-derive it slightly differently.
+
+    Returns `(corridor_frame, boundaries, stacked_train, train_val_stacked)`.
+    """
+    corridor_frame = forecast_experiment.corridor_anchored_pair_frame(
+        corridor, FROZEN_WINDOW_START, FROZEN_WINDOW_END, lead_hours=lead_hours,
+    )
+    boundaries = forecast_experiment._default_split_boundaries(corridor_frame)
+
+    stacked_full = forecast_experiment._stacked_pair_frame(
+        corridor, FROZEN_WINDOW_START, FROZEN_WINDOW_END, lead_hours=lead_hours,
+    )
+    stacked_train, stacked_val, stacked_test = experiment_splits.calendar_split(stacked_full, boundaries)
+    del stacked_test  # never touched again by this section.
+    train_val_stacked = (
+        pd.concat([stacked_train, stacked_val], ignore_index=True)
+        .sort_values("datetime_utc").reset_index(drop=True)
+    )
+    return corridor_frame, boundaries, stacked_train, train_val_stacked
+
+
+def arm5_label_timing_finding(corridor: str, *, lead_hours: int = None) -> dict:
+    """
+    D-01 bullet 4, label timing. Builds arm 5's corridor truth frame the
+    way the harness does (`_arm5_truth_frame` on the ABLATION train+val
+    stacked frame), then builds the feature and target matrices through
+    `forecast_training.build_training_matrix` at the primary lead. Measures
+    the wall-clock difference between each feature row's own timestamp
+    (`X.index`) and its own label's timestamp (`y.index`) from the RETURNED
+    indices -- never from the `horizon_minutes` parameter that was passed
+    in, which is the thing under audit (`build_training_matrix`'s own
+    contract: `y.index = X's original index + horizon`, `backend/
+    forecast_training.py:311-313,347`).
+
+    Also reports the production default horizon
+    (`config.FORECAST_HORIZON_MINUTES`) and the horizon this experiment
+    actually passes (`config.FORECAST_EXPERIMENT_PRIMARY_LEAD_HOURS * 60`)
+    as distinct values with citations, so the record cannot be misread as
+    claiming the experiment ran at the production default.
+
+    Answers D-01's actual question -- not "is the shift 24 hours" but "were
+    the training labels available before the decisions they are compared
+    against" -- by citing the two assertions that make each half true on
+    the ABLATION basis: every train timestamp is strictly before every
+    validation timestamp (`experiment_splits.calendar_split`'s own
+    partition predicate), and every validation row's own anchor time is
+    exactly `lead_hours` before its valid time (`anchored_pair_frame`'s
+    anchor-group construction).
+    """
+    if lead_hours is None:
+        lead_hours = config.FORECAST_EXPERIMENT_PRIMARY_LEAD_HOURS
+    city_a, city_b = config.CORRIDOR_ENDPOINTS[corridor]
+    experiment_horizon_minutes = lead_hours * 60
+
+    corridor_frame, boundaries, stacked_train, train_val_stacked = _ablation_train_val_stacked(
+        corridor, lead_hours=lead_hours,
+    )
+
+    arm5_truth_frame = forecast_experiment._arm5_truth_frame(train_val_stacked, city_a, city_b)
+    x5, y5 = forecast_training.build_training_matrix(arm5_truth_frame, horizon_minutes=experiment_horizon_minutes)
+
+    offsets = (y5.index - x5.index).unique()
+    # Formatted as hours explicitly (never pandas' own Timedelta str(),
+    # which renders 24 hours as "1 days 00:00:00" -- a representation that
+    # would make the offset's actual hour count invisible to a reader or a
+    # mechanical citation check).
+    distinct_offsets = sorted({f"{off / pd.Timedelta(hours=1):.1f}h" for off in offsets})
+
+    train_val_filtered_train = forecast_experiment.filter_to_exact_lead(stacked_train, lead_hours=lead_hours)
+    val_only = train_val_stacked[train_val_stacked["datetime_utc"] >= boundaries.val_start]
+    val_filtered = forecast_experiment.filter_to_exact_lead(val_only, lead_hours=lead_hours)
+    train_max = train_val_filtered_train["datetime_utc"].max() if len(train_val_filtered_train) else None
+    val_min = val_filtered["datetime_utc"].min() if len(val_filtered) else None
+    train_precedes_val = bool(train_max is not None and val_min is not None and train_max < val_min)
+
+    return {
+        "corridor": corridor,
+        "distinct_feature_to_label_offsets": distinct_offsets,
+        "distinct_feature_to_label_offsets_citation": "backend/forecast_training.py:311-313,347",
+        "production_default_horizon_minutes": config.FORECAST_HORIZON_MINUTES,
+        "production_default_horizon_citation": "backend/config.py:193",
+        "experiment_horizon_minutes": experiment_horizon_minutes,
+        "experiment_horizon_citation": "backend/config.py:412 (FORECAST_EXPERIMENT_PRIMARY_LEAD_HOURS * 60)",
+        "train_labels_precede_scored_validation": train_precedes_val,
+        "train_max_timestamp": str(train_max) if train_max is not None else None,
+        "val_min_timestamp": str(val_min) if val_min is not None else None,
+        "train_precedes_val_citation": "backend/experiment_splits.py:100-102 (calendar_split's own partition predicate)",
+        "validation_anchor_lead_hours": lead_hours,
+        "validation_anchor_lead_citation": "backend/forecast_experiment.py:606-620 (anchored_pair_frame's anchor-group construction)",
+    }
+
+
+def split_boundary_audit(corridor: str, *, lead_hours: int = None) -> dict:
+    """
+    D-01 bullet 4, boundaries. On the real re-derived boundaries, reports
+    each side's unfiltered and filtered row counts, whether any timestamp
+    appears on two sides (computed by PAIRWISE SET INTERSECTION on the
+    FILTERED sides -- the ones actually scored -- never inferred from the
+    partition predicates), whether a row exists exactly at each boundary
+    instant and which UNFILTERED side received it, and each filtered
+    side's own minimum and maximum timestamp.
+
+    Delegates the strict-ordering check to `forecast_experiment.
+    assert_filtered_split_disjoint` (the harness's own existing per-side
+    post-filter disjointness assertion) rather than writing a second one,
+    and additionally raises on any nonzero `shared_timestamp_count` itself
+    -- a boundary audit that reports "passed" next to a nonzero overlap
+    count would be worse than no audit at all.
+
+    Reads the TEST split's own timestamps (row counts, min/max, boundary
+    membership) but never `truth_dlr_amps` or any other scored value --
+    sanctioned calendar-boundary arithmetic, the same precedent
+    `assert_filtered_split_disjoint`'s own docstring and Plan 04-01's
+    `_build_corridor_basis_entry` both already established.
+    """
+    if lead_hours is None:
+        lead_hours = config.FORECAST_EXPERIMENT_PRIMARY_LEAD_HOURS
+
+    corridor_frame = forecast_experiment.corridor_anchored_pair_frame(
+        corridor, FROZEN_WINDOW_START, FROZEN_WINDOW_END, lead_hours=lead_hours,
+    )
+    boundaries = forecast_experiment._default_split_boundaries(corridor_frame)
+    train, val, test = experiment_splits.calendar_split(corridor_frame, boundaries)
+
+    train_filtered = forecast_experiment.filter_to_exact_lead(train, lead_hours=lead_hours)
+    val_filtered = forecast_experiment.filter_to_exact_lead(val, lead_hours=lead_hours)
+    test_filtered = forecast_experiment.filter_to_exact_lead(test, lead_hours=lead_hours)
+
+    # The harness's own existing per-side post-filter disjointness
+    # assertion -- extended (not duplicated) by this function's own
+    # set-intersection check below.
+    forecast_experiment.assert_filtered_split_disjoint(train_filtered, val_filtered, test_filtered)
+
+    train_ts = set(pd.to_datetime(train_filtered["datetime_utc"], utc=True))
+    val_ts = set(pd.to_datetime(val_filtered["datetime_utc"], utc=True))
+    test_ts = set(pd.to_datetime(test_filtered["datetime_utc"], utc=True))
+    overlap = (train_ts & val_ts) | (val_ts & test_ts) | (train_ts & test_ts)
+    if overlap:
+        raise ValueError(
+            f"split_boundary_audit: {len(overlap)} timestamp(s) appear on "
+            f"more than one FILTERED side -- e.g. {sorted(overlap)[:3]} -- "
+            f"a boundary audit must never report a passing summary next to "
+            f"a nonzero overlap count"
+        )
+
+    def _side_for_exact_instant(ts):
+        for side_name, side_frame in (("train", train), ("val", val), ("test", test)):
+            if (pd.to_datetime(side_frame["datetime_utc"], utc=True) == ts).any():
+                return side_name
+        return None
+
+    boundary_row_side = {
+        "val_start": _side_for_exact_instant(boundaries.val_start),
+        "test_start": _side_for_exact_instant(boundaries.test_start),
+    }
+
+    def _min_max(frame):
+        if len(frame) == 0:
+            return {"min": None, "max": None}
+        dt = pd.to_datetime(frame["datetime_utc"], utc=True)
+        return {"min": str(dt.min()), "max": str(dt.max())}
+
+    return {
+        "corridor": corridor,
+        "boundaries": {"val_start": str(boundaries.val_start), "test_start": str(boundaries.test_start)},
+        "unfiltered_rows": {"train": len(train), "val": len(val), "test": len(test)},
+        "filtered_rows": {"train": len(train_filtered), "val": len(val_filtered), "test": len(test_filtered)},
+        "shared_timestamp_count": len(overlap),
+        "boundary_row_side": boundary_row_side,
+        "filtered_side_min_max": {
+            "train": _min_max(train_filtered), "val": _min_max(val_filtered), "test": _min_max(test_filtered),
+        },
+    }
+
+
+def arm5_lag_offset_finding(corridor: str, *, lead_hours: int = None) -> dict:
+    """
+    D-01 bullet 5. Settles by measurement, in two parts, whether the
+    six-hourly exact-lead filter corrupts arm 5's hourly lag offsets.
+
+    Part one -- ordering. Builds arm 5's feature table the way the harness
+    does, from the FULL unfiltered ABLATION truth series
+    (`_arm5_truth_frame` on the train+val stacked frame). Then builds a
+    SECOND feature table from an input that has already been reduced to
+    the six-hourly exact-lead rows
+    (`forecast_experiment.filter_to_exact_lead` applied BEFORE
+    `build_training_matrix`, never after). Compares the two on the
+    timestamps they share -- `ampacity_forecast.build_ml_features`'s lag
+    columns are a POSITIONAL `.shift(h)` (`backend/ampacity_forecast.py:145`),
+    so filtering to a six-hourly cadence FIRST changes what "one row back"
+    means in wall-clock terms, and the two tables are expected to disagree.
+    Reports `filter_first_agrees_with_harness_order=False` as the
+    measurement that the harness's OWN ordering (lag features computed on
+    the full series, six-hourly selection applied only via the later
+    reindex in `_score_fitted_arms_at_corridor_level`,
+    `backend/forecast_experiment.py:1856-1859`) is load-bearing, not
+    incidental.
+
+    Part two -- cadence. Measures the real gap structure of the truth
+    series feeding arm 5's feature table: the distinct spacings between
+    consecutive timestamps, with counts. A positional lag shift is only
+    correct on an unbroken hourly cadence; reports `positional_shift_safe`
+    accordingly, cross-referenced against Plan 04-01's own measured
+    null-drop finding (a single contiguous window-start boundary effect,
+    not a scattered interior gap).
+    """
+    if lead_hours is None:
+        lead_hours = config.FORECAST_EXPERIMENT_PRIMARY_LEAD_HOURS
+    city_a, city_b = config.CORRIDOR_ENDPOINTS[corridor]
+
+    _corridor_frame, _boundaries, _stacked_train, train_val_stacked = _ablation_train_val_stacked(
+        corridor, lead_hours=lead_hours,
+    )
+    arm5_truth_frame = forecast_experiment._arm5_truth_frame(train_val_stacked, city_a, city_b)
+
+    harness_order_x5, _ = forecast_training.build_training_matrix(
+        arm5_truth_frame, horizon_minutes=lead_hours * 60,
+    )
+
+    filter_first_truth = forecast_experiment.filter_to_exact_lead(arm5_truth_frame, lead_hours=lead_hours)
+    filter_first_x5, _ = forecast_training.build_training_matrix(
+        filter_first_truth, horizon_minutes=lead_hours * 60,
+    )
+
+    shared_index = harness_order_x5.index.intersection(filter_first_x5.index)
+    if len(shared_index) == 0:
+        agrees = False
+    else:
+        a = harness_order_x5.loc[shared_index].to_numpy(dtype=float)
+        b = filter_first_x5.loc[shared_index].to_numpy(dtype=float)
+        agrees = bool(np.allclose(a, b, equal_nan=True))
+
+    dt = pd.to_datetime(arm5_truth_frame["datetime_utc"], utc=True).sort_values()
+    spacings = dt.diff().dropna()
+    spacing_counts = spacings.value_counts()
+    distinct_spacings = {str(k): int(v) for k, v in spacing_counts.items()}
+    positional_shift_safe = bool(
+        len(spacing_counts) == 1 and pd.Timedelta(spacing_counts.index[0]) == pd.Timedelta(hours=1)
+    )
+
+    return {
+        "corridor": corridor,
+        "filter_first_agrees_with_harness_order": agrees,
+        "shared_rows_compared": int(len(shared_index)),
+        "harness_order_citation": "backend/forecast_experiment.py:1856-1859 (build feature table from the full series, select rows afterwards via reindex)",
+        "filter_before_lag_citation": "backend/ampacity_forecast.py:145 (.shift(h) is positional -- filtering first changes what 'h rows back' means in wall-clock terms)",
+        "distinct_spacings": distinct_spacings,
+        "positional_shift_safe": positional_shift_safe,
+    }
+
+
+def d01_findings_table() -> list:
+    """
+    The closing dispositions table for the whole Data-provenance-re-audit
+    section: one row per D-01 bullet, with the bullet's subject, the
+    disposition, the evidence type, and the citation. Five rows, one per
+    bullet, no bullet omitted -- a "confirmed non-issue" disposition still
+    carries the citation that makes it so, per this plan's own instruction,
+    so a future audit is not tempted to re-open a question this one closed.
+
+    Static (not computed from a live run) because it is a SUMMARY of
+    findings this module's other functions already establish and this
+    plan's own audit-record prose already cites in full -- a future reader
+    who wants a specific finding's live re-computation calls the function
+    named in that row's own citation, not this summary.
+    """
+    return [
+        {
+            "bullet": "D-01 bullet 1 -- truth source is an archive, not a live feed",
+            "disposition": "confirmed non-issue (already covered by Plan 04-01, Finding 1)",
+            "evidence_type": "code read",
+            "citation": "backend/open_meteo_provider.py:1-32; docs/data-science/decisions/forecast_correction_followup_audit.md Finding 1",
+        },
+        {
+            "bullet": "D-01 bullet 2 -- decision-time availability vs. archive value-matching",
+            "disposition": "limitation to record (confirmed issue, narrower claim type than the frozen record implies)",
+            "evidence_type": "code read",
+            "citation": "backend/forecast_leadtime_calibration.py:390,515; docs/data-science/decisions/forecast_correction_followup_audit.md Finding 4",
+        },
+        {
+            "bullet": "D-01 bullet 3 -- every feature checked against decision time (schema partition + leakage probe coverage)",
+            "disposition": "confirmed non-issue for the schema partition (no mid-window column exists); confirmed issue for the leakage probe's callable shape (Mode A demonstrated powerless)",
+            "evidence_type": "both",
+            "citation": "backend/forecast_experiment_audit.py frame_time_reference_groups, leakage_probe_coverage_report; docs/data-science/decisions/forecast_correction_followup_audit.md Findings 5-6",
+        },
+        {
+            "bullet": "D-01 bullet 4 -- preprocessing, shifted targets, and split boundaries",
+            "disposition": "confirmed non-issue (label timing measured exactly at the claimed lead; split boundaries measured disjoint with zero shared timestamps)",
+            "evidence_type": "measurement",
+            "citation": "backend/forecast_experiment_audit.py arm5_label_timing_finding, split_boundary_audit",
+        },
+        {
+            "bullet": "D-01 bullet 5 -- six-hourly filter's effect on arm 5's hourly lag offsets",
+            "disposition": "confirmed non-issue (the harness's own filter-after-lag ordering is demonstrated load-bearing; the interior cadence is measured unbroken)",
+            "evidence_type": "measurement",
+            "citation": "backend/forecast_experiment_audit.py arm5_lag_offset_finding",
+        },
+    ]

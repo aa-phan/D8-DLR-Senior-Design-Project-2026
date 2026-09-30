@@ -673,3 +673,119 @@ def test_leakage_probe_coverage_report_guard_runs_before_probe(monkeypatch, tmp_
     with pytest.raises(ValueError, match="forced frozen-window violation"):
         fea.leakage_probe_coverage_report(_LEAKAGE_TEST_CORRIDOR)
     assert probe_called["value"] is False, "leakage_probe was reached despite the guard raising first"
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 04-02 Task 3: arm5_label_timing_finding, split_boundary_audit,
+# arm5_lag_offset_finding, and the closing d01_findings_table. Network-free,
+# reusing the same synthetic per-city assembly fixture Task 2 established.
+# ──────────────────────────────────────────────────────────────────────────
+
+def test_arm5_label_timing_finding_reports_single_24h_offset_and_distinct_horizons(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "FORECAST_EXPERIMENT_CACHE_DIR", str(tmp_path))
+    _patch_leakage_test_assembly(monkeypatch)
+
+    t = fea.arm5_label_timing_finding(_LEAKAGE_TEST_CORRIDOR)
+    assert t["distinct_feature_to_label_offsets"] == ["24.0h"], t["distinct_feature_to_label_offsets"]
+    assert t["production_default_horizon_minutes"] != t["experiment_horizon_minutes"], t
+    assert t["train_labels_precede_scored_validation"] is True, t
+
+
+def test_split_boundary_audit_reports_zero_overlap_and_required_keys(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "FORECAST_EXPERIMENT_CACHE_DIR", str(tmp_path))
+    _patch_leakage_test_assembly(monkeypatch)
+
+    b = fea.split_boundary_audit(_LEAKAGE_TEST_CORRIDOR)
+    assert b["shared_timestamp_count"] == 0, b
+    assert "boundary_row_side" in b, sorted(b)
+    for side in ("train", "val", "test"):
+        assert b["filtered_rows"][side] >= 0, b["filtered_rows"]
+
+
+def test_split_boundary_audit_raises_on_overlapping_sides(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "FORECAST_EXPERIMENT_CACHE_DIR", str(tmp_path))
+    _patch_leakage_test_assembly(monkeypatch)
+
+    real_calendar_split = fea.experiment_splits.calendar_split
+
+    def _corrupted_split(frame, boundaries):
+        train, val, test = real_calendar_split(frame, boundaries)
+        # Corrupt: val becomes an exact copy of train -- massively
+        # overlapping rather than chronologically disjoint.
+        return train, train.copy(), test
+
+    monkeypatch.setattr(fea.experiment_splits, "calendar_split", _corrupted_split)
+
+    with pytest.raises(ValueError):
+        fea.split_boundary_audit(_LEAKAGE_TEST_CORRIDOR)
+
+
+def test_split_boundary_audit_boundary_predicate_is_a_tested_fact(monkeypatch, tmp_path):
+    """
+    Synthetic boundary-predicate test: a row exactly at each boundary
+    instant lands on the documented side (at-or-after goes right,
+    strictly-before goes left) -- a tested fact, not a reading of the
+    predicates.
+    """
+    monkeypatch.setattr(config, "FORECAST_EXPERIMENT_CACHE_DIR", str(tmp_path))
+
+    val_start = pd.Timestamp("2025-06-01T00:00:00Z")
+    test_start = pd.Timestamp("2025-09-01T00:00:00Z")
+    fixed_boundaries = fea.experiment_splits.SplitBoundaries(val_start, test_start)
+
+    idx = pd.date_range("2025-01-01", "2025-12-31", freq="6h", tz="UTC")
+    idx = idx.union(pd.DatetimeIndex([val_start, test_start]))
+    frame = pd.DataFrame({"datetime_utc": idx})
+
+    def _fake_corridor_frame(corridor, start, end, *, lead_hours):
+        return frame.copy()
+
+    monkeypatch.setattr(fea.forecast_experiment, "corridor_anchored_pair_frame", _fake_corridor_frame)
+    monkeypatch.setattr(fea.forecast_experiment, "_default_split_boundaries", lambda f: fixed_boundaries)
+
+    b = fea.split_boundary_audit(_LEAKAGE_TEST_CORRIDOR)
+    assert b["boundary_row_side"]["val_start"] == "val", b["boundary_row_side"]
+    assert b["boundary_row_side"]["test_start"] == "test", b["boundary_row_side"]
+
+
+def test_arm5_lag_offset_finding_disagrees_and_reports_unbroken_cadence(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "FORECAST_EXPERIMENT_CACHE_DIR", str(tmp_path))
+    _patch_leakage_test_assembly(monkeypatch)
+
+    g = fea.arm5_lag_offset_finding(_LEAKAGE_TEST_CORRIDOR)
+    assert g["filter_first_agrees_with_harness_order"] is False, g
+    assert "distinct_spacings" in g and g["distinct_spacings"], g
+    assert isinstance(g["positional_shift_safe"], bool)
+    assert g["positional_shift_safe"] is True, g  # the synthetic fixture has no gaps
+
+
+def test_arm5_lag_offset_finding_gap_detector_detects_a_deliberately_removed_hour(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "FORECAST_EXPERIMENT_CACHE_DIR", str(tmp_path))
+    city_a, city_b = config.CORRIDOR_ENDPOINTS[_LEAKAGE_TEST_CORRIDOR]
+    frame_a = _synthetic_anchored_pair_frame(city_a, periods=24 * 220, seed=20260930)
+    frame_b = _synthetic_anchored_pair_frame(city_b, periods=24 * 220, seed=20260931)
+    # Deliberately remove one interior hour from city_a's frame to create a
+    # genuine gap (the inner merge in _arm5_truth_frame will then skip that
+    # hour on BOTH sides, leaving a real 2-hour spacing where an hour is
+    # missing) -- proving the gap detector DETECTS rather than merely passes.
+    frame_a = frame_a.drop(frame_a.index[500]).reset_index(drop=True)
+
+    def fake_anchored_pair_frame(city, start=None, end=None, *, lead_hours):
+        return {city_a: frame_a, city_b: frame_b}[city].copy()
+
+    monkeypatch.setattr(fea.forecast_experiment, "anchored_pair_frame", fake_anchored_pair_frame)
+
+    g = fea.arm5_lag_offset_finding(_LEAKAGE_TEST_CORRIDOR)
+    assert g["positional_shift_safe"] is False, g
+    assert len(g["distinct_spacings"]) > 1, g["distinct_spacings"]
+
+
+def test_d01_findings_table_has_five_rows_one_per_bullet():
+    table = fea.d01_findings_table()
+    assert len(table) == 5, table
+    for row in table:
+        for key in ("bullet", "disposition", "evidence_type", "citation"):
+            assert key in row and row[key], row
+    bullets_text = " ".join(row["bullet"] for row in table)
+    for n in ("1", "2", "3", "4", "5"):
+        assert f"bullet {n}" in bullets_text.lower(), bullets_text
