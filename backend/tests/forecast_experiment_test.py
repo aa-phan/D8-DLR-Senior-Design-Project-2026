@@ -1581,3 +1581,226 @@ def test_leakage_probe_sentinel_stays_in_physically_plausible_range():
     arms = {"reads_fcst": lambda f: f["fcst_wind_speed"].to_numpy(dtype=float)}
     result = fe.leakage_probe(frame, arms)
     assert result["reads_fcst"]["changed"] is False
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 03-06 Task 3: paired_bootstrap_margin, score_arms'/corridor_
+# experiment_report's baseline_name wiring, _resolve_verdict, and the
+# corridor-level TEST-split path that wires arms 3/4/5 in via
+# fit_fitted_arms/_score_fitted_arms_at_corridor_level.
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def test_paired_bootstrap_margin_bounds_bracket_the_point_and_favor_the_better_arm():
+    rng = np.random.default_rng(20260929)
+    errors_baseline = rng.normal(0.0, 10.0, size=300)
+    errors_arm = errors_baseline * 0.5  # systematically smaller |error| -> favors the arm
+    result = fe.paired_bootstrap_margin(errors_arm, errors_baseline)
+    assert result["ci_low"] <= result["point"] <= result["ci_high"]
+    assert result["point"] > 0.0
+    assert result["excludes_zero_favorably"] is True
+
+
+def test_paired_bootstrap_margin_reports_non_exclusion_for_difference_centered_on_zero():
+    rng = np.random.default_rng(20260929)
+    # errors_arm and errors_baseline are drawn independently from the SAME
+    # distribution -- no systematic difference, so the per-row absolute-
+    # error difference series is centered on zero.
+    errors_baseline = rng.normal(0.0, 10.0, size=300)
+    errors_arm = rng.normal(0.0, 10.0, size=300)
+    result = fe.paired_bootstrap_margin(errors_arm, errors_baseline)
+    assert result["ci_low"] <= result["point"] <= result["ci_high"]
+    assert result["excludes_zero_favorably"] is False
+
+
+def test_paired_bootstrap_margin_degenerate_self_comparison_is_zero_width_at_zero():
+    rng = np.random.default_rng(1)
+    errors = rng.normal(0.0, 5.0, size=50)
+    result = fe.paired_bootstrap_margin(errors, errors)
+    assert result == {
+        "point": 0.0, "ci_low": 0.0, "ci_high": 0.0, "excludes_zero_favorably": False,
+    }
+
+
+def test_paired_bootstrap_margin_raises_on_shape_mismatch():
+    with pytest.raises(ValueError):
+        fe.paired_bootstrap_margin(np.zeros(5), np.zeros(6))
+
+
+def test_score_arms_with_baseline_name_attaches_margin_to_every_candidate_including_baseline():
+    frame = _minimal_test_frame(n=30)
+    arms = {
+        "persistence": lambda f: f["anchor_dlr_amps"].to_numpy(dtype=float),
+        "raw_forecast": lambda f: f["anchor_dlr_amps"].to_numpy(dtype=float) + 5.0,
+    }
+    result = fe.score_arms(frame, arms, baseline_name="persistence")
+    for name, s in result["candidates"].items():
+        assert "margin_vs_persistence" in s, (name, s)
+    assert result["candidates"]["persistence"]["margin_vs_persistence"]["point"] == 0.0
+    assert result["candidates"]["persistence"]["margin_vs_persistence"]["excludes_zero_favorably"] is False
+
+
+def test_score_arms_raises_when_baseline_name_not_among_arms():
+    frame = _minimal_test_frame(n=10)
+    arms = {"persistence": lambda f: f["anchor_dlr_amps"].to_numpy(dtype=float)}
+    with pytest.raises(ValueError):
+        fe.score_arms(frame, arms, baseline_name="does_not_exist")
+
+
+def test_score_arms_without_baseline_name_omits_margin_key_unchanged_from_before():
+    frame = _minimal_test_frame(n=10)
+    arms = {"persistence": lambda f: f["anchor_dlr_amps"].to_numpy(dtype=float)}
+    result = fe.score_arms(frame, arms)
+    assert "margin_vs_persistence" not in result["candidates"]["persistence"]
+
+
+def test_resolve_verdict_reports_no_candidate_beat_persistence_when_all_straddle_zero():
+    candidates = {
+        "persistence_24h": {"margin_vs_persistence": {"point": 0.0, "excludes_zero_favorably": False}},
+        "arm_a": {"margin_vs_persistence": {"point": 1.0, "excludes_zero_favorably": False}},
+        "arm_b": {"margin_vs_persistence": {"point": -2.0, "excludes_zero_favorably": False}},
+    }
+    verdict = fe._resolve_verdict(candidates, "persistence_24h")
+    assert verdict == fe.NO_CANDIDATE_BEAT_PERSISTENCE_VERDICT
+
+
+def test_resolve_verdict_names_the_single_winner():
+    candidates = {
+        "persistence_24h": {"margin_vs_persistence": {"point": 0.0, "excludes_zero_favorably": False}},
+        "arm_a": {"margin_vs_persistence": {"point": 10.0, "excludes_zero_favorably": True}},
+        "arm_b": {"margin_vs_persistence": {"point": -2.0, "excludes_zero_favorably": False}},
+    }
+    verdict = fe._resolve_verdict(candidates, "persistence_24h")
+    assert verdict == "arm_a"
+
+
+def test_resolve_verdict_names_multiple_and_resolves_by_largest_margin():
+    candidates = {
+        "persistence_24h": {"margin_vs_persistence": {"point": 0.0, "excludes_zero_favorably": False}},
+        "arm_a": {"margin_vs_persistence": {"point": 10.0, "excludes_zero_favorably": True}},
+        "arm_b": {"margin_vs_persistence": {"point": 20.0, "excludes_zero_favorably": True}},
+    }
+    verdict = fe._resolve_verdict(candidates, "persistence_24h")
+    assert "multiple candidates" in verdict
+    assert "resolved to 'arm_b'" in verdict
+
+
+def test_corridor_experiment_report_attaches_verdict_when_baseline_name_given():
+    frame = _minimal_test_frame(n=20)
+    arms = {
+        "persistence": lambda f: f["anchor_dlr_amps"].to_numpy(dtype=float),
+        "raw_forecast": lambda f: f["anchor_dlr_amps"].to_numpy(dtype=float) + 5.0,
+    }
+    scored = fe.score_arms(frame, arms, baseline_name="persistence")
+    boundaries = fe._default_split_boundaries(frame)
+    report = fe.corridor_experiment_report(
+        "AUSTIN_CORPUS_CHRISTI", "2025-10-01", "2025-10-05", frame, frame, boundaries, scored,
+        lead_hours=24, split="test", id_key="corridor", baseline_name="persistence",
+    )
+    assert "verdict" in report
+
+
+def test_corridor_experiment_report_omits_verdict_when_baseline_name_not_given():
+    frame = _minimal_test_frame(n=20)
+    arms = {"persistence": lambda f: f["anchor_dlr_amps"].to_numpy(dtype=float)}
+    scored = fe.score_arms(frame, arms)
+    boundaries = fe._default_split_boundaries(frame)
+    report = fe.corridor_experiment_report(
+        "AUSTIN_CORPUS_CHRISTI", "2025-10-01", "2025-10-05", frame, frame, boundaries, scored,
+        lead_hours=24, split="val", id_key="corridor",
+    )
+    assert "verdict" not in report
+
+
+def test_main_at_test_split_wires_all_seven_arms_with_margins_and_verdict(
+    monkeypatch, tmp_path, capsys
+):
+    """
+    The corridor-level TEST-split path (Task 3's real wiring, exercised
+    here on synthetic data): all seven ALL_ARMS entries score on one
+    byte-identical row index, the oracle stays out of `candidates`, every
+    candidate carries a bracketing `margin_vs_persistence` interval, and
+    the report carries a non-empty `verdict`.
+    """
+    monkeypatch.setattr(config, "FORECAST_EXPERIMENT_CACHE_DIR", str(tmp_path))
+
+    frames = {}
+    for city in config.CITY_COORDINATES:
+        frames[config.CITY_COORDINATES[city]] = _synthetic_weather_frame(
+            periods=24 * 160, start="2025-01-01",
+        )
+
+    def fake_truth_fetch(lat, lon, start, end):
+        return frames[(lat, lon)].copy()
+
+    def fake_fcst_fetch(lat, lon, start, end, previous_day=None):
+        return frames[(lat, lon)].copy()
+
+    monkeypatch.setattr(fe.open_meteo_provider, "fetch_open_meteo", fake_truth_fetch)
+    monkeypatch.setattr(fe.open_meteo_forecast_provider, "fetch_previous_runs", fake_fcst_fetch)
+
+    fe.main([
+        "--lead-hours", str(PRIMARY_LEAD), "--start", "2025-01-01", "--end", "2025-06-10",
+        "--split", "test", "--corridor", CORRIDOR,
+    ])
+
+    captured = capsys.readouterr()
+    assert "split=test" in captured.out
+
+    report_path = os.path.join(str(tmp_path), f"experiment_report_{CORRIDOR}_test.json")
+    assert os.path.exists(report_path)
+    with open(report_path) as fh:
+        report = json.load(fh)
+
+    assert len(report["candidates"]) == 6
+    assert fe.ORACLE_ARM_NAME not in report["candidates"]
+    rows = {s["rows"] for s in report["candidates"].values()}
+    assert len(rows) == 1
+    for name, s in report["candidates"].items():
+        assert "margin_vs_persistence" in s, (name, s)
+        m = s["margin_vs_persistence"]
+        assert m["ci_low"] <= m["point"] <= m["ci_high"], (name, m)
+    assert report["verdict"]
+    assert report["split"] == "test"
+
+
+def test_main_at_val_split_still_scores_only_non_fitted_arms_unchanged(
+    monkeypatch, tmp_path, capsys
+):
+    """
+    Guard against regressing Plan 03-04's val-split report shape: the
+    'val' path must stay the four-non-fitted-arm-registry path (no
+    margin_vs_persistence, no verdict) -- exactly the path Plans 03-04/
+    03-05's own validation-split numbers were produced by.
+    """
+    monkeypatch.setattr(config, "FORECAST_EXPERIMENT_CACHE_DIR", str(tmp_path))
+
+    frames = {}
+    for city in config.CITY_COORDINATES:
+        frames[config.CITY_COORDINATES[city]] = _synthetic_weather_frame(
+            periods=24 * 90, start="2025-10-01",
+        )
+
+    def fake_truth_fetch(lat, lon, start, end):
+        return frames[(lat, lon)].copy()
+
+    def fake_fcst_fetch(lat, lon, start, end, previous_day=None):
+        return frames[(lat, lon)].copy()
+
+    monkeypatch.setattr(fe.open_meteo_provider, "fetch_open_meteo", fake_truth_fetch)
+    monkeypatch.setattr(fe.open_meteo_forecast_provider, "fetch_previous_runs", fake_fcst_fetch)
+
+    fe.main([
+        "--lead-hours", str(PRIMARY_LEAD), "--start", "2025-10-01", "--end", "2025-12-30",
+        "--corridor", CORRIDOR,
+    ])
+
+    report_path = os.path.join(str(tmp_path), f"experiment_report_{CORRIDOR}.json")
+    assert os.path.exists(report_path)
+    with open(report_path) as fh:
+        report = json.load(fh)
+
+    assert len(report["candidates"]) == 3
+    assert "verdict" not in report
+    for s in report["candidates"].values():
+        assert "margin_vs_persistence" not in s

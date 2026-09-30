@@ -109,6 +109,7 @@ import os
 
 import numpy as np
 import pandas as pd
+import scipy.stats
 
 import ampacity_forecast
 import config
@@ -1274,7 +1275,106 @@ def assert_identical_index(test_frame: pd.DataFrame, arms: dict) -> dict:
     return index_info
 
 
-def score_arms(test_frame: pd.DataFrame, arms: dict) -> dict:
+def paired_bootstrap_margin(errors_arm, errors_baseline) -> dict:
+    """
+    Plan 03-06 Task 3: a paired bootstrap confidence interval on an arm's
+    margin against a baseline (persistence, throughout this phase), over
+    the per-row ABSOLUTE-error difference series -- not two independently
+    resampled error series. Every arm in this phase's comparison scores on
+    one byte-identical held-out row index by construction
+    (`assert_identical_index`), so `errors_arm[i]` and `errors_baseline[i]`
+    are genuinely the SAME row's two residuals; resampling the paired
+    DIFFERENCE preserves that correspondence, while resampling the two
+    series independently would discard it and widen every interval for no
+    reason.
+
+    `errors_arm`/`errors_baseline` are raw residuals (actual - predicted),
+    the SAME shape `score_arms` already computes per arm -- this function
+    takes their absolute value itself, so a caller never has to remember
+    to.
+
+    The point margin is `mean(|errors_baseline|) - mean(|errors_arm|)`:
+    positive means the arm's mean absolute error is LOWER than the
+    baseline's (a margin favouring the arm). The confidence interval comes
+    from `scipy.stats.bootstrap` on the mean of the per-row difference
+    series `|errors_baseline| - |errors_arm|`, using
+    `config.FORECAST_EXPERIMENT_BOOTSTRAP_RESAMPLES` resamples at
+    `config.FORECAST_EXPERIMENT_BOOTSTRAP_CONFIDENCE` confidence, with a
+    FIXED random state (`config.FORECAST_EXPERIMENT_CORRECTION_RANDOM_
+    STATE` -- this phase's one existing fixed seed; no second bootstrap-
+    specific seed constant exists in `config.py`, and this task's own
+    `<read_first>` says read that module, not edit it) so the interval is
+    exactly reproducible from the same two residual arrays.
+
+    An interval excluding zero is STATISTICAL significance, not PRACTICAL
+    significance: a margin of a few amps on a rating in the hundreds can
+    have an interval that excludes zero at this phase's sample size
+    without being large enough, on its own, to justify replacing
+    persistence in production -- see the decision record's Expectation
+    section for the amperes-scale practical-significance threshold this
+    distinction exists for.
+
+    A degenerate (zero-variance) difference series -- most notably the
+    baseline scored against ITSELF, where every difference is exactly
+    zero -- is handled directly rather than handed to `scipy.stats.
+    bootstrap`: `scipy`'s default `BCa` method cannot compute an
+    acceleration parameter on degenerate data and returns `NaN` bounds
+    (confirmed empirically, not assumed), which would make every
+    downstream `ci_low <= point <= ci_high` assertion fail on exactly the
+    baseline-vs-itself entry every candidate mapping carries.
+
+    Returns:
+        `{"point": float, "ci_low": float, "ci_high": float,
+        "excludes_zero_favorably": bool}` -- the last key is `True` only
+        when `ci_low > 0.0` (the ENTIRE interval favours the arm).
+
+    Raises:
+        ValueError: naming both shapes, if `errors_arm` and
+            `errors_baseline` are not the same length.
+    """
+    abs_arm = np.abs(np.asarray(errors_arm, dtype=float))
+    abs_baseline = np.abs(np.asarray(errors_baseline, dtype=float))
+    if abs_arm.shape != abs_baseline.shape:
+        raise ValueError(
+            f"paired_bootstrap_margin: errors_arm has shape {abs_arm.shape} "
+            f"but errors_baseline has shape {abs_baseline.shape} -- both "
+            f"must be scored on the identical row index"
+        )
+
+    diff = abs_baseline - abs_arm
+    point = float(np.mean(diff)) if diff.size else 0.0
+
+    if diff.size == 0 or np.ptp(diff) == 0.0:
+        # Degenerate: every row's difference is identical (typically all
+        # zero, the baseline scored against itself). The interval collapses
+        # to the point value -- no resampling can produce a different
+        # number from constant data, and scipy's BCa method returns NaN
+        # here rather than the mathematically correct degenerate answer.
+        return {
+            "point": point,
+            "ci_low": point,
+            "ci_high": point,
+            "excludes_zero_favorably": bool(point > 0.0),
+        }
+
+    result = scipy.stats.bootstrap(
+        (diff,), np.mean,
+        n_resamples=config.FORECAST_EXPERIMENT_BOOTSTRAP_RESAMPLES,
+        confidence_level=config.FORECAST_EXPERIMENT_BOOTSTRAP_CONFIDENCE,
+        random_state=config.FORECAST_EXPERIMENT_CORRECTION_RANDOM_STATE,
+        method="BCa",
+    )
+    ci_low = float(result.confidence_interval.low)
+    ci_high = float(result.confidence_interval.high)
+    return {
+        "point": point,
+        "ci_low": ci_low,
+        "ci_high": ci_high,
+        "excludes_zero_favorably": bool(ci_low > 0.0),
+    }
+
+
+def score_arms(test_frame: pd.DataFrame, arms: dict, *, baseline_name: str | None = None) -> dict:
     """
     Score every callable in `arms` (mapping of arm name -> a callable
     taking `test_frame` and returning a prediction array) against
@@ -1286,29 +1386,57 @@ def score_arms(test_frame: pd.DataFrame, arms: dict) -> dict:
     arms and BOTH counts when any two arms disagree with each other, not
     only when one disagrees with `test_frame`'s own length.
 
+    `baseline_name` (Plan 03-06 Task 3, additive, default `None` -- every
+    pre-existing caller's behavior is byte-identical to before this
+    parameter existed): when given, every OTHER arm's entry in
+    `candidates` gains a `margin_vs_persistence` key
+    (`paired_bootstrap_margin`'s return value) computed against
+    `baseline_name`'s own residuals on this SAME call's identical index --
+    including `baseline_name`'s own entry, scored against itself
+    (trivially a zero-width interval at zero), so a caller iterating
+    `candidates` never has to special-case the one entry missing the key.
+
     Returns:
-        `{"candidates": {arm_name: {"mae", "rmse", "rows"}}, "test_index":
-        [the exact index values scored, as a list], "rows": int,
-        "first_timestamp": str, "last_timestamp": str}` -- `test_index` and
-        the index-shape fields are kept OUTSIDE `candidates` so
-        `report["candidates"]` (this function's `candidates` value) stays
-        a clean per-arm score mapping, matching `forecast_training.
-        corridor_report`'s own `candidates` shape.
+        `{"candidates": {arm_name: {"mae", "rmse", "rows"[, "margin_vs_
+        persistence"]}}, "test_index": [the exact index values scored, as
+        a list], "rows": int, "first_timestamp": str, "last_timestamp":
+        str}` -- `test_index` and the index-shape fields are kept OUTSIDE
+        `candidates` so `report["candidates"]` (this function's
+        `candidates` value) stays a clean per-arm score mapping, matching
+        `forecast_training.corridor_report`'s own `candidates` shape.
+
+    Raises:
+        ValueError: naming `baseline_name` and the scored arm names, if
+            `baseline_name` is given but is not among `arms`.
     """
     index_info = assert_identical_index(test_frame, arms)
 
     actual = test_frame["truth_dlr_amps"].to_numpy(dtype=float)
     n = len(test_frame)
 
+    residuals = {}
     candidates = {}
     for name, fn in arms.items():
         pred = np.asarray(fn(test_frame), dtype=float)
         residual = actual - pred
+        residuals[name] = residual
         candidates[name] = {
             "mae": float(np.mean(np.abs(residual))),
             "rmse": float(np.sqrt(np.mean(residual ** 2))),
             "rows": int(n),
         }
+
+    if baseline_name is not None:
+        if baseline_name not in residuals:
+            raise ValueError(
+                f"score_arms: baseline_name {baseline_name!r} is not "
+                f"among the scored arms {sorted(residuals)}"
+            )
+        baseline_residual = residuals[baseline_name]
+        for name, residual in residuals.items():
+            candidates[name]["margin_vs_persistence"] = paired_bootstrap_margin(
+                residual, baseline_residual,
+            )
 
     return {
         "candidates": candidates,
@@ -1382,10 +1510,69 @@ def assert_filtered_split_disjoint(
             )
 
 
+# Plan 03-06 Task 3's plainly-worded null-result verdict value, per D-02's
+# explicit commitment: the record states this outcome the same way every
+# time, never reframed as a near-miss or a partial win. A shared module
+# constant so `corridor_experiment_report` and every caller/test that
+# checks for this outcome compare against one string, never a
+# re-typed literal that could silently drift.
+NO_CANDIDATE_BEAT_PERSISTENCE_VERDICT: str = "no candidate beat persistence"
+
+
+def _resolve_verdict(candidates: dict, baseline_name: str) -> str:
+    """
+    Plan 03-06 Task 3's three-valued verdict, resolved from `candidates`'
+    (already oracle-popped) `margin_vs_persistence` entries:
+
+    - `NO_CANDIDATE_BEAT_PERSISTENCE_VERDICT` when no candidate other than
+      `baseline_name` itself has an interval excluding zero favourably --
+      D-02's explicit commitment to reporting this outcome plainly.
+    - the single winning arm's bare name when exactly one candidate's
+      interval excludes zero favourably.
+    - an explicit, self-describing multiple-candidates string, naming
+      every beating candidate and its point margin, when more than one
+      does -- resolved to the largest point margin, with an exact tie at
+      the top recorded in the string rather than silently broken.
+
+    `baseline_name` itself is never a candidate winner (its own margin
+    against itself is the degenerate zero-width interval at zero) -- this
+    function does not need to special-case it beyond excluding it from
+    consideration, since its own entry can never satisfy
+    `excludes_zero_favorably`.
+    """
+    winners = [
+        (name, entry["margin_vs_persistence"]["point"])
+        for name, entry in candidates.items()
+        if name != baseline_name
+        and "margin_vs_persistence" in entry
+        and entry["margin_vs_persistence"]["excludes_zero_favorably"]
+    ]
+    if not winners:
+        return NO_CANDIDATE_BEAT_PERSISTENCE_VERDICT
+    if len(winners) == 1:
+        return winners[0][0]
+
+    best_margin = max(margin for _, margin in winners)
+    tied_at_top = sorted(name for name, margin in winners if margin == best_margin)
+    resolved = tied_at_top[0]
+    ranked = ", ".join(
+        f"{name} ({margin:.3f})" for name, margin in sorted(winners, key=lambda p: p[1], reverse=True)
+    )
+    tie_note = (
+        f"; tied at the top margin with {tied_at_top[1:]!r}, resolved to "
+        f"{resolved!r} by name order" if len(tied_at_top) > 1 else ""
+    )
+    return (
+        f"multiple candidates beat persistence ({ranked}); resolved to "
+        f"{resolved!r} by largest point margin ({best_margin:.3f}){tie_note}"
+    )
+
+
 def corridor_experiment_report(
     label, start, end, assembled_frame, filtered_frame, boundaries, scored,
     *, lead_hours: int, split: str = "val", bottleneck_distribution: dict | None = None,
     nwp_wind_delta_clamp_count: int | None = None, id_key: str = "city",
+    baseline_name: str | None = None,
 ) -> dict:
     """
     Assemble the report mapping: `label` under `id_key` (`"city"` for Plan
@@ -1408,6 +1595,14 @@ def corridor_experiment_report(
     THIS FUNCTION, not caller discipline: any later winner-selection step
     iterating `report["candidates"]` structurally cannot reach the oracle
     (ROADMAP Success Criterion 2).
+
+    `baseline_name` (Plan 03-06 Task 3, additive, default `None` -- every
+    pre-existing caller's behavior and emitted report shape is byte-
+    identical to before this parameter existed): when given, this
+    function ALSO attaches a top-level `"verdict"` key
+    (`_resolve_verdict`'s return value) resolved from `candidates`'
+    `margin_vs_persistence` entries -- `score_arms` must have been called
+    with the matching `baseline_name` for those entries to exist.
     """
     lead_cfg = _lead_source_config(lead_hours)
     candidates = dict(scored["candidates"])
@@ -1446,6 +1641,8 @@ def corridor_experiment_report(
         report["bottleneck_distribution"] = bottleneck_distribution
     if nwp_wind_delta_clamp_count is not None:
         report["nwp_wind_delta_clamp_count"] = nwp_wind_delta_clamp_count
+    if baseline_name is not None:
+        report["verdict"] = _resolve_verdict(candidates, baseline_name)
 
     return report
 
@@ -1534,6 +1731,153 @@ def _run_city_tracer(city, start, end, lead_hours, lead_cfg):
     )
 
 
+def _fitted_arm_city_frame(stacked_frame: pd.DataFrame, city: str, boundaries, split: str, *, lead_hours: int) -> pd.DataFrame:
+    """
+    Plan 03-06 Task 3: `city`'s own exact-lead-filtered rows for `split`
+    ('val' or 'test'), sliced from `stacked_frame` (this module's
+    `_stacked_pair_frame` shape) using the SAME `boundaries` the
+    corridor-level split used -- so arms 3/4's per-city scoring frame is
+    split on the identical calendar dates the corridor-level candidates
+    were reduced from, never a re-derived boundary that could drift from
+    it.
+    """
+    city_frame = (
+        stacked_frame[stacked_frame["endpoint_city"] == city]
+        .sort_values("datetime_utc").reset_index(drop=True)
+    )
+    _train, val_side, test_side = experiment_splits.calendar_split(city_frame, boundaries)
+    side = {"val": val_side, "test": test_side}[split]
+    return filter_to_exact_lead(side, lead_hours=lead_hours)
+
+
+def _merge_prediction_to_scored_index(scored_frame: pd.DataFrame, datetimes_a, pred_a, datetimes_b, pred_b) -> tuple:
+    """
+    Plan 03-06 Task 3: align two cities' own per-row predictions
+    (`datetimes_a`/`pred_a`, `datetimes_b`/`pred_b`) onto `scored_frame`'s
+    own `datetime_utc` index by timestamp, then reduce them through
+    `forecast_training.corridor_weakest_link` -- the repository's ONE
+    weakest-link reduction, the SAME one `corridor_anchored_pair_frame`
+    uses for the four non-fitted arms. Each city's own frame may carry
+    timestamps beyond `scored_frame`'s own set (its own `anchored_pair_
+    frame` predates the corridor-level inner join); alignment is by
+    explicit reindex onto `scored_frame`'s timestamps, never by raw
+    positional concatenation, so a length coincidence can never silently
+    pair the wrong rows.
+
+    Raises:
+        ValueError: naming the missing timestamp count on whichever side
+            is short, if either city's own predictions do not cover every
+            timestamp `scored_frame` needs.
+    """
+    target_index = pd.DatetimeIndex(pd.to_datetime(scored_frame["datetime_utc"], utc=True))
+    series_a = pd.Series(
+        np.asarray(pred_a, dtype=float),
+        index=pd.DatetimeIndex(pd.to_datetime(datetimes_a, utc=True)),
+    )
+    series_b = pd.Series(
+        np.asarray(pred_b, dtype=float),
+        index=pd.DatetimeIndex(pd.to_datetime(datetimes_b, utc=True)),
+    )
+    aligned_a = series_a.reindex(target_index)
+    aligned_b = series_b.reindex(target_index)
+    if aligned_a.isna().any() or aligned_b.isna().any():
+        missing_a = target_index[aligned_a.isna()]
+        missing_b = target_index[aligned_b.isna()]
+        raise ValueError(
+            f"_merge_prediction_to_scored_index: {len(missing_a)} "
+            f"timestamp(s) missing from city A's prediction "
+            f"(e.g. {list(missing_a[:3])}), {len(missing_b)} missing from "
+            f"city B's (e.g. {list(missing_b[:3])}) -- the corridor-level "
+            f"scored index is not fully covered by both cities' own "
+            f"per-city predictions"
+        )
+    reduced, bottleneck, _ = forecast_training.corridor_weakest_link(
+        aligned_a.to_numpy(dtype=float), aligned_b.to_numpy(dtype=float), {}, {},
+    )
+    return reduced, bottleneck
+
+
+def _score_fitted_arms_at_corridor_level(
+    stacked_full: pd.DataFrame, boundaries, split: str, scored_frame: pd.DataFrame, geometry, fitted: dict,
+    *, lead_hours: int,
+) -> pd.DataFrame:
+    """
+    Plan 03-06 Task 3: compute arms 3 (`ml_wind_corrected`), 4
+    (`ml_cooling_corrected`) and 5 (`reference_ml_refit_24h`)'s
+    corridor-level predictions for `split` ('val' or 'test') and attach
+    them to a COPY of `scored_frame` as `pred_<arm_name>` columns, on the
+    SAME `datetime_utc` index `scored_frame` already carries -- so
+    `_corridor_arm_reader` can read all seven `ALL_ARMS` entries
+    uniformly and `score_arms`'s identical-index assertion holds by
+    construction, not by coincidence.
+
+    Arms 3/4 are corrected PER CITY (Plan 03-05's correction models are
+    fit pooled-with-an-endpoint-indicator or per-city, on each city's own
+    weather rows), so each city's own corrected ampacity is computed
+    independently via `_wind_corrected_ampacity`/`_cooling_corrected_
+    ampacity` and reduced through the SAME `forecast_training.
+    corridor_weakest_link` helper `corridor_anchored_pair_frame` uses for
+    the four non-fitted arms (`_merge_prediction_to_scored_index`).
+
+    Arm 5 is fit AND scored purely from the corridor's own weakest-link-
+    reduced TRUTH series (`_arm5_truth_frame`) -- its prediction is
+    already corridor-level by construction, with no further per-city
+    reduction needed. Its FEATURES are rebuilt here from `stacked_full`
+    (the FULL train+val+test window), not the train-plus-validation frame
+    `fitted["arm5_estimator"]` was FIT on -- a fresh feature build is
+    needed so lag features exist at `split`'s own anchor times; only the
+    fitted ESTIMATOR itself (never re-fit here) came from train+val. This
+    is not a leak: every scored row's own features are built from truth
+    values strictly BEFORE that row's own valid time (the anchor time is
+    `lead_hours` earlier), and the estimator's learned weights never saw a
+    train/val-excluded row during fitting.
+    """
+    city_a, city_b = sorted(stacked_full["endpoint_city"].unique())
+
+    city_a_frame = _add_correction_columns(
+        _fitted_arm_city_frame(stacked_full, city_a, boundaries, split, lead_hours=lead_hours), geometry,
+    )
+    city_b_frame = _add_correction_columns(
+        _fitted_arm_city_frame(stacked_full, city_b, boundaries, split, lead_hours=lead_hours), geometry,
+    )
+
+    wind_pred_a = _wind_corrected_ampacity(fitted["wind_model"], city_a_frame, geometry)
+    wind_pred_b = _wind_corrected_ampacity(fitted["wind_model"], city_b_frame, geometry)
+    wind_reduced, wind_bottleneck = _merge_prediction_to_scored_index(
+        scored_frame, city_a_frame["datetime_utc"], wind_pred_a, city_b_frame["datetime_utc"], wind_pred_b,
+    )
+
+    cooling_pred_a = _cooling_corrected_ampacity(fitted["cooling_model"], city_a_frame, geometry)
+    cooling_pred_b = _cooling_corrected_ampacity(fitted["cooling_model"], city_b_frame, geometry)
+    cooling_reduced, cooling_bottleneck = _merge_prediction_to_scored_index(
+        scored_frame, city_a_frame["datetime_utc"], cooling_pred_a, city_b_frame["datetime_utc"], cooling_pred_b,
+    )
+
+    arm5_truth_frame = _arm5_truth_frame(stacked_full, city_a, city_b)
+    X5_all, _ = forecast_training.build_training_matrix(arm5_truth_frame, horizon_minutes=1440)
+    anchor_index = pd.DatetimeIndex(pd.to_datetime(scored_frame["anchor_datetime_utc"], utc=True))
+    X5_scored = X5_all.reindex(anchor_index)
+    missing_mask = X5_scored.isna().any(axis=1)
+    if missing_mask.any():
+        missing = anchor_index[missing_mask]
+        raise ValueError(
+            f"_score_fitted_arms_at_corridor_level: arm 5's feature table "
+            f"is missing {int(missing_mask.sum())} anchor timestamp(s) "
+            f"needed by the {split!r} split, e.g. {list(missing[:3])}"
+        )
+    arm5_pred = np.asarray(
+        fitted["arm5_estimator"].predict(X5_scored.to_numpy(dtype=float)), dtype=float,
+    )
+
+    augmented = scored_frame.copy()
+    augmented["pred_ml_wind_corrected"] = wind_reduced
+    augmented["bottleneck_index_ml_wind_corrected"] = wind_bottleneck
+    augmented["pred_ml_cooling_corrected"] = cooling_reduced
+    augmented["bottleneck_index_ml_cooling_corrected"] = cooling_bottleneck
+    augmented["pred_reference_ml_refit_24h"] = arm5_pred
+    return augmented
+
+
 def _run_corridor(corridor, start, end, lead_hours, lead_cfg, split):
     """
     Plan 03-04's corridor-level path (the default, and the phase's PRIMARY
@@ -1542,6 +1886,18 @@ def _run_corridor(corridor, start, end, lead_hours, lead_cfg, split):
     reduction, score ALL FOUR `NON_FITTED_ARMS` entries (including the
     oracle) on the requested split, and write a per-corridor JSON report
     with the oracle structurally isolated by `corridor_experiment_report`.
+
+    Plan 03-06 Task 3: when `split == "test"`, this is the phase's ONE
+    irreversible step. Arms 3/4/5 are fit ONCE, on the stacked train+val
+    frame only (`fit_fitted_arms`, never on test rows), and their
+    corridor-level predictions are attached to the scored frame
+    (`_score_fitted_arms_at_corridor_level`) so all SEVEN `ALL_ARMS`
+    entries score together. The `split == "val"` path below is UNCHANGED
+    from Plan 03-04 -- it is the exact path Plans 03-04/03-05's own
+    validation-split reports were produced by (see `docs/data-science/
+    decisions/forecast_correction_experiment.md`'s Configuration measured
+    section), and this plan does not alter that historical reproduction
+    path or its four-non-fitted-arm report shape.
     """
     frame = corridor_anchored_pair_frame(corridor, start, end, lead_hours=lead_hours)
     assert_exact_lead(frame, lead_hours=lead_hours)
@@ -1567,8 +1923,36 @@ def _run_corridor(corridor, start, end, lead_hours, lead_cfg, split):
     scored_frame = {"val": val_filtered, "test": test_filtered}[split]
     assert_exact_lead(scored_frame, lead_hours=lead_hours)
 
-    arms = {name: _corridor_arm_reader(name) for name in NON_FITTED_ARMS}
-    scored = score_arms(scored_frame, arms)
+    geometry = corridor_discretization.corridor_geometry(corridor)
+
+    if split == "test":
+        # Plan 03-06 Task 3: the phase's one irreversible step. Fit arms
+        # 3/4/5 on the STACKED train+val frame -- never on test rows --
+        # then attach their corridor-level predictions to scored_frame so
+        # all seven ALL_ARMS entries score on the identical row index.
+        stacked_full = _stacked_pair_frame(corridor, start, end, lead_hours=lead_hours)
+        stacked_train, stacked_val, _stacked_test = experiment_splits.calendar_split(
+            stacked_full, boundaries,
+        )
+        train_val_stacked = (
+            pd.concat([stacked_train, stacked_val], ignore_index=True)
+            .sort_values("datetime_utc").reset_index(drop=True)
+        )
+        fitted = fit_fitted_arms(
+            train_val_stacked, geometry,
+            wind_configuration=WIND_CONFIGURATION, cooling_configuration=COOLING_CONFIGURATION,
+        )
+        scored_frame = _score_fitted_arms_at_corridor_level(
+            stacked_full, boundaries, split, scored_frame, geometry, fitted, lead_hours=lead_hours,
+        )
+        arms = {name: _corridor_arm_reader(name) for name in ALL_ARMS}
+        baseline_name = "persistence_24h"
+    else:
+        # UNCHANGED from Plan 03-04 -- see this function's own docstring.
+        arms = {name: _corridor_arm_reader(name) for name in NON_FITTED_ARMS}
+        baseline_name = None
+
+    scored = score_arms(scored_frame, arms, baseline_name=baseline_name)
 
     bottleneck_distribution = {
         "truth": _bottleneck_counts(scored_frame["bottleneck_index_truth"], corridor),
@@ -1581,13 +1965,20 @@ def _run_corridor(corridor, start, end, lead_hours, lead_cfg, split):
     report = corridor_experiment_report(
         corridor, start, end, frame, scored_frame, boundaries, scored,
         lead_hours=lead_hours, split=split, bottleneck_distribution=bottleneck_distribution,
-        nwp_wind_delta_clamp_count=clamp_count, id_key="corridor",
+        nwp_wind_delta_clamp_count=clamp_count, id_key="corridor", baseline_name=baseline_name,
     )
 
     os.makedirs(config.FORECAST_EXPERIMENT_CACHE_DIR, exist_ok=True)
-    report_path = os.path.join(
-        config.FORECAST_EXPERIMENT_CACHE_DIR, f"experiment_report_{corridor}.json",
+    # The test-split report is written under its OWN, split-suffixed
+    # filename (never the bare val filename Plan 03-04 established) so a
+    # test-set run can never silently overwrite -- or be mistaken for --
+    # the validation-split report the Configuration measured section of
+    # the decision record cites.
+    report_filename = (
+        f"experiment_report_{corridor}.json" if split == "val"
+        else f"experiment_report_{corridor}_{split}.json"
     )
+    report_path = os.path.join(config.FORECAST_EXPERIMENT_CACHE_DIR, report_filename)
     with open(report_path, "w") as fh:
         json.dump(report, fh, indent=2, default=str)
 
