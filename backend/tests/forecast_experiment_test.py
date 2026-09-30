@@ -604,7 +604,13 @@ def test_caveat_and_measured_lead_appear_in_emitted_report_for_24h_lead(monkeypa
     assert fe.EXPERIMENT_LEAD_REALIZABILITY_CAVEAT not in json.dumps(report)
 
 
-def test_guard_test_split_access_raises_for_test_and_not_for_val():
+def test_guard_test_split_access_raises_for_test_and_not_for_val(monkeypatch):
+    # Plan 03-06 Task 1 unlocked the module's real _TEST_SPLIT_UNLOCKED
+    # flag (the Expectation record is committed) -- this test exercises the
+    # LOCK MECHANISM itself, independent of the module's actual current
+    # value, by monkeypatching the flag back to locked for the duration of
+    # the test.
+    monkeypatch.setattr(fe, "_TEST_SPLIT_UNLOCKED", False)
     with pytest.raises(RuntimeError):
         fe._guard_test_split_access("test")
     # No exception for "val" while locked.
@@ -1254,7 +1260,11 @@ def test_assert_filtered_split_disjoint_raises_on_constructed_val_test_overlap()
     assert "VAL" in str(excinfo.value) and "TEST" in str(excinfo.value)
 
 
-def test_require_test_split_unlocked_raises_naming_expectation_and_plan_03_06():
+def test_require_test_split_unlocked_raises_naming_expectation_and_plan_03_06(monkeypatch):
+    # See test_guard_test_split_access_raises_for_test_and_not_for_val's
+    # comment: the module's real flag is unlocked as of Plan 03-06 Task 1,
+    # so this test locks it back via monkeypatch to exercise the mechanism.
+    monkeypatch.setattr(fe, "_TEST_SPLIT_UNLOCKED", False)
     with pytest.raises(RuntimeError) as excinfo:
         fe._require_test_split_unlocked()
     msg = str(excinfo.value)
@@ -1262,7 +1272,8 @@ def test_require_test_split_unlocked_raises_naming_expectation_and_plan_03_06():
     assert "expectation" in msg.lower()
 
 
-def test_guard_test_split_access_delegates_to_require_test_split_unlocked():
+def test_guard_test_split_access_delegates_to_require_test_split_unlocked(monkeypatch):
+    monkeypatch.setattr(fe, "_TEST_SPLIT_UNLOCKED", False)
     with pytest.raises(RuntimeError) as excinfo:
         fe._guard_test_split_access("test")
     assert "03-06" in str(excinfo.value)
