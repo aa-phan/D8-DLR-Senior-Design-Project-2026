@@ -208,6 +208,13 @@ at this specific horizon.
   60-minute horizon, given that the measured evidence in this document does not currently support
   that recommendation — this document intentionally does not resolve that recommendation; it
   records the evidence a future decision would need.
+- Cross-reference: `docs/data-science/decisions/forecast_correction_experiment.md` (Phase 3) asked
+  the same "does the `ml` method's estimator family beat persistence?" question at a 24-hour
+  horizon instead of this document's 60 minutes, using a genuinely different forecast data source.
+  There, the same `MLPRegressor` family (refit for that horizon) reversed this document's finding
+  and beat persistence distinguishably at both corridors — evidence that this document's 60-minute
+  result does not generalize to a longer horizon, and a data point for whichever future decision
+  revisits the question posed by this section's first bullet above.
 
 ## References
 
