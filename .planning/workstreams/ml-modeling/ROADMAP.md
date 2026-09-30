@@ -197,11 +197,12 @@ FCST-01/FCST-02's existing "ml" method, not new project scope
      matching the existing 9-section structure) states which approach wins on the held-out test
      set, or states plainly that none beat persistence — with the Expectation section committed
      before the test-set run, per this workstream's existing no-peeking discipline.
-**Plans**: 2 plans executed (Wave 1); remaining waves being replanned around D-04's pivot to a
-24-hour realizable lead as primary (see 03-CONTEXT.md D-04) — the 1-hour idealized-lead approach
+**Plans**: 7 plans across 5 waves — 2 executed (Wave 1), 5 planned (Waves 2-5) around D-04's pivot
+to a 24-hour realizable lead as primary (see 03-CONTEXT.md D-04). The 1-hour idealized-lead approach
 Wave 1 built hit a real data-source limitation (Open-Meteo's "forecast" and "truth" endpoints are
-bit-identical at 1h lead for any window recent enough to satisfy the lead-alignment rule), so
-Waves 2-5 as originally planned are superseded, not merely pending.
+bit-identical at 1h lead for any window recent enough to satisfy the lead-alignment rule), so the
+originally-planned Waves 2-5 were superseded and replanned rather than merely deferred. The 1-hour
+arm's committed code is retained as a documented non-primary curiosity per D-04's disposition.
 
 **Wave 1**
 
@@ -213,13 +214,35 @@ Waves 2-5 as originally planned are superseded, not merely pending.
   convective-term extraction plus `q_conv_override` (bit-exact via `np.array_equal`), and the
   `corridor_weakest_link` extraction — all lead-time-agnostic and fully reused by the replanned waves
 
-**Waves 2-5 — superseded, to be replanned** (`/gsd-plan-phase 3 ml-modeling`)
+**Wave 2** *(replanned around D-04; blocked on Wave 1)*
 
-Per D-04: rebuild the remaining arms (wind-delta, oracle, ML-wind-correction, ML-cooling-correction,
-refit reference `"ml"`) around Open-Meteo's Previous Runs API 24-hour lead as the primary comparison
-instead of the 1-hour idealized lead, reusing Wave 1's lead-time-agnostic building blocks. The
-committed 1-hour-lead code from 03-01 is kept as a documented non-primary curiosity in the final
-decision record, not deleted and not treated as a competing candidate.
+- [ ] 03-03-PLAN.md — Tracer: the 24-hour realizable lead end-to-end — `fetch_previous_runs` under
+  its own `gfs_seamless` pin, the measured `24 + (hour % 6)` offset-lead verification correcting
+  D-04's own "no gate needed" framing, the `lead_hours`-generalized anchored-pair contract with a
+  lead-aware cache key, and a live validation-split score proving the forecast is no longer
+  bit-identical to truth
+
+**Wave 3** *(blocked on Wave 2; two plans run in parallel — disjoint file ownership)*
+
+- [ ] 03-04-PLAN.md — The four non-fitted arms (24-hour persistence, NWP-wind-delta, raw forecast,
+  oracle) in one registry, promoted to corridor level via `corridor_weakest_link`, with the oracle
+  structurally outside the candidate mapping rather than merely labelled
+- [ ] 03-05-PLAN.md — The two ML correction families as standalone units: u/v wind correction (both
+  pooling strategies) and convective-term correction through `q_conv_override` (both target
+  parameterizations), selected on the validation set; plus the additive `horizon_minutes` parameter
+  giving arm 5 a 24-hour target without mutating a global constant
+
+**Wave 4** *(blocked on Wave 3)*
+
+- [ ] 03-06-PLAN.md — The Expectation committed before any test row is read, a leakage probe with
+  demonstrated power, and the single seven-arm held-out test-set run with paired bootstrap
+  confidence intervals on every margin against persistence
+
+**Wave 5** *(blocked on Wave 4)*
+
+- [ ] 03-07-PLAN.md — The 9-section decision record: the primary 24-hour verdict read against the
+  unedited Expectation, the legacy 1-hour arm as a labelled curiosity with its bit-identity caveat,
+  honest limitations, and the phase's closing records
 
 ## Progress
 

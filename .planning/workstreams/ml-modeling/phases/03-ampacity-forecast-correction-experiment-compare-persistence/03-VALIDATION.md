@@ -1,10 +1,12 @@
 ---
 phase: "03"
 slug: "ampacity-forecast-correction-experiment-compare-persistence"
-status: draft
+status: in-progress
 nyquist_compliant: false
 wave_0_complete: false
 created: "2026-09-29"
+updated: "2026-09-29"
+revision: "D-04 replan — Waves 2-5 remapped to Plans 03-03..03-07; Wave 1 rows corrected to the plan numbering actually executed"
 ---
 
 # Phase 03 — Validation Strategy
@@ -27,35 +29,61 @@ created: "2026-09-29"
 
 ## Sampling Rate
 
-- **After every task commit:** `.venv/bin/python -m pytest backend/tests/<touched>_test.py -x -q`
-- **After every plan wave:** `.venv/bin/python -m pytest -q`
-- **Before `/gsd-verify-work`:** Full suite green, **plus** one live-network calibration run
-  (`forecast_leadtime_calibration.py`) whose output is transcribed into the tracked decision
-  record — mirrors this workstream's existing precedent (`forecast_training.py --bakeoff` is run
-  by hand and `forecasting_model.md` hand-transcribes it).
+- **After every task commit:** `.venv/bin/python3 -m pytest -q backend/tests/<touched>_test.py`
+- **After every plan wave:** `.venv/bin/python3 -m pytest -q`
+- **Before `/gsd-verify-work`:** Full suite green, **plus** both live-network verification runs (the
+  legacy 1-hour calibration gate and the 24-hour offset-lead cross-check) and the single seven-arm
+  held-out test run, each hand-transcribed into the tracked decision record — mirroring this
+  workstream's existing precedent (`forecast_training.py --bakeoff` is run by hand and
+  `forecasting_model.md` hand-transcribes it).
 - **Max feedback latency:** 60 seconds (unit suite only; live-network steps are explicitly
   out-of-band and not gated on this latency).
+- **Known baseline:** the full suite carries 23 pre-existing `corridor_discretization_test.py`
+  failures, reproducible on Plan 03-02's own base commit and logged in `.planning/WINDOWS.md`. Every
+  full-suite gate in Plans 03-03 through 03-07 is written against that baseline rather than against
+  zero, so a plan neither inherits blame for them nor is allowed to hide a new failure behind them.
 
 ---
 
 ## Per-Task Verification Map
 
+> **Plan-numbering correction (2026-09-29).** The rows below were originally written against a
+> pre-execution plan numbering that no longer matches what ran: the old `03-01-*` rows described
+> work that landed in Plan **03-02** (thermal-model extraction, weakest-link), and the old
+> `03-02-*` rows described work that landed in Plan **03-01** (the provider adapter). They are
+> corrected here to the plans actually executed. Plans 03-03 through 03-07 are the D-04 replan
+> (Waves 2-5) and their rows are new — the superseded 03-03 through 03-06 rows for the abandoned
+> 1-hour-primary design have been replaced, not merely appended to.
+
+**Wave 1 — executed (corrected numbering)**
+
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 03-01-T1 | 01 | 1 | D-03 | V4 (path traversal) | `thermal_model.ieee738_ampacity` output exactly unchanged after extraction (`np.array_equal`, not `allclose` — see Pitfall 1) | unit | `.venv/bin/python -m pytest backend/tests/thermal_model_test.py -x -q` | ✅ extend existing | ⬜ pending |
-| 03-01-T2 | 01 | 1 | D-03 | — | `q_conv_override=None` is a true no-op; a passed override changes the result | unit | same | ❌ W0 | ⬜ pending |
-| 03-01-T3 | 01 | 1 | D-03 | — | `corridor_weakest_link` reproduces `corridor_training_frame`'s pre-refactor `dlr_amps`/`bottleneck_index` exactly | unit | `.venv/bin/python -m pytest backend/tests/forecast_training_test.py -x -q` | ✅ extend existing | ⬜ pending |
-| 03-02-T1 | 02 | 1 | D-01 | Caller-URL SSRF | New provider's base URLs are fixed module constants; `models=ecmwf_ifs` always present in outgoing params | unit (recorder) | `.venv/bin/python -m pytest backend/tests/open_meteo_forecast_provider_test.py -x -q` | ❌ W0 | ⬜ pending |
-| 03-02-T2 | 02 | 1 | D-01 | V5 input validation | An all-null / partially-null variable array raises, never forward-filled (Pitfall 3) | unit | same | ❌ W0 | ⬜ pending |
-| 03-02-T3 | 02 | 1 | D-01 | — | Single-Runs `run=` formatted `%Y-%m-%dT%H:%M`; malformed-`run` 400 vs. unavailable-`run` 400 distinguished (Pitfall 4) | unit | same | ❌ W0 | ⬜ pending |
-| 03-03-T1 | 03 | 2 | D-01 | — | `assert_supports_horizon` fails on the unfiltered series and passes on `hour % 6 == 1` | unit | `.venv/bin/python -m pytest backend/tests/forecast_leadtime_calibration_test.py -x -q` | ❌ W0 | ⬜ pending |
-| 03-04-T1 | 04 | 2 | D-02 | — | Every train timestamp < every val timestamp < every test timestamp; split is pure; empty side raises | unit | `.venv/bin/python -m pytest backend/tests/experiment_splits_test.py -x -q` | ❌ W0 | ⬜ pending |
-| 03-04-T2 | 04 | 2 | D-02 | — | `calendar_split` agrees with `anomaly_training.chronological_split` at equivalent boundaries | unit | same | ❌ W0 | ⬜ pending |
-| 03-05-T1 | 05 | 3 | D-02 | Silent-null / fail-safe | All seven arms scored on a byte-identical test-timestamp index | unit | `.venv/bin/python -m pytest backend/tests/forecast_experiment_test.py -x -q` | ❌ W0 | ⬜ pending |
-| 03-05-T2 | 05 | 3 | D-02 | Standing ethical commitment (REQUIREMENTS.md Out of Scope) | Experiment never calls `ampacity_forecast._load_corridor_model`; approach 5 refits from train+val only | unit (monkeypatch to raise) | same | ❌ W0 | ⬜ pending |
-| 03-05-T3 | 05 | 3 | D-02 | — | Oracle arm lives in a separate report key, absent from any winner-selection input | unit | same | ❌ W0 | ⬜ pending |
-| 03-06-T1 | 06 | 1 | D-02 | — | `from_uv(*to_uv(s, d)) == (s, d)` for all integer `d` in 0..359, `s > 0` | unit | `.venv/bin/python -m pytest backend/tests/wind_vector_test.py -x -q` | ❌ W0 | ⬜ pending |
-| 03-06-T2 | 06 | 1 | D-02 | — | `perpendicular_wind(*from_uv(*to_uv(s, d)), az) == perpendicular_wind(s, d, az)` | unit | same | ❌ W0 | ⬜ pending |
+| 03-01-T1 | 01 | 1 | D-01 | Caller-URL SSRF | Provider base URLs are fixed module constants; `models` pinned in every outgoing request | unit (recorder) | `.venv/bin/python3 -m pytest -q backend/tests/open_meteo_forecast_provider_test.py` | ✅ | ✅ green |
+| 03-01-T2 | 01 | 1 | D-01 | V5 input validation | An all-null or partially-null variable array raises, never forward-filled (Pitfall 3); malformed-`run` 400 distinguished from unavailable-`run` 400 (Pitfall 4) | unit | same | ✅ | ✅ green |
+| 03-01-T3 | 01 | 1 | D-01, D-02 | Silent-null / fail-safe | Calibration gate fails on the unfiltered series and passes only on `hour % 6 == 1`; anchored-pair anchor gap is exactly 1 h; arms 0 and 2 share one index | unit | `.venv/bin/python3 -m pytest -q backend/tests/forecast_leadtime_calibration_test.py backend/tests/experiment_splits_test.py backend/tests/forecast_experiment_test.py` | ✅ | ✅ green |
+| 03-02-T1 | 02 | 1 | D-02 | — | `from_uv(*to_uv(s, d))` round-trips, and `perpendicular_wind` agrees across the full direction circle | unit | `.venv/bin/python3 -m pytest -q backend/tests/wind_vector_test.py` | ✅ | ✅ green |
+| 03-02-T2 | 02 | 1 | D-03 | V4 (path traversal) | `ieee738_ampacity` output bit-identical after extraction (`np.array_equal`, not a tolerance); `q_conv_override=None` is a true no-op | unit | `.venv/bin/python3 -m pytest -q backend/tests/thermal_model_test.py` | ✅ | ✅ green |
+| 03-02-T3 | 02 | 1 | D-03 | — | `corridor_weakest_link` reproduces `corridor_training_frame`'s pre-refactor output exactly, including the tie-break | unit | `.venv/bin/python3 -m pytest -q backend/tests/forecast_training_test.py` | ✅ | ✅ green |
+
+**Waves 2-5 — the D-04 replan**
+
+| Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
+|---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
+| 03-03-T1 | 03 | 2 | D-04 | T-03-03-01/02/04 | Previous-Runs fetch under its own pin (never the legacy model, which live-returns all-null here); suffix-stripped unit-echo check still fires; NO leading-null carve-out | unit (recorder) + live | `.venv/bin/python3 -m pytest -q backend/tests/open_meteo_forecast_provider_test.py` | ✅ extend | ⬜ pending |
+| 03-03-T2 | 03 | 2 | D-04 | T-03-03-05 | The 24-hour offset gate fails on the unfiltered 24-29 h span and passes only on `hour % 6 == 0`; legacy 1-hour gate untouched | unit | `.venv/bin/python3 -m pytest -q backend/tests/forecast_leadtime_calibration_test.py` | ✅ extend | ⬜ pending |
+| 03-03-T3 | 03 | 2 | D-02, D-04 | T-03-03-06/07 | Anchor gap exactly equals the claimed lead at both leads; cache key includes the lead; test split mechanically locked; live raw-forecast MAE is non-zero | unit + live | `.venv/bin/python3 -m pytest -q backend/tests/forecast_experiment_test.py` | ✅ extend | ⬜ pending |
+| 03-04-T1 | 04 | 3 | D-02, D-04 | T-03-04-01 | Arm 0 equals the truth ampacity at exactly `T-24h`; no one-row-lag production helper in the module | unit | `.venv/bin/python3 -m pytest -q backend/tests/forecast_experiment_test.py` | ✅ extend | ⬜ pending |
+| 03-04-T2 | 04 | 3 | D-02 | T-03-04-02/03/04 | Corridor reduction uses the one extracted weakest-link helper, per column group at its own time; oracle structurally outside `candidates` | unit + live | same | ✅ extend | ⬜ pending |
+| 03-04-T3 | 04 | 3 | D-02 | T-03-04-05 | Identical row index enforced by exception; split ordering asserted on the filtered frame; no-peeking lock self-describing | unit | same | ✅ extend | ⬜ pending |
+| 03-05-T1 | 05 | 3 | D-03 | T-03-05-04/05 | `build_training_matrix`'s default path bit-identical to a pre-edit golden capture; 24-hour target shift asserted from returned index values; no global mutation | unit | `.venv/bin/python3 -m pytest -q backend/tests/forecast_training_test.py` | ✅ extend | ⬜ pending |
+| 03-05-T2 | 05 | 3 | D-02 | T-03-05-02/03 | Wind correction fitted and recomposed in u/v space; correct across the 0/360 wrap; selector cannot see a test frame | unit | `.venv/bin/python3 -m pytest -q backend/tests/forecast_correction_models_test.py` | ❌ W0 | ⬜ pending |
+| 03-05-T3 | 05 | 3 | D-02 | T-03-05-01/06 | Cooling correction goes through `q_conv_override`; a non-positive convective term raises rather than being clamped; no second heat-balance implementation | unit | same | ❌ W0 | ⬜ pending |
+| 03-06-T1 | 06 | 4 | D-02 | T-03-06-01 | The Expectation lands in an isolated two-file commit with the lock flip and no scoring run — auditable from `git log` | doc + git gate | `.venv/bin/python3 -m pytest -q backend/tests/forecast_experiment_test.py` | ✅ extend | ⬜ pending |
+| 03-06-T2 | 06 | 4 | D-02 | T-03-06-02/03 | Leakage probe with demonstrated power: only the oracle responds to a sabotaged truth column, and a known-leaking arm is detected; arm 5 never reaches the persisted artifact or the process-global cache | unit (monkeypatch to raise) | same | ✅ extend | ⬜ pending |
+| 03-06-T3 | 06 | 4 | D-02 | T-03-06-04/06/07 | Seven arms on one held-out index; every margin carries a paired bootstrap interval bracketing its point estimate; oracle outside `candidates` | unit + live (one run) | same | ✅ extend | ⬜ pending |
+| 03-07-T1 | 07 | 5 | D-01, D-02, D-04 | T-03-07-01/02/03 | Expectation byte-identical to its first commit; legacy 1-hour arm labelled non-primary with its bit-identity caveat preceding any score; Limitations covers the diurnal baseline, the oracle ceiling and the filter cost | doc gate | `.venv/bin/python3 -m pytest -q` | ✅ | ⬜ pending |
+| 03-07-T2 | 07 | 5 | — | T-03-07-05/06 | Phase records describe what was executed; zero backend diff from a documentation plan | doc gate | same | ✅ | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -63,15 +91,26 @@ created: "2026-09-29"
 
 ## Wave 0 Requirements
 
-- [ ] `backend/tests/open_meteo_forecast_provider_test.py` — new; clone `open_meteo_provider_test.py`'s `_FakeResponse`/`_mock_get` scaffolding
-- [ ] `backend/tests/wind_vector_test.py` — new
-- [ ] `backend/tests/experiment_splits_test.py` — new
-- [ ] `backend/tests/forecast_leadtime_calibration_test.py` — new
-- [ ] `backend/tests/forecast_experiment_test.py` — new
-- [ ] Extend `backend/tests/thermal_model_test.py` with the exact-equality extraction gate (`np.array_equal`)
-- [ ] Extend `backend/tests/forecast_training_test.py` with the `corridor_weakest_link` equality gate
-- [ ] `backend/tests/` importability idiom for new modules (no network/file I/O on import) — pattern exists at `thermal_model_test.py:249`
-- [ ] Framework install: **none needed** — pytest 9.0.3 already present and pinned
+**Wave 1 — all closed by Plans 03-01 and 03-02:**
+
+- [x] `backend/tests/open_meteo_forecast_provider_test.py` — created (24 tests), cloning `open_meteo_provider_test.py`'s `_FakeResponse`/`_mock_get` scaffolding
+- [x] `backend/tests/wind_vector_test.py` — created (9 tests)
+- [x] `backend/tests/experiment_splits_test.py` — created (9 tests)
+- [x] `backend/tests/forecast_leadtime_calibration_test.py` — created (10 tests)
+- [x] `backend/tests/forecast_experiment_test.py` — created (15 tests)
+- [x] `backend/tests/thermal_model_test.py` extended with the exact-equality extraction gate (`np.array_equal`)
+- [x] `backend/tests/forecast_training_test.py` extended with the `corridor_weakest_link` equality gate
+- [x] Subprocess-isolated no-network-import idiom established (Plan 03-02 corrected the naive in-process form, which failed on shared state during a full-suite run)
+- [x] Framework install: **none needed** — pytest 9.0.3 already present and pinned
+
+**Waves 2-5 — new for the D-04 replan:**
+
+- [ ] `backend/tests/forecast_correction_models_test.py` — new (Plan 03-05); module-level plain-assert functions, network-free, with the subprocess-isolated import check
+- [ ] `backend/tests/forecast_training_pre_horizon_param_golden.npz` — new golden capture (Plan 03-05), committed in its own commit strictly BEFORE the source edit it gates
+- [ ] Extend `backend/tests/open_meteo_forecast_provider_test.py` with the Previous-Runs path (Plan 03-03) — at least 8 new tests
+- [ ] Extend `backend/tests/forecast_leadtime_calibration_test.py` with a clearly separated 24-hour-primary section (Plan 03-03) — at least 6 new tests
+- [ ] Extend `backend/tests/forecast_experiment_test.py` across Plans 03-03, 03-04 and 03-06 — at least 30 new tests, including the leakage probe's own power test
+- [ ] Framework install: **none needed** — `scipy` 1.17.1 supplies the paired bootstrap and is already pinned; its availability was confirmed during planning
 
 ---
 
@@ -79,8 +118,9 @@ created: "2026-09-29"
 
 | Behavior | Requirement | Why Manual | Test Instructions |
 |----------|-------------|------------|-------------------|
-| Lead-time calibration gate's live measurement against Single-Runs API | D-01 | Requires live network access to two external APIs; the unit suite tests the gate's *logic* with mocked responses, not the real measurement | Run `.venv/bin/python backend/forecast_leadtime_calibration.py` by hand, inspect the JSON + histogram output, confirm `assert_supports_horizon` behaves as the research predicts (fails unfiltered, passes on `hour % 6 == 1`) before proceeding |
-| Full seven-arm experiment run producing the decision record's numbers | D-02 | Requires live network fetch of ~340 requests across three Open-Meteo endpoints, plus model fitting; not something to run automatically on every commit | Run `.venv/bin/python backend/forecast_experiment.py` by hand once data assembly/splits/refactors are all in place; transcribe results into `docs/data-science/decisions/forecast_correction_experiment.md` per this workstream's existing hand-transcription precedent |
+| Legacy 1-hour lead-time calibration gate's live measurement against the Single-Runs API | D-01 | Requires live network access to two external APIs; the unit suite tests the gate's *logic* with mocked responses, not the real measurement | Run `.venv/bin/python3 backend/forecast_leadtime_calibration.py --days 30` by hand, inspect the per-lead table, confirm the gate fails unfiltered and passes on `hour % 6 == 1`. **Executed in Plan 03-01; transcript in `03-01-SUMMARY.md`.** |
+| 24-hour offset-lead stitching cross-check against exact single runs | D-04 | Requires live network access, and the Single-Runs archive for the pinned Previous-Runs model reaches back only a few months — so this is a bounded, hand-run check over recent dates, not a wide historical sampler. Assumption B2's limitation (no direct check possible for 2024-2025) must be recorded in the decision record alongside it. | Run `.venv/bin/python3 backend/forecast_leadtime_calibration.py --previous-runs` by hand (Plan 03-03 Task 2); confirm near-total match rates at offsets 24-29, an unfiltered verdict of FAIL and a filtered verdict of PASS; transcribe into `03-03-SUMMARY.md` |
+| Full seven-arm experiment run producing the decision record's numbers | D-02 | Requires a live multi-endpoint fetch plus model fitting, and — critically — the held-out test run is scored **exactly once**, after the Expectation is committed. It is not something to run automatically on any commit. | Run `.venv/bin/python3 backend/forecast_experiment.py --lead-hours 24 --split test` by hand once (Plan 03-06 Task 3), only after the Expectation commit and the leakage probe pass; transcribe results into `docs/data-science/decisions/forecast_correction_experiment.md` per this workstream's hand-transcription precedent |
 
 ---
 
