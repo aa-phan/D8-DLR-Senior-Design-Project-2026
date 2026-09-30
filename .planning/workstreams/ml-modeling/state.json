@@ -25,9 +25,9 @@
     }
   ],
   "next": {
-    "command": "/gsd-plan-phase 4 ml-modeling",
-    "label": "Plan Phase 4",
-    "reason": "Phase 4 of 4 · added this session · needs planning"
+    "command": "/gsd:progress",
+    "label": "Show progress",
+    "reason": "Unsure of state — showing progress"
   },
-  "updated_at": "2026-09-30T20:17:54.493Z"
+  "updated_at": "2026-09-30T22:25:55.685Z"
 }

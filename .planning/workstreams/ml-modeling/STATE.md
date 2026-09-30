@@ -2,20 +2,20 @@
 gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: )
-current_phase: 03
-current_phase_name: Ampacity Forecast Correction Experiment
+current_phase: 04
+current_phase_name: Forecast Correction Follow-up Audit
 status: complete
 stopped_at: Phase 3 complete — ml_cooling_corrected wins distinguishably at both corridors on the held-out 24h-lead test set
-last_updated: "2026-09-30T00:00:00.000Z"
+last_updated: "2026-09-30T22:25:55.666Z"
 last_activity: 2026-09-30
 last_activity_desc: Phase 3 Waves 2-5 executed after D-04 pivot; decision record complete
-state_head: 1397bf1
+state_head: e17822450ea60be23e7ada0f78d06ec4aff3d3d5
 progress:
-  total_phases: 3
+  total_phases: 4
   completed_phases: 3
-  total_plans: 15
+  total_plans: 21
   completed_plans: 15
-  percent: 100
+  percent: 71
 ---
 
 # Project State
@@ -36,7 +36,7 @@ held-out test set — see `docs/data-science/decisions/forecast_correction_exper
 
 ## Current Position
 
-Phase: 03 (Ampacity Forecast Correction Experiment) — COMPLETE (7/7 plans, all 5 waves)
+Phase: 04 (Forecast Correction Follow-up Audit) — READY TO EXECUTE
 Plan: 7 of 7
 Status: Decision record complete. Winner: ml_cooling_corrected (24h lead), +24.86A/+30.67A margin
 vs. persistence at AUSTIN_CORPUS_CHRISTI/MIDLAND_EL_PASO, both 95% CIs excluding zero. The original
@@ -102,6 +102,13 @@ None yet.
   today (Track 1 has not executed). Both phases must assemble their own real-data training/
   validation series from Open-Meteo backfill (+ ERCOT historical load for Phase 2) rather than
   assuming the live archive has accrued — see ROADMAP.md Overview.
+- Phase 4 planning (2026-09-30): the automated `check.decision-coverage-plan` gate returned
+  `passed: false, reason: could-not-parse` against `04-CONTEXT.md` — its `- **D-NN:**` bullet
+  parser doesn't match this CONTEXT.md's `### D-01:`-heading decision format (5 sections, `uncovered`
+  list came back empty, not a real gap list). Proceeded anyway: the independently-spawned
+  `gsd-plan-checker` verification pass read the actual PLAN.md files and CONTEXT.md directly and
+  confirmed exhaustive coverage of D-01 through D-05 across the 6 plans (see
+  `04-01-PLAN.md`..`04-06-PLAN.md`). Override recorded per plan-phase workflow §13a.
 
 ## Deferred Items
 
