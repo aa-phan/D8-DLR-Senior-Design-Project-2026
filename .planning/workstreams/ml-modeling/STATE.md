@@ -4,18 +4,18 @@ milestone: v1.3
 milestone_name: )
 current_phase: 03
 current_phase_name: Ampacity Forecast Correction Experiment
-status: pending
-stopped_at: Phase 3 Wave 1 complete; D-04 pivot to 24h realizable lead — Waves 2-5 need replanning
-last_updated: "2026-09-29T00:41:39.539Z"
-last_activity: 2026-09-29
-last_activity_desc: Promoted backlog Phase 999.1 to Phase 3 (Ampacity Forecast Correction Experiment)
-state_head: 7a58597
+status: complete
+stopped_at: Phase 3 complete — ml_cooling_corrected wins distinguishably at both corridors on the held-out 24h-lead test set
+last_updated: "2026-09-30T00:00:00.000Z"
+last_activity: 2026-09-30
+last_activity_desc: Phase 3 Waves 2-5 executed after D-04 pivot; decision record complete
+state_head: 1397bf1
 progress:
   total_phases: 3
-  completed_phases: 2
-  total_plans: 8
-  completed_plans: 8
-  percent: 67
+  completed_phases: 3
+  total_plans: 15
+  completed_plans: 15
+  percent: 100
 ---
 
 # Project State
@@ -28,19 +28,25 @@ See: .planning/PROJECT.md (updated 2026-09-10) and this workstream's
 **Core value:** The end-to-end pipeline produces valid ampacity forecasts and runs without manual
 intervention, while never letting an unreliable input silently overstate what a line can safely
 carry.
-**Current focus:** Phase 03 — Ampacity Forecast Correction Experiment (promoted from backlog
-Phase 999.1: Phase 1's "ml" forecasting method lost to naive persistence at the 60-min horizon;
-this phase determines what should replace it via a rigorous forecast-vs-physics comparison)
+**Current focus:** None — all three phases of milestone v1.3 are complete. Phase 03 (Ampacity
+Forecast Correction Experiment, promoted from backlog Phase 999.1) determined what should replace
+Phase 1's "ml" forecasting method: `ml_cooling_corrected` (a 24-hour-lead physics-plus-ML-corrected
+approach) beat persistence with a statistically distinguishable margin at both corridors on the
+held-out test set — see `docs/data-science/decisions/forecast_correction_experiment.md`.
 
 ## Current Position
 
-Phase: 03 (Ampacity Forecast Correction Experiment) — WAVE 1 COMPLETE, REPLANNING
-Plan: 2 of 2 (Wave 1: 03-01, 03-02) executed; Waves 2-5 superseded by D-04, need replanning
-Status: D-04 pivot — 1h idealized lead hit a bit-identical forecast/truth data-source limit;
-promoted the 24h Previous-Runs-API lead to primary. Run /gsd-plan-phase 3 ml-modeling next.
-Last activity: 2026-09-29 — Wave 1 executed; D-04 pivot decided and recorded
+Phase: 03 (Ampacity Forecast Correction Experiment) — COMPLETE (7/7 plans, all 5 waves)
+Plan: 7 of 7
+Status: Decision record complete. Winner: ml_cooling_corrected (24h lead), +24.86A/+30.67A margin
+vs. persistence at AUSTIN_CORPUS_CHRISTI/MIDLAND_EL_PASO, both 95% CIs excluding zero. The original
+1-hour approach (Wave 1) hit a bit-identical forecast/truth data-source dead end and was pivoted
+(D-04) to a 24-hour lead via Previous Runs API — kept in the record as a labeled non-primary
+curiosity, not a competing result.
+Last activity: 2026-09-30 — Phase 3 Waves 2-5 executed; decision record, ROADMAP, and disclosure
+finalized. Milestone v1.3 (all 3 phases) now complete.
 
-Progress: [███████░░░] 67%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
