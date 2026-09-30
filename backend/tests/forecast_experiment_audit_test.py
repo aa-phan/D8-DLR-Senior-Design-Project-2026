@@ -23,10 +23,12 @@ Module-level plain-assert functions, no test classes, mirroring
 
 import json
 
+import numpy as np
 import pandas as pd
 import pytest
 
 import config
+import corridor_discretization
 import forecast_experiment_audit as fea
 
 
@@ -337,3 +339,453 @@ def test_build_basis_manifest_roundtrips_with_documented_keys(tmp_path, monkeypa
     for city_entry in entry["cities"].values():
         for key in ("assembled_rows", "dropped_rows", "method", "hourly_span_expectation"):
             assert key in city_entry, sorted(city_entry)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 04-02 Task 1: decision_time_availability_finding (D-01 bullet 2) and
+# frame_time_reference_groups (D-01 bullet 3, first half). Both network-free.
+# ──────────────────────────────────────────────────────────────────────────
+
+def test_decision_time_availability_finding_has_required_fields():
+    f = fea.decision_time_availability_finding()
+    for key in (
+        "compared_products", "compared_quantity", "success_condition",
+        "supported_claim", "unsupported_claim", "differs_from_recorded_limitation",
+        "reachable_fetch_functions", "citations",
+    ):
+        assert key in f, sorted(f)
+    assert len(f["compared_products"]) == 2
+    for product in f["compared_products"].values():
+        assert "endpoint" in product and product["endpoint"]
+    assert len(f["reachable_fetch_functions"]) >= 2
+
+
+def test_decision_time_availability_finding_supported_and_unsupported_claims_distinct():
+    f = fea.decision_time_availability_finding()
+    for key in ("supported_claim", "unsupported_claim", "differs_from_recorded_limitation"):
+        assert isinstance(f[key], str) and f[key].strip(), (key, f.get(key))
+    assert f["supported_claim"].strip() != f["unsupported_claim"].strip()
+
+
+def test_decision_time_availability_finding_citations_parse_and_cover_calibration_module():
+    import re
+    f = fea.decision_time_availability_finding()
+    blob = repr(f)
+    cites = re.findall(r"[A-Za-z_./-]+\.(?:py|md):\d+", blob)
+    assert len(cites) >= 4, f"only {len(cites)} citation(s): {cites}"
+    assert any("forecast_leadtime_calibration.py" in c for c in cites), cites
+    sources = f.get("reachable_fetch_functions") or f.get("fetch_functions")
+    assert sources and len(sources) >= 2, sources
+
+
+def test_decision_time_availability_finding_distinguishes_from_recorded_limitation():
+    f = fea.decision_time_availability_finding()
+    limitation = f["differs_from_recorded_limitation"].lower()
+    # The distinction must actually be argued, not merely asserted: it must
+    # name both the existing coverage limitation and the new claim-type one.
+    assert "coverage" in limitation or "reach" in limitation
+    assert "claim-type" in limitation or "claim type" in limitation
+
+
+_PER_CITY_FRAME_COLUMNS = [
+    "datetime_utc", "anchor_datetime_utc", "fcst_anchor_datetime_utc", "hour_mod_remainder",
+    "truth_air_temp", "truth_wind_speed", "truth_wind_direction", "truth_solar_radiation",
+    "truth_relative_humidity", "truth_dlr_amps",
+    "anchor_air_temp", "anchor_wind_speed", "anchor_wind_direction", "anchor_solar_radiation",
+    "anchor_relative_humidity", "anchor_dlr_amps",
+    "fcst_air_temp", "fcst_wind_speed", "fcst_wind_direction", "fcst_solar_radiation", "fcst_relative_humidity",
+    "fcst_anchor_air_temp", "fcst_anchor_wind_speed", "fcst_anchor_wind_direction",
+    "fcst_anchor_solar_radiation", "fcst_anchor_relative_humidity",
+]
+
+
+def _synthetic_per_city_frame():
+    frame = pd.DataFrame({c: [0.0] for c in _PER_CITY_FRAME_COLUMNS})
+    frame["datetime_utc"] = pd.to_datetime(["2025-06-01T00:00:00Z"])
+    frame["anchor_datetime_utc"] = pd.to_datetime(["2025-05-31T00:00:00Z"])
+    frame["fcst_anchor_datetime_utc"] = pd.to_datetime(["2025-05-31T00:00:00Z"])
+    return frame
+
+
+def _synthetic_corridor_frame():
+    return pd.DataFrame({
+        "datetime_utc": pd.to_datetime(["2025-06-01T00:00:00Z"]),
+        "anchor_datetime_utc": pd.to_datetime(["2025-05-31T00:00:00Z"]),
+        "hour_mod_remainder": [0],
+        "truth_dlr_amps": [1000.0],
+        "bottleneck_index_truth": [0],
+        "truth_air_temp": [25.0], "truth_wind_speed": [3.0],
+        "truth_wind_direction": [180.0], "truth_solar_radiation": [500.0],
+        "anchor_dlr_amps": [980.0],
+        "bottleneck_index_anchor": [1],
+        "anchor_air_temp": [24.0], "anchor_wind_speed": [2.5],
+        "anchor_wind_direction": [170.0], "anchor_solar_radiation": [480.0],
+        "nwp_wind_delta_clamped_a": [False], "nwp_wind_delta_clamped_b": [True],
+        "pred_persistence_24h": [990.0], "bottleneck_index_persistence_24h": [0],
+        "pred_oracle_observed_future_wind": [1005.0],
+        "bottleneck_index_oracle_observed_future_wind": [1],
+    })
+
+
+def test_frame_time_reference_groups_per_city_frame_fully_classified():
+    frame = _synthetic_per_city_frame()
+    groups = fea.frame_time_reference_groups(frame)
+    assert groups["unclassified"] == [], groups["unclassified"]
+    assert groups["distinct_clock_instants_per_row"] == 2, groups["distinct_clock_instants_per_row"]
+    assert set(groups["observed_at_valid_time"]) == {
+        "truth_air_temp", "truth_wind_speed", "truth_wind_direction",
+        "truth_solar_radiation", "truth_relative_humidity", "truth_dlr_amps",
+    }
+    assert set(groups["observed_at_decision_time"]) == {
+        "anchor_air_temp", "anchor_wind_speed", "anchor_wind_direction",
+        "anchor_solar_radiation", "anchor_relative_humidity", "anchor_dlr_amps",
+    }
+    assert set(groups["forecast_valid_at_valid_time"]) == {
+        "fcst_air_temp", "fcst_wind_speed", "fcst_wind_direction",
+        "fcst_solar_radiation", "fcst_relative_humidity",
+    }
+    assert set(groups["forecast_valid_at_decision_time"]) == {
+        "fcst_anchor_air_temp", "fcst_anchor_wind_speed", "fcst_anchor_wind_direction",
+        "fcst_anchor_solar_radiation", "fcst_anchor_relative_humidity",
+    }
+    assert groups["corridor_reduced_predictions"] == []
+    assert groups["bottleneck_selection_diagnostics"] == []
+    assert set(groups["index_and_diagnostic_columns"]) == {
+        "datetime_utc", "anchor_datetime_utc", "fcst_anchor_datetime_utc", "hour_mod_remainder",
+    }
+
+
+def test_frame_time_reference_groups_unrecognized_column_is_unclassified_not_absorbed():
+    frame = _synthetic_per_city_frame()
+    frame["midwindow_truth_wind_speed_t_minus_12h"] = 0.0
+    groups = fea.frame_time_reference_groups(frame)
+    assert "midwindow_truth_wind_speed_t_minus_12h" in groups["unclassified"], groups["unclassified"]
+    # It must NOT have been absorbed into observed_at_valid_time just
+    # because "truth_" appears as a substring rather than a real prefix.
+    assert "midwindow_truth_wind_speed_t_minus_12h" not in groups["observed_at_valid_time"]
+
+
+def test_frame_time_reference_groups_corridor_frame_fully_classified_and_differs():
+    frame = _synthetic_corridor_frame()
+    groups = fea.frame_time_reference_groups(frame)
+    assert groups["unclassified"] == [], groups["unclassified"]
+    assert groups["distinct_clock_instants_per_row"] == 2, groups["distinct_clock_instants_per_row"]
+    # The corridor frame carries corridor-reduced predictions and
+    # bottleneck-selection diagnostics the per-city frame does not, and
+    # carries NO forecast_valid_at_* groups (no fcst_*/fcst_anchor_* columns
+    # in the corridor-level frame at all) -- the documented difference from
+    # the per-city frame's own classification.
+    assert set(groups["corridor_reduced_predictions"]) == {
+        "pred_persistence_24h", "pred_oracle_observed_future_wind",
+    }
+    assert set(groups["bottleneck_selection_diagnostics"]) == {
+        "bottleneck_index_truth", "bottleneck_index_anchor",
+        "bottleneck_index_persistence_24h", "bottleneck_index_oracle_observed_future_wind",
+    }
+    assert groups["forecast_valid_at_valid_time"] == []
+    assert groups["forecast_valid_at_decision_time"] == []
+    assert "nwp_wind_delta_clamped_a" in groups["index_and_diagnostic_columns"]
+    assert "nwp_wind_delta_clamped_b" in groups["index_and_diagnostic_columns"]
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 04-02 Task 2: leakage_probe_coverage_report. Network-free -- patches
+# `forecast_experiment_audit.forecast_experiment.anchored_pair_frame` (the
+# per-city assembly helper both `corridor_anchored_pair_frame` and
+# `_stacked_pair_frame` call internally), on the AUDIT MODULE's own
+# reference to the harness module object, exactly like Plan 04-01's own
+# `_patch_harness_assembly`. Patching one level lower than that (at
+# `anchored_pair_frame` rather than `corridor_anchored_pair_frame`/
+# `_stacked_pair_frame` directly) makes the REAL harness code responsible
+# for corridor-level reduction and stacking, so Mode A's corridor-level
+# frame and Mode B's per-city frames are guaranteed internally consistent
+# (built from the identical underlying synthetic per-city series) without
+# hand-duplicating that reduction logic in this test file.
+# ──────────────────────────────────────────────────────────────────────────
+
+_LEAKAGE_TEST_CORRIDOR = "AUSTIN_CORPUS_CHRISTI"
+_LEAKAGE_TEST_LEAD_HOURS = 24
+
+
+def _synthetic_anchored_pair_frame(city: str, *, periods=24 * 220, start="2024-01-01", seed: int) -> pd.DataFrame:
+    """
+    A deterministic, fully-populated hourly per-city frame carrying the
+    REAL `anchored_pair_frame` schema (truth_*/anchor_*/fcst_*/fcst_anchor_*,
+    `datetime_utc`/`anchor_datetime_utc`/`fcst_anchor_datetime_utc`,
+    `hour_mod_remainder`) with the SAME anchor-group semantics the real
+    function uses (the anchor group is the truth series shifted forward by
+    `lead_hours` -- built here via `.shift(lead_hours)` on a contiguous
+    hourly index, which is equivalent since the synthetic index has no
+    gaps). `truth_dlr_amps` is computed through the REAL
+    `forecast_experiment._city_ampacity` physics, never reinvented, so
+    arm 5's real training pipeline sees a physically coherent target.
+    """
+    idx = pd.date_range(start, periods=periods, freq="h", tz="UTC")
+    t = np.arange(len(idx), dtype=float)
+    rng = np.random.default_rng(seed)
+    lead_td = pd.Timedelta(hours=_LEAKAGE_TEST_LEAD_HOURS)
+
+    corridor = next(
+        c for c, cities in config.CORRIDOR_ENDPOINTS.items() if city in cities
+    )
+    geometry = corridor_discretization.corridor_geometry(corridor)
+
+    truth_air_temp = 25.0 + 8.0 * np.sin(t / 24.0)
+    truth_wind_speed = 3.0 + rng.random(len(idx)) * 2.0
+    truth_wind_direction = (t * 7.0) % 360.0
+    truth_solar_radiation = np.clip(600.0 * np.sin(t / 24.0), 0.0, None)
+    truth_relative_humidity = 50.0 + rng.random(len(idx)) * 10.0
+    truth_dlr_amps = fea.forecast_experiment._city_ampacity(
+        truth_air_temp, truth_wind_speed, truth_wind_direction, truth_solar_radiation, geometry,
+    )
+
+    frame = pd.DataFrame({"datetime_utc": idx})
+    frame["truth_air_temp"] = truth_air_temp
+    frame["truth_wind_speed"] = truth_wind_speed
+    frame["truth_wind_direction"] = truth_wind_direction
+    frame["truth_solar_radiation"] = truth_solar_radiation
+    frame["truth_relative_humidity"] = truth_relative_humidity
+    frame["truth_dlr_amps"] = truth_dlr_amps
+
+    frame["fcst_air_temp"] = truth_air_temp + rng.normal(0, 0.5, len(idx))
+    frame["fcst_wind_speed"] = np.clip(truth_wind_speed + rng.normal(0, 0.3, len(idx)), 0.0, None)
+    frame["fcst_wind_direction"] = truth_wind_direction
+    frame["fcst_solar_radiation"] = truth_solar_radiation
+    frame["fcst_relative_humidity"] = truth_relative_humidity
+
+    for col in ("air_temp", "wind_speed", "wind_direction", "solar_radiation", "relative_humidity", "dlr_amps"):
+        frame[f"anchor_{col}"] = frame[f"truth_{col}"].shift(_LEAKAGE_TEST_LEAD_HOURS)
+    for col in ("air_temp", "wind_speed", "wind_direction", "solar_radiation", "relative_humidity"):
+        frame[f"fcst_anchor_{col}"] = frame[f"fcst_{col}"].shift(_LEAKAGE_TEST_LEAD_HOURS)
+
+    frame["anchor_datetime_utc"] = frame["datetime_utc"] - lead_td
+    frame["fcst_anchor_datetime_utc"] = frame["datetime_utc"] - lead_td
+    frame["hour_mod_remainder"] = (
+        frame["datetime_utc"].dt.hour % config.FORECAST_EXPERIMENT_LEAD_FILTER_MODULUS
+    )
+    return frame.dropna().reset_index(drop=True)
+
+
+def _patch_leakage_test_assembly(monkeypatch, *, periods=24 * 220):
+    city_a, city_b = config.CORRIDOR_ENDPOINTS[_LEAKAGE_TEST_CORRIDOR]
+    frames = {
+        city_a: _synthetic_anchored_pair_frame(city_a, periods=periods, seed=20260930),
+        city_b: _synthetic_anchored_pair_frame(city_b, periods=periods, seed=20260931),
+    }
+
+    def fake_anchored_pair_frame(city, start=None, end=None, *, lead_hours):
+        return frames[city].copy()
+
+    monkeypatch.setattr(fea.forecast_experiment, "anchored_pair_frame", fake_anchored_pair_frame)
+
+
+def test_leakage_probe_coverage_report_refuses_unknown_corridor():
+    with pytest.raises(ValueError) as exc_info:
+        fea.leakage_probe_coverage_report("NOT_A_REAL_CORRIDOR")
+    message = str(exc_info.value)
+    for name in config.CORRIDOR_ENDPOINTS:
+        assert name in message, message
+
+
+def test_leakage_probe_coverage_report_runs_and_returns_documented_shape(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "FORECAST_EXPERIMENT_CACHE_DIR", str(tmp_path))
+    _patch_leakage_test_assembly(monkeypatch)
+
+    report_path = str(tmp_path / "leakage_report.json")
+    report = fea.leakage_probe_coverage_report(_LEAKAGE_TEST_CORRIDOR, report_path=report_path)
+
+    for key in ("mode_a", "mode_b", "comparison", "finding"):
+        assert key in report, sorted(report)
+    for mode_key in ("mode_a", "mode_b"):
+        mode = report[mode_key]
+        assert "arms" in mode and "frozen_window_guard_passed" in mode
+        assert mode["frozen_window_guard_passed"] is True
+
+    b_arms = report["mode_b"]["arms"]
+    assert len(b_arms) >= 8, sorted(b_arms)
+    sabotaged = [n for n in b_arms if "sabotag" in n]
+    assert sabotaged, sorted(b_arms)
+    assert b_arms[sabotaged[0]]["changed"] is True
+
+    oracle_name = fea.forecast_experiment.ORACLE_ARM_NAME
+    assert b_arms[oracle_name]["changed"] is True
+    for name, res in b_arms.items():
+        if name == oracle_name or "sabotag" in name:
+            continue
+        assert res["changed"] is False, (name, res)
+
+    assert isinstance(report["finding"], str) and report["finding"].strip()
+    assert "oracle_distinguished" in report["comparison"]
+
+    # Report round-trips through JSON.
+    with open(report_path) as fh:
+        reloaded = json.load(fh)
+    assert reloaded["corridor"] == _LEAKAGE_TEST_CORRIDOR
+    assert set(reloaded["mode_b"]["arms"]) == set(b_arms)
+
+
+def test_leakage_probe_coverage_report_mode_a_shows_no_power_via_column_reader_shape(monkeypatch, tmp_path):
+    """
+    Mode A's callable shape (a reader of an already-computed pred_<arm>
+    column) is structurally blind to sabotaging truth_* columns -- every
+    arm, including the oracle, must report unchanged.
+    """
+    monkeypatch.setattr(config, "FORECAST_EXPERIMENT_CACHE_DIR", str(tmp_path))
+    _patch_leakage_test_assembly(monkeypatch)
+
+    report = fea.leakage_probe_coverage_report(_LEAKAGE_TEST_CORRIDOR)
+    a_arms = report["mode_a"]["arms"]
+    for name, res in a_arms.items():
+        assert res["changed"] is False, (name, res)
+    assert report["comparison"]["oracle_distinguished"] is False
+    assert report["comparison"]["mode_a_all_unchanged_including_oracle"] is True
+
+
+def test_leakage_probe_coverage_report_guard_runs_before_probe(monkeypatch, tmp_path):
+    """
+    Prove the frozen-window guard executes BEFORE `leakage_probe` by
+    forcing the guard to raise on its first invocation and tracking whether
+    `leakage_probe` was ever reached. If the guard truly runs first,
+    `leakage_probe` must never be called.
+    """
+    monkeypatch.setattr(config, "FORECAST_EXPERIMENT_CACHE_DIR", str(tmp_path))
+
+    def _fake_corridor_frame(corridor, start, end, *, lead_hours):
+        idx = pd.date_range("2024-01-01", periods=24 * 40, freq="h", tz="UTC")
+        return pd.DataFrame({"datetime_utc": idx})
+
+    monkeypatch.setattr(fea.forecast_experiment, "corridor_anchored_pair_frame", _fake_corridor_frame)
+
+    probe_called = {"value": False}
+    real_probe = fea.forecast_experiment.leakage_probe
+
+    def _tracking_probe(frame, arms):
+        probe_called["value"] = True
+        return real_probe(frame, arms)
+
+    monkeypatch.setattr(fea.forecast_experiment, "leakage_probe", _tracking_probe)
+
+    def _raising_guard(frame, *, basis):
+        raise ValueError("forced frozen-window violation for ordering test")
+
+    monkeypatch.setattr(fea, "assert_basis_excludes_frozen_test_rows", _raising_guard)
+
+    with pytest.raises(ValueError, match="forced frozen-window violation"):
+        fea.leakage_probe_coverage_report(_LEAKAGE_TEST_CORRIDOR)
+    assert probe_called["value"] is False, "leakage_probe was reached despite the guard raising first"
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 04-02 Task 3: arm5_label_timing_finding, split_boundary_audit,
+# arm5_lag_offset_finding, and the closing d01_findings_table. Network-free,
+# reusing the same synthetic per-city assembly fixture Task 2 established.
+# ──────────────────────────────────────────────────────────────────────────
+
+def test_arm5_label_timing_finding_reports_single_24h_offset_and_distinct_horizons(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "FORECAST_EXPERIMENT_CACHE_DIR", str(tmp_path))
+    _patch_leakage_test_assembly(monkeypatch)
+
+    t = fea.arm5_label_timing_finding(_LEAKAGE_TEST_CORRIDOR)
+    assert t["distinct_feature_to_label_offsets"] == ["24.0h"], t["distinct_feature_to_label_offsets"]
+    assert t["production_default_horizon_minutes"] != t["experiment_horizon_minutes"], t
+    assert t["train_labels_precede_scored_validation"] is True, t
+
+
+def test_split_boundary_audit_reports_zero_overlap_and_required_keys(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "FORECAST_EXPERIMENT_CACHE_DIR", str(tmp_path))
+    _patch_leakage_test_assembly(monkeypatch)
+
+    b = fea.split_boundary_audit(_LEAKAGE_TEST_CORRIDOR)
+    assert b["shared_timestamp_count"] == 0, b
+    assert "boundary_row_side" in b, sorted(b)
+    for side in ("train", "val", "test"):
+        assert b["filtered_rows"][side] >= 0, b["filtered_rows"]
+
+
+def test_split_boundary_audit_raises_on_overlapping_sides(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "FORECAST_EXPERIMENT_CACHE_DIR", str(tmp_path))
+    _patch_leakage_test_assembly(monkeypatch)
+
+    real_calendar_split = fea.experiment_splits.calendar_split
+
+    def _corrupted_split(frame, boundaries):
+        train, val, test = real_calendar_split(frame, boundaries)
+        # Corrupt: val becomes an exact copy of train -- massively
+        # overlapping rather than chronologically disjoint.
+        return train, train.copy(), test
+
+    monkeypatch.setattr(fea.experiment_splits, "calendar_split", _corrupted_split)
+
+    with pytest.raises(ValueError):
+        fea.split_boundary_audit(_LEAKAGE_TEST_CORRIDOR)
+
+
+def test_split_boundary_audit_boundary_predicate_is_a_tested_fact(monkeypatch, tmp_path):
+    """
+    Synthetic boundary-predicate test: a row exactly at each boundary
+    instant lands on the documented side (at-or-after goes right,
+    strictly-before goes left) -- a tested fact, not a reading of the
+    predicates.
+    """
+    monkeypatch.setattr(config, "FORECAST_EXPERIMENT_CACHE_DIR", str(tmp_path))
+
+    val_start = pd.Timestamp("2025-06-01T00:00:00Z")
+    test_start = pd.Timestamp("2025-09-01T00:00:00Z")
+    fixed_boundaries = fea.experiment_splits.SplitBoundaries(val_start, test_start)
+
+    idx = pd.date_range("2025-01-01", "2025-12-31", freq="6h", tz="UTC")
+    idx = idx.union(pd.DatetimeIndex([val_start, test_start]))
+    frame = pd.DataFrame({"datetime_utc": idx})
+
+    def _fake_corridor_frame(corridor, start, end, *, lead_hours):
+        return frame.copy()
+
+    monkeypatch.setattr(fea.forecast_experiment, "corridor_anchored_pair_frame", _fake_corridor_frame)
+    monkeypatch.setattr(fea.forecast_experiment, "_default_split_boundaries", lambda f: fixed_boundaries)
+
+    b = fea.split_boundary_audit(_LEAKAGE_TEST_CORRIDOR)
+    assert b["boundary_row_side"]["val_start"] == "val", b["boundary_row_side"]
+    assert b["boundary_row_side"]["test_start"] == "test", b["boundary_row_side"]
+
+
+def test_arm5_lag_offset_finding_disagrees_and_reports_unbroken_cadence(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "FORECAST_EXPERIMENT_CACHE_DIR", str(tmp_path))
+    _patch_leakage_test_assembly(monkeypatch)
+
+    g = fea.arm5_lag_offset_finding(_LEAKAGE_TEST_CORRIDOR)
+    assert g["filter_first_agrees_with_harness_order"] is False, g
+    assert "distinct_spacings" in g and g["distinct_spacings"], g
+    assert isinstance(g["positional_shift_safe"], bool)
+    assert g["positional_shift_safe"] is True, g  # the synthetic fixture has no gaps
+
+
+def test_arm5_lag_offset_finding_gap_detector_detects_a_deliberately_removed_hour(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "FORECAST_EXPERIMENT_CACHE_DIR", str(tmp_path))
+    city_a, city_b = config.CORRIDOR_ENDPOINTS[_LEAKAGE_TEST_CORRIDOR]
+    frame_a = _synthetic_anchored_pair_frame(city_a, periods=24 * 220, seed=20260930)
+    frame_b = _synthetic_anchored_pair_frame(city_b, periods=24 * 220, seed=20260931)
+    # Deliberately remove one interior hour from city_a's frame to create a
+    # genuine gap (the inner merge in _arm5_truth_frame will then skip that
+    # hour on BOTH sides, leaving a real 2-hour spacing where an hour is
+    # missing) -- proving the gap detector DETECTS rather than merely passes.
+    frame_a = frame_a.drop(frame_a.index[500]).reset_index(drop=True)
+
+    def fake_anchored_pair_frame(city, start=None, end=None, *, lead_hours):
+        return {city_a: frame_a, city_b: frame_b}[city].copy()
+
+    monkeypatch.setattr(fea.forecast_experiment, "anchored_pair_frame", fake_anchored_pair_frame)
+
+    g = fea.arm5_lag_offset_finding(_LEAKAGE_TEST_CORRIDOR)
+    assert g["positional_shift_safe"] is False, g
+    assert len(g["distinct_spacings"]) > 1, g["distinct_spacings"]
+
+
+def test_d01_findings_table_has_five_rows_one_per_bullet():
+    table = fea.d01_findings_table()
+    assert len(table) == 5, table
+    for row in table:
+        for key in ("bullet", "disposition", "evidence_type", "citation"):
+            assert key in row and row[key], row
+    bullets_text = " ".join(row["bullet"] for row in table)
+    for n in ("1", "2", "3", "4", "5"):
+        assert f"bullet {n}" in bullets_text.lower(), bullets_text
