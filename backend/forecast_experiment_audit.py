@@ -33,6 +33,9 @@ that catches an accidental frozen-window read regardless of how a frame
 reached this module.
 """
 
+import json
+import logging
+import os
 import re
 
 import pandas as pd
@@ -347,3 +350,318 @@ def truth_provenance_finding(frozen_record_path: str = DEFAULT_FROZEN_RECORD_PAT
             "accuracy."
         ),
     }
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 04-01 Task 2: assembling the real ABLATION/FRESH bases, measuring
+# how much real data exists, and closing 04-RESEARCH.md Open Question 1
+# with a measured null-drop count.
+# ──────────────────────────────────────────────────────────────────────────
+
+DEFAULT_MANIFEST_PATH: str = os.path.join(
+    config.FORECAST_EXPERIMENT_CACHE_DIR, "audit_basis_manifest.json"
+)
+
+
+def _measure_city_assembly(city: str, start: str, end: str, *, lead_hours: int) -> dict:
+    """
+    Measure how many rows `forecast_experiment.anchored_pair_frame` drops
+    as null for `city` over `[start, end]` at `lead_hours`, via TWO
+    independent methods, per this task's own instruction that the manifest
+    should carry whichever measurements were actually taken:
+
+    1. `warning_log_capture` -- a temporary `logging.Handler` installed on
+       `forecast_experiment`'s own logger, capturing the `dropped %d row(s)`
+       WARNING the assembly path already emits (`anchored_pair_frame`,
+       `backend/forecast_experiment.py:660-665`). Only fires on a FRESH
+       fetch -- a cache hit re-reads the already-assembled CSV directly and
+       never re-triggers the drop computation or its warning.
+    2. An independent hourly-span expectation: the number of hourly rows
+       `[start, end]` (inclusive of `end`'s full day) SHOULD contain if
+       every hour were present, computed from calendar arithmetic alone,
+       never from the assembled frame itself. The difference between this
+       expectation and the frame's own row count is a cache-independent
+       cross-check that closes 04-RESEARCH.md Open Question 1 even when the
+       warning-log method is unavailable (a cache hit).
+
+    Never edits `forecast_experiment.py` -- installs and removes its own
+    handler on the existing `forecast_experiment` logger.
+    """
+    captured = {"dropped": None}
+
+    class _DropCaptureHandler(logging.Handler):
+        def emit(self, record):
+            if record.name == "forecast_experiment" and isinstance(record.msg, str) and (
+                "dropped %d row" in record.msg
+            ):
+                captured["dropped"] = record.args[0] if record.args else None
+
+    fe_logger = logging.getLogger("forecast_experiment")
+    handler = _DropCaptureHandler()
+    prior_level = fe_logger.level
+    fe_logger.addHandler(handler)
+    fe_logger.setLevel(logging.WARNING)
+    try:
+        frame = forecast_experiment.anchored_pair_frame(city, start, end, lead_hours=lead_hours)
+    finally:
+        fe_logger.removeHandler(handler)
+        fe_logger.setLevel(prior_level)
+
+    assembled_rows = len(frame)
+
+    span_index = pd.date_range(
+        pd.Timestamp(start, tz="UTC"),
+        pd.Timestamp(end, tz="UTC") + pd.Timedelta(days=1),
+        freq="h", inclusive="left",
+    )
+    hourly_span_expectation = len(span_index)
+    dropped_via_span = hourly_span_expectation - assembled_rows
+
+    if captured["dropped"] is not None:
+        method = (
+            "warning_log_capture (this run's fresh fetch), cross-checked "
+            "against an independent hourly-span expectation"
+        )
+    else:
+        method = (
+            "independent hourly-span expectation only -- no fresh "
+            "WARNING observed this run, so the frame was very likely "
+            "served from cache rather than freshly assembled"
+        )
+
+    return {
+        "assembled_rows": assembled_rows,
+        "dropped_rows": int(dropped_via_span),
+        "dropped_rows_via_warning_log": (
+            int(captured["dropped"]) if captured["dropped"] is not None else None
+        ),
+        "hourly_span_expectation": hourly_span_expectation,
+        "method": method,
+    }
+
+
+def _build_fresh_basis_entry(corridor: str, *, lead_hours: int, resolved_window_end: str) -> dict:
+    """
+    Resolve the FRESH basis for `corridor` at run time. If the resolved
+    window end is not strictly later than `FROZEN_WINDOW_END`, records a
+    zero-row FRESH basis with an explicit reason naming both dates and
+    skips the fetch entirely -- there is nothing to fetch, and issuing the
+    request anyway would be a request for rows the frozen window already
+    contains. Otherwise assembles the corridor frame for the window
+    beginning the day after `FROZEN_WINDOW_END` through the resolved end,
+    applies the exact-lead filter, and runs the frozen-window guard under
+    `basis="FRESH"`.
+    """
+    frozen_end_ts = pd.Timestamp(FROZEN_WINDOW_END, tz="UTC")
+    resolved_end_ts = pd.Timestamp(resolved_window_end, tz="UTC")
+
+    if not (resolved_end_ts > frozen_end_ts):
+        return {
+            "rows": 0,
+            "resolved_window_end": resolved_window_end,
+            "reason": (
+                f"resolved window end {resolved_window_end} is not "
+                f"strictly later than FROZEN_WINDOW_END {FROZEN_WINDOW_END} "
+                f"-- there is nothing to fetch"
+            ),
+        }
+
+    fresh_start = (frozen_end_ts + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    fresh_frame = forecast_experiment.corridor_anchored_pair_frame(
+        corridor, fresh_start, resolved_window_end, lead_hours=lead_hours,
+    )
+    fresh_filtered = forecast_experiment.filter_to_exact_lead(fresh_frame, lead_hours=lead_hours)
+    guard_summary = assert_basis_excludes_frozen_test_rows(fresh_filtered, basis="FRESH")
+
+    entry = {
+        "rows": guard_summary["rows"],
+        "resolved_window_start": fresh_start,
+        "resolved_window_end": resolved_window_end,
+        "first_timestamp": guard_summary["first_timestamp"],
+        "last_timestamp": guard_summary["last_timestamp"],
+        "frozen_window_guard_passed": True,
+    }
+    if entry["rows"] == 0:
+        entry["reason"] = (
+            f"the resolved fresh window [{fresh_start}, {resolved_window_end}] "
+            f"produced zero rows after the exact-lead filter"
+        )
+    return entry
+
+
+def _build_corridor_basis_entry(corridor: str, *, lead_hours: int, resolved_window_end: str) -> dict:
+    """
+    Build one corridor's manifest entry: the ABLATION basis (assembled at
+    the PINNED frozen window, boundaries re-derived and matched against the
+    pin, filtered train/validation row counts, frozen-window guard run over
+    their concatenation), the FRESH basis (`_build_fresh_basis_entry`), and
+    the per-city null-drop measurement (`_measure_city_assembly`).
+
+    Never reads or records anything about the held-out TEST split beyond
+    what `forecast_experiment.assert_filtered_split_disjoint` itself needs
+    internally (which the harness's own docstring establishes is not a
+    no-peeking violation -- it reads only timestamps, never a target
+    value). This function does not return or log the test split's row
+    count or any other property of it.
+    """
+    city_a, city_b = config.CORRIDOR_ENDPOINTS[corridor]
+
+    # Per-city null-drop measurement FIRST, while a fresh fetch (if any) is
+    # still possible -- corridor_anchored_pair_frame below will then hit
+    # the cache these calls just warmed.
+    cities_entry = {
+        city_a: _measure_city_assembly(
+            city_a, FROZEN_WINDOW_START, FROZEN_WINDOW_END, lead_hours=lead_hours,
+        ),
+        city_b: _measure_city_assembly(
+            city_b, FROZEN_WINDOW_START, FROZEN_WINDOW_END, lead_hours=lead_hours,
+        ),
+    }
+
+    corridor_frame = forecast_experiment.corridor_anchored_pair_frame(
+        corridor, FROZEN_WINDOW_START, FROZEN_WINDOW_END, lead_hours=lead_hours,
+    )
+
+    rederived = rederive_frozen_split_boundaries(corridor_frame)
+    boundaries = rederived["boundaries"]
+
+    train, val, test = experiment_splits.calendar_split(corridor_frame, boundaries)
+    train_filtered = forecast_experiment.filter_to_exact_lead(train, lead_hours=lead_hours)
+    val_filtered = forecast_experiment.filter_to_exact_lead(val, lead_hours=lead_hours)
+    test_filtered = forecast_experiment.filter_to_exact_lead(test, lead_hours=lead_hours)
+
+    # Sanctioned per the harness's own precedent (assert_filtered_split_
+    # disjoint's docstring): reading test's own TIMESTAMPS for a
+    # disjointness check is calendar-boundary arithmetic, not a no-peeking
+    # violation -- no target value is read, and this function returns
+    # nothing derived from `test_filtered` beyond this assertion's pass/fail.
+    forecast_experiment.assert_filtered_split_disjoint(train_filtered, val_filtered, test_filtered)
+    del test_filtered  # never referenced again -- not stored, not returned, not logged.
+
+    # The re-derived boundary's DATE matches the pinned constant (checked
+    # below), but the harness's own boundary rule computes an exact
+    # sub-day TIMESTAMP, not a midnight-aligned date -- so the real
+    # validation split can extend a few hours into the pinned boundary's
+    # calendar day. The pin is deliberately DATE-granularity (matching how
+    # the frozen record itself states it: "test split starts 2026-03-17",
+    # no time component), which is the more conservative of the two -- so
+    # this audit clips the ABLATION basis to strictly before the PINNED
+    # constant (never the re-derived, sub-day-precise one), discarding a
+    # handful of same-day rows that the harness's own precise boundary
+    # would have kept in validation. This is intentionally conservative:
+    # excluding a few extra hours of legitimate validation data costs
+    # nothing scientifically and keeps the frozen-window guard's date-level
+    # pin authoritative over a sub-day recomputation this module explicitly
+    # does not trust (see FROZEN_TEST_SPLIT_START's own comment).
+    pinned_boundary = pd.Timestamp(FROZEN_TEST_SPLIT_START, tz="UTC")
+    train_before_clip, val_before_clip = len(train_filtered), len(val_filtered)
+    train_filtered = train_filtered[train_filtered["datetime_utc"] < pinned_boundary].reset_index(drop=True)
+    val_filtered = val_filtered[val_filtered["datetime_utc"] < pinned_boundary].reset_index(drop=True)
+    rows_clipped_for_pin_safety = (
+        (train_before_clip - len(train_filtered)) + (val_before_clip - len(val_filtered))
+    )
+
+    ablation_frame = pd.concat([train_filtered, val_filtered], ignore_index=True)
+    assert_basis_excludes_frozen_test_rows(ablation_frame, basis="ABLATION")
+
+    ablation_entry = {
+        "train_rows": len(train_filtered),
+        "val_rows": len(val_filtered),
+        "rederived_test_start": rederived["rederived_test_start"],
+        "pinned_test_start": rederived["pinned_test_start"],
+        "matches_pinned_test_start": rederived["matches_pinned_test_start"],
+        "rows_clipped_for_pin_safety": rows_clipped_for_pin_safety,
+        "frozen_window_guard_passed": True,
+    }
+
+    fresh_entry = _build_fresh_basis_entry(
+        corridor, lead_hours=lead_hours, resolved_window_end=resolved_window_end,
+    )
+
+    return {
+        "ablation": ablation_entry,
+        "fresh": fresh_entry,
+        "cities": cities_entry,
+    }
+
+
+def build_basis_manifest(
+    corridors=None, *, lead_hours: int = None, manifest_path: str = None,
+) -> dict:
+    """
+    Assemble the real ABLATION and FRESH bases for every corridor in
+    `corridors` (default: every corridor in `config.CORRIDOR_ENDPOINTS`),
+    measure the null-drop for each endpoint city, and write the whole
+    manifest as JSON to `manifest_path` (default:
+    `data/experiment/audit_basis_manifest.json`, git-ignored evidence, never
+    the artifact of record).
+
+    Raises `ValueError` naming the valid corridors for an unknown one.
+
+    Atomic load-merge-write: if `manifest_path` already exists, this
+    function loads it first and merges this run's corridor entries into the
+    existing `corridors` mapping (overwriting only the corridors just
+    computed) rather than replacing the whole file -- a second, narrower
+    run (e.g. `corridors=["AUSTIN_CORPUS_CHRISTI"]`) never clobbers a prior
+    run's entry for a corridor it did not touch. Writes to a `.tmp` path and
+    `os.replace`s it into place so a reader never observes a partially
+    written file.
+    """
+    if lead_hours is None:
+        lead_hours = config.FORECAST_EXPERIMENT_PRIMARY_LEAD_HOURS
+    if manifest_path is None:
+        manifest_path = DEFAULT_MANIFEST_PATH
+
+    valid_corridors = sorted(config.CORRIDOR_ENDPOINTS)
+    if corridors is None:
+        corridors = valid_corridors
+    else:
+        corridors = list(corridors)
+        unknown = sorted(set(corridors) - set(valid_corridors))
+        if unknown:
+            raise ValueError(
+                f"build_basis_manifest: unknown corridor(s) {unknown} -- "
+                f"valid corridors: {valid_corridors}"
+            )
+
+    resolved_window_end = forecast_experiment._resolve_window_end(None)
+
+    new_entries = {}
+    for corridor in corridors:
+        new_entries[corridor] = _build_corridor_basis_entry(
+            corridor, lead_hours=lead_hours, resolved_window_end=resolved_window_end,
+        )
+
+    manifest_dir = os.path.dirname(manifest_path)
+    if manifest_dir:
+        os.makedirs(manifest_dir, exist_ok=True)
+
+    existing = {}
+    if os.path.exists(manifest_path):
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as fh:
+                existing = json.load(fh)
+        except (json.JSONDecodeError, OSError):
+            existing = {}
+
+    merged_corridors = dict(existing.get("corridors", {}))
+    merged_corridors.update(new_entries)
+
+    manifest = {
+        "generated_at": pd.Timestamp.now(tz="UTC").isoformat(),
+        "note": (
+            "Git-ignored evidence, not the artifact of record -- mirrors "
+            "this project's established convention for generated JSON "
+            "reports (see data/experiment/'s .gitignore entry)."
+        ),
+        "resolved_window_end": resolved_window_end,
+        "lead_hours": lead_hours,
+        "corridors": merged_corridors,
+    }
+
+    tmp_path = manifest_path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as fh:
+        json.dump(manifest, fh, indent=2, default=str)
+    os.replace(tmp_path, manifest_path)
+
+    return manifest

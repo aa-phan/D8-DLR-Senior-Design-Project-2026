@@ -46,11 +46,34 @@ Every empirical claim in this document rests on exactly one of three named bases
 | `ABLATION` | Real rows strictly before `FROZEN_TEST_SPLIT_START` (2026-03-17) | Replication of Phase 3's own candidate ordering; relative-ordering and ablation findings | A confirmation claim — that calendar range was already read during Phase 3's own development |
 | `FRESH` | Real rows strictly after `FROZEN_WINDOW_END` (2026-09-29) | The only basis on which this audit may make a confirmation claim | Nothing is excluded by construction, but a FRESH basis may legitimately be zero rows, and a zero-row basis supports no numeric claim at all |
 
-**Placeholder — filled by Plan 04-02.** The measured row counts per corridor and basis (real
-`ABLATION` train/validation row counts, the real `FRESH` row count and its resolved window, the
-re-derived split-boundary match, and the null-drop measurement) are written to
-`data/experiment/audit_basis_manifest.json` by Plan 04-01 Task 2 and will be transcribed into this
-table's replacement in that same task's commit.
+**Measured (Plan 04-01 Task 2, `data/experiment/audit_basis_manifest.json`, generated 2026-09-30, run
+against the pinned frozen window `[2024-01-20, 2026-09-29]` at the 24-hour primary lead):**
+
+| Corridor | ABLATION train rows | ABLATION val rows | Re-derived `test_start` | Matches pinned `2026-03-17`? | Rows clipped for pin-safety | FRESH rows | FRESH reason (if zero) |
+|---|---|---|---|---|---|---|---|
+| AUSTIN_CORPUS_CHRISTI | 2360 | 784 | 2026-03-17 | Yes | 2 | 0 | resolved window end 2026-09-29 is not strictly later than `FROZEN_WINDOW_END` 2026-09-29 — nothing to fetch |
+| MIDLAND_EL_PASO | 2360 | 784 | 2026-03-17 | Yes | 2 | 0 | resolved window end 2026-09-29 is not strictly later than `FROZEN_WINDOW_END` 2026-09-29 — nothing to fetch |
+
+**Both may-say/may-not-say statements, restated at their measured size, so no later plan may soften
+them:**
+
+- **ABLATION, at 784 validation rows per corridor (minus 2 clipped for pin-safety — see the Data
+  provenance re-audit finding below — leaving 782 rows actually usable per corridor), may support**
+  replication of Phase 3's own candidate ordering, relative-ordering findings between candidates, and
+  ablation studies of the harness's own code. **It may NOT support a confirmation claim** — this exact
+  calendar range (2024-01-20 through 2026-03-16) was already assembled and read during Phase 3's own
+  development and its own validation-split runs (Plans 03-04/03-05), so any later plan's number
+  computed on this basis is a replication of already-seen evidence, not new evidence.
+- **FRESH, at 0 rows for both corridors, measured — not assumed — at run time via
+  `forecast_experiment._resolve_window_end(None)`, may support nothing numeric.** As of this audit's
+  run date (2026-09-30), "yesterday UTC" resolves to exactly `2026-09-29`, the frozen window's own
+  last day — there is zero calendar time between the frozen window's end and today from which to draw
+  a genuinely fresh row. This is the expected honest answer 04-RESEARCH.md's Open Question 2
+  anticipated, not a defect: it means Plan 04-03's confirmation-basis claim for this audit's real-data
+  track is, at this calendar date, necessarily an ABLATION-basis replication only — no real
+  confirmation claim is available today. A future re-run of `build_basis_manifest` on a later calendar
+  date would report a nonzero FRESH row count (accruing at four corridor rows per calendar day, since
+  the exact-lead filter keeps one row in four).
 
 ## Data provenance re-audit (D-01)
 
@@ -108,6 +131,47 @@ explicit constants rather than recomputing them from a freshly assembled frame �
 silently drift the audit's frozen-window guard off the exact boundary Phase 3's test-set run actually
 scored. Plan 04-01 Task 2 independently re-derives the boundary on the real, pinned-window frame and
 records whether it matches `2026-03-17` in `data/experiment/audit_basis_manifest.json`.
+
+On the real, pinned-window corridor frame (`[2024-01-20, 2026-09-29]`, both corridors), the re-derived
+`test_start`'s DATE matches the frozen record's `2026-03-17` exactly. But `_default_split_boundaries`
+computes an exact sub-day TIMESTAMP, not a midnight-aligned date, and the two real corridor frames'
+re-derived boundary lands a few hours into that day rather than at `2026-03-17T00:00:00Z` — so 2 rows
+per corridor (both at `2026-03-17T00:00:00Z` and `T06:00:00Z`) fall on the frozen record's boundary
+DATE while still belonging, under the harness's own precise sub-day rule, to Phase 3's real validation
+split rather than its test split. `forecast_experiment_audit.py`'s pin is deliberately DATE-granularity
+(matching how the frozen record itself states the boundary — "test split starts 2026-03-17", no time
+component), which is the more conservative reading of the two, so `build_basis_manifest` clips both
+corridors' ABLATION basis to strictly before the pinned constant, discarding those 2 legitimate-but-
+boundary-adjacent rows per corridor rather than trusting the sub-day recomputation this module
+explicitly does not pin on. This costs nothing scientifically (2 rows out of 784) and keeps the
+frozen-window guard's coarser, safer boundary authoritative.
+
+**Finding 3 — the null-row drop is a one-time window-start boundary effect, not a scattered internal
+gap, and it does not threaten arm 5's positional lag assumption (closes 04-RESEARCH.md Open
+Question 1).** `anchored_pair_frame`'s `dropna()` (`backend/forecast_experiment.py:658`) drops
+exactly 24 rows for every one of the four project cities over the pinned frozen window — measured via
+`build_basis_manifest`'s `_measure_city_assembly`, cross-checked independently against an hourly-span
+expectation computed from calendar arithmetic alone (23,616 expected hourly rows over
+`[2024-01-20, 2026-09-29]` inclusive, versus 23,592 actually assembled — a difference of 24, matching
+the frozen record's own stated per-city row count of 23,592 exactly). I inspected the cached assembled
+frames directly (`data/experiment/anchored_pair_frame_<CITY>_2024-01-20_2026-09-29_lead24_previous_runs.csv`)
+to locate the 24 missing hours rather than assuming their position, and found the SAME 24-hour block
+for all four cities: `2024-01-20T00:00:00Z` through `2024-01-20T23:00:00Z` — the window's entire FIRST
+calendar day, contiguous, with no other gap anywhere else in the 983-day series. This is fully
+explained structurally, not mysteriously: `anchored_pair_frame`'s anchor group is the truth series
+shifted forward by `lead_hours` (24), so the anchor value for a row at valid time `T` on the window's
+first day requires a truth observation from `T - 24h`, i.e. from the day BEFORE the window start —
+but `open_meteo_provider.fetch_open_meteo` is only called for `[start, end]` = `[2024-01-20,
+2026-09-29]`, never for `2024-01-19`. The anchor columns for the first 24 rows are therefore
+necessarily null, and `merged.dropna()` (line 658) removes them. **Judgement: this does NOT threaten
+arm 5's positional lag assumption.** The drop is a single contiguous block at the extreme edge of the
+window, entirely outside any scored split (the ABLATION train split begins at the window start and
+extends for roughly 1,770 days before reaching validation, so the missing first day is deep inside
+the earliest training rows, not adjacent to any split boundary that would misalign a lag). From
+`2024-01-21T00:00:00Z` onward, the hourly cadence is unbroken for all four cities — confirmed by the
+same missing-timestamp scan finding zero additional gaps anywhere in the remaining ~23,592-row series.
+Plan 04-02's own lag-offset audit (04-CONTEXT.md D-01's fifth bullet) can therefore treat the interior
+hourly cadence as gap-free rather than as an open empirical question.
 
 ## Strengthened comparison (D-02)
 

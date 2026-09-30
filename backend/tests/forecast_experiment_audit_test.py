@@ -1,15 +1,27 @@
 """
 Tests for backend/forecast_experiment_audit.py (Phase 4, Plan 04-01).
 
-This file makes NO network call and needs NO fetch monkeypatching at all --
-every function it exercises is a pure transform over in-memory frames. The
-one test that touches disk (`test_truth_provenance_finding_...disclosure`)
-writes to a pytest `tmp_path` file and passes its path directly to
-`truth_provenance_finding`, so the real
-`docs/data-science/decisions/forecast_correction_experiment.md` is never
-read or written by this test. Module-level plain-assert functions, no test
-classes, mirroring `forecast_experiment_test.py`'s own convention.
+Task 1's tests make NO network call and need NO fetch monkeypatching at all
+-- every function they exercise is a pure transform over in-memory frames.
+The one Task 1 test that touches disk
+(`test_truth_provenance_finding_...disclosure`) writes to a pytest
+`tmp_path` file and passes its path directly to `truth_provenance_finding`,
+so the real `docs/data-science/decisions/forecast_correction_experiment.md`
+is never read or written by this test.
+
+Task 2's `build_basis_manifest` tests monkeypatch
+`forecast_experiment_audit.forecast_experiment.corridor_anchored_pair_frame`,
+`.anchored_pair_frame`, and `._resolve_window_end` -- on the AUDIT MODULE's
+own reference to the harness module object, never by editing
+`forecast_experiment.py` itself -- so these tests make no network call
+either, and every manifest they write goes to a pytest `tmp_path`, never the
+real `data/experiment/` cache.
+
+Module-level plain-assert functions, no test classes, mirroring
+`forecast_experiment_test.py`'s own convention.
 """
+
+import json
 
 import pandas as pd
 import pytest
@@ -223,3 +235,105 @@ def test_truth_provenance_finding_scans_rather_than_hardcodes(tmp_path):
     assert finding["frozen_record_states_limitation"] is True
     assert finding["frozen_record_quotation"] is not None
     assert "sensor" in finding["frozen_record_quotation"].lower()
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# build_basis_manifest (Task 2) -- network-free via monkeypatched assembly
+# helpers on the audit module's own `forecast_experiment` reference
+# ──────────────────────────────────────────────────────────────────────────
+
+def _fake_corridor_frame(corridor, start, end, *, lead_hours):
+    """A small, deterministic, already-exact-lead-filtered (6h cadence) synthetic corridor frame."""
+    idx = pd.date_range(start, end, freq="6h", tz="UTC")
+    return pd.DataFrame({"datetime_utc": idx})
+
+
+def _fake_city_frame(city, start, end, *, lead_hours):
+    """A small, deterministic, full-hourly-cadence synthetic per-city frame."""
+    idx = pd.date_range(start, end, freq="h", tz="UTC")
+    return pd.DataFrame({"datetime_utc": idx})
+
+
+def _patch_harness_assembly(monkeypatch, *, resolved_end=None):
+    monkeypatch.setattr(fea.forecast_experiment, "corridor_anchored_pair_frame", _fake_corridor_frame)
+    monkeypatch.setattr(fea.forecast_experiment, "anchored_pair_frame", _fake_city_frame)
+    if resolved_end is not None:
+        monkeypatch.setattr(fea.forecast_experiment, "_resolve_window_end", lambda end: resolved_end)
+
+
+def test_build_basis_manifest_refuses_unknown_corridor():
+    with pytest.raises(ValueError) as exc_info:
+        fea.build_basis_manifest(corridors=["NOT_A_REAL_CORRIDOR"])
+    message = str(exc_info.value)
+    for name in config.CORRIDOR_ENDPOINTS:
+        assert name in message, message
+
+
+def test_fresh_basis_zero_row_branch_carries_explicit_reason(monkeypatch):
+    _patch_harness_assembly(monkeypatch, resolved_end=fea.FROZEN_WINDOW_END)
+    resolved = fea.forecast_experiment._resolve_window_end(None)
+    assert resolved == fea.FROZEN_WINDOW_END
+    entry = fea._build_fresh_basis_entry(
+        next(iter(config.CORRIDOR_ENDPOINTS)), lead_hours=24, resolved_window_end=resolved,
+    )
+    assert entry["rows"] == 0
+    assert entry.get("reason"), "a zero-row FRESH basis must carry an explicit reason string"
+    assert fea.FROZEN_WINDOW_END in entry["reason"]
+
+
+def test_fresh_basis_nonzero_when_resolved_end_is_later(monkeypatch):
+    later_end = "2027-01-15"
+    _patch_harness_assembly(monkeypatch, resolved_end=later_end)
+    entry = fea._build_fresh_basis_entry(
+        next(iter(config.CORRIDOR_ENDPOINTS)), lead_hours=24, resolved_window_end=later_end,
+    )
+    assert entry["rows"] > 0
+    assert entry["frozen_window_guard_passed"] is True
+
+
+def test_build_basis_manifest_atomic_merge_preserves_prior_corridor(tmp_path, monkeypatch):
+    _patch_harness_assembly(monkeypatch, resolved_end=fea.FROZEN_WINDOW_END)
+    manifest_path = str(tmp_path / "audit_basis_manifest.json")
+    corridor_a, corridor_b = sorted(config.CORRIDOR_ENDPOINTS)
+
+    fea.build_basis_manifest(corridors=[corridor_a], manifest_path=manifest_path)
+    first = json.load(open(manifest_path))
+    assert corridor_a in first["corridors"]
+    assert corridor_b not in first["corridors"]
+
+    fea.build_basis_manifest(corridors=[corridor_b], manifest_path=manifest_path)
+    second = json.load(open(manifest_path))
+    assert corridor_a in second["corridors"], (
+        "a second corridor's write must preserve the first corridor's entry"
+    )
+    assert corridor_b in second["corridors"]
+
+
+def test_build_basis_manifest_roundtrips_with_documented_keys(tmp_path, monkeypatch):
+    _patch_harness_assembly(monkeypatch, resolved_end=fea.FROZEN_WINDOW_END)
+    manifest_path = str(tmp_path / "audit_basis_manifest.json")
+    corridor = next(iter(config.CORRIDOR_ENDPOINTS))
+
+    fea.build_basis_manifest(corridors=[corridor], manifest_path=manifest_path)
+    loaded = json.load(open(manifest_path))
+
+    for key in ("generated_at", "note", "resolved_window_end", "lead_hours", "corridors"):
+        assert key in loaded, sorted(loaded)
+
+    entry = loaded["corridors"][corridor]
+    for key in ("ablation", "fresh", "cities"):
+        assert key in entry, sorted(entry)
+
+    for key in (
+        "train_rows", "val_rows", "rederived_test_start",
+        "matches_pinned_test_start", "frozen_window_guard_passed",
+    ):
+        assert key in entry["ablation"], sorted(entry["ablation"])
+    assert entry["ablation"]["train_rows"] > 0
+    assert entry["ablation"]["val_rows"] > 0
+
+    assert "rows" in entry["fresh"]
+
+    for city_entry in entry["cities"].values():
+        for key in ("assembled_rows", "dropped_rows", "method", "hourly_span_expectation"):
+            assert key in city_entry, sorted(city_entry)
