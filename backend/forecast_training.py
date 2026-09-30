@@ -285,20 +285,35 @@ def corridor_training_frame(corridor: str, years: int) -> pd.DataFrame:
     return frame[keep_mask].reset_index(drop=True)
 
 
-def build_training_matrix(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
+def build_training_matrix(
+    frame: pd.DataFrame, horizon_minutes: float | None = None,
+) -> tuple[pd.DataFrame, pd.Series]:
     """
     Build the (X, y) training matrix from a `corridor_training_frame`-
     shaped frame: index by `datetime_utc`, build `ampacity_forecast.
     build_ml_features` for X, and set the target `y` to `dlr_amps`
-    shifted FORWARD by exactly `config.FORECAST_HORIZON_MINUTES` worth of
-    rows (1 row at this project's hourly cadence).
+    shifted FORWARD by exactly `horizon_minutes` worth of rows (1 row at
+    this project's hourly cadence, for the production 60-minute default).
+
+    `horizon_minutes` (Phase 3 Plan 05, D-03): an additive, appended-last,
+    default-preserving parameter. When `None` (the default), the horizon
+    is read from `config.FORECAST_HORIZON_MINUTES` exactly as this
+    function did before this parameter existed, so the production
+    trainer's two call sites (`main`, `_run_bakeoff`, both positional,
+    both unchanged) get byte-identical output. The parameter exists so
+    this phase's arm-5 reference model can be refit at a 24-hour target
+    without mutating the global constant -- a hidden global mutation
+    would contaminate any other concurrent reader of
+    `config.FORECAST_HORIZON_MINUTES` in the same process and would hide
+    the change from the call site, which is exactly the failure mode this
+    parameter is designed to avoid.
 
     `X.index` carries each row's FEATURE timestamp; `y.index` carries
     that same row's TARGET timestamp (`feature_timestamp +
-    FORECAST_HORIZON_MINUTES`), so the feature/target time relationship
-    is inspectable by a test directly from the returned index values
-    rather than only asserted in prose (RESEARCH.md Pitfall 4). Rows
-    where any feature or the target is null are dropped.
+    horizon_minutes`), so the feature/target time relationship is
+    inspectable by a test directly from the returned index values rather
+    than only asserted in prose (RESEARCH.md Pitfall 4). Rows where any
+    feature or the target is null are dropped.
     """
     indexed = frame.copy()
     indexed.index = pd.to_datetime(indexed["datetime_utc"])
@@ -306,18 +321,25 @@ def build_training_matrix(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]
 
     X = ampacity_forecast.build_ml_features(indexed)
 
-    horizon = pd.Timedelta(minutes=config.FORECAST_HORIZON_MINUTES)
+    if horizon_minutes is None:
+        resolved_minutes = config.FORECAST_HORIZON_MINUTES
+        source = "config.FORECAST_HORIZON_MINUTES"
+    else:
+        resolved_minutes = horizon_minutes
+        source = "the horizon_minutes argument"
+
+    horizon = pd.Timedelta(minutes=resolved_minutes)
     # This project's only supported cadence is hourly, so the horizon
-    # (60 min) is exactly 1 row -- asserted, not silently assumed, so a
-    # future sub-hourly cadence change fails loudly here instead of
-    # quietly leaking or misaligning the target.
+    # (60 min by default) is exactly 1 row -- asserted, not silently
+    # assumed, so a future sub-hourly cadence change fails loudly here
+    # instead of quietly leaking or misaligning the target.
     cadence = pd.Timedelta(hours=1)
     horizon_rows = horizon / cadence
     if horizon_rows != int(horizon_rows):
         raise ValueError(
-            f"build_training_matrix: FORECAST_HORIZON_MINUTES "
-            f"({config.FORECAST_HORIZON_MINUTES}) is not a whole multiple "
-            f"of the assumed hourly cadence"
+            f"build_training_matrix: resolved horizon {resolved_minutes} "
+            f"minutes (from {source}) is not a whole multiple of the "
+            f"assumed hourly cadence"
         )
     horizon_rows = int(horizon_rows)
 
