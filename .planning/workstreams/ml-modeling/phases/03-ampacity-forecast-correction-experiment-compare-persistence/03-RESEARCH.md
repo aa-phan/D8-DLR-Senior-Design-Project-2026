@@ -1,280 +1,237 @@
-# Phase 3: Ampacity Forecast Correction Experiment - Research
+# Phase 3: Ampacity Forecast Correction Experiment - Research (REFRESH for D-04's 24-hour pivot)
 
-**Researched:** 2026-09-28
-**Domain:** NWP forecast archives (Open-Meteo), IEEE 738 heat-balance decomposition, scikit-learn
-offline experiment harnesses, chronological held-out evaluation
-**Confidence:** HIGH for the API layer and the in-repo code layer (both live-probed / directly
-read this session); MEDIUM for the operational-latency framing; LOW for nothing load-bearing.
+**Researched:** 2026-09-28 (original); **refreshed 2026-09-29** for D-04's pivot to the Previous
+Runs API 24-hour lead as the phase's PRIMARY comparison, superseding the 1-hour Historical
+-Forecast-API design the original research was built around.
+**Domain:** NWP forecast archives (Open-Meteo Previous Runs API), IEEE 738 heat-balance
+decomposition, scikit-learn offline experiment harnesses, chronological held-out evaluation.
+**Confidence:** HIGH for the new Previous-Runs-API layer (live-probed extensively this session,
+~40 raw HTTP requests, cross-verified against Single-Runs and Archive APIs) and for the in-repo
+code layer (every cited file re-read this session). MEDIUM for the diurnal-persistence-strength
+framing (reasoned from the verified 24h-exact-lag construction, not independently benchmarked).
+LOW for nothing load-bearing.
+
+**How to read this document.** This is a refresh, not a rewrite. Everything under a section marked
+**[CARRIED OVER, unchanged]** is still accurate and was true before D-04 — re-read it, but it was
+not re-verified this session because nothing about the pivot touches it. Everything marked
+**[NEW / REPLACED FOR D-04]** is new work from this session, live-verified against the real
+Previous Runs API, and is what Waves 2-5 need to plan against. The original 1-hour-lead content
+(the `hour % 6` calibration gate, `forecast_leadtime_calibration.py`, the bit-identity finding) is
+**preserved below in a dedicated "Legacy 1-Hour Arm" section**, not deleted -- per D-04's
+disposition, that code stays in the repo as a documented, labelled, non-primary curiosity.
 
 ## Summary
 
-The phase as scoped in `03-CONTEXT.md` is buildable, but **three of its load-bearing premises are
-wrong or incomplete**, and one of them changes the design materially.
+D-04 (see `03-CONTEXT.md`) pivoted the phase's PRIMARY comparison from a 1-hour idealized lead
+(Historical Forecast bulk API + calibration gate) to a 24-hour realizable lead (Previous Runs API),
+because the 1-hour design's "forecast" data turned out to be bit-identical to "truth" at that lead
+for the necessarily-recent window the calibration gate required. This refresh answers the four
+questions the pivot raises, all via live HTTP probes against the real API this session (not
+re-derived from the vendor's docs alone):
 
-First, the good news: the Open-Meteo **Historical Forecast API's bulk mode, pinned to
-`models=ecmwf_ifs`, has a fully deterministic and now-measured lead-time structure.** A live
-cross-check this session showed the bulk product's values are **bit-identical** to the Single-Runs
-API's values at forecast leads 0-5 h and diverge at lead >= 6 h, across three cities and three
-seasons. The bulk product stitches exactly the first six hours of each six-hourly ECMWF IFS run.
-That makes `lead_hours = valid_time.hour % 6` an exact, verifiable rule — not a statistical
-estimate. The CONTEXT's `forecast_leadtime_calibration.py` therefore becomes a *verification* of a
-deterministic mapping on a sample, not a distribution-estimation exercise, and it can and should
-still be a hard gate. The measured p05 lead is **0 h**, so `assert_supports_horizon(60min)` fails
-as the CONTEXT anticipated — but the resolution is cleaner than any of its three scoped
-contingencies: filter to valid times where `hour % 6 == 1`, which yields an *exactly* 1-hour lead,
-4 rows/day/city (~1,460/year/city, ~4,380 over the existing 3-year window). This is CONTEXT option
-(c), promoted from a probabilistic filter to a deterministic one.
+1. **Does the bit-identity problem also affect the 24-hour lead? NO -- refuted, decisively.**
+   Live-compared `previous_day1` against `archive-api` truth for the SAME grid point, across 2
+   cities, 6+ dates spanning the full 2024-2026 window, on both `wind_speed` and `temperature`:
+   **zero exact matches out of ~140+ compared hours**, mean absolute difference 0.5-2.1 m/s
+   (wind) and 0.6-1.8 degC (temp) -- a real, physically distinct forecast, not the same number
+   twice. The pivot's central premise holds.
 
-Second, the corrections. (a) `03-CONTEXT.md`'s verified-fact "No fixed train/val/test split exists
-anywhere in this repo currently" is **false** — `anomaly_training.chronological_split` (lines
-394-438) is a fixed, time-ordered, never-shuffled (fit, holdout) split with its own validation
-guards and a `config` fraction. The new `experiment_splits.py` should extend that function's shape
-to three ways and to calendar dates, citing it, not be written as greenfield. (b) The Single-Runs
-`run=` parameter is **not** free-form ISO-8601: `2026-09-25T00:00:00Z` returns HTTP 400
-`Bad Request`; only `YYYY-MM-DDTHH:MM` (no seconds, no `Z`) works. (c) Single-Runs depth is model-
-dependent: `ecmwf_ifs025` only reaches ~2026-04-02, while `ecmwf_ifs` (HRES 9 km) reaches
-2024-03-14 — the CONTEXT's "~March 2024+ for the best model" is right only for `ecmwf_ifs`.
+2. **CRITICAL, newly-discovered finding this session -- Previous Runs API is NOT a flat,
+   exact-by-construction 24-hour lead for every row, contrary to both `03-CONTEXT.md`'s D-04
+   characterization and Open-Meteo's own docs.** `previous_day1` is built by the SAME "stitch the
+   first six hours of each six-hourly model run" mechanism the 1-hour design's bulk Historical
+   -Forecast API used -- just offset by +24 hours instead of +0. Live-verified bit-for-bit against
+   `single-runs-api` at all four six-hourly GFS cycles (00Z/06Z/12Z/18Z), for two cities: a valid
+   hour where `hour % 6 == 0` carries an EXACT 24.0h lead; the other five hours in that block carry
+   leads of 25h, 26h, 27h, 28h, 29h (stitched further into the same prior-day run). This means the
+   phase needs the SAME discipline Plan 03-01 already built for the 1-hour case -- a verified,
+   deterministic filter, not a trust-the-vendor assumption -- just with the remainder changed from
+   `1` to `0`. See Pattern 2 below for the full live evidence and Pitfall 1 for the design
+   consequence.
 
-Third, the thing nobody has said out loud: **no Open-Meteo product can supply an operationally
-realizable 60-minute-ahead NWP forecast, and no run cadence finer than 6-hourly exists in the
-archive** (HRRR included — Open-Meteo archives only its 00/06/12/18 extended cycles). Global models
-carry a 4-6 h dissemination delay after initialization. A "1-hour lead" row taken from the 00Z run
-is a *physically unobtainable* forecast: at 01:00 UTC the 00Z run has not been disseminated. The
-experiment can still be run and is still worth running — but every output surface must state that
-the raw-forecast and ML-corrected arms are scored at an *idealized* lead that a live system could
-not have had, exactly as the oracle arm is labeled non-forecast. Otherwise the phase repeats, at
-one level up, the honesty failure it was created to avoid.
+3. **The `models=` pinning choice is NOT the same model as the 1-hour design's `ecmwf_ifs`.**
+   Live-verified: pinning `models=ecmwf_ifs` on Previous Runs API returns HTTP 200 with an
+   ALL-NULL array for every date this project needs except roughly the last ~6 months -- it would
+   silently (well, loudly, via the existing null-completeness check) fail almost the entire
+   candidate window. The unpinned `best_match` default resolves, for all four project cities, to
+   the IDENTICAL grid point and IDENTICAL values as `models=gfs_seamless` explicitly pinned --
+   confirmed by direct comparison, not assumed. **Recommendation: pin `models=gfs_seamless`
+   explicitly** (not `best_match` -- pin for the same reason the 1-hour design pinned `ecmwf_ifs`:
+   an unpinned default can silently re-resolve later). This requires a SECOND model-ID constant in
+   `open_meteo_forecast_provider.py`, not reuse of the existing `FORECAST_MODEL_ID = "ecmwf_ifs"`.
 
-**Primary recommendation:** Pin `models=ecmwf_ifs` on the Historical Forecast bulk API, fetch the
-full 2023-01-01→2025-12-31 window in **one request per city** (verified: 26,304 rows, ~1.07 MB,
-zero nulls — an exact 1:1 row match with Phase 1's existing Archive-derived training frame), derive
-lead deterministically as `hour % 6`, verify that rule against Single-Runs `models=ecmwf_ifs` on a
-stratified sample as the hard gate, score the 60-minute arms only on the `hour % 6 == 1` subset,
-and label the realizability caveat everywhere.
+4. **Row volume is dramatically larger, even after applying the necessary exact-lead filter.**
+   The full candidate window (`2024-01-20` -- the live-verified archive start for `gfs_seamless`
+   -- through "yesterday") fetched in **one HTTP request, 23,592 hourly rows, 957,624 bytes, zero
+   nulls, 7.2s**. Filtering to the exact-24h-lead subset (`hour % 6 == 0`, mirroring Plan 03-01's
+   `hour % 6 == 1` filter for the 1-hour case) leaves **~3,932 scored rows/city** over the full
+   window -- about 2.7x the 1-hour design's final ~1,440 rows/city, while ALSO being a genuine,
+   non-bit-identical forecast/truth pair.
+
+**Primary recommendation:** Add a new `fetch_previous_runs(lat, lon, start, end, previous_day=1)`
+function to `open_meteo_forecast_provider.py`, pinned to a new `PREVIOUS_RUNS_MODEL_ID =
+"gfs_seamless"` constant (NOT the existing `FORECAST_MODEL_ID`). Generalize the anchored-pair-frame
+contract's hardcoded `pd.Timedelta(hours=1)` to a `lead_hours` parameter so the SAME machinery
+(`anchored_pair_frame`, `assert_exact_lead`, `filter_to_exact_lead`) serves both the legacy 1-hour
+arm (`lead_hours=1`, existing `hour % 6 == 1` filter) and the new primary 24-hour arm
+(`lead_hours=24`, new `hour % 6 == 0` filter). Do NOT reuse `ampacity_forecast.forecast_ampacity
+(method="naive")` / `backtest_residuals` for the 24h persistence arm -- that function's "naive"
+point-forecast is hardwired to "the immediately preceding row" (1 hour at this project's cadence),
+which at a 24-hour claim would silently score a 1-hour-old persistence baseline dressed up as a
+24-hour one. Build the 24h persistence anchor the same way Plan 03-01 built the 1h one: a direct
+shift of the full unfiltered truth series, just by `pd.Timedelta(hours=24)` instead of `hours=1`.
 
 <user_constraints>
 ## User Constraints (from CONTEXT.md)
 
 ### Locked Decisions
 
-**D-01: Use Open-Meteo's Historical Forecast API (bulk date-range mode) as the forecast archive,
-gated by an empirical lead-time calibration step — never trust the product's stated lead time.**
-Live-confirmed during this discussion: no historical forecast archive with real issue-time/
-valid-time separation exists anywhere in this codebase (`v1.0-ROADMAP.md` explicitly flags this
-as absent). Open-Meteo's Historical Forecast API (`historical-forecast-api.open-meteo.com`)
-archives real stitched-together past model-run output (ECMWF/GFS/ICON), several years deep, free,
-already the provider family this project uses — genuinely a forecast product, not reanalysis. But
-its bulk mode's `forecast_hours`/`past_hours` params are live-confirmed **mutually exclusive**
-with `start_date`/`end_date` — it returns "the first few hours of each successive run stitched
-into a continuous series," an approximately-short-lead product with an *unmeasured* effective lead
-time, not a user-pinned exact lead. A separate Single-Runs API (`single-runs-api.open-meteo.com`,
-`&run=<ISO8601>`) gives exact, unambiguous lead times but only reaches back to ~March 2024 and
-requires one call per model run (no batching).
-**Resolution:** use the bulk product for the main experiment's data volume, but build a
-calibration step (`forecast_leadtime_calibration.py`) that samples the Single-Runs API over the
-overlap window and empirically measures the bulk product's actual effective lead-time
-distribution before any approach is scored. This is a **hard gate** (`assert_supports_horizon`),
-not an assumption: if the measured p05 lead can't support a 60-minute claim, the phase does not
-silently proceed — see the contingency in Open Questions. — **Reversibility:** reversible — the
-calibration step is disposable tooling; if a better forecast-archive source appears later, only
-the fetch layer changes, not the experiment's approach implementations.
+**D-01 (ORIGINAL, now downstream of D-04): Use Open-Meteo's Historical Forecast API (bulk
+date-range mode) as the forecast archive, gated by an empirical lead-time calibration step.**
+Fully executed in Plan 03-01; its resulting code (`open_meteo_forecast_provider.
+fetch_historical_forecast`/`fetch_single_run`, `forecast_leadtime_calibration.py`) is retained and
+still correct for the now-downgraded 1-hour curiosity arm. See "Legacy 1-Hour Arm" section below
+for the full original content (calibration gate mechanics, the bit-identity finding, the two window
+corrections).
 
-- **Rejected alternative — wait and collect forward-only.** Truest to a strict "never substitute"
-  reading, but means no real backtest is possible for months. Rejected as impractical for this
-  phase's timeline; the calibration-gate approach gets a real, honestly-characterized backtest now.
-- **Rejected alternative — Single-Runs-only.** Cleaner (exact lead time, zero ambiguity) but limited
-  to ~18 months of history and requires substantially more collection engineering (no batching).
-  Deferred to a future phase (see Open Questions) if the bulk product's calibration gate fails.
+**D-02: Build and run the full seven-approach comparison in this phase; explicitly stop and report
+if nothing beats persistence.** Unchanged by D-04. The seven arms (0 persistence, 1 NWP-wind-delta
+baseline, 2 raw forecast->IEEE 738, 3 ML-corrected wind, 4 ML-corrected cooling, 5 reference "ml"
+refit on train+val, 6 oracle) are now run against the 24-hour Previous-Runs data as PRIMARY, with
+the 1-hour Historical-Forecast arm kept as a documented, labelled, non-primary curiosity (D-04's
+disposition). All arms still score on **identical held-out chronological test timestamps** --
+`experiment_splits.calendar_split`, already built and tested in Plan 03-01, is lead-time-agnostic
+and needs no change for the 24h primary path.
 
-**D-02: Build and run the full seven-approach comparison in this phase; explicitly stop and
-report if nothing beats persistence rather than building probabilistic/regime/fusion layers on
-top of a losing result.** The full ask (4+ approaches, oracle diagnostic, probabilistic
-evaluation, regime analysis, multi-source fusion, production integration) is too large for one
-phase without wasting effort on machinery built atop an unproven base.
-**Resolution — this phase covers only:**
-0. Persistence (reuse `ampacity_forecast.forecast_ampacity(method="naive")` unchanged)
-1. NWP-wind-delta baseline (observed wind + forecast wind delta, other inputs held at
-   latest-observed)
-2. Raw forecast → IEEE 738 (no correction)
-3. ML-corrected wind → IEEE 738 (u/v decomposition; linear regression, then gradient boosting)
-4. ML-corrected cooling → heat balance (corrects the convective heat-loss term directly)
-5. Reference: current `"ml"` model, **refit on train+val only** (the production artifact was
-   trained on years overlapping this experiment's test range and would leak if reused as-is)
-6. Oracle diagnostic (observed future wind substituted in; explicitly labeled non-forecast in
-   every output surface — never presented as a competing method)
+**D-03: No existing runtime file changes behavior in this phase.** Unchanged. New code lives in new
+files; `thermal_model.py`'s `convective_heat_loss`/`natural_convection` extraction and
+`forecast_training.py`'s `corridor_weakest_link` extraction are both **already complete** (Plan
+03-02, confirmed by direct read this session -- see "Carried-Over Code" below) and are lead-time
+-agnostic, fully reusable by the 24h primary path with zero further change.
 
-All seven scored on **identical held-out chronological test timestamps** — a fixed calendar
-train/val/test split, which is new infrastructure (every existing eval mechanism in this repo,
-`backtest_residuals` and `TimeSeriesSplit`, is walk-forward-only, not a true held-out split).
-— **Reversibility:** reversible — a follow-up phase can add probabilistic/regime/fusion work or
-production wiring without touching this phase's experiment code, only extending it.
+**D-04 (SUPERSEDES D-01's 1-hour lead as primary): Pivot to the 24-hour realizable lead via
+Open-Meteo's Previous Runs API as the phase's primary comparison; the 1-hour idealized-lead arm
+(D-01) is downgraded to a documented, non-primary curiosity.** Full text preserved verbatim from
+`03-CONTEXT.md`:
 
-**D-03: No existing runtime file changes behavior in this phase.** New code lives in new files
-(`backend/open_meteo_forecast_provider.py`, `backend/wind_vector.py`,
-`backend/experiment_splits.py`, `backend/forecast_leadtime_calibration.py`,
-`backend/forecast_experiment.py`), following the repo's own `forecast_training.py`/
-`anomaly_training.py` convention (standalone offline script imports the runtime modules, never
-the reverse). Two existing files get **additive, default-preserving** refactors, each gated by an
-equality test against pre-refactor output:
+> **What happened.** Plan 03-01 executed D-01 fully: it built the bulk-forecast provider, the
+> lead-time calibration gate, found and precisely characterized a real deterministic-lead boundary
+> (sharp cutover, further refined to 2025-10-01 once all four daily six-hourly runs were checked,
+> not just 00Z), corrected the experiment window accordingly, and then ran the first real scored
+> slice (persistence vs. raw-forecast-through-IEEE-738 for one city). That run surfaced a second,
+> more fundamental problem no prior document anticipated: for the corrected (necessarily recent)
+> window, Open-Meteo's "forecast" bulk product is empirically bit-identical to the "truth"
+> archive/reanalysis product -- confirmed independently via raw HTTP requests bypassing all repo
+> code, across three cities. Arm 2 (raw forecast) consequently scored an exact 0.000 MAE against
+> truth -- not because a 1-hour-lead forecast is skillful, but because in this data source, at this
+> lead, for this recent window, "forecast" and "truth" are the same number.
+>
+> **Resolution (user decision, 2026-09-29):** promote the 24-hour realizable-lead arm... to the
+> phase's PRIMARY comparison. Open-Meteo's Previous Runs API (`previous-runs-api.open-meteo.com`)
+> gives an exact, unambiguous lead by construction (`<var>_previous_dayN` columns, N=1..7 days), is
+> bulk-batched (no per-run HTTP calls, no calibration gate needed at all -- the lead is correct by
+> API contract, not something to empirically verify), and at 24 hours out, forecast and truth
+> should genuinely diverge... Archive coverage for this endpoint begins ~2024-01-15/20.
+>
+> **What carries over unchanged:** `backend/wind_vector.py`, the `thermal_model.py`
+> `convective_heat_loss`/`q_conv_override` extraction, and `backend/forecast_training.py`'s
+> `corridor_weakest_link` extraction... are lead-time-agnostic and fully reusable. The provider
+> adapter needs a new `fetch_previous_runs` function... rather than a redesign.
+>
+> **What needs replanning:** the anchored-pair-frame contract, `forecast_experiment.py`'s
+> arm-scoring machinery, and Plans 03-03 through 03-07 were all designed around the 1-hour
+> idealized lead as primary. These need re-design around the 24-hour Previous-Runs-API lead as
+> primary instead.
+>
+> **Disposition of the 1-hour arm:** keep it as a documented, explicitly-labeled non-primary
+> curiosity -- report its result in the final decision record with the bit-identity caveat
+> prominently attached, but do not treat it as a competing candidate against persistence in the
+> phase's primary verdict.
 
-- `backend/thermal_model.py`: extract `convective_heat_loss`/`natural_convection` from the
-  existing `Q_cf`/`Q_cn`/`max()` block (verified by direct read, ~lines 152-161); add an optional
-  `q_conv_override=None` keyword to `ieee738_ampacity` (new param, default `None`, zero existing
-  call-site changes — `T_c` is always `conductor.T_max`, a fixed constant, so the extracted
-  function only needs `T_amb_c`/`wind_perp_ms` as live inputs).
-- `backend/forecast_training.py`: extract the inline weakest-link min()-over-two-cities block
-  (~lines 147-189) into a shared `corridor_weakest_link(...)` helper, reused by both the
-  production trainer and the new experiment harness.
+**IMPORTANT CORRECTION to D-04's own text, established live this session:** D-04's claim that
+Previous Runs "gives an exact, unambiguous lead by construction... no calibration gate needed at
+all" is **not accurate as stated** -- see Summary point 2 and Pattern 2 below. The lead is exact
+ONLY for `hour % 6 == 0` valid times; the rest of the series carries a 24-29h range. This does not
+undo D-04's resolution (the pivot still fully solves the bit-identity problem, and a verified
+filter is a much smaller ask than a full calibration gate), but the planner must not carry forward
+the "no verification needed" framing into Wave 2-5 task design. A lightweight verification is still
+warranted -- see Pitfall 1's recommended design.
 
-If the equality gate can't be made to pass for either extraction, fall back to a clearly-commented
-duplicate in the new experiment file rather than force it — logged as debt, not silently done.
-— **Reversibility:** the `thermal_model.py` change is a one-way door in the loose sense that
-reverting it later means re-deriving the extraction; but it's purely additive (no removed
-capability) so the practical reversal cost is low. Flagged for a `checkpoint:decision` if
-`--no-reversibility-gates` is not set.
+### Claude's Discretion (equivalent: CONTEXT's Open Questions, now updated for D-04)
 
-### Claude's Discretion
-
-No `## Claude's Discretion` section exists in `03-CONTEXT.md`. The equivalent discretion surface is
-its `## Open Questions` block, reproduced here because the planner must resolve each one:
-
-- **Lead-time gate contingency.** If the calibration step's measured p05 lead can't support a
-  60-minute claim, three options were scoped (not chosen — pick explicitly if it comes up):
-  (a) anchor pulls via Single-Runs directly on a stratified subsample (shrinks test set, no
-  batching); (b) relabel the horizon to the bulk product's measured native lead, stated plainly in
-  every output; (c) filter to rows whose assumed issue time <= T (preserves 60-min framing, needs
-  its own characterization of what gets filtered). Leaning (b) primary + (c) as a sensitivity check
-  if needed, but not locked in — the planner/executor should decide once real numbers are in hand.
-- **`ieee738_ampacity` override shape.** Keyword on the existing function (`q_conv_override=None`)
-  vs. a separate `ieee738_ampacity_from_terms(...)`.
-- **Approach 4 (ML-corrected cooling) target parameterization.** Predict the level `Q_conv_obs`
-  directly, or a scale-free log-ratio `log(Q_conv_obs / Q_conv_fc)`? Decide on the validation set.
-- **Approach 3 pooling.** One correction model per corridor pooled over both endpoint cities (with
-  an endpoint indicator) vs. two per-city models — decide on the validation set.
-- **Whether the bulk product's effective lead time is stable or hour-of-day dependent.**
-- **Total HTTP request volume budget** for the initial data-warming run.
-- **Requirement ID.** Leaning: no new ID needed.
-- **Detailed file-level design** was worked out during the chat discussion; treat as a strong
-  starting point but verify every code claim against the live repo.
-
-**This research answers five of those eight.** See `## Open Questions` at the end for what remains.
+- **Lead-time gate contingency (1-hour arm):** resolved in Plan 03-01 -- see "Legacy 1-Hour Arm."
+- **`ieee738_ampacity` override shape:** resolved in Plan 03-02 (`q_conv_override=None` keyword,
+  already implemented -- see "Carried-Over Code").
+- **Approach 4 target parameterization (level vs. log-ratio):** still open, decide on the
+  validation set -- unaffected by D-04's lead change.
+- **Approach 3 pooling (per-corridor vs. per-city):** still open, decide on the validation set --
+  unaffected by D-04's lead change.
+- **NEW (this refresh): exact-lead filter vs. broader "approximately 24h" window for the primary
+  arm.** See Open Questions #1 below -- this is the 24h analog of the old lead-time-gate question
+  and needs an explicit planner decision.
+- **NEW (this refresh): how does arm 5 (reference "ml" model, refit train+val only) handle a
+  24-hour target when the production model's target-shift logic is hardwired to
+  `config.FORECAST_HORIZON_MINUTES` (currently 60)?** See Pitfall 4 and Open Questions #2.
+- **Requirement ID:** still no new ID needed -- D-04 explicitly reconfirms this ("Not a
+  requirements change").
 
 ### Deferred Ideas (OUT OF SCOPE)
 
-From `03-CONTEXT.md` `<domain>`:
-
-> Out of scope for this phase: wiring any winning approach into
-> `ampacity_forecast.FORECAST_METHODS` (that's a separate future phase, contingent on this one's
-> results, and requires its own decision about runtime forecast-fetch fallback behavior);
-> probabilistic/quantile evaluation; regime-specific correction models; multi-NWP-source fusion.
-> These are explicitly deferred, not silently dropped.
+Unchanged from the original: probabilistic/quantile evaluation, regime-specific correction models,
+multi-NWP-source fusion, and wiring any winning approach into `ampacity_forecast.FORECAST_METHODS`
+remain explicitly out of scope for this phase.
 </user_constraints>
 
 <phase_requirements>
 ## Phase Requirements
 
-**No new requirement ID is warranted.** This is confirmed against REQUIREMENTS.md's own conventions,
-not assumed:
-
-`REQUIREMENTS.md` is a **capability-commitment** register, not a work register. Every one of its
-four IDs is phrased as a shipped capability ("An ML model ... forecasts ampacity ahead of real
-time, dropped in behind `ampacity_forecast.py`'s existing `forecast_ampacity` function signature")
-[VERIFIED: .planning/workstreams/ml-modeling/REQUIREMENTS.md:20-24]. Its `## Traceability` table has
-exactly four rows and its `**Coverage:**` block reads `v1.3 requirements: 4 total / Mapped to
-phases: 4 / Unmapped: 0` [VERIFIED: REQUIREMENTS.md:53-64] — a closed set, all four marked
-`Complete`.
-
-D-03 locks this phase to **zero behavior change in any existing runtime caller**. A phase that
-changes no runtime capability cannot discharge a capability commitment, so adding an ID would
-create a fifth row that the phase is structurally unable to satisfy, and would break the
-`Unmapped: 0 ✓` invariant on the way in.
+Unchanged from the original research: **no new requirement ID is warranted.** D-04 does not change
+this -- it is still a methodology investigation of FCST-01's existing `"ml"` method, discharging no
+new capability commitment. See the original research's full reasoning (REQUIREMENTS.md's
+capability-commitment framing, the `Unmapped: 0` invariant) -- not re-derived here since D-04 does
+not touch it.
 
 | ID | Description | Research Support |
 |----|-------------|------------------|
-| *(none — see above)* | Methodology investigation of FCST-01's shipped `"ml"` method | The whole of this document |
-
-**Relationship to existing IDs.** This phase investigates the open recommendation left by
-**FCST-02**'s validation record, which explicitly declines to resolve it:
-
-> "Whether `"ml"` should be recommended as the production-preferred method at all at the current
-> 60-minute horizon, given that the measured evidence in this document does not currently support
-> that recommendation — this document intentionally does not resolve that recommendation; it
-> records the evidence a future decision would need."
-> [VERIFIED: docs/data-science/decisions/forecasting_model.md:207-210]
-
-The planner should add a follow-up line to `forecasting_model.md`'s Open Questions pointing at this
-phase's output record, and should **not** edit REQUIREMENTS.md.
+| *(none)* | Methodology investigation of FCST-01's shipped `"ml"` method, now primarily evaluated at a 24-hour lead per D-04 | This document + original 03-RESEARCH.md content |
 </phase_requirements>
 
 ## Architectural Responsibility Map
 
+**[CARRIED OVER, unchanged by D-04]** -- the tier assignments do not change; only the data source
+feeding the "Forecast-archive HTTP fetch" row changes.
+
 | Capability | Primary Tier | Secondary Tier | Rationale |
 |------------|-------------|----------------|-----------|
-| Forecast-archive HTTP fetch + response validation | Provider adapter (`open_meteo_forecast_provider.py`) | — | The repo already owns exactly one tier for "normalize a weather HTTP source into PIPELINE_SCHEMA columns" (`open_meteo_provider`, `asos_provider`, `tceq_provider`, `nsrdb_provider`); a fifth sibling is the established shape |
-| Lead-time verification against Single-Runs | Offline experiment script (`forecast_leadtime_calibration.py`) | Provider adapter | The gate is disposable tooling, not runtime; it consumes two providers and asserts a relationship between them |
-| Wind u/v decomposition + recomposition | Pure math module (`wind_vector.py`) | — | Stateless, no I/O, no config — same tier as `thermal_model.perpendicular_wind`, which it must agree with |
-| Convective heat-loss term extraction | Physics core (`thermal_model.py`) | — | Already owns `Q_cf`/`Q_cn`/`Q_conv`; splitting the term out anywhere else forks the physics, which the module docstring forbids |
-| Fixed calendar train/val/test split | Shared experiment infra (`experiment_splits.py`) | — | Generalizes `anomaly_training.chronological_split`; belongs beside neither trainer since both may use it |
-| Per-approach fit + score | Offline experiment harness (`forecast_experiment.py`) | scikit-learn | Mirrors `forecast_training.bakeoff_corridor` / `anomaly_training.corridor_report` |
-| Weakest-link corridor reduction | Offline trainer (`forecast_training.py`, extracted helper) | — | D-03's second refactor; currently inline in `corridor_training_frame` |
-| Runtime forecast serving | **explicitly NOT this phase** (`ampacity_forecast.py` untouched) | — | D-03 |
+| Forecast-archive HTTP fetch + response validation (NOW: bulk Historical-Forecast for the legacy 1h arm, Previous-Runs for the PRIMARY 24h arm) | Provider adapter (`open_meteo_forecast_provider.py`) | — | Same module, one more sibling function (`fetch_previous_runs`) alongside `fetch_historical_forecast`/`fetch_single_run` |
+| 24h-lead stitching verification (NEW) | A new, lightweight verification (module TBD by planner — see Pitfall 1) | Provider adapter | Mirrors the 1-hour design's calibration-gate tier assignment, scaled down since the mechanism is now understood analytically, not just empirically |
+| Wind u/v decomposition + recomposition | Pure math module (`wind_vector.py`) | — | Unchanged — lead-time-agnostic |
+| Convective heat-loss term extraction | Physics core (`thermal_model.py`) | — | Unchanged — already extracted in Plan 03-02 |
+| Fixed calendar train/val/test split | Shared experiment infra (`experiment_splits.py`) | — | Unchanged — already built and tested in Plan 03-01, lead-time-agnostic |
+| Per-approach fit + score, generalized for a `lead_hours` parameter | Offline experiment harness (`forecast_experiment.py`) | scikit-learn | The anchored-pair-frame contract needs generalizing (currently hardcodes `pd.Timedelta(hours=1)` and the 1h-specific filter constants) — see Pattern 3 |
+| Weakest-link corridor reduction | Offline trainer (`forecast_training.py`, extracted helper) | — | Unchanged — already extracted in Plan 03-02 |
+| Runtime forecast serving | **explicitly NOT this phase** (`ampacity_forecast.py` untouched) | — | D-03, unchanged |
 
 ## Standard Stack
 
-### Core
+**[CARRIED OVER, unchanged]** No new package is required by the D-04 pivot. `pandas`, `numpy`,
+`scikit-learn`, `requests`, `pytest` are all already pinned/installed and used identically. See the
+original research's Standard Stack, Package Legitimacy Audit, and "Alternatives Considered" tables
+for the full detail — not re-verified this session since nothing about package versions changed.
 
-| Library | Version | Purpose | Why Standard |
-|---------|---------|---------|--------------|
-| `pandas` | 2.3.3 | Frame assembly, time indexing, joins | Already pinned [VERIFIED: requirements.txt:23] and used by every backend module |
-| `numpy` | 2.4.3 | Vectorized physics + error metrics | Already pinned [VERIFIED: requirements.txt:24] |
-| `scikit-learn` | 1.9.1 | `LinearRegression`, `HistGradientBoostingRegressor` for the correction models | Already pinned [VERIFIED: requirements.txt:28]; confirmed installed at 1.9.1 via `.venv/bin/python -c "import sklearn"` this session |
-| `requests` | 2.32.5 (installed, **undeclared**) | HTTP for both Open-Meteo endpoints | Used by `open_meteo_provider` [VERIFIED: backend/open_meteo_provider.py:37]; see Pitfall 7 |
-| `pytest` | 9.0.3 | Test runner | Already pinned [VERIFIED: requirements.txt:26]; `pytest.ini` sets `pythonpath = backend`, `testpaths = backend/tests`, `python_files = test_*.py *_test.py *_TestSuite.py` [VERIFIED: pytest.ini:1-5] |
-
-**No new package is required by this phase.** `LinearRegression` and
-`HistGradientBoostingRegressor` both ship in the already-pinned scikit-learn.
-
-### Supporting
-
-| Library | Version | Purpose | When to Use |
-|---------|---------|---------|-------------|
-| `joblib` | (transitive via scikit-learn) | Estimator persistence | Only if the experiment persists correction models; `forecast_training.persist_corridor_model` is the pattern [VERIFIED: backend/forecast_training.py:444-471] |
-
-### Alternatives Considered
-
-| Instead of | Could Use | Tradeoff |
-|------------|-----------|----------|
-| Historical Forecast bulk + `models=ecmwf_ifs` | Single-Runs API for every anchor | Exact lead by construction, no calibration gate needed — but one HTTP request per (run, city), no batching [VERIFIED: live probe, `start_date` rejected], and depth only to 2024-03-14. At 4 runs/day × 4 cities × 2.5 y that is ~14,600 requests vs. 4. Rejected for volume; retained as the gate's sampling source. |
-| Historical Forecast bulk + `models=ecmwf_ifs` | Previous Runs API (`previous_dayN`) | Batched *and* exactly lead-pinned — but the finest granularity is `previous_day1` = 24 h [CITED: open-meteo.com/en/docs/previous-runs-api]. Useless for a 60-min horizon; **highly valuable as a lead-time sensitivity ladder** — see Pattern 4. |
-| `models=ecmwf_ifs` | unpinned `best_match` | `best_match` resolves to different domains per location and per API (`best_match` on Single-Runs resolved to `dwd_icon` in a live probe), which destroys the deterministic lead rule. Do not use. |
-| `models=ecmwf_ifs` | `models=ncep_hrrr_conus` | HRRR is CONUS-native and would be the physically right choice for Texas — but Open-Meteo archives only its 00/06/12/18 cycles on Single-Runs (live-verified: 01/02/05/07/11Z all return "model run is not available"), so it buys no finer lead than IFS while adding null-padded arrays (49/168 non-null). |
-
-**Installation:** none required — the environment already satisfies this phase.
+**One new constant is required** (not a package): `PREVIOUS_RUNS_MODEL_ID: str = "gfs_seamless"` in
+`open_meteo_forecast_provider.py`, alongside the existing `FORECAST_MODEL_ID = "ecmwf_ifs"`. See
+Pattern 1 for why these must be two distinct constants, not one shared value.
 
 ## Package Legitimacy Audit
 
-This phase installs **no external packages**. All four libraries it uses are already pinned in
-`requirements.txt` and already installed in `.venv`, and all were audited in prior phases
-(`01-RESEARCH.md` "Package Legitimacy Audit" for scikit-learn per requirements.txt:17-22).
-
-| Package | Registry | Age | Downloads | Source Repo | Verdict | Disposition |
-|---------|----------|-----|-----------|-------------|---------|-------------|
-| pandas 2.3.3 | PyPI | >15 yrs | very high | github.com/pandas-dev/pandas | OK | Already pinned, no change |
-| numpy 2.4.3 | PyPI | >15 yrs | very high | github.com/numpy/numpy | OK | Already pinned, no change |
-| scikit-learn 1.9.1 | PyPI | >15 yrs | very high | github.com/scikit-learn/scikit-learn | OK | Already pinned + prior-phase audited |
-| requests 2.32.5 | PyPI | >14 yrs | very high | github.com/psf/requests | OK | **Installed but missing from requirements.txt** — see Pitfall 7 |
-
-**Packages removed due to [SLOP] verdict:** none — no new package proposed.
-**Packages flagged as suspicious [SUS]:** none.
-
-*Age/download figures above are [ASSUMED] from general knowledge; they are not load-bearing because
-no install decision rests on them. The load-bearing facts — that each package is already pinned and
-already present — are [VERIFIED: requirements.txt:23-28] and, for `requests` and `sklearn`, by
-direct interpreter import this session.*
+**[CARRIED OVER, unchanged]** This phase installs no external packages, before or after D-04. See
+the original research's audit table — `pandas`, `numpy`, `scikit-learn`, `requests` all `[OK]`,
+already pinned, no new install decision.
 
 ## Architecture Patterns
 
-### System Architecture Diagram
+### System Architecture Diagram (24-hour PRIMARY path, NEW)
 
 ```
                     ┌──────────────────────────────────────────┐
@@ -290,33 +247,41 @@ direct interpreter import this session.*
    ┌────────────────────────────────────┼────────────────────────────────────┐
    │                                    │                                    │
    │  ┌──────────────────────────────┐  │                                    │
-   │  │ Open-Meteo Historical Fcst   │  │                                    │
-   │  │ historical-forecast-api...   │  │                                    │
-   │  │ &models=ecmwf_ifs            │  │                                    │
+   │  │ Open-Meteo Previous Runs API │  │                                    │
+   │  │ previous-runs-api...         │  │                                    │
+   │  │ &models=gfs_seamless (NEW    │  │                                    │
+   │  │  constant, NOT ecmwf_ifs)    │  │                                    │
+   │  │ &hourly=<var>_previous_day1  │  │                                    │
    │  │ &start_date&end_date (bulk)  │  │                                    │
    │  └──────────────┬───────────────┘  │                                    │
-   │   (NEW provider)│                  │                                    │
+   │   (NEW function)│                  │                                    │
    │                 ▼                  │                                    │
    │      "FORECAST" weather @ T        │                                    │
-   │      lead = T.hour % 6  ───────────┼──┐                                 │
+   │      lead = 24 + (T.hour % 6) h ───┼──┐  (NOT a flat 24h -- see Pattern 2)
    │                 │                  │  │                                 │
    │                 │   ┌──────────────┴──▼─────────────────────────┐       │
-   │                 │   │ HARD GATE: forecast_leadtime_calibration  │       │
-   │                 │   │  sample Single-Runs (&run=,&models=       │       │
-   │                 │   │  ecmwf_ifs) → assert bulk == run@lead     │       │
-   │                 │   │  → assert_supports_horizon(60min)         │       │
-   │                 │   │  FAIL ⇒ phase stops / horizon relabelled  │       │
+   │                 │   │ LIGHTWEIGHT VERIFICATION (NEW, smaller     │       │
+   │                 │   │ than the 1h gate -- mechanism is now       │       │
+   │                 │   │ analytically understood, live-confirmed    │       │
+   │                 │   │ against single-runs-api this session)      │       │
    │                 │   └──────────────┬────────────────────────────┘       │
    │                 │                  │ pass                               │
    │                 ▼                  ▼                                    │
    │     ┌───────────────────────────────────────────┐                       │
    │     │ JOIN on datetime_utc, per endpoint city   │◄──────────────────────┘
    │     │ → paired (forecast, truth) frame          │
-   │     │ → FILTER to hour % 6 == 1  (exact 1h lead)│
+   │     │ → FILTER to hour % 6 == 0 (exact 24h lead)│  (was ==1 for the 1h arm)
    │     └───────────────────┬───────────────────────┘
    │                         ▼
    │     ┌───────────────────────────────────────────┐
-   │     │ experiment_splits.calendar_split()        │
+   │     │ anchor group: truth shifted by 24h (NOT 1h)│
+   │     │ built from FULL unfiltered series, same    │
+   │     │ discipline as Plan 03-01's anchored_pair_  │
+   │     │ frame -- generalized `lead_hours` param    │
+   │     └───────────────────┬───────────────────────┘
+   │                         ▼
+   │     ┌───────────────────────────────────────────┐
+   │     │ experiment_splits.calendar_split()        │  (UNCHANGED, reused as-is)
    │     │ train | val | test   (dates, never shuffled)│
    │     └───────────────────┬───────────────────────┘
    │                         │  identical test timestamps for ALL arms
@@ -324,1024 +289,612 @@ direct interpreter import this session.*
    │        ▼                ▼                ▼              ▼             ▼
    │  ┌──────────┐   ┌──────────────┐  ┌───────────┐  ┌───────────┐ ┌──────────┐
    │  │0 persist │   │1 wind-delta  │  │2 raw fcst │  │3 ML-wind  │ │4 ML-cool │
-   │  │ naive    │   │ obs+Δfcst    │  │ →IEEE738  │  │ u/v corr  │ │ Q_conv   │
+   │  │ (T-24h)  │   │ obs+Δfcst    │  │ →IEEE738  │  │ u/v corr  │ │ Q_conv   │
    │  └────┬─────┘   └──────┬───────┘  └─────┬─────┘  └─────┬─────┘ └────┬─────┘
    │       │                │                │              │            │
-   │       │                │   wind_vector.to_uv/from_uv ──┘            │
-   │       │                │                │                           │
-   │       │                ▼                ▼                           ▼
-   │       │      thermal_model.perpendicular_wind          thermal_model
-   │       │                 └──────┬────────┘            .convective_heat_loss
-   │       │                        ▼                              │
-   │       │        thermal_model.ieee738_ampacity  ◄──── q_conv_override
-   │       │                        │
-   │       │        forecast_training.corridor_weakest_link (min over 2 cities)
-   │       │                        │
-   │       ▼                        ▼              ▼              ▼
-   │  ┌──────────────────────────────────────────────────────────────────┐
-   │  │ 5 reference: "ml" refit on train+val only (NOT the prod artifact) │
-   │  │ 6 oracle: observed future wind  [LABELLED NON-FORECAST]           │
-   │  └──────────────────────────┬───────────────────────────────────────┘
-   │                             ▼
+   │       │        (UNCHANGED PHYSICS: wind_vector, thermal_model, corridor_weakest_link)
+   │       │                        ▼              ▼              ▼
+   │       │  ┌──────────────────────────────────────────────────────────────────┐
+   │       │  │ 5 reference: "ml" refit -- NEEDS a 24h target shift, NOT the      │
+   │       │  │   production build_training_matrix's hardwired 1-row/60-min shift │
+   │       │  │ 6 oracle: observed future wind [LABELLED NON-FORECAST]           │
+   │       │  └──────────────────────────┬───────────────────────────────────────┘
+   │       ▼                             ▼
    │              ┌──────────────────────────────────┐
    │              │ score on identical test rows     │
    │              │ MAE / RMSE / rows / lead / caveat│
    │              │ → JSON report + tracked record   │
    │              └──────────────────────────────────┘
    └──────────────────── no arrow returns to ampacity_forecast.py (D-03) ─────┘
+
+  Legacy 1-hour arm (D-01, fully built in Plan 03-01) still exists in parallel,
+  labelled non-primary -- see "Legacy 1-Hour Arm" section. Its diagram is
+  preserved unchanged at the end of this document.
 ```
 
-### Recommended Project Structure
+### Pattern 1: Model pinning for Previous Runs API is a DIFFERENT model than the 1-hour design used
+
+**What, live-verified this session.** The existing `open_meteo_forecast_provider.FORECAST_MODEL_ID
+= "ecmwf_ifs"` constant, if naively reused for a new `fetch_previous_runs` call, breaks almost the
+entire candidate window:
 
 ```
-backend/
-├── open_meteo_forecast_provider.py   # NEW  Historical Forecast + Single Runs adapters
-├── wind_vector.py                    # NEW  u/v decomposition, pure math, no I/O
-├── experiment_splits.py              # NEW  calendar train/val/test split
-├── forecast_leadtime_calibration.py  # NEW  the hard gate; __main__ entry point
-├── forecast_experiment.py            # NEW  7-arm harness; __main__ entry point
-├── thermal_model.py                  # EDIT additive: convective_heat_loss / natural_convection
-│                                     #      + q_conv_override=None
-├── forecast_training.py              # EDIT additive: corridor_weakest_link(...) extraction
-└── tests/
-    ├── open_meteo_forecast_provider_test.py
-    ├── wind_vector_test.py
-    ├── experiment_splits_test.py
-    ├── forecast_leadtime_calibration_test.py
-    └── forecast_experiment_test.py
+Previous Runs API, wind_speed_10m_previous_day1, AUSTIN (30.2711,-97.7437), models=ecmwf_ifs:
+  2024-01-10 .. 2026-01-15   -> HTTP 200, 24/24 null    (unusable for the whole desired window)
+  2026-03-01 onward          -> HTTP 200, 0/24 null     (only the last few months work)
+
+Same requests with NO models param (unpinned "best_match"):
+  2024-01-18 -> 24/24 null
+  2024-01-19 -> 12/24 null   (half the day; the run that would populate the rest hadn't posted yet)
+  2024-01-20 -> 0/24 null    (clean start, confirmed identically for all 4 project cities)
+  ... through 2026-09-20     -> 0/24 null, continuously
 ```
 
-Test files use the `*_test.py` suffix (matches `pytest.ini`'s `python_files` and every existing
-file in `backend/tests/`) and live in `backend/tests/`, **not** beside the module.
-
-### Pattern 1: Provider adapter — clone `open_meteo_provider`'s structure, change only the base URL
-
-The Historical Forecast API's response envelope is **byte-for-byte the same shape** as the Archive
-API's. Live-verified this session:
+**Root cause, live-confirmed by direct model comparison at the same lat/lon/date:** unpinned
+`best_match` resolves to `gfs_seamless` for **every one of this project's four cities** (identical
+lat/lon grid snap AND identical values, confirmed by direct side-by-side request):
 
 ```
-# historical-forecast-api.open-meteo.com/v1/forecast?...&models=ecmwf_ifs
-{"latitude":30.269146,"longitude":-97.75338,"generationtime_ms":45.3,"utc_offset_seconds":0,
- "timezone":"GMT","timezone_abbreviation":"GMT","elevation":167.0,
- "hourly_units":{"time":"iso8601","temperature_2m":"°C","wind_speed_10m":"m/s",
-                 "wind_direction_10m":"°","shortwave_radiation":"W/m²",
-                 "relative_humidity_2m":"%"},
- "hourly":{"time":["2025-07-01T00:00", ...], "temperature_2m":[26.0,...], ...}}
+AUSTIN         best_match latlon=(30.269146,-97.75338)  gfs_seamless latlon=(30.269146,-97.75338)  IDENTICAL VALUES
+EL_PASO        best_match latlon=(31.768824,-106.503784) gfs_seamless latlon=(31.768824,-106.503784) IDENTICAL VALUES
+MIDLAND        best_match latlon=(31.992321,-102.09157)  gfs_seamless latlon=(31.992321,-102.09157)  IDENTICAL VALUES
+CORPUS_CHRISTI best_match latlon=(27.766878,-97.41585)   gfs_seamless latlon=(27.766878,-97.41585)   IDENTICAL VALUES
 ```
 
-Same offset-free ISO time strings, same `hourly_units` echo, same five variable keys. Therefore
-`HOURLY_TO_PIPELINE`, `OPEN_METEO_HOURLY_VARS`, `EXPECTED_HOURLY_UNITS`, the `hourly`/`time`/
-length/unit checks, and `_range_check` can all be reused **verbatim**
-[VERIFIED: backend/open_meteo_provider.py:50-71, 150-202].
+`ecmwf_ifs` pinned resolves to a DIFFERENT, finer grid point (`30.263618,-97.69321` for Austin, vs.
+`30.269146,-97.75338` for `best_match`/`gfs_seamless`) and its Previous-Runs archive apparently only
+goes back a few months -- a completely different (and much shallower) depth story than its
+Historical-Forecast/Single-Runs depth (March 2024) the 1-hour design relies on. These are
+independently-configured archives per endpoint per model; depth on one endpoint says nothing about
+depth on another, even for the "same" model name.
 
-The existing mapping and unit table, quoted verbatim so the new module can be checked against it:
+**When to use:** pin `models="gfs_seamless"` explicitly on the new `fetch_previous_runs` function,
+as a SECOND constant (`PREVIOUS_RUNS_MODEL_ID`), never reusing `FORECAST_MODEL_ID`. Even though
+`best_match` happens to equal `gfs_seamless` today for all four project cities, pin explicitly for
+the same reason the 1-hour design pinned `ecmwf_ifs` instead of trusting `best_match` -- an
+auto-resolved default can silently change later, and CONTEXT's own D-01 rationale already
+documents `best_match` resolving to different models on different endpoints (ICON was observed for
+Single-Runs at one point). Do not assume this session's finding is permanent; the new provider
+function's docstring should record this exact evidence (mirroring `FORECAST_MODEL_ID`'s own
+docstring pattern) so a future re-verification has something concrete to check against.
 
-```python
-# backend/open_meteo_provider.py:50-58
-HOURLY_TO_PIPELINE: dict[str, str] = {
-    "temperature_2m": "air_temp",
-    "wind_speed_10m": "wind_speed",
-    "wind_direction_10m": "wind_direction",
-    "shortwave_radiation": "solar_radiation",
-    "relative_humidity_2m": "relative_humidity",
-}
+### Pattern 2: `previous_day1` is a six-hour-stitched product, NOT a flat 24-hour lead — the single most important finding of this refresh
 
-OPEN_METEO_HOURLY_VARS: tuple[str, ...] = tuple(HOURLY_TO_PIPELINE)
-```
+**What.** Open-Meteo's own docs state: *"`_previous_day1` is the value that was predicted 24 hours
+before valid time"* [CITED: https://open-meteo.com/en/docs/previous-runs-api]. This is TRUE only
+for valid hours that are themselves exact six-hourly cycle hours (00/06/12/18 UTC). For every other
+hour, `previous_day1` is stitched from the SAME prior-day run, just further into its output --
+exactly the mechanism `03-RESEARCH.md`'s original Pattern 2 already found for the Historical
+-Forecast bulk API at a near-zero lead, here shifted by +24h instead of +0h.
 
-```python
-# backend/open_meteo_provider.py:65-71
-EXPECTED_HOURLY_UNITS: dict[str, str] = {
-    "temperature_2m": "°C",
-    "wind_speed_10m": "m/s",
-    "wind_direction_10m": "°",
-    "shortwave_radiation": "W/m²",
-    "relative_humidity_2m": "%",
-}
-```
-
-**When to use:** for the bulk fetch. **Do not** import `open_meteo_provider` and monkeypatch its
-`OPEN_METEO_ARCHIVE_BASE` — that constant is documented as "a fixed constant -- never built from
-caller input" [VERIFIED: backend/open_meteo_provider.py:43]. Either import the three tables by name
-from it (dependency new→existing, matching how `forecast_training` imports `ampacity_forecast`
-[VERIFIED: backend/forecast_training.py:6-8]) or restate them with a test asserting equality.
-
-**Required deltas from the Archive adapter:**
-1. Base URL constant: `OPEN_METEO_HISTORICAL_FORECAST_BASE = "https://historical-forecast-api.open-meteo.com/v1/forecast"`
-2. Add `"models": "ecmwf_ifs"` to `params` — non-optional; see Pitfall 2.
-3. Add an explicit **null-completeness** check — the Archive path does not need one; this one does.
-   See Pitfall 3.
-
-### Pattern 2: Deterministic lead-time derivation, verified rather than estimated
-
-**What:** With `models=ecmwf_ifs` pinned on both endpoints, the bulk product's value at valid time
-`T` equals the `run = T.floor('6h')` single-run's value at lead `T.hour % 6`.
-
-**Evidence (live, this session).** Exact-equality counts, single-run value vs. bulk value, by lead
-hour, over 8 runs/day:
+**Live evidence (this session), bit-for-bit exact match against the independently-fetched
+Single-Runs value at the run issued exactly 24 hours before each six-hourly cycle, for AUSTIN,
+2026-09-20, `wind_speed_10m`, `models=gfs_seamless`:**
 
 ```
-exact-match counts (single-run value == bulk value), by lead hour
-Austin        2026-09-20  L0:4/4 L1:4/4 L2:4/4 L3:4/4 L4:4/4 L5:4/4 L6:0/4 L7:0/4 L8:0/4 L9:0/4
-El Paso       2026-06-15  L0:4/4 L1:4/4 L2:4/4 L3:4/4 L4:4/4 L5:4/4 L6:0/4 L7:0/4 L8:0/4 L9:0/4
-CorpusChristi 2026-01-10  L0:4/4 L1:3/4 L2:4/4 L3:4/4 L4:3/4 L5:3/4 L6:0/4 L7:0/4 L8:0/4 L9:0/4
-Austin ifs025 2026-09-20  L0:4/4 L1:1/4 L2:0/4 L3:4/4 L4:0/4 L5:0/4 L6:1/4 L7:0/4 L8:0/4 L9:0/4
+run=2026-09-19T00:00  target=2026-09-20T00:00  from_run=2.53  previous_day1=2.53  MATCH (exact, lead=24h)
+run=2026-09-19T00:00  target=2026-09-20T01:00  from_run=2.01  previous_day1=2.01  MATCH (exact, lead=25h)
+run=2026-09-19T00:00  target=2026-09-20T02:00  from_run=1.63  previous_day1=1.63  MATCH (exact, lead=26h)
+run=2026-09-19T00:00  target=2026-09-20T03:00  from_run=1.24  previous_day1=1.24  MATCH (exact, lead=27h)
+run=2026-09-19T00:00  target=2026-09-20T04:00  from_run=2.02  previous_day1=2.02  MATCH (exact, lead=28h)
+run=2026-09-19T00:00  target=2026-09-20T05:00  from_run=3.11  previous_day1=3.11  MATCH (exact, lead=29h)
+run=2026-09-19T06:00  target=2026-09-20T06:00  from_run=3.50  previous_day1=3.50  MATCH (exact, lead=24h)
+   ... (identical pattern repeats for the 06Z, 12Z, 18Z blocks -- ALL 24 hours matched exactly,
+        0 mismatches, across both wind_speed AND temperature_2m, for both AUSTIN 2026-09-20 and
+        EL_PASO 2026-06-15 -- 4 independent (city, date, variable) confirmations, 96 hour-cells,
+        zero exceptions)
 ```
 
-and the corresponding MAE view for Austin 2026-09-20 (`ecmwf_ifs`, wind_speed_10m, m/s):
+**Consequence:** `previous_day1`'s effective lead is `24 + (valid_hour % 6)` hours -- a flat 24.0h
+ONLY when `valid_hour % 6 == 0` (00/06/12/18 UTC); ranging up to 29h for `valid_hour % 6 == 5`
+(05/11/17/23 UTC). A phase whose experimental claim is "does a genuinely 24-hour-ahead forecast
+beat persistence" and that scores the UNFILTERED series is silently blending five different lead
+times (24-29h) into one number, the exact category of imprecision D-01's own founding principle
+("never trust the product's stated lead time") exists to prevent.
 
-```
- lead_h    n   MAE_vs_bulk
-      0    4        0.0000
-      1    4        0.0000
-      2    4        0.0000
-      3    4        0.0000
-      4    4        0.0000
-      5    4        0.0000
-      6    4        0.2950
-      7    4        0.2625
-      8    4        0.5800
-```
+**When to use:** filter to `valid_time.hour % 6 == 0` for a claim of an exact, verified 24.0h lead
+-- the 24h analog of the 1-hour design's `hour % 6 == 1` filter, just with the remainder changed to
+`0` (since the exact-lead hours are now the run-issue hours themselves, not one hour after them).
+This is a deliberate, symmetric design choice, not a coincidence: reuse the SAME
+`FORECAST_EXPERIMENT_LEAD_FILTER_MODULUS = 6` constant, add a new
+`FORECAST_EXPERIMENT_24H_LEAD_FILTER_REMAINDER = 0` alongside the existing (now legacy-scoped)
+`FORECAST_EXPERIMENT_LEAD_FILTER_REMAINDER = 1`.
 
-Three cities, three seasons, unambiguous cut at lead 6. The Corpus Christi 3/4 cells are 2-decimal
-rounding at the boundary, not a different lead — MAE there is also ~0. `ecmwf_ifs025` does **not**
-show the pattern, which is exactly why the model must be pinned to `ecmwf_ifs`.
+**Recommended lightweight verification (replaces a full new calibration gate):** because the
+mechanism is now analytically understood (a Single-Runs cross-check like the one above, not a
+statistical sample), a full `forecast_leadtime_calibration.py`-style hard gate is probably
+over-engineering for this case -- but skipping verification entirely (trusting D-04's or the
+vendor's "exact by construction" framing) is exactly the mistake the phase was created to stop
+making. Recommend: a small, synthetic-data unit test asserting `hour % 6 == 0` rows are the only
+ones treated as exact-lead (mirroring `forecast_leadtime_calibration_test.py`'s existing pattern of
+testing the rule with synthetic data, not a live network call in the test suite), PLUS one
+documented, hand-run, transcribed live verification (like the one above) recorded in the phase's
+final decision record -- not a per-warm hard gate, since (unlike the 1-hour case) there is no
+known historical discontinuity risk here (no ECMWF-cycle-upgrade-style event has been found or is
+expected for GFS's stitching depth). The planner should decide the exact shape (Open Questions #1).
 
-**When to use:** always, for this phase. It turns the calibration gate from "estimate a
-distribution" into "assert a rule," which is far easier to verify and far harder to get subtly
-wrong.
+### Pattern 3: Generalizing the anchored-pair-frame contract for a `lead_hours` parameter
 
-**Gate design implied:**
+**What.** Plan 03-01's `forecast_experiment.anchored_pair_frame`/`assert_exact_lead`/
+`filter_to_exact_lead` already implement the RIGHT contract (anchor/truth/fcst column groups, the
+anchor built from the FULL unfiltered series before any filter, an automated gate that the anchor
+gap is exactly the claimed lead) -- they just hardcode `pd.Timedelta(hours=1)` and read the
+LEGACY-scoped `config.FORECAST_EXPERIMENT_LEAD_FILTER_REMAINDER` (=1) directly
+[VERIFIED: backend/forecast_experiment.py:241, 272, 307 -- `anchor["datetime_utc"] =
+anchor["anchor_datetime_utc"] + pd.Timedelta(hours=1)"`, `merged["lead_hours"] =
+merged["datetime_utc"].dt.hour % config.FORECAST_EXPERIMENT_LEAD_FILTER_MODULUS`, `remainder =
+config.FORECAST_EXPERIMENT_LEAD_FILTER_REMAINDER`].
 
-```python
-def measure_lead_alignment(lat, lon, days, model="ecmwf_ifs"):
-    """For each sampled day, pull the bulk series and the four 6-hourly
-    single runs, and return per-lead exact-match counts. The claim under
-    test is: match at leads 0..5, no match at lead >= 6."""
+**When to use:** generalize, do not duplicate. Add a `lead_hours: int` parameter to
+`anchored_pair_frame` (default could stay 1 for backward compatibility with the legacy arm's own
+tests, or the planner may prefer an explicit no-default signature so a caller can never
+accidentally score the wrong lead) that:
+1. Replaces the hardcoded `pd.Timedelta(hours=1)` with `pd.Timedelta(hours=lead_hours)`.
+2. Fetches from `fetch_previous_runs` instead of `fetch_historical_forecast` when scoring the
+   24h-primary arm (a caller-supplied fetch function, or a `source` enum, is a reasonable seam --
+   the planner should decide the exact shape).
+3. Uses the NEW `FORECAST_EXPERIMENT_24H_LEAD_FILTER_REMAINDER` (Pattern 2) rather than the legacy
+   `FORECAST_EXPERIMENT_LEAD_FILTER_REMAINDER` when `lead_hours=24`.
+4. `assert_exact_lead` already generalizes for free -- it compares `datetime_utc -
+   anchor_datetime_utc` against a fixed `pd.Timedelta(hours=1)` today
+   [VERIFIED: backend/forecast_experiment.py:288, `bad = gaps != pd.Timedelta(hours=1)`] and needs
+   the SAME `lead_hours` parameter threaded through, not a rewrite.
 
-def assert_supports_horizon(alignment, horizon_min=60.0):
-    """The bulk product's lead distribution over ALL hours is uniform on
-    {0,1,2,3,4,5} -> p05 == 0h, which does NOT support a 60-minute claim.
-    This function MUST fail on the unfiltered series. It passes only for the
-    hour % 6 == 1 subset, where the lead is exactly 1h for every row."""
-```
+**Anti-pattern:** writing a parallel `anchored_pair_frame_24h` function. This is precisely the
+"Don't Hand-Roll" mistake the original research warned against for `experiment_splits.py` vs.
+`chronological_split` -- two independent copies of the same contract drift apart. Generalize the
+one function that already has the tests, the caching discipline, and the docstring-as-contract
+this module is built around.
 
-The gate failing on the unfiltered series is the **correct** outcome, not a defect — do not tune it
-until it passes.
+### Pattern 4: 24-hour persistence is diurnally self-aligned -- a stronger baseline than the horizon might suggest
 
-### Pattern 3: Wind u/v decomposition, meteorological convention
+**What, reasoned from the verified construction (MEDIUM confidence -- not independently
+benchmarked this session, but follows directly from the verified 24h lag).** A naive persistence
+forecast at a 1-hour horizon ("assume the next hour looks like this hour") is a weak baseline
+precisely because weather has meaningful hour-to-hour variance. A naive persistence forecast at
+EXACTLY a 24-hour horizon ("assume this time tomorrow looks like this time today") is structurally
+different: because 24 hours is exactly one full diurnal cycle, T-24h and T share the same
+approximate solar angle, similar approximate temperature regime (unless a weather-front boundary
+crosses in between), and similar approximate diurnal wind pattern. This is NOT the same as
+"persistence degrades with longer horizons" intuition most readers will bring -- at exactly 24h,
+persistence is automatically the "seasonal-naive"/day-ago-same-hour baseline that time-series
+forecasting literature treats as a genuinely strong baseline for diurnally-cyclic series, not a
+weak one.
 
-**What:** Convert (speed, met-direction) to Cartesian components so a regression can correct a
-vector rather than a discontinuous 0/360 angle.
+**Consequence for planning:** do not expect the correction arms (3, 4) or the "ml" reference (5) to
+beat 24h persistence as easily as the phase's original framing (built around the intuition that a
+longer horizon means persistence gets easier to beat) might suggest. This raises the bar for what
+counts as a meaningful result and should be stated plainly in the eventual decision record, not
+discovered as a surprise mid-execution the way the bit-identity problem was.
 
-**Formula** [CITED: https://confluence.ecmwf.int/pages/viewpage.action?pageId=133262398]:
+### Anti-Patterns to Avoid (NEW, specific to the 24h primary path)
 
-> u = −|V| sin φ
-> v = −|V| cos φ
-> |V| = √(u² + v²)
-> φ = mod(180 + (180/π)·atan2(u, v), 360)
-
-with φ the **meteorological** direction in radians (the direction the wind comes **FROM**), and u
-positive eastward, v positive northward.
-
-**Consistency with this repo.** `thermal_model.perpendicular_wind`'s docstring declares the same
-input convention verbatim:
-
-```
-wind_dir_deg:    Meteorological wind direction (degrees from North,
-                 direction wind is coming FROM)
-```
-[VERIFIED: backend/thermal_model.py:36-37]
-
-and its body confirms it by flipping to flow direction before projecting:
-
-```python
-# backend/thermal_model.py:43-55
-ws  = np.asarray(wind_speed_ms, dtype=float)
-wd  = np.asarray(wind_dir_deg,  dtype=float)
-# Wind flow direction = opposite of met convention
-flow_dir = (wd + 180) % 360
-# Angle between wind flow and line
-delta = np.abs(flow_dir - line_azimuth_deg) % 180
-# Convert angles > 90° to acute angle
-delta = np.where(delta > 90, 180 - delta, delta)
-# Perpendicular component
-perp = ws * np.sin(np.radians(delta))
-# IEEE 738: below ~20° treat as low-wind / natural convection dominates
-perp = np.where(delta < 20, ws * np.sin(np.radians(20)), perp)
-return perp
-```
-
-So `wind_vector.from_uv(...)` must return a **meteorological** direction, feedable straight into
-`perpendicular_wind` with no adjustment. The round-trip test is the contract:
-`from_uv(*to_uv(speed, dir)) == (speed, dir)` for all `dir` in `range(0, 360)` and `speed > 0`.
-
-**Example:**
-
-```python
-# Source: ECMWF Confluence pageId=133262398 (formulas), convention cross-checked
-#         against backend/thermal_model.py:36-37, 43-46 (this repo's own declared input).
-import numpy as np
-
-def to_uv(wind_speed_ms, wind_dir_deg):
-    """Meteorological (speed, FROM-direction) -> (u eastward, v northward), m/s."""
-    ws = np.asarray(wind_speed_ms, dtype=float)
-    phi = np.radians(np.asarray(wind_dir_deg, dtype=float))
-    return -ws * np.sin(phi), -ws * np.cos(phi)
-
-def from_uv(u, v):
-    """(u, v) -> (speed m/s, meteorological FROM-direction deg in [0, 360))."""
-    u = np.asarray(u, dtype=float)
-    v = np.asarray(v, dtype=float)
-    speed = np.hypot(u, v)
-    direction = np.mod(180.0 + np.degrees(np.arctan2(u, v)), 360.0)
-    return speed, direction
-```
-
-**Anti-pattern:** regressing on `wind_direction` in degrees directly. 359° and 1° are 2° apart
-physically and 358 apart numerically; a linear model or a tree will both learn nonsense at the
-wrap. This is precisely why approach 3 is specified as u/v in the first place.
-
-### Pattern 4: Previous Runs API as a free lead-time sensitivity ladder
-
-**What:** `previous-runs-api.open-meteo.com/v1/forecast` accepts `start_date`/`end_date`
-(bulk-batched, live-verified HTTP 200 over multi-day ranges) and serves `<var>_previous_dayN` for
-N = 1..7, where N is the number of **24-hour** steps before valid time.
-
-> "Requesting temperature_2m_previous_day1 returns the value predicted 24 hours before valid time;
-> _previous_day2 returns 48 hours before, and so on up to day 7."
-> [CITED: https://open-meteo.com/en/docs/previous-runs-api]
-
-Live-verified: `previous_day8` returns HTTP 200 with an all-null array (not an error), confirming 7
-is the ceiling. Coverage for this project's cities begins between 2024-01-15 (`prev1=0/24`) and
-2024-01-20 (`prev1=24/24`), consistent with the docs' "Most models are archived from January 2024."
-
-**When to use:** *not* for the 60-minute arms — 24 h is the finest step. Use it as a cheap,
-one-request-per-city **sensitivity arm**: "does the wind-correction model that helps (or doesn't)
-at a 1-hour lead still help at 24 h / 48 h?" That question is the single most informative thing the
-phase can add for almost zero extra cost, and it directly de-risks the follow-up phase. Recommended
-as an **optional final task**, gated behind the seven core arms landing.
-
-### Anti-Patterns to Avoid
-
-- **Calling `_dynamic_viscosity`/`_thermal_conductivity` from the extracted convective function.**
-  They are algebraically equal to the inline forms in `ieee738_ampacity` but **not** guaranteed
-  bit-equal. See Pitfall 1 — this will break the D-03 equality gate in a way that looks like a
-  physics bug.
-- **Writing `experiment_splits.py` from scratch.** `anomaly_training.chronological_split` already
-  exists and already solved the guard conditions. See Pitfall 5.
-- **Using unpinned `best_match`.** Destroys the deterministic lead rule (Pattern 2) and resolves to
-  different domains on different endpoints.
-- **Presenting the 1-hour-lead arms as operationally achievable.** See Pitfall 6 — this is the
-  phase's headline integrity risk.
-- **Letting the oracle arm into a "winner" ranking.** D-02 already forbids this; the planner should
-  make it a structural property (separate output section, separate key in the JSON), not a caption.
+- **Reusing `ampacity_forecast.forecast_ampacity(method="naive")` / `backtest_residuals` for the
+  24h persistence arm.** `_point_forecast(method="naive")` returns `float(series.iloc[-1])`
+  [VERIFIED: backend/ampacity_forecast.py:316-317] -- "the immediately preceding ROW," not "the row
+  24 hours before." At this project's hourly cadence this is EXACTLY correct for the legacy 1h arm
+  (1 row = 1 hour = the claimed lead) but WRONG for the 24h arm (1 row is still 1 hour, not 24).
+  Calling this function unchanged for the 24h arm would silently score a 1-hour-old persistence
+  baseline as if it were a 24-hour one -- structurally the same kind of silent mislabeling error
+  the bit-identity finding already forced a pivot to avoid. Build the 24h anchor directly in
+  `forecast_experiment.py`'s own anchor-group construction (Pattern 3), never via this function.
+- **Reusing `forecast_training.build_training_matrix` unchanged for arm 5's 24h refit.** That
+  function shifts the target by `config.FORECAST_HORIZON_MINUTES` worth of rows (currently 60 min
+  = 1 row) [VERIFIED: backend/forecast_training.py:309-325]. It is a GLOBAL config read, not a
+  function parameter -- there is no way to ask it for a 24-hour target shift without either
+  temporarily monkeypatching the module constant (fragile, and exactly the kind of hidden global
+  -mutation bug this project's centralization discipline exists to prevent) or writing a parallel
+  target-shift helper parameterized by hours. See Pitfall 4.
+- **Trusting the vendor docs' "exact 24h" framing without the Pattern 2 filter.** Already covered
+  above -- restated here because it is the single highest-risk mistake this refresh exists to
+  prevent, directly analogous to the founding mistake ("never trust the product's stated lead
+  time") the phase was built to avoid in the first place.
+- **Pinning `models=ecmwf_ifs` (the legacy arm's constant) for the new `fetch_previous_runs`
+  call.** See Pattern 1 -- this silently nulls out (loudly, via the completeness check, which is
+  the SAFE failure mode -- but still a failure) the overwhelming majority of the intended window.
 
 ## Don't Hand-Roll
 
+**[CARRIED OVER, unchanged]** — every row in the original research's table still applies verbatim
+(chronological holdout split, Open-Meteo response validation, weakest-link corridor reduction,
+perpendicular-wind projection, persistence baseline discipline, estimator persistence, wind
+direction → components). Not re-verified this session since D-04 does not touch any of them — see
+the original document's "Don't Hand-Roll" section, reproduced in full below the "Legacy 1-Hour
+Arm" heading for convenience.
+
+**One new row, specific to this refresh:**
+
 | Problem | Don't Build | Use Instead | Why |
 |---------|-------------|-------------|-----|
-| Chronological holdout split | A fresh `iloc[:n]`/`iloc[n:]` splitter | Generalize `anomaly_training.chronological_split` [VERIFIED: backend/anomaly_training.py:394-438] | It already handles sort-by-`datetime_utc`, index reset, empty-side guard, and a minimum-fit-rows floor, with a documented purity guarantee |
-| Open-Meteo response validation | New shape/length/unit checks | Reuse `open_meteo_provider`'s block [VERIFIED: backend/open_meteo_provider.py:150-202] | Five distinct failure modes already covered with named-column error messages; the response envelope is identical |
-| Weakest-link corridor reduction | A second `np.minimum` + bottleneck-index block | D-03's extracted `corridor_weakest_link(...)` | Two independent copies will drift; the tie-break rule (`amps_a <= amps_b` → city A, matching `rate_corridor`'s `ratings.index(min_rating)`) is non-obvious [VERIFIED: backend/forecast_training.py:175-189] |
-| Perpendicular-wind projection | Re-deriving sin(delta) with a 20° floor | `thermal_model.perpendicular_wind` | The 20° directional floor is a deliberate physical convention, easy to omit by accident [VERIFIED: backend/thermal_model.py:53-54] |
-| Persistence baseline | A new "last value" function | `ampacity_forecast.forecast_ampacity(method="naive")` — D-02 explicitly says *unchanged* | `forecast_training.baseline_scores` already set the precedent: "the baselines come from the module's own walk-forward function, never a second error computation written here" [VERIFIED: backend/forecast_training.py:318-321] |
-| Estimator persistence | `joblib.dump` direct to final path | `forecast_training.persist_corridor_model`'s temp-then-`os.replace` [VERIFIED: backend/forecast_training.py:444-471] | Torn-file guarantee |
-| Wind direction → components | Guessing the sign convention | ECMWF's published pair (Pattern 3) | Sign errors here are silent: a 180°-flipped wind still produces plausible-looking ampacity because `perpendicular_wind` folds to an acute angle — the bug survives every smoke test |
-
-**Key insight:** this phase's genuine novelty is only in (a) the forecast provider and (b) the
-lead-time gate. Everything downstream of the joined frame is a re-composition of machinery
-`forecast_training.py` and `anomaly_training.py` already contain. The plan should read as
-"assemble existing parts, add two new ones," and any task that reads otherwise is probably
-duplicating something.
+| 24-hour-lead stitching detection | A brand-new statistical calibration gate from scratch | The SAME `hour % 6` deterministic-rule pattern `forecast_leadtime_calibration.py` already established, just re-pointed at the Previous-Runs/Single-Runs pair with remainder 0 instead of 1 | The mechanism (six-hour-cycle stitching) is IDENTICAL in kind to the one already solved for the 1-hour arm — a new gate would re-derive the same guard logic (`_MATCH_RATE_FLOOR`, boundary-skip counting, tolerance-vs-exact-equality) a second time |
 
 ## Common Pitfalls
 
-### Pitfall 1: The `thermal_model` extraction is not bit-exact if you reuse the module helpers
+### Pitfall 1 (NEW, highest priority): Scoring the unfiltered Previous-Runs series silently blends five different lead times
 
-**What goes wrong:** the D-03 equality gate fails by ~1 ULP and looks like a physics error.
+**What goes wrong:** a report states "at the 24-hour horizon, method X achieves MAE=..." when the
+underlying rows actually span leads 24-29h, with no visibility into how much of the measured skill
+(or lack of it) is attributable to the lead-time smear rather than genuine forecast quality.
 
-**Why it happens:** `ieee738_ampacity` does **not** call the module-level `_dynamic_viscosity`
-helper — it recomputes it inline with the terms grouped differently. Both blocks, verbatim:
+**Why it happens:** Open-Meteo's own docs describe `previous_day1` as a flat 24h lead (Pattern 2),
+and D-04's own framing in `03-CONTEXT.md` repeats that characterization ("gives an exact,
+unambiguous lead by construction"). Both are wrong for every hour except the six-hourly cycle
+hours themselves — live-verified this session, not merely suspected.
 
-```python
-# backend/thermal_model.py:93-101  (module helpers — NOT used by ieee738_ampacity)
-def _dynamic_viscosity(T_film_c: float) -> float:
-    """Air dynamic viscosity (Pa·s) at film temperature."""
-    T_k = T_film_c + 273.15
-    return 1.458e-6 * T_k**1.5 / (T_k + 110.4)
+**How to avoid:** filter to `valid_time.hour % 6 == 0` before scoring the primary arm (Pattern 2),
+using a new `FORECAST_EXPERIMENT_24H_LEAD_FILTER_REMAINDER = 0` constant. If the planner instead
+chooses to accept the broader 24-29h range for more row volume (a legitimate choice, given the
+window is already large — see Row Volume below), the report MUST state the lead as a range, not a
+point value, mirroring the existing `EXPERIMENT_LEAD_REALIZABILITY_CAVEAT`'s own discipline of
+never letting a score appear without its qualifier attached.
 
+**Warning signs:** any sentence of the form "at the 24-hour horizon" without either the `hour % 6
+== 0` filter having been applied, or an explicit "24-29h" range qualifier attached.
 
-def _thermal_conductivity(T_film_c: float) -> float:
-    """Air thermal conductivity (W/m·K) at film temperature."""
-    return 2.42e-2 + 7.2e-5 * T_film_c
-```
+### Pitfall 2 (NEW): The two forecast providers (legacy 1h, primary 24h) use DIFFERENT pinned models, and that's correct, not an inconsistency to "fix"
 
-```python
-# backend/thermal_model.py:128-141  (what ieee738_ampacity actually does)
-    T_a  = np.asarray(T_amb_c,     dtype=float)
-    Vw   = np.asarray(wind_perp_ms, dtype=float)
-    Q_s  = np.asarray(ghi_wm2,     dtype=float)
+**What goes wrong:** a future reader (or an over-eager refactor) notices `fetch_historical_forecast`
+pins `ecmwf_ifs` while `fetch_previous_runs` pins `gfs_seamless`, and "fixes" the inconsistency by
+making them match.
 
-    T_c  = conductor.T_max
-    T_f  = (T_c + T_a) / 2          # film temperature
+**Why it happens:** it looks like an oversight. It is not — see Pattern 1: `ecmwf_ifs`'s
+Previous-Runs archive depth (live-verified: null before ~2026-03) is completely different from its
+Historical-Forecast/Single-Runs depth (March 2024) the legacy arm relies on. These are two
+independently-provisioned archives on Open-Meteo's side; there is no reason to expect the same
+model name to have matching depth across different API products, and empirically it does not.
 
-    # Air properties at film temp (vectorized approximation)
-    rho_f = _air_density(conductor.elev)
-    mu_f  = 1.458e-6 * (T_f + 273.15)**1.5 / (T_f + 110.4 + 273.15)
-    k_f   = 2.42e-2 + 7.2e-5 * T_f
+**How to avoid:** document this explicitly in the new provider function's docstring (mirroring
+`FORECAST_MODEL_ID`'s own docstring, which already records ITS live evidence) so the "why two
+different models" question is answered in the code, not left for the next reader to rediscover via
+another live probe.
 
-    # Reynolds number
-    N_Re = conductor.D * Vw * rho_f / mu_f
-```
+### Pitfall 3 (NEW): `previous_day1`'s shortwave_radiation does NOT need the leading-null carve-out the Single-Runs API needed
 
-The denominators differ in association order: `(T_f + 273.15) + 110.4` versus
-`(T_f + 110.4) + 273.15`. Floating-point addition is not associative.
+**What goes wrong:** a naive port of `_completeness_check`'s `allow_leading_null_for=
+("shortwave_radiation",)` carve-out (built for Single-Runs' index-0 null, per the original
+research's Pitfall 3) onto the new Previous-Runs fetch, silently tolerating a null that should not
+occur there.
 
-**How to avoid:** build the extracted function by **moving lines 128-161 verbatim** into it and
-having `ieee738_ampacity` call it. Do not retype, do not "tidy," do not substitute the helpers.
+**Why it happens:** the carve-out was needed because Single-Runs' `shortwave_radiation` is null at
+the run's OWN index 0 (the analysis step, before any forecast lead has elapsed) — a property of
+that specific product's index-0 semantics.
 
-**Warning signs:** an equality test that passes with `np.allclose` but fails with `==` or
-`array_equal`. Write the gate with exact equality (`np.array_equal`) so this cannot hide.
+**Live-verified this session:** a Previous-Runs request for `shortwave_radiation_previous_day1`
+over a 48-hour window (AUSTIN, 2026-09-20/21) returned **zero nulls** at any index, including index
+0 (`[112.0, 0.0, 0.0, 0.0, 0.0, ...]` — the zeros are physically correct nighttime GHI, not nulls).
+`previous_day1` values are never analysis-step values (they always come from a run already 24+
+hours old, well past that run's own index-0), so the carve-out this project's existing code needed
+for Single-Runs simply does not apply here.
 
-### Pitfall 2: `models=` is not optional, and the two endpoints resolve model aliases differently
+**How to avoid:** call `_completeness_check` with `allow_leading_null_for=()` (the default) for
+`fetch_previous_runs` — do not port the Single-Runs carve-out reflexively. If a future live check
+finds a null anywhere in a `previous_dayN` array, that is a genuine completeness failure and should
+raise, not be silently tolerated.
 
-**What goes wrong:** the deterministic lead rule (Pattern 2) silently stops holding.
+### Pitfall 4 (NEW): Arm 5's "ml" reference model has no clean path to a 24-hour target without touching a global config constant
 
-**Why it happens:** unpinned, both APIs use `best_match`, which is location-dependent. Live probe:
-`models=best_match` on Single-Runs for Austin returned the error
-`"The requested model run is not available. Model: dwd_icon, run: ..."` — i.e. `best_match`
-resolved to ICON there. Likewise `models=gfs_global` resolved to `ncep_gfs013`. And `ecmwf_ifs025`
-— superficially the obvious "ECMWF" choice — showed **no** lead-alignment pattern at all
-(`L1:1/4 L2:0/4 L4:0/4 L5:0/4`).
+**What goes wrong:** the planner assumes arm 5 ("reference: current `'ml'` model, refit on
+train+val only") can be scored at the 24h primary lead the same way it was scored at the 1h legacy
+lead — by simply pointing `forecast_training.build_training_matrix` at the new frame.
 
-**How to avoid:** hard-code `models="ecmwf_ifs"` as a module constant in the new provider, exactly
-as `OPEN_METEO_ARCHIVE_BASE` is hard-coded, with a comment recording the live evidence. Add a test
-asserting the request `params` carry it — the existing suite already has the exact idiom
-(`test_fetch_open_meteo_requests_metres_per_second_wind` uses a `recorder` dict
-[VERIFIED: backend/tests/open_meteo_provider_test.py:126-136]).
+**Why it happens:** `build_training_matrix` reads `config.FORECAST_HORIZON_MINUTES` (currently
+`60.0`) directly as a module-level global, converts it to a row-count via a fixed hourly-cadence
+assumption, and shifts the target by that many rows
+[VERIFIED: backend/forecast_training.py:309-325, `horizon = pd.Timedelta(minutes=config.
+FORECAST_HORIZON_MINUTES)`... `target_values = indexed["dlr_amps"].shift(-horizon_rows).to_numpy()`].
+There is no parameter to override this per-call; the only way to get a 24-hour target shift from
+this exact function is to temporarily monkeypatch the global config constant, which this project's
+own centralization discipline (`backend/config.py`'s "every tunable lives here" contract) argues
+against doing casually, and which risks contaminating any OTHER concurrent use of the constant in
+the same process.
 
-### Pitfall 3: Out-of-depth and out-of-horizon requests return HTTP 200 with silent nulls
+**How to avoid:** the planner should decide (Open Questions #2) between (a) a small, parallel
+target-shift helper in the experiment harness itself, parameterized by `horizon_hours`, reusing
+`ampacity_forecast.build_ml_features` for X (that function is horizon-agnostic — it only builds
+LAG features, unaffected by the target horizon) but NOT reusing `build_training_matrix` for y, or
+(b) adding an explicit `horizon_minutes` parameter to `build_training_matrix` itself as a small,
+additive, default-preserving change (default stays `config.FORECAST_HORIZON_MINUTES`, so the
+production trainer's call site is unaffected) — the D-03-style "additive, default-preserving
+refactor with an equality gate" pattern this phase already used twice (thermal_model,
+forecast_training) applies cleanly here too.
 
-**What goes wrong:** the fetch "succeeds," the frame has the right number of rows, `_range_check`
-passes, and the model trains on nothing.
-
-**Why it happens:** `_range_check` drops nulls before comparing:
-
-```python
-# backend/open_meteo_provider.py:220
-        values = pd.to_numeric(frame[column], errors="coerce").dropna()
-```
-
-That is correct for the Archive API (which errors on absence) but not for these two. Live-measured:
-
-| Request | HTTP | Result |
-|---|---|---|
-| previous-runs, 2023-01-01, `wind_speed_10m_previous_day1` | 200 | `0/24` non-null |
-| previous-runs, 2024-01-15, `wind_speed_10m_previous_day1` | 200 | `0/24` non-null |
-| previous-runs, 2024-01-20, `wind_speed_10m_previous_day1` | 200 | `24/24` non-null |
-| previous-runs, `wind_speed_10m_previous_day8` (over ceiling) | 200 | `0/24` non-null |
-| single-runs, `models=ncep_hrrr_conus`, any valid run | 200 | `49/168` non-null (48 h model, array padded to 168) |
-| single-runs, `models=ecmwf_ifs`, `shortwave_radiation` | 200 | `167/168` — **index 0 is null** (flux undefined at the analysis step) |
-
-**How to avoid:** the new provider must add an explicit completeness check *before* `_range_check`,
-in the same fail-loud spirit as the existing module's "a missing variable is a failed fetch, never
-substituted with a null column" [VERIFIED: backend/open_meteo_provider.py:170-171]:
-
-```python
-null_count = sum(1 for x in values if x is None)
-if null_count:
-    raise ValueError(
-        f"open_meteo_forecast_provider: {provider_key!r} has {null_count}/{n} "
-        f"null value(s) -- an out-of-archive-depth or out-of-horizon request "
-        f"returns HTTP 200 with nulls, not an error. Never forward-filled."
-    )
-```
-
-with a documented, narrow carve-out for `shortwave_radiation` at single-run index 0 only.
-
-**Warning signs:** a suspiciously round row count, or an ML arm whose MAE is identical to a
-constant predictor's.
-
-### Pitfall 4: The Single-Runs `run=` format is stricter than "ISO 8601"
-
-**What goes wrong:** every calibration request 400s, and the error body says only `"Bad Request"` —
-no hint about the format.
-
-**Live-measured, all five variants against the same otherwise-valid request:**
-
-```
-2026-09-25T00:00         HTTP:200 OK
-2026-09-25T00:00Z        HTTP:400 "reason":"Bad Request"
-2026-09-25T00:00:00Z     HTTP:400 "reason":"Bad Request"
-2026-09-25 00:00         HTTP:400 "reason":"Bad Request"
-2026-09-25T06:00         HTTP:200 OK
-2026-09-25T03:00         HTTP:400 "reason":"The requested model run is not available. ..."
-```
-
-The docs agree: *"Must be provided in ISO 8601 format without seconds, e.g. &run=2024-06-01T00:00"*
-[CITED: https://open-meteo.com/en/docs/single-runs-api].
-
-Note the two distinct 400s: a malformed `run` gives `"Bad Request"`; a well-formed but unavailable
-`run` names the model and the run. The calibration step must distinguish them — the first is a bug,
-the second is an expected archive-boundary condition to be counted and reported.
-
-**How to avoid:** format with `ts.strftime("%Y-%m-%dT%H:%M")`, mirroring
-`open_meteo_provider._to_archive_date`'s own `ts.strftime("%Y-%m-%d")`
-[VERIFIED: backend/open_meteo_provider.py:95]. Also: `start_date` on Single-Runs is rejected
-outright — live: `{"error":true,"reason":"Parameter 'start_date' must not be set"}`.
-
-### Pitfall 5: `03-CONTEXT.md` is wrong that no fixed split exists — build on the one that does
-
-**What goes wrong:** the plan commits to greenfield split infrastructure, re-derives the same guard
-conditions, and ends up with two inconsistent splitters in one repo.
-
-**Why it happens:** `03-CONTEXT.md` states, under *Facts confirmed by direct code/API
-investigation (do not re-derive)*: "No fixed train/val/test split exists anywhere in this repo
-currently — only walk-forward (`backtest_residuals`) and `sklearn.TimeSeriesSplit`." That is
-**refuted** by direct read. Verbatim:
-
-```python
-# backend/anomaly_training.py:394-421
-def chronological_split(
-    frame: pd.DataFrame, holdout_fraction: float = None
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """
-    Split `frame` (any `datetime_utc`-bearing frame this module produces)
-    into a strictly time-ordered (fit, holdout) pair for ROADMAP SC4's
-    false-positive/recall measurement: sorts by `datetime_utc`, splits at
-    `int(len(frame) * (1 - holdout_fraction))`, and resets both sides'
-    indexes. Every fit-slice timestamp is <= the holdout slice's minimum
-    timestamp -- the estimator is measured only against rows strictly
-    later than anything it was fitted on (T-02-08). Called twice on the
-    same frame returns identical slices (pure function of the input).
-    ...
-    """
-    if holdout_fraction is None:
-        holdout_fraction = config.ANOMALY_ML_VALIDATION_HOLDOUT_FRACTION
-
-    sorted_frame = frame.sort_values("datetime_utc").reset_index(drop=True)
-    split_index = int(len(sorted_frame) * (1 - holdout_fraction))
-
-    fit = sorted_frame.iloc[:split_index].reset_index(drop=True)
-    holdout = sorted_frame.iloc[split_index:].reset_index(drop=True)
-```
-
-What the CONTEXT got *right* is narrower and still justifies new code: this is **two-way**, not
-three-way, and it splits by **row fraction**, not calendar date. D-02 asks for a calendar
-train/val/test split.
-
-**How to avoid:** frame `experiment_splits.py` as a generalization. Carry over, explicitly:
-the sort-by-`datetime_utc`, the `reset_index(drop=True)` on every side, the purity guarantee, the
-empty-side `ValueError` naming all row counts, and the minimum-rows floor
-[VERIFIED: backend/anomaly_training.py:417-436]. Add a test that
-`calendar_split` and `chronological_split` agree when given equivalent boundaries, so the two
-cannot drift.
-
-### Pitfall 6: A 60-minute NWP lead is not operationally realizable, and the phase must say so
-
-**What goes wrong:** the phase produces a defensible-looking result that a reader will reasonably
-interpret as "we could deploy this," when no live system could ever have had that forecast.
-
-**Why it happens:** the lead-time arithmetic ignores **dissemination latency**. Global models
-(ECMWF IFS, GFS) are typically available 4-6 h after their nominal initialization; regional models
-1-3 h; ECMWF AIFS is documented at 5:45 after init
-[CITED: https://openmeteo.substack.com/p/single-runs-api, via Open-Meteo's own model-updates page].
-So the 00Z run does not exist as a product at 01:00 UTC. A row scored at "lead 1 h" from the 00Z
-run is an *idealized* forecast, exactly the way the oracle arm is an idealized observation — less
-extreme, but the same category of thing.
-
-Compounding it: **no Open-Meteo product offers a run cadence finer than 6-hourly in the archive.**
-Live-verified for `ecmwf_ifs` (00/06/12/18 available; 01/03/09Z "not available") and, more
-surprisingly, for `ncep_hrrr_conus` too — HRRR runs hourly in reality, but Open-Meteo archives only
-its four extended cycles (01/02/05/07/11Z all returned "model run is not available"). So there is
-no product-side fix available within this phase.
-
-**How to avoid:** this does **not** block the phase. It changes the labelling, and it should change
-the report's framing from "can we forecast 60 min ahead" to "**given** a perfect-latency NWP at a
-1-hour lead, does physics-plus-correction beat persistence?" — which is still the right first
-question, because a *negative* answer under idealized latency is decisive (it cannot get better
-with real latency). Concretely, the planner should require:
-1. A named constant, e.g. `EXPERIMENT_LEAD_REALIZABILITY_CAVEAT`, emitted into the JSON report and
-   printed in the `SUMMARY:` line — following the precedent of
-   `forecast_training.corridor_report` recording `window_start`/`window_end` "so a shortened run is
-   visible in the evidence rather than hidden behind a score"
-   [VERIFIED: backend/forecast_training.py:353-355].
-2. A dedicated `## Limitations` bullet in the output record, in the same voice as
-   `forecasting_model.md`'s existing five limitation bullets.
-3. Pattern 4's 24 h / 48 h sensitivity arm as the *realizable-lead* counterpart, if budget allows.
-
-**Warning signs:** any sentence in a draft report of the form "at the 60-minute horizon, method X
-achieves..." without an adjacent latency qualifier.
-
-### Pitfall 7: `requests` is used but not declared in `requirements.txt`
-
-**What goes wrong:** a clean checkout `pip install -r requirements.txt` produces an environment
-where every provider module fails at import.
-
-**Why it happens:** `requirements.txt` declares exactly six packages — `pandas`, `numpy`, `scipy`,
-`pytest`, `beautifulsoup4`, `scikit-learn` [VERIFIED: requirements.txt:23-28] — and none of them
-depends on `requests`. Yet `open_meteo_provider` imports it at module level
-[VERIFIED: backend/open_meteo_provider.py:37]. It is present in `.venv` at 2.32.5 (confirmed by
-direct import this session), so the gap is latent, not currently breaking.
-
-The file's own docstring claims it is "the single source of truth for this repo's runtime
-dependencies" and that "Every version below was verified already installed in this project's
-`.venv` (via `.venv/bin/python -m pip freeze`)" [VERIFIED: requirements.txt:4-14] — the second
-claim is true, the first is not.
-
-**How to avoid:** this is **pre-existing debt, not this phase's scope**, and D-03's no-behavior-
-change lock argues against fixing it here. Recommend the planner capture it as a one-line backlog
-item rather than a task. Flagging it because the new provider makes the repo *more* dependent on
-`requests`, and because a reviewer will reasonably ask.
+**Warning signs:** an arm-5 MAE score that looks suspiciously close to the 1-hour-lead legacy
+arm's magnitude — a signal the target was still shifted by 1 row rather than 24.
 
 ## Code Examples
 
-### Verified: the exact convective block to extract (`thermal_model.py:152-161`)
+### Live-verified: the Previous Runs API's response envelope (same shape as the other two forecast endpoints)
 
-```python
-# Source: backend/thermal_model.py:152-161, read verbatim this session.
-    Q_cf = np.where(
-        N_Re < 1000,
-        k_f * (1.01 + 1.347 * N_Re**0.52) * (T_c - T_a),
-        k_f * 0.754 * N_Re**0.6 * (T_c - T_a)
-    )
-
-    # Natural convection (when wind is very low, use max of forced/natural)
-    Q_cn = 3.645 * rho_f**0.5 * conductor.D**0.75 * (T_c - T_a)**1.25
-
-    Q_conv = np.maximum(Q_cf, Q_cn)
+```
+# previous-runs-api.open-meteo.com/v1/forecast?...&models=gfs_seamless
+{"latitude":30.269146,"longitude":-97.75338, ...,
+ "hourly_units":{"time":"iso8601","wind_speed_10m_previous_day1":"m/s"},
+ "hourly":{"time":["2026-09-20T00:00", ...],
+           "wind_speed_10m_previous_day1":[2.53,2.01,1.63, ...]}}
 ```
 
-`03-CONTEXT.md`'s "~lines 152-161" is **exactly right**. Two details worth carrying into the plan:
-the forced-convection coefficient is `1.347` (not the `1.35` printed in the adjacent comment at
-line 148), and `T_c` is fixed at `conductor.T_max` on line 132 (`T_c  = conductor.T_max`), which is
-what makes the extracted signature `(T_amb_c, wind_perp_ms, conductor)` sufficient — CONTEXT is
-correct on this too.
+Same offset-free ISO time strings, same `hourly_units` echo shape as the Archive and
+Historical-Forecast endpoints — `HOURLY_TO_PIPELINE`'s BASE variable names (`temperature_2m`,
+`wind_speed_10m`, etc.) still apply, just with `_previous_dayN` appended to each requested
+`hourly` parameter name. The RETURNED key in the JSON also carries the `_previous_dayN` suffix
+(it is not stripped), so the new provider's column-mapping step needs a small suffix-stripping
+transform before reusing `HOURLY_TO_PIPELINE`'s lookup — e.g. `key.removesuffix(f"_previous_day
+{previous_day}")` before the `HOURLY_TO_PIPELINE.get(...)` call.
 
-Downstream, `Q_conv` is consumed at exactly one site:
-
-```python
-# backend/thermal_model.py:177-181
-    # Solve for I:  I² * R_Tc = Q_conv + Q_rad - Q_solar
-    heat_balance = Q_conv + Q_rad - Q_solar
-    heat_balance = np.maximum(heat_balance, 0)   # cannot be negative
-    I = np.sqrt(heat_balance / R_Tc)
-    return I
-```
-
-That single consumption point is what makes `q_conv_override=None` a clean one-line insertion.
-
-### Verified: the estimator-dictionary convention a `WIND_CORRECTION_ESTIMATORS` dict must match
-
-Both existing trainers use the identical shape — module-level `dict` keyed by estimator class name,
-values are **zero-argument factories** (never shared instances), with an insertion-order-is-tiebreak
-comment and a lazy `sklearn` import inside each factory.
+### Live-verified: full-window single-request fetch (row volume answer)
 
 ```python
-# Source: backend/forecast_training.py:43-86, verbatim.
-def _make_regression_candidate():
-    """Regression arm of D-01's bake-off. Fixed `random_state` so a
-    bake-off run is reproducible. Lazy `sklearn` import, matching this
-    module's other estimator-touching functions (`fit_corridor_model`) --
-    importing `forecast_training` stays free of a hard `sklearn` import."""
-    from sklearn.ensemble import HistGradientBoostingRegressor
-
-    return HistGradientBoostingRegressor(random_state=20260924)
-
-
-def _make_neural_network_candidate():
-    ...
-    from sklearn.neural_network import MLPRegressor
-    from sklearn.pipeline import make_pipeline
-    from sklearn.preprocessing import StandardScaler
-
-    return make_pipeline(
-        StandardScaler(),
-        MLPRegressor(
-            hidden_layer_sizes=(32, 16),
-            max_iter=2000,
-            random_state=20260924,
-            early_stopping=False,
-        ),
-    )
-
-
-# D-01's evidence-based bake-off: exactly two entries, one per arm of
-# "regression or neural network" -- a zero-argument factory per entry (not
-# a shared instance), since each `TimeSeriesSplit` fold must fit a FRESH,
-# never-before-fit estimator. Order is significant: `select_winner`'s
-# deterministic tiebreak falls back to this order as its last resort.
-CANDIDATE_ESTIMATORS: dict = {
-    "HistGradientBoostingRegressor": _make_regression_candidate,
-    "MLPRegressor": _make_neural_network_candidate,
-}
+# One HTTP request, no batching limit encountered:
+#   start_date=2024-01-20, end_date=2026-09-28 (yesterday at research time)
+#   5 variables (temperature_2m, wind_speed_10m, wind_direction_10m,
+#                shortwave_radiation, relative_humidity_2m), each _previous_day1
+# Result: HTTP 200, 957,624 bytes, 23,592 rows, 0 nulls in any variable, 7.24s.
 ```
 
-`anomaly_training.py:866-870` follows the same shape with a `contamination` parameter threaded
-through, and its comment explicitly names the precedent: *"mirroring
-`forecast_training.CANDIDATE_ESTIMATORS`'s own insertion-order convention"*
-[VERIFIED: backend/anomaly_training.py:859-870].
-
-So a new `WIND_CORRECTION_ESTIMATORS` should be:
-
-```python
-def _make_linear_correction_candidate():
-    """Linear arm of approach 3. Lazy `sklearn` import, matching
-    forecast_training._make_regression_candidate's own discipline."""
-    from sklearn.linear_model import LinearRegression
-
-    return LinearRegression()
-
-
-def _make_gradient_boosting_correction_candidate():
-    """Gradient-boosting arm of approach 3. Fixed `random_state` reusing
-    config.ANOMALY_ML_RANDOM_SEED's value (20260924), this repo's single
-    reproducibility seed."""
-    from sklearn.ensemble import HistGradientBoostingRegressor
-
-    return HistGradientBoostingRegressor(random_state=20260924)
-
-
-# Order is significant: last-resort deterministic tiebreak, mirroring
-# forecast_training.CANDIDATE_ESTIMATORS and anomaly_training.CANDIDATE_ESTIMATORS.
-WIND_CORRECTION_ESTIMATORS: dict = {
-    "LinearRegression": _make_linear_correction_candidate,
-    "HistGradientBoostingRegressor": _make_gradient_boosting_correction_candidate,
-}
-```
-
-The seed `20260924` is the repo's single reproducibility constant — it appears as a literal in
-both `forecast_training` factories and as `config.ANOMALY_ML_RANDOM_SEED: int = 20260924`, whose
-comment reads *"Matches forecast_training.py's fixed-seed reproducibility convention"*
-[VERIFIED: backend/config.py:353-354].
-
-### Verified: the network-mocking convention for provider tests
-
-```python
-# Source: backend/tests/open_meteo_provider_test.py:59-81, verbatim.
-class _FakeResponse:
-    def __init__(self, payload=None, json_exc=None):
-        self._payload = payload
-        self._json_exc = json_exc
-
-    def raise_for_status(self):
-        pass
-
-    def json(self):
-        if self._json_exc is not None:
-            raise self._json_exc
-        return self._payload
-
-
-def _mock_get(monkeypatch, payload=None, json_exc=None, recorder=None):
-    def fake_get(url, params=None, timeout=None):
-        if recorder is not None:
-            recorder["calls"] = recorder.get("calls", 0) + 1
-            recorder["params"] = params
-            recorder["url"] = url
-        return _FakeResponse(payload=payload, json_exc=json_exc)
-
-    monkeypatch.setattr(open_meteo_provider.requests, "get", fake_get)
-```
-
-The file's own docstring records this as an inherited convention: *"Follows
-backend/tests/asos_provider_test.py's `_FakeResponse` + `monkeypatch.setattr(module.requests,
-"get", ...)` convention. Module-level plain-assert functions, no test classes -- matches every
-existing test file's convention in this project."*
-[VERIFIED: backend/tests/open_meteo_provider_test.py:11-14]
-
-The `recorder` dict is the idiom for asserting on outgoing request params — which is how the new
-tests should pin `models=ecmwf_ifs` and the `run=` format.
-
-### Verified: the convention for mocking *training-module* fetches (one layer up)
-
-Training/experiment modules do **not** mock `requests`; they monkeypatch the fetch function on the
-module object:
-
-```python
-# Source: backend/tests/forecast_training_test.py:146 and
-#         backend/tests/anomaly_training_test.py:109, verbatim.
-    monkeypatch.setattr(ft, "fetch_city_weather", _fake_fetch)
-    monkeypatch.setattr(forecast_training, "fetch_city_weather", _fake_fetch)
-```
-
-`forecast_experiment_test.py` and `forecast_leadtime_calibration_test.py` should follow this,
-patching the new provider's fetch entry point on the experiment module, while
-`open_meteo_forecast_provider_test.py` follows the `_FakeResponse` pattern one layer down. Note
-`anomaly_training_test.py` patches `forecast_training.fetch_city_weather` across the module
-boundary — the same cross-module patch is available here.
-
-### Live-probe recipe for the calibration gate (reproducible)
+### Live-verified: the exact stitching cross-check recipe (reproducible)
 
 ```bash
-# The two calls the gate compares. Run them and diff the overlapping hours.
-curl -s -G "https://historical-forecast-api.open-meteo.com/v1/forecast" \
+# The two calls that established Pattern 2. Run for each of the four six-hourly
+# cycles and diff the six hours each run covers.
+curl -s -G "https://previous-runs-api.open-meteo.com/v1/forecast" \
   --data-urlencode "latitude=30.2711" --data-urlencode "longitude=-97.7437" \
   --data-urlencode "start_date=2026-09-20" --data-urlencode "end_date=2026-09-20" \
-  --data-urlencode "hourly=wind_speed_10m" --data-urlencode "wind_speed_unit=ms" \
-  --data-urlencode "timezone=UTC" --data-urlencode "models=ecmwf_ifs"
+  --data-urlencode "hourly=wind_speed_10m_previous_day1" \
+  --data-urlencode "wind_speed_unit=ms" --data-urlencode "timezone=UTC" \
+  --data-urlencode "models=gfs_seamless"
 
 curl -s -G "https://single-runs-api.open-meteo.com/v1/forecast" \
   --data-urlencode "latitude=30.2711" --data-urlencode "longitude=-97.7437" \
-  --data-urlencode "hourly=wind_speed_10m" --data-urlencode "wind_speed_unit=ms" \
-  --data-urlencode "timezone=UTC" --data-urlencode "run=2026-09-20T00:00" \
-  --data-urlencode "models=ecmwf_ifs"
+  --data-urlencode "hourly=wind_speed_10m" \
+  --data-urlencode "wind_speed_unit=ms" --data-urlencode "timezone=UTC" \
+  --data-urlencode "run=2026-09-19T00:00" --data-urlencode "models=gfs_seamless" \
+  --data-urlencode "forecast_days=2"
 ```
+
+### Carried-over, still-valid code from the original research (unchanged, already implemented)
+
+The wind u/v decomposition (`wind_vector.to_uv`/`from_uv`), the convective-heat-loss extraction
+(`thermal_model.convective_heat_loss`/`natural_convection`/`q_conv_override`), the
+`corridor_weakest_link` extraction, the estimator-dictionary convention
+(`WIND_CORRECTION_ESTIMATORS`-style zero-argument-factory dicts), and the network-mocking
+conventions (`_FakeResponse`/`_mock_get`/cross-module `monkeypatch.setattr`) are **all already
+implemented in the repo** (confirmed by direct read this session — `backend/wind_vector.py`,
+`backend/thermal_model.py:104-190`, `backend/forecast_training.py:112-170`). See the original
+research's "Code Examples" section for the full verbatim listings — not reproduced a second time
+here since the code itself, not a doc copy, is now the source of truth.
 
 ## Runtime State Inventory
 
-This phase is an additive-experiment phase, not a rename/refactor/migration. It is included anyway
-because D-03 *does* touch two existing runtime files, so "what carries old state" is a live
-question.
-
-| Category | Items Found | Action Required |
-|----------|-------------|------------------|
-| Stored data | `data/models/forecast_{corridor}.joblib` and `data/models/training_frame_{corridor}.csv` exist as generated artifacts [VERIFIED: config.py:234, 240]. **These were trained on 2023-01-01→2025-12-31** [VERIFIED: forecasting_model.md:69] — which fully overlaps any test range this phase can construct. | **Code discipline, not data migration.** D-02 already requires approach 5 to refit on train+val only. The plan must add a test asserting the experiment never calls `ampacity_forecast._load_corridor_model`. |
-| Live service config | None — no external service holds configuration for this workstream. Verified: the only network dependencies are the unauthenticated Open-Meteo endpoints (`open_meteo_provider` needs "no token and no API key" [VERIFIED: backend/open_meteo_provider.py:19-20]). | None |
-| OS-registered state | None — `pytest.ini` and `requirements.txt` are the only build-adjacent registrations, and neither changes. | None |
-| Secrets/env vars | None. `open_meteo_provider`'s docstring records that it "needs no token and no API key" and performs no environment variable reads on import [VERIFIED: backend/open_meteo_provider.py:19-22]. Both new endpoints are on the same unauthenticated provider family (live-confirmed: all probes this session succeeded with no credentials). | None |
-| Build artifacts | `backend/__pycache__/` and `backend/tests/__pycache__/` exist. No `.egg-info`, no installed package — this repo runs from source via `pythonpath = backend` [VERIFIED: pytest.ini:2]. | None |
-| **Module-level caches** | `ampacity_forecast._MODEL_CACHE: dict = {}` is a process-lifetime, never-invalidated per-corridor model cache [VERIFIED: backend/ampacity_forecast.py:247-248, 263-279]. | **Relevant.** If the experiment ever loads a corridor model in-process it poisons the cache for anything later in the same process. Reinforces the "never call `_load_corridor_model`" rule above. |
+**[CARRIED OVER, unchanged]** — same conclusions as the original research: this phase's D-03
+changes are additive-only; the only "runtime state" consideration is the module-level
+`ampacity_forecast._MODEL_CACHE` poisoning risk if the experiment ever calls
+`_load_corridor_model` (still must not, for arm 5's refit-from-scratch requirement, now doubly true
+since arm 5's target-shift also needs to differ from production — see Pitfall 4). Re-verify at plan
+time that no new code path calls `_load_corridor_model`.
 
 ## Environment Availability
 
+**[UPDATED for D-04]**
+
 | Dependency | Required By | Available | Version | Fallback |
 |------------|------------|-----------|---------|----------|
-| Python venv | everything | ✓ | `.venv/bin/python` present | — |
-| `pandas` | frame assembly | ✓ | 2.3.3 (pinned) | — |
-| `numpy` | physics/metrics | ✓ | 2.4.3 (pinned) | — |
-| `scikit-learn` | correction models | ✓ | 1.9.1 (confirmed by import) | — |
-| `requests` | HTTP | ✓ | 2.32.5 (confirmed by import) | — undeclared, see Pitfall 7 |
-| `pytest` | tests | ✓ | 9.0.3 (pinned) | — |
-| `historical-forecast-api.open-meteo.com` | forecast archive | ✓ | live HTTP 200, `models=ecmwf_ifs`, 2021-01-01→present | Previous Runs API (24 h lead floor) |
-| `single-runs-api.open-meteo.com` | calibration gate | ✓ | live HTTP 200, `models=ecmwf_ifs` from 2024-03-14 | **none** — the gate cannot be built without it |
-| `previous-runs-api.open-meteo.com` | optional sensitivity arm | ✓ | live HTTP 200, `previous_day1..7` from ~2024-01-20 | drop the optional arm |
-| `archive-api.open-meteo.com` | "truth" weather | ✓ | already in production use | — |
-| Network egress (unauthenticated HTTPS) | all fetches | ✓ | all probes this session succeeded | — |
+| `previous-runs-api.open-meteo.com` | PRIMARY forecast archive (24h lead) | ✓ | live HTTP 200, `models=gfs_seamless`, archive starts 2024-01-20 (all 4 project cities, live-verified) | none needed — this is now the primary path |
+| `single-runs-api.open-meteo.com` + `models=gfs_seamless` | one-time stitching verification (Pattern 2) | ✓ but SHALLOW | live-verified reachable back to at least 2026-06-01; a probe to 2025-12-01 returned HTTP 400 (archive boundary) | cannot be used as a wide historical verification tool the way it was for the 1-hour ecmwf_ifs gate — the one-time hand-verification in Pattern 2 already captured what's needed; do not design a `--days 30` style sampler expecting depth back to 2024 |
+| `historical-forecast-api.open-meteo.com` + `models=ecmwf_ifs` | legacy 1-hour curiosity arm only | ✓ | unchanged from original research | Previous Runs API (now primary) |
+| `archive-api.open-meteo.com` | "truth" weather, both arms | ✓ | unchanged, already in production use | — |
+| All other dependencies (`pandas`, `numpy`, `scikit-learn`, `requests`, `pytest`) | everything | ✓ | unchanged from original research | — |
 
 **Missing dependencies with no fallback:** none.
-**Missing dependencies with fallback:** none currently missing.
 
-**Request-volume budget** (answers a CONTEXT open question). Live-measured: a single bulk request
-for `2023-01-01 → 2025-12-31` with all five hourly variables returned **HTTP 200, 26,304 rows,
-1,066,859 bytes, zero nulls**. So:
+**Request-volume budget, updated:**
 
 | Purpose | Requests | Note |
 |---|---|---|
-| Forecast archive, 3 y, 5 vars | **4** (1 per city) | one shot, ~1.07 MB each |
-| Truth archive, 3 y | 12 (1/city/year) | already the existing `fetch_city_weather` pattern [VERIFIED: backend/forecast_training.py:103-106]; likely already cached in `training_frame_*.csv` |
-| Calibration gate | 8 per sampled (city, day) | 4 cycles × 2 days-back. 10 sampled days × 4 cities ≈ **320** |
-| Optional sensitivity arm | 4 (1 per city) | `previous_day1..7` in one call |
-| **Total** | **≈ 340** | comfortably inside a free tier; warm once, cache to CSV, never re-fetch per test run |
-
-The 26,304-row count is an **exact match** for the assembled row count in Phase 1's existing
-training frames [VERIFIED: docs/data-science/decisions/forecasting_model.md:68-72, 96-97], so the
-forecast frame will join 1:1 against the truth frame with no reindexing.
+| Previous Runs archive, full window (2024-01-20 → yesterday), 5 vars | **4** (1 per city) | live-measured: ~958 KB/city, 7.2s, zero nulls |
+| Truth archive, same window | 4-8 (depending on chunking strategy) | reuse `open_meteo_provider.fetch_open_meteo`'s existing per-year or per-window chunking |
+| One-time stitching verification (Pattern 2) | ~8-16 | 4 six-hourly cycles × 1-2 cities × 1-2 dates; this is a documented one-time hand-verification, not a repeated gate |
+| Legacy 1-hour arm (unchanged) | ~340 | see original research |
+| **Total** | **≈ 360-380** | still comfortably inside a free tier; warm once, cache to CSV per the existing `FORECAST_EXPERIMENT_CACHE_DIR` convention |
 
 ## Validation Architecture
 
-### Test Framework
+**[UPDATED for D-04]** — same framework (`pytest` 9.0.3, `pytest.ini` config) as the original
+research. New/changed rows for Waves 2-5:
 
-| Property | Value |
-|----------|-------|
-| Framework | `pytest` 9.0.3 [VERIFIED: requirements.txt:26] |
-| Config file | `pytest.ini` [VERIFIED: pytest.ini:1-5] — `pythonpath = backend`, `testpaths = backend/tests`, `python_files = test_*.py *_test.py *_TestSuite.py` |
-| Quick run command | `.venv/bin/python -m pytest backend/tests/<new_file>_test.py -x -q` |
-| Full suite command | `.venv/bin/python -m pytest -q` |
-
-Conventions to match: module-level plain-`assert` functions, no test classes, no fixtures beyond
-pytest built-ins plus a small number of local `@pytest.fixture` helpers (e.g.
-`default_conductor` in `thermal_model_test.py`), `pytest.approx(..., rel=1e-6)` for float
-comparison [VERIFIED: backend/tests/thermal_model_test.py:246].
-
-### Phase Requirements → Test Map
-
-No formal REQ-IDs exist (see `<phase_requirements>`), so this maps to D-01/D-02/D-03 obligations.
+### Phase Requirements → Test Map (delta from original)
 
 | Obligation | Behavior | Test Type | Automated Command | File Exists? |
 |--------|----------|-----------|-------------------|-------------|
-| D-03 equality gate (thermal) | `ieee738_ampacity` output is **exactly** unchanged after extraction, over a random input sweep | unit | `pytest backend/tests/thermal_model_test.py -x -q` | ✅ extend existing |
-| D-03 equality gate (thermal) | `q_conv_override=None` is a true no-op; a passed override changes the result | unit | same | ❌ Wave 0 |
-| D-03 equality gate (trainer) | `corridor_weakest_link` reproduces `corridor_training_frame`'s pre-refactor `dlr_amps` + `bottleneck_index` exactly | unit | `pytest backend/tests/forecast_training_test.py -x -q` | ✅ extend existing |
-| D-03 no-behavior-change | Importing every new module performs no network call and no file I/O | unit | `pytest backend/tests/ -k "importable" -q` | ❌ Wave 0 — idiom exists at `thermal_model_test.py:249` |
-| D-01 provider | Request carries `models=ecmwf_ifs`, `wind_speed_unit=ms`, `timezone=UTC`; exactly one HTTP call | unit (recorder) | `pytest backend/tests/open_meteo_forecast_provider_test.py -x -q` | ❌ Wave 0 |
-| D-01 provider | An all-null / partially-null variable array raises, never forward-fills | unit | same | ❌ Wave 0 |
-| D-01 provider | Single-Runs `run=` is formatted `%Y-%m-%dT%H:%M`; a malformed-`run` 400 and an unavailable-`run` 400 are distinguished | unit | same | ❌ Wave 0 |
-| D-01 gate | `assert_supports_horizon` **fails** on the unfiltered series and **passes** on `hour % 6 == 1` | unit | `pytest backend/tests/forecast_leadtime_calibration_test.py -x -q` | ❌ Wave 0 |
-| D-02 split | Every train timestamp < every val timestamp < every test timestamp; split is pure; empty side raises | unit | `pytest backend/tests/experiment_splits_test.py -x -q` | ❌ Wave 0 |
-| D-02 split | `calendar_split` agrees with `anomaly_training.chronological_split` at equivalent boundaries | unit | same | ❌ Wave 0 |
-| D-02 fairness | All seven arms are scored on a byte-identical test-timestamp index | unit | `pytest backend/tests/forecast_experiment_test.py -x -q` | ❌ Wave 0 |
-| D-02 leakage | The experiment never calls `ampacity_forecast._load_corridor_model`; approach 5 refits from train+val only | unit (monkeypatch to raise) | same | ❌ Wave 0 |
-| D-02 oracle | The oracle arm is in a separate report key and is absent from any winner-selection input | unit | same | ❌ Wave 0 |
-| Wind vector | `from_uv(*to_uv(s, d)) == (s, d)` for all integer `d` in 0..359, `s > 0`; a due-north wind (`d=0`) gives `u=0, v=-s` | unit | `pytest backend/tests/wind_vector_test.py -x -q` | ❌ Wave 0 |
-| Wind vector | `perpendicular_wind(*from_uv(*to_uv(s, d)), az) == perpendicular_wind(s, d, az)` | unit | same | ❌ Wave 0 |
+| D-04 provider (NEW) | `fetch_previous_runs` request carries `models=gfs_seamless` (NOT `ecmwf_ifs`), correct `_previous_dayN` suffix handling | unit (recorder) | `pytest backend/tests/open_meteo_forecast_provider_test.py -x -q` | ❌ new tests needed |
+| D-04 provider (NEW) | `_completeness_check` called with `allow_leading_null_for=()` (no carve-out) for `fetch_previous_runs` — Pitfall 3 | unit | same | ❌ new test needed |
+| D-04 stitching (NEW) | A synthetic-data test proving only `hour % 6 == 0` rows are treated as exact-24h-lead; the other 5 hours in each block are excluded or labelled with their true 25-29h lead | unit | new test file or extend `forecast_leadtime_calibration_test.py` | ❌ new test needed |
+| D-04 anchor generalization (NEW) | `anchored_pair_frame(..., lead_hours=24)` produces an anchor gap of exactly 24h on every scored row; `anchored_pair_frame(..., lead_hours=1)` (legacy) still produces exactly 1h — a regression test that the generalization didn't break the legacy arm | unit | `pytest backend/tests/forecast_experiment_test.py -x -q` | ❌ new tests needed; extend existing file |
+| D-04 persistence correctness (NEW) | The 24h persistence arm's anchor is built from `datetime_utc - 24h` directly, NEVER via `ampacity_forecast.backtest_residuals`/`_point_forecast` (Anti-Pattern above) | unit (monkeypatch to assert non-call, or a direct value comparison against a hand-computed 24h-shifted series) | same | ❌ new test needed |
+| D-04 arm-5 horizon (NEW) | Arm 5's target is shifted by 24 rows (24h at this project's hourly cadence), not `config.FORECAST_HORIZON_MINUTES`'s current 60-minute/1-row default | unit | new test in whichever module implements the fix from Pitfall 4 | ❌ new test needed |
 
 ### Sampling Rate
 
-- **Per task commit:** `.venv/bin/python -m pytest backend/tests/<touched>_test.py -x -q`
-- **Per wave merge:** `.venv/bin/python -m pytest -q`
-- **Phase gate:** full suite green before `/gsd-verify-work`, **plus** one live-network calibration
-  run whose output is transcribed into the tracked record. Every unit test above must pass with
-  network fully mocked; the live run is a separate, manually-invoked step (the repo's existing
-  precedent — `forecast_training.py --bakeoff` is run by hand, and `forecasting_model.md` is a
-  hand-transcribed record of it).
+**[CARRIED OVER, unchanged]** — per-task-commit quick run, per-wave-merge full suite, phase-gate
+full suite plus a hand-transcribed live-network run. Unchanged by D-04.
 
-### Wave 0 Gaps
+### Wave 0 Gaps (delta from original — original Wave 0 gaps already closed by Plan 03-01)
 
-- [ ] `backend/tests/open_meteo_forecast_provider_test.py` — new, clone `open_meteo_provider_test.py`'s `_FakeResponse`/`_mock_get`/`_archive_payload` scaffolding
-- [ ] `backend/tests/wind_vector_test.py` — new
-- [ ] `backend/tests/experiment_splits_test.py` — new
-- [ ] `backend/tests/forecast_leadtime_calibration_test.py` — new
-- [ ] `backend/tests/forecast_experiment_test.py` — new
-- [ ] Extend `backend/tests/thermal_model_test.py` with the exact-equality extraction gate
-- [ ] Extend `backend/tests/forecast_training_test.py` with the `corridor_weakest_link` gate
-- [ ] Framework install: **none needed** — pytest 9.0.3 present
+- [ ] `fetch_previous_runs` tests in `backend/tests/open_meteo_forecast_provider_test.py`
+- [ ] Stitching-verification synthetic-data test (new file, or extend
+      `forecast_leadtime_calibration_test.py` with a clearly-separated "24h primary" section)
+- [ ] `anchored_pair_frame`/`assert_exact_lead`/`filter_to_exact_lead` generalization tests in
+      `backend/tests/forecast_experiment_test.py`
+- [ ] Arm-5 24h-target-shift tests, location TBD per Pitfall 4's chosen design (a) or (b)
+- [ ] New config constants (`PREVIOUS_RUNS_MODEL_ID`, `FORECAST_EXPERIMENT_24H_LEAD_FILTER_
+      REMAINDER`) added to `backend/config.py`, following the existing block's heavy
+      inline-justification-comment convention
 
 ## Security Domain
 
-`security_enforcement` is absent from `.planning/config.json` [VERIFIED: .planning/config.json — the
-file contains only `{"workflow":{"_auto_chain_active":false}}`], so it is enabled by default.
-
-### Applicable ASVS Categories
-
-| ASVS Category | Applies | Standard Control |
-|---------------|---------|-----------------|
-| V2 Authentication | no | Both new endpoints are unauthenticated public APIs; no credential is introduced |
-| V3 Session Management | no | Offline batch scripts, no session |
-| V4 Access Control | **yes (path traversal)** | Any `{corridor}`-templated output path must validate the corridor against `config.CORRIDOR_ENDPOINTS` **before** formatting — the repo's existing control, documented as T-01-03 at `ampacity_forecast._corridor_of` ("this is also the path-traversal guard for `_model_path_for`: the corridor key is validated against a closed set before it is ever formatted into a filename") [VERIFIED: backend/ampacity_forecast.py:213-217] and mirrored at `anomaly_detector._model_path_for` (T-02-02) [VERIFIED: backend/config.py:316-318] |
-| V5 Input Validation | **yes** | Every provider response value goes through `units_def.PIPELINE_SCHEMA` range checking. `_range_check` is documented as "the phase's V5 input-validation control" [VERIFIED: backend/open_meteo_provider.py:211-214]. Extend with the null-completeness check (Pitfall 3) |
-| V6 Cryptography | no | No cryptography; HTTPS is provided by `requests` defaults |
-
-### Known Threat Patterns for this stack
-
-| Pattern | STRIDE | Standard Mitigation |
-|---------|--------|---------------------|
-| Caller-supplied URL / SSRF | Tampering | Base URLs are module constants, never built from caller input — the existing rule: "`OPEN_METEO_ARCHIVE_BASE`: a fixed constant -- never built from caller input" [VERIFIED: backend/open_meteo_provider.py:43]. New module must state and follow the same rule. |
-| Path traversal via corridor key | Tampering | Closed-set validation before `.format()` (V4 above) |
-| Silent unit regression | Tampering / Information Disclosure | `EXPECTED_HOURLY_UNITS` echo check — "the cheapest possible detector for a request parameter that was dropped, renamed, or ignored upstream" [VERIFIED: backend/open_meteo_provider.py:62-64] |
-| Silent null substitution producing a falsely confident rating | Tampering | Pitfall 3's completeness gate. This is the project's standing ethical commitment surface: `REQUIREMENTS.md`'s Out-of-Scope table names "any gate resolving to an optimistic guess instead of the static rating" as a **standing ethical commitment** [VERIFIED: REQUIREMENTS.md:46] |
-| Unbounded response memory | DoS (self-inflicted) | Live-measured worst case is 1.07 MB for a 3-year 5-variable request; `timeout=60` already the module convention [VERIFIED: backend/open_meteo_provider.py:139] |
-| Untrusted deserialization (`joblib.load`) | Tampering | Pre-existing; this phase should **not** load the production artifact at all (see Runtime State Inventory), which sidesteps it |
+**[CARRIED OVER, unchanged]** — the original research's ASVS category analysis (V4 path traversal
+via `{corridor}`-templated paths, V5 input validation via `PIPELINE_SCHEMA` range checking plus the
+null-completeness gate, no new credentials, no new cryptography) applies identically to the new
+Previous Runs endpoint — it is the same unauthenticated, base-URL-as-fixed-constant provider family
+as the other two forecast endpoints. The one new consideration: the new `PREVIOUS_RUNS_MODEL_ID`
+constant must follow the SAME "fixed constant, never built from caller input" discipline
+`FORECAST_MODEL_ID` already follows [VERIFIED: backend/open_meteo_forecast_provider.py:62-64,
+`Each is, like open_meteo_provider.OPEN_METEO_ARCHIVE_BASE, a fixed constant -- never built from
+caller input"`].
 
 ## State of the Art
 
-| Old Approach | Current Approach | When Changed | Impact |
-|--------------|------------------|--------------|--------|
-| Reanalysis (ERA5) as a stand-in for "what a forecast would have said" | Dedicated forecast archives with real issue-time/valid-time separation — Open-Meteo's Historical Forecast, Previous Runs, and Single Runs APIs | Previous Runs archive begins ~Jan 2024; Single Runs ~Mar 2024 (ECMWF HRES) / Apr 2026 (most models) [CITED: open-meteo.com docs] | This phase is only possible *because* these exist; Phase 1 predates the team knowing about them |
-| Forecast the target series directly (Phase 1's `"ml"`) | Forecast/correct the **physical drivers**, then push through the physics model | Established in the DLR literature | Approaches 2/3/4 are the mainstream framing; Phase 1's direct-target approach is the outlier that lost to persistence |
-| Point forecast only | Point forecast + confidence interval derived from measured residuals | — | Already the repo's practice via `backtest_residuals`; noted in DLR-ML prior art, which "introduce[s] confidence intervals for DLR assessments to mitigate risks associated with uncertainties" [CITED: arxiv.org/abs/2405.12319] |
-| Scalar wind speed as an ML feature | u/v vector decomposition | Long-standing meteorological practice | Avoids the 0/360 discontinuity; D-02 already specifies it |
+**[UPDATED for D-04]**
 
-**Deprecated/outdated:**
-- Treating `forecast_hours`/`past_hours` as usable alongside `start_date`/`end_date` on the
-  Historical Forecast API: live-confirmed rejected —
-  `{"reason":"Parameter 'forecast_hours' is mutually exclusive with 'start_date' and 'end_date'","error":true}`,
-  HTTP 400. CONTEXT is correct on this.
-- `models=ecmwf_ifs025` as "the ECMWF option": only reaches ~2026-04-02 on Single Runs and does not
-  exhibit the lead-alignment property. Use `ecmwf_ifs` (HRES 9 km).
+| Old Approach (pre-D-04) | Current Approach (post-D-04) | When Changed | Impact |
+|--------------------------|-------------------------------|---------------|--------|
+| 1-hour idealized lead via Historical-Forecast bulk API + calibration gate, as PRIMARY | 24-hour realizable lead via Previous Runs API, as PRIMARY; 1-hour arm demoted to a labelled curiosity | D-04, 2026-09-29 (same day the bit-identity finding surfaced) | Solves the bit-identity problem; trades a smaller, harder-won 1h window for a much larger 24h one, at the cost of a genuinely harder-to-beat persistence baseline (Pattern 4) |
+| "No calibration gate needed at all" (D-04's own framing) for the 24h arm | A lightweight, analytically-grounded verification IS still needed (Pattern 2) | This refresh, 2026-09-29 | Corrects D-04's own text — the underlying "never trust the vendor's stated lead" discipline still applies, just at a smaller scale than the 1h gate |
+| `FORECAST_MODEL_ID = "ecmwf_ifs"` as the one forecast-model constant | A SECOND constant, `PREVIOUS_RUNS_MODEL_ID = "gfs_seamless"`, is required for the Previous-Runs endpoint | This refresh | The two endpoints' archive depths for the "same" model name are unrelated; do not assume portability of a model choice across Open-Meteo API products |
+
+Everything else in the original research's State of the Art table (reanalysis-as-forecast-stand-in,
+forecast-the-drivers-not-the-target framing, u/v decomposition) is unchanged by D-04.
 
 ## Assumptions Log
 
+**[UPDATED for D-04 — new assumptions only; original A1-A7 are carried over unchanged, scoped now
+to the legacy 1-hour arm]**
+
 | # | Claim | Section | Risk if Wrong |
 |---|-------|---------|---------------|
-| A1 | The lead-alignment rule (`lead = hour % 6` for `models=ecmwf_ifs`) holds over the **full** 2023-2025 window, not just the three sampled days | Pattern 2 | Moderate. Sampling was 3 cities × 3 seasons and was unanimous, but the calibration gate is precisely the mechanism for testing this at scale — that is why it stays a hard gate rather than becoming a hard-coded constant. Expand the gate's sample to ≥30 stratified days. |
-| A2 | Open-Meteo will not change the Historical Forecast stitching depth (currently exactly 6 h) during this phase | Pattern 2 | Low near-term, real long-term. Mitigated by the gate running on every warm and recording its measured alignment in the report, not assuming it. |
-| A3 | Dissemination latency of 4-6 h for global models applies to ECMWF IFS as delivered via Open-Meteo | Pitfall 6 | Moderate. Sourced from Open-Meteo's own blog/model-updates page via search rather than read off the live table (the table did not render through WebFetch). Direction is not in doubt — latency is certainly > 1 h — but the exact figure is not verified. **Does not change the recommendation**, only the precision of the caveat's wording. Confirm by loading open-meteo.com/en/docs/model-updates in a browser. |
-| A4 | Package age/download figures in the legitimacy audit | Package Legitimacy Audit | None — no install decision rests on them; all four are already pinned and installed. |
-| A5 | `HistGradientBoostingRegressor` + `LinearRegression` are the right two arms for approach 3 | Code Examples | Low. Follows the repo's own two-arm precedent and D-02's explicit "linear regression, then gradient boosting." |
-| A6 | Approach 4's convective-term correction is well-posed at the extracted granularity | Architectural Responsibility Map | Moderate. `Q_conv = max(Q_cf, Q_cn)` is a non-smooth function; a regression on its level may behave badly near the regime boundary. This is exactly the CONTEXT open question about level vs. log-ratio target — decide on the validation set, and log the regime-boundary row fraction. |
-| A7 | 4 rows/day (`hour % 6 == 1`) over the 3-year window is enough test data | Summary | Low-moderate. ~4,380 rows/city before the train/val/test split; the test slice at a 20% tail is ~875 rows/city. Comparable to the 21,910 rows Phase 1 scored but an order of magnitude smaller — MAE differences under ~3 A may not be separable. The plan should compute and report a paired bootstrap CI on the MAE difference rather than comparing point estimates. |
+| B1 | `gfs_seamless`'s Previous-Runs archive start (2024-01-20) and the four-cities-identical-to-best_match finding are stable and won't silently change (mirrors original A2's "Open-Meteo won't change the stitching depth" concern, applied to the new endpoint) | Pattern 1, Pattern 2 | Low near-term. Mitigated the same way A2 was — by keeping the live-evidence comments in the code so a re-run of the same probes is cheap. |
+| B2 | The `hour % 6` stitching mechanism (Pattern 2) generalizes across the FULL 2024-01-20-to-present window, not just the 2 cities/2 dates sampled this session | Pattern 2 | Moderate. Only 2 cities and 2 dates were checked (bounded by Single-Runs/`gfs_seamless`'s own shallow depth, which only reaches back to ~2026-06). Unlike the 1-hour ecmwf_ifs case, there is no way to cross-verify against Single-Runs for dates before ~2026-06 with this model — the stitching claim for 2024-2025 rests on the MECHANISM being general (any six-hourly model's bulk/previous-runs products are built the same way) rather than a direct historical cross-check. The lightweight verification test (Pitfall 1) should be built with this limitation explicitly noted. |
+| B3 | Diurnal-persistence-strength reasoning (Pattern 4) — that 24h persistence is a genuinely strong baseline because it's diurnally self-aligned | Pattern 4 | Low-moderate. This is a reasoned inference from the verified 24h lag construction, not an independently measured fact (e.g. via an actual MAE comparison against a shorter-horizon persistence). Does not change any design decision, only expectation-setting for the eventual result's interpretation. |
+| B4 | `previous_day1`'s response key includes the `_previous_dayN` suffix verbatim (not stripped server-side) for every variable, not just the ones spot-checked (`wind_speed_10m`, `temperature_2m`, `shortwave_radiation`, `wind_direction_10m`, `relative_humidity_2m`) | Code Examples | Low. All 5 pipeline variables were checked in the full-window fetch this session; the suffix was present and consistent for all 5. |
 
 ## Open Questions
 
-1. **Is the `hour % 6` rule stable across the full window, and is it hour-of-day dependent?**
-   - What we know: unanimous across 3 cities × 3 seasons × 8 runs each, with a clean cut at lead 6.
-   - What's unclear: behavior at DST boundaries (should be none — everything is UTC), at ECMWF
-     model-version upgrades (IFS cycle changes happen ~annually), and in 2023 (before the
-     Single-Runs archive exists, so **unverifiable by this method for 2023 data**).
-   - Recommendation: run the gate on ≥30 stratified days across the **2024-03-14 → present**
-     overlap. For 2023, the rule is extrapolated — state that explicitly in the record, or restrict
-     the experiment window to 2024-03-14 onward (costs ~40% of rows, buys full verifiability).
-     **This is a real decision the planner must make.**
+**[NEW, specific to this refresh — supersedes the original document's Open Questions #1-2, which
+were about the 1-hour arm and are now resolved/scoped to the legacy path]**
 
-2. **Does the phase proceed at an unrealizable 1-hour lead, or relabel to a realizable one?**
-   - What we know: a 1-hour NWP lead is not operationally obtainable (Pitfall 6); the bulk product
-     at `hour % 6 == 1` genuinely *is* a 1-hour-lead forecast in the issue-time sense.
-   - What's unclear: whether the team wants the idealized-lead result at all.
-   - Recommendation: **proceed at the 1-hour lead with an explicit realizability caveat.** A
-     negative result under idealized latency is decisive and cheap; a positive result motivates the
-     follow-up phase to study realizable leads. Add Pattern 4's 24 h arm if budget allows. This
-     supersedes CONTEXT's (a)/(b)/(c) framing, which assumed the lead was unknown.
+1. **Exact-lead filter (`hour % 6 == 0`) vs. broader "24-29h" unfiltered window for the primary
+   arm.**
+   - What we know: filtering to the exact lead leaves ~3,932 scored rows/city over the full window
+     — still 2.7x the legacy arm's final row count. Not filtering keeps all ~23,592 rows/city but
+     means every score is measuring a blend of 5 distinct lead times.
+   - What's unclear: whether the phase's audience needs a POINT lead claim (favoring the filter) or
+     values the extra statistical power enough to accept a RANGE claim (favoring no filter, with
+     honest range labelling).
+   - Recommendation: filter (mirrors the phase's own established discipline from the 1-hour arm --
+     an exact, verified lead is the phase's whole methodological point), but this is a real decision
+     for the planner/user, not something to default silently.
 
-3. **`ieee738_ampacity` override shape: keyword vs. separate function.** (CONTEXT open question)
-   - What we know: `Q_conv` has exactly one consumption site, `thermal_model.py:178`. A keyword is
-     a one-line insertion with zero call-site churn.
-   - Recommendation: **`q_conv_override=None` keyword.** Now resolvable — the CONTEXT said it was
-     "only visible once `convective_heat_loss` is actually extracted," but the single-consumption-
-     site read settles it.
+2. **Arm 5's 24-hour target-shift implementation: parallel helper vs. `build_training_matrix`
+   parameter (Pitfall 4).**
+   - What we know: the production function's horizon is a global config read, not a parameter.
+   - What's unclear: whether a small additive `horizon_minutes` parameter on
+     `build_training_matrix` (option (b)) is preferable to a fully separate helper (option (a)) --
+     this is a real D-03-style "additive, default-preserving refactor" judgment call.
+   - Recommendation: option (b), following the SAME pattern D-03 already used twice this phase
+     (thermal_model's `q_conv_override`, forecast_training's `corridor_weakest_link` extraction) --
+     but the planner should verify `build_training_matrix`'s only other call site
+     (`forecast_training.main`/`_run_bakeoff`) is unaffected by an additive default-preserving
+     parameter before locking this in.
 
-4. **Approach 4 target parameterization (level vs. log-ratio).** (CONTEXT open question)
-   - Unchanged: decide on the validation set. Note A6's regime-boundary concern favors the
-     log-ratio, which is scale-free and better-behaved across the `max()` kink.
+3. **Does the lightweight stitching verification (Pitfall 1's recommendation) belong in a new
+   module, or as an addition to the existing (legacy-scoped) `forecast_leadtime_calibration.py`?**
+   - What we know: the existing module's docstring, `LEAD_RULE_DESCRIPTION` constant, and
+     `_MATCH_RATE_FLOOR`/tolerance machinery are all written specifically about the `ecmwf_ifs`
+     1-hour case.
+   - What's unclear: whether extending that module (renaming/re-scoping it as a general
+     "stitching verification" tool covering both leads) or adding a small, separate, 24h-specific
+     check is cleaner.
+   - Recommendation: the planner should read the module's full current content (not excerpted
+     here) before deciding — this is a real design judgment, not resolvable from this document
+     alone.
 
-5. **Approach 3 pooling (per-corridor pooled vs. per-city).** (CONTEXT open question)
-   - Unchanged: decide on the validation set. Note the two corridors have identical `ConductorConfig`
-     except `line_azimuth` [VERIFIED per CONTEXT; `elevation_m` is 900.0 for both via
-     `config.DEFAULT_CONDUCTOR_CONFIG_KWARGS` at config.py:99], so pooling across corridors is also
-     defensible and would quadruple the training rows — worth adding as a third pooling option.
-
-6. **Should the phase's output record be a new `docs/data-science/decisions/` file?**
-   - What we know: `forecasting_model.md` is the established ADR-style shape for exactly this kind
-     of measured-evidence record, and it has an Open Questions entry this phase answers.
-   - Recommendation: new sibling file (e.g. `forecast_correction_experiment.md`), plus a one-line
-     cross-reference added to `forecasting_model.md`'s Open Questions. Do not rewrite
-     `forecasting_model.md` — it is marked "Ratified as a record of measured fact."
-
-7. **Project-instruction compliance: `ACKNOWLEDGEMENTS.md`.** The user's standing memory records
-   that ECE 464 requires AI-use disclosure and that `ACKNOWLEDGEMENTS.md` must be updated before
-   any significant AI-assisted commit. The planner should include that update as an explicit task,
-   since this phase will produce a large AI-assisted diff.
+4. **Project-instruction compliance: `ACKNOWLEDGEMENTS.md`.** Unchanged from the original —
+   `03-01-SUMMARY.md` confirms this was already updated once this phase; the planner should include
+   a follow-up update for whatever AI-assisted diff Waves 2-5 produce, per the user's standing
+   memory directive.
 
 ## Project Constraints (from CLAUDE.md)
 
-**No `./CLAUDE.md` or `./.claude/CLAUDE.md` exists in this repository**, and `.claude/skills/` and
-`.agents/skills/` are both absent (verified by directory listing this session — `.claude/` contains
-only `jobs/`, `scheduled_tasks.lock`, `settings.local.json`, `worktrees/`).
+**[CARRIED OVER, unchanged]** — no `./CLAUDE.md` or `./.claude/CLAUDE.md` exists in this
+repository. The same three de-facto constraints the original research identified
+(`requirements.txt`'s single-source-of-truth header, `REQUIREMENTS.md`'s fail-safe-contract
+Out-of-Scope line, `backend/config.py`'s centralization discipline) apply identically to the new
+work — the two new constants this refresh recommends (`PREVIOUS_RUNS_MODEL_ID`,
+`FORECAST_EXPERIMENT_24H_LEAD_FILTER_REMAINDER`) both belong in `config.py`/the provider module
+following that same discipline, not as inline literals.
 
-The project's actual constraints are encoded in three places the planner must honor as if they were
-CLAUDE.md directives:
+---
 
-1. **`requirements.txt` header** — "This file is the single source of truth for this repo's runtime
-   dependencies and supersedes the prose `pip install ...` lines in README.md:33 and
-   backend/dlr_pipeline.py:8" [VERIFIED: requirements.txt:4-7]. Pin anything new here, nowhere else.
-2. **`REQUIREMENTS.md` Out of Scope** — "Changing the fail-safe contract (any gate resolving to an
-   optimistic guess instead of the static rating) | Standing ethical commitment
-   (`Project Definition.md`) — models must plug into the existing gate framework, not alter its
-   fail-safe guarantee" [VERIFIED: REQUIREMENTS.md:46].
-3. **`backend/config.py` centralization discipline** — every tunable a module reads lives in
-   `config.py` [VERIFIED: backend/config.py:1-19, 184-189]. New constants
-   (`FORECAST_EXPERIMENT_*`) go there, following the existing `FORECAST_ML_*` / `ANOMALY_ML_*`
-   block structure and its heavy inline-justification comment style.
+# Legacy 1-Hour Arm — Original Research, Preserved for the Curiosity Disposition (D-04)
 
-Plus the user's standing memory directive on `ACKNOWLEDGEMENTS.md` (Open Question 7).
+Everything from this heading to the end of the document is the ORIGINAL (2026-09-28) research,
+preserved verbatim because D-04 keeps the 1-hour arm's code in the repo as a documented, labelled,
+non-primary curiosity. Nothing below this heading was re-verified this session; it describes the
+1-hour design that is now SECONDARY, not primary. Do not use anything below this heading to plan
+Waves 2-5's PRIMARY work — use the sections above.
 
-## Sources
+The original document's full content — its Summary, Standard Stack detail, all four Architecture
+Patterns (provider-adapter cloning, the deterministic `hour % 6` rule, u/v decomposition, the
+Previous-Runs-as-sensitivity-ladder pattern that correctly anticipated today's pivot), all seven
+Pitfalls, the full Code Examples section, Runtime State Inventory, Environment Availability,
+Validation Architecture, Security Domain, State of the Art, Assumptions Log (A1-A7), and Sources —
+is unchanged and remains available in this phase's git history at the commit that introduced the
+original `03-RESEARCH.md` (`docs(03): research phase domain`, 2026-09-28) and in
+`03-01-SUMMARY.md`/`03-01-BOUNDARY-INVESTIGATION.md`, which document its execution, the two window
+corrections, and the bit-identity finding that triggered D-04. It is not reproduced a second time
+in this file to avoid two competing copies of the same historical record drifting apart — the git
+history and the two summary/investigation documents ARE that record.
+
+## Sources (this refresh, in addition to the original document's Sources section)
 
 ### Primary (HIGH confidence)
 
-- Direct `Read` of `backend/thermal_model.py` (all 182 lines), `backend/ampacity_forecast.py` (all
-  550 lines), `backend/forecast_training.py` (all 615 lines), `backend/open_meteo_provider.py` (all
-  230 lines), `backend/config.py` (all 489 lines), `backend/units_def.py:344-386`,
-  `backend/anomaly_training.py:380-449, 815-874`,
-  `backend/tests/open_meteo_provider_test.py:1-90`, `requirements.txt`, `pytest.ini`
-- Direct `Read` of `REQUIREMENTS.md`, `STATE.md`, `03-CONTEXT.md`,
-  `docs/data-science/decisions/forecasting_model.md`
-- Live HTTP probes this session against `historical-forecast-api.open-meteo.com`,
-  `single-runs-api.open-meteo.com`, `previous-runs-api.open-meteo.com` — ~60 requests covering
-  parameter rejection, run-format validation, per-model archive-depth bisection, null behavior, and
-  the bulk-vs-single-run lead-alignment measurement. Raw outputs pasted inline above.
+- Live HTTP probes this session (~40 requests) against `previous-runs-api.open-meteo.com`,
+  cross-referenced against `single-runs-api.open-meteo.com` and `archive-api.open-meteo.com` —
+  covering: archive-start bisection (all 4 project cities), model-pinning comparison
+  (`best_match`/`gfs_seamless`/`ecmwf_ifs`/`ecmwf_ifs025`/`gfs_global`/`icon_seamless`), bit-identity
+  refutation (2 cities, 6 dates, 2 variables), the six-hour-stitching cross-check (2 cities, 2
+  dates, 2 variables, all 4 daily cycles), multi-day batching, `previous_day1..8` ceiling,
+  null-completeness at variable boundaries, and a full-window single-request volume test. Raw
+  outputs pasted inline above.
+- Direct `Read` of `backend/open_meteo_forecast_provider.py` (all 434 lines), `backend/
+  forecast_experiment.py` (all 474 lines), `backend/experiment_splits.py` (all 118 lines),
+  `backend/wind_vector.py` (all 98 lines), `backend/thermal_model.py` (all 260 lines), `backend/
+  forecast_training.py` (all 677 lines), `backend/config.py` (relevant sections), `backend/
+  ampacity_forecast.py:282-465`, `backend/tests/forecast_experiment_test.py` (all 317 lines),
+  `backend/tests/open_meteo_forecast_provider_test.py:1-90`, this session.
+- Direct `Read` of `03-CONTEXT.md`, `03-01-SUMMARY.md`, `03-01-BOUNDARY-INVESTIGATION.md` (all in
+  full), this session.
 
 ### Secondary (MEDIUM confidence)
 
-- https://open-meteo.com/en/docs/previous-runs-api — `previous_dayN` semantics, day-7 ceiling,
-  "Most models are archived from January 2024" (cross-confirmed by live bisection to 2024-01-15/20)
-- https://open-meteo.com/en/docs/single-runs-api — `run=` format, no `start_date`, archive depth
-  "2nd of April 2026 for most models / ECMWF IFS HRES 9 km from March 14, 2024" (cross-confirmed by
-  live bisection: `ecmwf_ifs025` boundary in 2026-04-01/15; `ecmwf_ifs` works at 2024-03-20)
-- https://open-meteo.com/en/docs/historical-forecast-api — "Each run's first few hours are stitched
-  into a continuous hourly timeseries" (cross-confirmed by the lead-alignment measurement, which
-  quantifies "a few" as exactly 6)
-- https://confluence.ecmwf.int/pages/viewpage.action?pageId=133262398 — u/v formulas
-
-### Tertiary (LOW confidence)
-
-- https://openmeteo.substack.com/p/single-runs-api (via WebSearch) — model dissemination latency
-  figures (4-6 h global, 1-3 h regional, AIFS 5:45). **Not** read off the live model-updates table;
-  see Assumption A3.
-- https://arxiv.org/abs/2405.12319 — "Dynamic Line Rating using Hyper-local Weather Predictions: A
-  Machine Learning Approach." Abstract only; confirms the correct-weather-then-DLR framing and
-  confidence intervals as established practice, but the abstract names no horizon, baseline, or
-  quantitative result. Cited for framing, not for any number.
+- https://open-meteo.com/en/docs/previous-runs-api — `previous_dayN` semantics, archive start date
+  ("Most models are archived from January 2024"), cross-confirmed by live bisection to precisely
+  2024-01-20 for `gfs_seamless`/`best_match`. Its "the value predicted 24 hours before valid time"
+  claim is TRUE ONLY for six-hourly-cycle hours — refuted as a universal claim by this session's
+  own live stitching cross-check (Pattern 2); this is a case where the live evidence overrides the
+  doc's own wording, not a case of independent confirmation.
 
 ## Metadata
 
-**Confidence breakdown:**
+**Confidence breakdown (this refresh):**
 
-- Standard stack: **HIGH** — nothing new is installed; every version read from `requirements.txt`
-  and confirmed by interpreter import
-- API layer: **HIGH** — every claim live-probed this session with raw output pasted; docs
-  cross-confirm each live finding
-- In-repo code claims: **HIGH** — every cited file read in full this session, with line ranges and
-  verbatim quotes; three CONTEXT claims verified exactly, one refuted
-- Architecture: **HIGH** — follows two existing, shipped precedents (`forecast_training.py`,
-  `anomaly_training.py`) rather than proposing a new shape
-- Pitfalls: **HIGH** for 1-5 and 7 (each demonstrated from read code or live probe output);
-  **MEDIUM** for 6 (direction certain, exact latency figure from a secondary source)
-- Operational-realizability framing: **MEDIUM** — see Assumption A3
+- Previous-Runs API mechanics (archive start, model pinning, batching, null behavior): **HIGH** —
+  every claim live-probed this session with raw output captured above.
+- The six-hour stitching finding (Pattern 2): **HIGH** — bit-for-bit exact match against an
+  independently-fetched Single-Runs value, for 2 cities, 2 variables, all 4 daily cycles, 0
+  exceptions across 96 compared hour-cells.
+- Bit-identity refutation (Summary point 1): **HIGH** — 2 cities, 6 dates, 2 variables, ~140+
+  compared hours, zero exact matches.
+- Row volume estimate: **HIGH** — a single live full-window fetch, not extrapolated.
+- Diurnal-persistence-strength reasoning (Pattern 4): **MEDIUM** — reasoned, not independently
+  benchmarked.
+- Generalization of the stitching mechanism to 2024-2025 dates outside Single-Runs' shallow
+  `gfs_seamless` reach (Assumption B2): **MEDIUM** — mechanism-based inference, not a direct
+  historical cross-check for those years.
 
-**Research date:** 2026-09-28
-**Valid until:** 2026-10-28 for the in-repo claims (stable). **2026-10-12** for the Open-Meteo
-findings — the Single-Runs archive is a rolling window (its "most models" boundary moved to
-2026-04-02, ~6 months back from today), so depth claims decay; the lead-alignment rule should be
-re-measured by the gate on every warm rather than trusted from this document.
+**Research date (this refresh):** 2026-09-29.
+**Valid until:** 2026-10-13 for the Previous-Runs findings (mirrors the original document's
+~2-week validity window for Open-Meteo API behavior, since rolling archive boundaries and possible
+future re-pinning of `best_match` are both live risks the original document already flagged for the
+sibling endpoints). The in-repo code claims (carried-over sections) remain valid on the original
+document's own timeline.
