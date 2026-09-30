@@ -174,35 +174,58 @@ benefit wind correction could capture.
 under revisit, not a new model class; supersedes backlog Phase 999.1, which found both trained
 candidates lost to naive persistence at the 60-minute horizon — see
 `docs/data-science/decisions/forecasting_model.md`)
-**Requirements**: TBD — no new FCST/ANOM requirement ID; this is a methodology investigation for
-FCST-01/FCST-02's existing "ml" method, not new project scope
+**Requirements**: No FCST/ANOM requirement ID — D-04 reconfirmed this remains a methodology
+investigation of FCST-01/FCST-02's existing "ml" method, not new project scope.
 **Success Criteria** (what must be TRUE):
 
-  1. A historical forecast archive (Open-Meteo Historical Forecast API, NOT reanalysis) is
-     assembled with its actual effective lead time empirically measured against Open-Meteo's
-     Single-Runs API (exact issue times) — never trusted from documentation alone — and the
-     60-minute-horizon claim is either confirmed or explicitly relabeled/adjusted before any
-     approach is scored.
+  1. A forecast archive with a genuinely measured (never vendor-assumed) lead time backs the
+     phase's primary comparison. **Executed as, per D-04 — a decision made before any test-set
+     result was seen, following Wave 1's discovery that the originally-scoped 1-hour Historical
+     Forecast archive was bit-identical to truth for the necessarily-recent calibration window,
+     not following the eventual test-set outcome:** Open-Meteo's **Previous Runs API** is the
+     primary 24-hour-lead forecast source, with its `24 + (hour % 6)`-hour effective lead measured
+     (not trusted from Open-Meteo's own "exact by construction" documentation) against the
+     Single-Runs API, and every scored row filtered to the verified exact-24h-lead subset
+     (`hour % 6 == 0`). The originally-scoped 1-hour Historical Forecast arm (Wave 1, its own
+     measured lead-time calibration gate against Single-Runs) is demoted to a labelled, non-primary
+     curiosity — see `forecast_correction_experiment.md`'s Legacy 1-Hour Arm section.
+     **Disposition: MET, as amended by D-04** — Plan 03-03 (the 24-hour offset-lead gate) and
+     `forecast_correction_experiment.md`.
   2. All seven approaches (persistence, NWP-wind-delta, raw-forecast, ML-wind-correction,
      ML-cooling-correction, refit reference `"ml"`, oracle) are scored on identical held-out
      chronological test timestamps — a fixed calendar train/val/test split, not the existing
      walk-forward-only evaluation machinery — with the oracle labeled as non-forecast in every
      output surface.
+     **Disposition: MET** — Plan 03-06 scored all seven arms on one byte-identical held-out
+     test-timestamp index per corridor; the oracle is structurally isolated out of the candidate
+     mapping (Plan 03-04), never merely labelled.
   3. No approach's prediction or regime label can be shown to depend on any post-issue-time
      information (a leakage test suite proves this directly, not just by construction).
+     **Disposition: MET** — Plan 03-06's leakage probe demonstrated power against a deliberately
+     sabotaged arm; the probe's own coverage gap (a model trained on test rows, rather than a
+     direct read of a truth column) is closed instead by arm 5's from-scratch train+validation-only
+     refit and the filtered-frame split-disjointness assertion (Plan 03-04) — see
+     `forecast_correction_experiment.md`'s Limitations.
   4. `backend/thermal_model.py::ieee738_ampacity` and `backend/anomaly_detector.py` are
      unchanged in observable behavior (any refactor — e.g. exposing a substitutable convective
      term — is proven behavior-identical via an equality test against the pre-refactor output).
+     **Disposition: MET** — the convective-term extraction (Plan 03-02) is proven bit-identical via
+     an exact-equality (`np.array_equal`) golden-fixture gate; `anomaly_detector.py` carried zero
+     diff after every plan in this phase.
   5. A written decision record (`docs/data-science/decisions/forecast_correction_experiment.md`,
      matching the existing 9-section structure) states which approach wins on the held-out test
      set, or states plainly that none beat persistence — with the Expectation section committed
      before the test-set run, per this workstream's existing no-peeking discipline.
-**Plans**: 7 plans across 5 waves — 2 executed (Wave 1), 5 planned (Waves 2-5) around D-04's pivot
-to a 24-hour realizable lead as primary (see 03-CONTEXT.md D-04). The 1-hour idealized-lead approach
-Wave 1 built hit a real data-source limitation (Open-Meteo's "forecast" and "truth" endpoints are
-bit-identical at 1h lead for any window recent enough to satisfy the lead-alignment rule), so the
-originally-planned Waves 2-5 were superseded and replanned rather than merely deferred. The 1-hour
-arm's committed code is retained as a documented non-primary curiosity per D-04's disposition.
+     **Disposition: MET** — the Expectation section was committed in the same isolated commit
+     (`4d964cf`) that unlocked the held-out test split (Plan 03-06); the Verdict (Plan 03-07) states
+     `ml_cooling_corrected` wins distinguishably at both corridors, read against that unedited
+     Expectation.
+**Plans**: 7 plans across 5 waves — all complete. Wave 1's originally-scoped Waves 2-5 (designed
+around a 1-hour idealized lead) were redesigned around D-04's pivot to a 24-hour realizable lead
+after Wave 1 discovered the 1-hour data source was bit-identical to truth for the necessarily-recent
+calibration window; the redesigned Waves 2-5 (Plans 03-03 through 03-07) are the waves documented
+below. The 1-hour arm's already-committed code is retained as a documented, non-primary curiosity
+per D-04's disposition.
 
 **Wave 1**
 
@@ -212,37 +235,37 @@ arm's committed code is retained as a documented non-primary curiosity per D-04'
   which the plan surfaced honestly rather than hiding
 - [x] 03-02-PLAN.md — Building blocks: `wind_vector` u/v decomposition, the additive `thermal_model`
   convective-term extraction plus `q_conv_override` (bit-exact via `np.array_equal`), and the
-  `corridor_weakest_link` extraction — all lead-time-agnostic and fully reused by the replanned waves
+  `corridor_weakest_link` extraction — all lead-time-agnostic and fully reused by the redesigned waves
 
-**Wave 2** *(replanned around D-04; blocked on Wave 1)*
+**Wave 2** *(redesigned around D-04)*
 
-- [ ] 03-03-PLAN.md — Tracer: the 24-hour realizable lead end-to-end — `fetch_previous_runs` under
+- [x] 03-03-PLAN.md — Delivered the 24-hour realizable lead end-to-end: `fetch_previous_runs` under
   its own `gfs_seamless` pin, the measured `24 + (hour % 6)` offset-lead verification correcting
   D-04's own "no gate needed" framing, the `lead_hours`-generalized anchored-pair contract with a
   lead-aware cache key, and a live validation-split score proving the forecast is no longer
   bit-identical to truth
 
-**Wave 3** *(blocked on Wave 2; two plans run in parallel — disjoint file ownership)*
+**Wave 3** *(two plans run in parallel — disjoint file ownership)*
 
-- [ ] 03-04-PLAN.md — The four non-fitted arms (24-hour persistence, NWP-wind-delta, raw forecast,
-  oracle) in one registry, promoted to corridor level via `corridor_weakest_link`, with the oracle
-  structurally outside the candidate mapping rather than merely labelled
-- [ ] 03-05-PLAN.md — The two ML correction families as standalone units: u/v wind correction (both
-  pooling strategies) and convective-term correction through `q_conv_override` (both target
-  parameterizations), selected on the validation set; plus the additive `horizon_minutes` parameter
-  giving arm 5 a 24-hour target without mutating a global constant
+- [x] 03-04-PLAN.md — Delivered the four non-fitted arms (24-hour persistence, NWP-wind-delta, raw
+  forecast, oracle) in one registry, promoted to corridor level via `corridor_weakest_link`, with the
+  oracle structurally outside the candidate mapping rather than merely labelled
+- [x] 03-05-PLAN.md — Delivered the two ML correction families as standalone units: u/v wind
+  correction (both pooling strategies) and convective-term correction through `q_conv_override`
+  (both target parameterizations), selected on the validation set; plus the additive
+  `horizon_minutes` parameter giving arm 5 a 24-hour target without mutating a global constant
 
-**Wave 4** *(blocked on Wave 3)*
+**Wave 4**
 
-- [ ] 03-06-PLAN.md — The Expectation committed before any test row is read, a leakage probe with
-  demonstrated power, and the single seven-arm held-out test-set run with paired bootstrap
-  confidence intervals on every margin against persistence
+- [x] 03-06-PLAN.md — Delivered the Expectation committed before any test row was read, a leakage
+  probe with demonstrated power, and the single seven-arm held-out test-set run with paired
+  bootstrap confidence intervals on every margin against persistence
 
-**Wave 5** *(blocked on Wave 4)*
+**Wave 5**
 
-- [ ] 03-07-PLAN.md — The 9-section decision record: the primary 24-hour verdict read against the
-  unedited Expectation, the legacy 1-hour arm as a labelled curiosity with its bit-identity caveat,
-  honest limitations, and the phase's closing records
+- [x] 03-07-PLAN.md — Delivered the completed 9-section decision record: the primary 24-hour verdict
+  read against the unedited Expectation, the legacy 1-hour arm as a labelled curiosity with its
+  bit-identity caveat, honest limitations, and the phase's closing records
 
 ## Progress
 
@@ -254,7 +277,7 @@ and may be executed first or in parallel if that better fits available capacity)
 |-------|----------------|--------|-----------|
 | 1. Forecasting Model | 3/3 | Complete    | 2026-09-24 |
 | 2. Anomaly Detection Model | 5/5 | Complete   | 2026-09-28 |
-| 3. Ampacity Forecast Correction Experiment | 0/? | Not Started | |
+| 3. Ampacity Forecast Correction Experiment | 7/7 | Complete | 2026-09-30 |
 
 ## Backlog
 
