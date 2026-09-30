@@ -32,6 +32,7 @@ import ampacity_forecast
 import config
 import corridor_discretization
 import forecast_experiment as fe
+import forecast_training
 
 
 CITY = "AUSTIN"
@@ -1348,3 +1349,235 @@ def test_main_raises_via_split_disjointness_check_on_corrupted_boundaries(
 def test_module_import_has_no_side_effects():
     import importlib
     importlib.reload(fe)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 03-06 Task 2: the three fitted arms (3, 4, 5), ALL_ARMS, and the
+# leakage probe
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def test_all_arms_has_exactly_seven_entries_and_contains_oracle():
+    assert len(fe.ALL_ARMS) == 7, sorted(fe.ALL_ARMS)
+    assert fe.ORACLE_ARM_NAME in fe.ALL_ARMS
+    assert set(fe.ALL_ARMS) == set(fe.NON_FITTED_ARMS) | set(fe.FITTED_ARM_NAMES)
+
+
+def test_candidate_mapping_derived_from_all_arms_excludes_oracle_and_has_six():
+    candidate_names = set(fe.ALL_ARMS) - {fe.ORACLE_ARM_NAME}
+    assert len(candidate_names) == 6, sorted(candidate_names)
+
+
+def test_all_arms_fitted_placeholder_entries_raise_naming_fit_fitted_arms():
+    geometry = corridor_discretization.corridor_geometry(CORRIDOR)
+    for name in fe.FITTED_ARM_NAMES:
+        callable_ = fe.ALL_ARMS[name](geometry)
+        with pytest.raises(RuntimeError) as excinfo:
+            callable_(pd.DataFrame({"datetime_utc": []}))
+        assert "fit_fitted_arms" in str(excinfo.value)
+
+
+def _build_stacked_train_val_frame(monkeypatch, tmp_path, *, periods=24 * 40):
+    """
+    A stacked, endpoint_city-tagged, unfiltered two-city frame for
+    Task 2's fitted-arm tests -- built the same way Task 3's real corridor
+    scoring will build one (`fe._stacked_pair_frame`), from the SAME
+    two-city fixtures Plan 03-04's corridor tests already established.
+    """
+    monkeypatch.setattr(config, "FORECAST_EXPERIMENT_CACHE_DIR", str(tmp_path))
+    truth_a = _synthetic_weather_frame(periods=periods)
+    truth_b = _synthetic_weather_frame(periods=periods)
+    fcst_a = _synthetic_weather_frame(periods=periods)
+    fcst_b = _synthetic_weather_frame(periods=periods)
+    _patch_two_city_24h_fetches(
+        monkeypatch,
+        {AUSTIN_LATLON: truth_a, CC_LATLON: truth_b},
+        {AUSTIN_LATLON: fcst_a, CC_LATLON: fcst_b},
+    )
+    return fe._stacked_pair_frame(CORRIDOR, "2025-10-01", "2025-11-09", lead_hours=PRIMARY_LEAD)
+
+
+def test_stacked_pair_frame_has_endpoint_city_column_with_exactly_two_cities(
+    monkeypatch, tmp_path
+):
+    stacked = _build_stacked_train_val_frame(monkeypatch, tmp_path)
+    cities = set(stacked["endpoint_city"].unique())
+    assert cities == {"AUSTIN", "CORPUS_CHRISTI"}
+    assert len(stacked) > 0
+
+
+def test_fit_fitted_arms_returns_three_fitted_objects(monkeypatch, tmp_path):
+    stacked = _build_stacked_train_val_frame(monkeypatch, tmp_path)
+    geometry = corridor_discretization.corridor_geometry(CORRIDOR)
+
+    fitted = fe.fit_fitted_arms(
+        stacked, geometry,
+        wind_configuration=fe.WIND_CONFIGURATION, cooling_configuration=fe.COOLING_CONFIGURATION,
+    )
+
+    assert hasattr(fitted["wind_model"], "predict") is False  # it's a WindCorrectionModel, not an estimator
+    assert fitted["wind_model"].pooling == "pooled"
+    assert fitted["cooling_model"].target == "log_ratio"
+    assert hasattr(fitted["arm5_estimator"], "predict")
+    assert fitted["wind_configuration"] == fe.WIND_CONFIGURATION
+    assert fitted["cooling_configuration"] == fe.COOLING_CONFIGURATION
+
+
+def test_arm5_target_index_is_exactly_24_hours_after_feature_index(monkeypatch, tmp_path):
+    stacked = _build_stacked_train_val_frame(monkeypatch, tmp_path)
+    city_a, city_b = "AUSTIN", "CORPUS_CHRISTI"
+
+    arm5_frame = fe._arm5_truth_frame(stacked, city_a, city_b)
+    X5, y5 = forecast_training.build_training_matrix(arm5_frame, horizon_minutes=1440)
+
+    assert len(X5) > 0
+    assert ((y5.index - X5.index) == pd.Timedelta(hours=24)).all()
+
+
+def test_fit_fitted_arms_arm5_never_touches_production_model_loader_or_cache(
+    monkeypatch, tmp_path
+):
+    import ampacity_forecast as af
+
+    stacked = _build_stacked_train_val_frame(monkeypatch, tmp_path)
+    geometry = corridor_discretization.corridor_geometry(CORRIDOR)
+
+    def _raise(*args, **kwargs):
+        raise AssertionError(
+            "fit_fitted_arms must never call ampacity_forecast._load_corridor_model"
+        )
+
+    monkeypatch.setattr(af, "_load_corridor_model", _raise)
+
+    # Completes without raising -- the monkeypatched loader is never reached.
+    fitted = fe.fit_fitted_arms(
+        stacked, geometry,
+        wind_configuration=fe.WIND_CONFIGURATION, cooling_configuration=fe.COOLING_CONFIGURATION,
+    )
+    assert fitted["arm5_estimator"] is not None
+
+
+def test_no_artifact_reuse_constants_absent_from_non_comment_source():
+    import inspect
+
+    source = inspect.getsource(fe)
+    non_comment_lines = [
+        line for line in source.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    non_comment_source = "\n".join(non_comment_lines)
+    for forbidden in ("FORECAST_ML_MODEL_DIR", "_load_corridor_model", "_MODEL_CACHE"):
+        assert forbidden not in non_comment_source, forbidden
+    assert "horizon_minutes" in non_comment_source
+
+
+def test_wind_and_cooling_corrected_ampacity_are_finite_and_differ_from_raw_forecast(
+    monkeypatch, tmp_path
+):
+    stacked = _build_stacked_train_val_frame(monkeypatch, tmp_path)
+    geometry = corridor_discretization.corridor_geometry(CORRIDOR)
+    city_a = "AUSTIN"
+
+    fitted = fe.fit_fitted_arms(
+        stacked, geometry,
+        wind_configuration=fe.WIND_CONFIGURATION, cooling_configuration=fe.COOLING_CONFIGURATION,
+    )
+
+    city_frame = fe.filter_to_exact_lead(
+        stacked[stacked["endpoint_city"] == city_a].reset_index(drop=True),
+        lead_hours=PRIMARY_LEAD,
+    )
+    city_frame = fe._add_correction_columns(city_frame, geometry)
+
+    wind_pred = fe._wind_corrected_ampacity(fitted["wind_model"], city_frame, geometry)
+    cooling_pred = fe._cooling_corrected_ampacity(fitted["cooling_model"], city_frame, geometry)
+    raw_pred = fe._make_raw_forecast_arm(geometry)(city_frame)
+
+    assert np.all(np.isfinite(wind_pred))
+    assert np.all(np.isfinite(cooling_pred))
+    assert len(wind_pred) == len(city_frame)
+    assert len(cooling_pred) == len(city_frame)
+    # A fitted correction need not always differ from the raw forecast, but
+    # across a whole scored window it should not be bit-identical to it --
+    # otherwise the correction model learned literally nothing.
+    assert not np.array_equal(wind_pred, raw_pred)
+
+
+def test_leakage_probe_passes_on_real_arms_flags_oracle_and_flags_a_sabotaged_arm(
+    monkeypatch, tmp_path
+):
+    """
+    The power test (Task 2's `<behavior>`): the probe must not merely pass
+    vacuously. Built against six real forecast arms (three non-fitted, two
+    fitted corrections, and the from-scratch reference model) plus the
+    oracle, plus one deliberately sabotaged arm that reads a truth column
+    directly.
+    """
+    stacked = _build_stacked_train_val_frame(monkeypatch, tmp_path)
+    geometry = corridor_discretization.corridor_geometry(CORRIDOR)
+    city_a, city_b = "AUSTIN", "CORPUS_CHRISTI"
+
+    fitted = fe.fit_fitted_arms(
+        stacked, geometry,
+        wind_configuration=fe.WIND_CONFIGURATION, cooling_configuration=fe.COOLING_CONFIGURATION,
+    )
+
+    arm5_truth_frame = fe._arm5_truth_frame(stacked, city_a, city_b)
+    X5_all, _ = forecast_training.build_training_matrix(arm5_truth_frame, horizon_minutes=1440)
+
+    def reference_arm(frame: pd.DataFrame) -> np.ndarray:
+        # Deliberately reads ONLY anchor_datetime_utc -- never any
+        # truth_*/fcst_* column of the passed frame -- so a sabotaged
+        # truth column can structurally never reach this arm's prediction.
+        idx = pd.DatetimeIndex(frame["anchor_datetime_utc"])
+        features = X5_all.reindex(idx)
+        return np.asarray(fitted["arm5_estimator"].predict(features.to_numpy(dtype=float)), dtype=float)
+
+    city_frame = fe.filter_to_exact_lead(
+        stacked[stacked["endpoint_city"] == city_a].reset_index(drop=True),
+        lead_hours=PRIMARY_LEAD,
+    )
+    city_frame = fe._add_correction_columns(city_frame, geometry)
+    # Restrict to rows arm5's feature table can actually serve (no NaN lag
+    # features at the edges of the synthetic window).
+    city_frame = city_frame[
+        pd.DatetimeIndex(city_frame["anchor_datetime_utc"]).isin(X5_all.index)
+    ].reset_index(drop=True)
+    assert len(city_frame) > 0
+
+    arms = {
+        name: fe.NON_FITTED_ARMS[name](geometry) for name in fe.NON_FITTED_ARMS
+    }
+    arms["ml_wind_corrected"] = lambda f: fe._wind_corrected_ampacity(fitted["wind_model"], f, geometry)
+    arms["ml_cooling_corrected"] = lambda f: fe._cooling_corrected_ampacity(fitted["cooling_model"], f, geometry)
+    arms["reference_ml_refit_24h"] = reference_arm
+    arms["sabotaged_reads_truth_wind_directly"] = lambda f: f["truth_wind_speed"].to_numpy(dtype=float)
+
+    result = fe.leakage_probe(city_frame, arms)
+
+    assert set(result) == set(arms)
+    for name in (
+        "persistence_24h", "nwp_wind_delta", "raw_forecast",
+        "ml_wind_corrected", "ml_cooling_corrected", "reference_ml_refit_24h",
+    ):
+        assert result[name]["changed"] is False, (name, result[name])
+        assert result[name]["max_abs_change"] == 0.0, (name, result[name])
+
+    assert result[fe.ORACLE_ARM_NAME]["changed"] is True
+    assert result[fe.ORACLE_ARM_NAME]["max_abs_change"] > 0.0
+
+    assert result["sabotaged_reads_truth_wind_directly"]["changed"] is True
+    assert result["sabotaged_reads_truth_wind_directly"]["max_abs_change"] > 0.0
+
+
+def test_leakage_probe_sentinel_stays_in_physically_plausible_range():
+    idx = pd.date_range("2025-10-01", periods=5, freq="h", tz="UTC")
+    frame = pd.DataFrame({
+        "datetime_utc": idx,
+        "truth_wind_speed": np.array([3.0, 4.0, 5.0, 6.0, 7.0]),
+        "truth_air_temp": np.array([20.0, 21.0, 22.0, 23.0, 24.0]),
+        "fcst_wind_speed": np.array([3.5, 4.5, 5.5, 6.5, 7.5]),
+    })
+    arms = {"reads_fcst": lambda f: f["fcst_wind_speed"].to_numpy(dtype=float)}
+    result = fe.leakage_probe(frame, arms)
+    assert result["reads_fcst"]["changed"] is False
