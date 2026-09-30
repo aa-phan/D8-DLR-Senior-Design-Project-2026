@@ -280,8 +280,10 @@ held-out test set — Phase 3's results are frozen and treated as already-seen e
 analysis is labeled as follow-up work on a fresh basis (a reserved chronological holdout, ablations,
 provenance re-checks), never a second look at the same test rows.
 **Depends on**: Phase 3 (audits its artifacts; makes no changes to them)
-**Requirements**: TBD — methodology/audit investigation, not new capability scope (mirrors Phase 3's
-own no-new-requirement-ID reasoning)
+**Requirements**: None — methodology/audit investigation, not new capability scope (mirrors Phase 3's
+own no-new-requirement-ID reasoning; `REQUIREMENTS.md` shows FCST-01/02 and ANOM-01/02 already Complete
+against Phases 1 and 2). `04-CONTEXT.md`'s five locked decisions D-01 … D-05 are this phase's scope and
+are carried in each plan's `requirements:` field, exactly as Phase 3's plans used `[D-02, D-03, D-04]`.
 **Success Criteria** (what must be TRUE):
 
   1. Data provenance and leakage are independently re-audited: the exact Archive API "truth" source
@@ -310,7 +312,54 @@ own no-new-requirement-ID reasoning)
      needs-that-dataset work split, and packaging/runtime-fetch/fallback/shadow-eval/monitoring/
      rollback outlined — with the 60-minute-vs-24-hour-vs-both product question named explicitly as
      unresolved rather than assumed.
-**Plans**: 0 plans (run `/gsd-plan-phase 4 ml-modeling` to break down)
+**Plans**: 6 plans across 6 waves (planned 2026-09-30; sequential by necessity — each wave's findings
+are cited by the next, and all six plans write to the same new audit record, so no two can run in
+parallel without a file conflict)
+
+**Wave 1**
+
+- [ ] 04-01-PLAN.md — Tracer: the audit spine end to end (a mechanical guard that raises on any frozen
+  test-window row, the three named audit bases SYNTHETIC/ABLATION/FRESH, an independent re-derivation
+  of the frozen split boundary, and one real code-grounded provenance finding carried into a new
+  ten-section audit record), plus the real basis assembly and a blocking checkpoint surfacing how much
+  real data actually exists
+
+**Wave 2** *(blocked on Wave 1)*
+
+- [ ] 04-02-PLAN.md — D-01's five bullets answered by measurement: what the lead-time calibration gate
+  actually proves versus what it is read as proving, an exhaustive time-reference partition of every
+  scored-frame column, the leakage probe re-run on real rows in both callable shapes with a sabotaged
+  arm for power, and arm 5's label timing, split boundaries and lag-offset integrity
+
+**Wave 3** *(blocked on Wave 2)*
+
+- [ ] 04-03-PLAN.md — D-02's strengthened comparison: a paired block bootstrap proven to reduce to the
+  i.i.d. case at block length one, block-length sensitivity with a stability verdict, and a real
+  out-of-sample replication on the ABLATION basis (fitted arms refit on train rows alone) giving every
+  pairwise margin between the four real candidates with both error metrics and persisted per-row
+  residuals
+
+**Wave 4** *(blocked on Wave 3)*
+
+- [ ] 04-04-PLAN.md — D-03's genuinely new analysis: overrating frequency, magnitude and run length by
+  weather regime with the low-wind boundary set at the conductor's own measured convection crossover,
+  lower-tail quantiles fitted/calibrated/checked on three disjoint periods via pinball loss, and
+  retained capacity at matched overrating rates as the headline comparison
+
+**Wave 5** *(blocked on Wave 4)*
+
+- [ ] 04-05-PLAN.md — D-04's corrections: low-wind sensitivity distinguished from numerical instability
+  by measurement and the convective seam's bit-identity reproduced independently, then a six-item
+  append-only amendment to the frozen record under a byte-identity gate on its Expectation and
+  Measured-results sections, and the audit's own corrected verdict and limitations
+
+**Wave 6** *(blocked on Wave 5)*
+
+- [ ] 04-06-PLAN.md — D-05's integration-readiness plan: the lag-versus-covariate ablation answering the
+  frozen record's own open question plus a testable cooling-rediscovery hypothesis, the field-level
+  minimum data contract with its three distinct timestamps, the now-versus-blocked recommendation split,
+  the packaging/fetch/fallback/shadow-eval/monitoring/rollback outline, and the horizon product question
+  named and left open
 
 ## Progress
 
@@ -323,10 +372,9 @@ and may be executed first or in parallel if that better fits available capacity)
 | 1. Forecasting Model | 3/3 | Complete    | 2026-09-24 |
 | 2. Anomaly Detection Model | 5/5 | Complete   | 2026-09-28 |
 | 3. Ampacity Forecast Correction Experiment | 7/7 | Complete   | 2026-09-30 |
-| 4. Forecast Correction Follow-up Audit | 0/? | Not Started | |
+| 4. Forecast Correction Follow-up Audit | 0/6 | Planned | |
 
 ## Backlog
 
-*(none — Phase 999.1 promoted to Phase 3 above, 2026-09-28)*
-
-- [ ] TBD (run /gsd-plan-phase 4 to break down)
+*(none — Phase 999.1 promoted to Phase 3 above, 2026-09-28; Phase 4 broken down into 6 plans,
+2026-09-30)*
