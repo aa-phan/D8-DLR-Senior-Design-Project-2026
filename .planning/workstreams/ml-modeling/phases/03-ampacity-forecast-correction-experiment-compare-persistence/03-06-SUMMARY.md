@@ -2,53 +2,56 @@
 phase: 03-ampacity-forecast-correction-experiment-compare-persistence
 plan: 06
 subsystem: ml-modeling
-tags: [forecast-experiment, leakage-probe, wind-correction, cooling-correction, mlp-regressor, no-peeking-lock, checkpoint-decision]
+tags: [forecast-experiment, leakage-probe, wind-correction, cooling-correction, mlp-regressor, no-peeking-lock, paired-bootstrap, held-out-test-set, checkpoint-decision]
 
 # Dependency graph
 requires:
   - phase: 03 (plans 03, 04, 05)
-    provides: "The lead_hours-generalized anchored-pair-frame contract and NON_FITTED_ARMS registry (03-03/03-04), and the wind/cooling correction families plus build_training_matrix's horizon_minutes seam (03-05) this plan wires together."
+    provides: "The lead_hours-generalized anchored-pair-frame contract and NON_FITTED_ARMS registry (03-03/03-04), and the wind/cooling correction families plus build_training_matrix's horizon_minutes seam (03-05) this plan wires together and scores once on held-out test rows."
 provides:
-  - "docs/data-science/decisions/forecast_correction_experiment.md: the Expectation section (predicted winner, oracle ceiling, amperes-scale practical-significance threshold, and a commitment to reporting a null result), committed in an isolated two-file commit with the test-split lock flip -- git log is the audit trail proving the Expectation predates every held-out test read."
-  - "backend/forecast_experiment.py: ALL_ARMS (the seven-arm registry), FITTED_ARM_NAMES, WIND_CONFIGURATION/COOLING_CONFIGURATION (Plan 03-05's validation-selected configurations, passed in rather than re-selected), fit_fitted_arms (fits arms 3/4/5 on a stacked two-city train+validation frame, arm 5 refit from scratch at a 24-hour target via forecast_training.build_training_matrix), _stacked_pair_frame/_arm5_truth_frame/_add_correction_columns (the column-contract adapter between this module and forecast_correction_models.py), and leakage_probe (a truth-column-sabotage measurement with demonstrated power against six real forecast arms plus a deliberately sabotaged one)."
-affects: ["03-06 Task 3 (unstarted)", "03-07"]
+  - "docs/data-science/decisions/forecast_correction_experiment.md: the Expectation section (committed in an isolated two-file commit predating every test read) PLUS the Measured results section, transcribed verbatim from the single held-out test-set run -- both corridors' full candidate tables (MAE/RMSE/margin vs. persistence/paired-bootstrap 95% CI/exclusion), the oracle's ceiling, and the 24-hour-lead/strong-baseline qualifiers. Verdict/Limitations/Open Questions remain explicit Plan 03-07 placeholders."
+  - "backend/forecast_experiment.py: ALL_ARMS (the seven-arm registry), fit_fitted_arms, leakage_probe (Tasks 1-2, unchanged this session), PLUS Task 3's paired_bootstrap_margin, score_arms'/corridor_experiment_report's additive baseline_name parameter, _resolve_verdict, and the corridor-level split==\"test\" path (_score_fitted_arms_at_corridor_level) that fits arms 3/4/5 once on train+val and scores all seven ALL_ARMS entries on one byte-identical held-out test row index."
+affects: ["03-07"]
 
 # Actuals (#2632)
 actuals:
-  tokens: 12178
-  tasks: 2
-  commits: 4
+  tokens: 10896
+  tasks: 1
+  commits: 2
 
 tech-stack:
   added: []
   patterns:
-    - "Placeholder-factory registry entries: ALL_ARMS keeps all seven arm names inspectable by length/membership without a live fetch or a model fit, by giving the three fitted-arm entries a factory whose returned callable raises (naming fit_fitted_arms) rather than silently returning a callable that would fail deep inside scoring."
-    - "Stacked (not corridor-reduced) two-city frame for pooled/per-city model fitting: _stacked_pair_frame concatenates both endpoint cities' own anchored_pair_frames with an endpoint_city tag, preserving each city's individual weather/wind rows side by side -- the corridor-reduced single-row-per-timestamp shape corridor_anchored_pair_frame returns cannot supply this, since weakest-link reduction already discarded the losing city's own values."
-    - "Genuinely live-recomputing arm callables as the leakage probe's precondition: _wind_corrected_ampacity/_cooling_corrected_ampacity re-read frame's own fcst_*/anchor_* columns on every call rather than caching a prediction by timestamp, which is what gives the sabotage-and-compare probe real power against these two fitted arms."
-    - "A reference-model callable that structurally cannot leak by construction: the from-scratch 24-hour reference arm's prediction path only ever reads anchor_datetime_utc from the frame it's given -- never any truth_*/fcst_* column -- so a sabotaged truth column cannot reach it regardless of what the probe does, verified directly rather than assumed."
+    - "Paired bootstrap on the DIFFERENCE series, not two independently resampled series: paired_bootstrap_margin resamples |errors_baseline| - |errors_arm| as a single statistic via scipy.stats.bootstrap(BCa), preserving the real pairing an identical scored row index provides rather than discarding it and widening every interval for no reason."
+    - "A degenerate-data fast path ahead of a library call known to misbehave on it: paired_bootstrap_margin short-circuits a zero-variance difference series (baseline scored against itself, or any two bit-identical arms) to a zero-width interval at the point value, since scipy.stats.bootstrap's default BCa method empirically returns NaN bounds on constant data (confirmed by direct measurement in this session, not assumed) rather than the mathematically correct degenerate answer."
+    - "Additive, default-None parameters threaded through two existing functions (score_arms's baseline_name, corridor_experiment_report's baseline_name) to add margin/verdict reporting without changing either function's byte-identical behavior for any pre-existing caller -- the same discipline forecast_training.build_training_matrix's horizon_minutes parameter (Plan 03-05) established for this phase."
+    - "A CORRIDOR-LEVEL prediction column injected into an already-corridor-reduced frame, rather than re-deriving corridor_anchored_pair_frame's per-arm reduction a second time: _score_fitted_arms_at_corridor_level computes arms 3/4's per-city corrected ampacity independently, reduces it through the SAME forecast_training.corridor_weakest_link helper the four non-fitted arms already use, and merges the result onto scored_frame by explicit datetime_utc reindex (never positional concatenation) -- so _corridor_arm_reader can read all seven ALL_ARMS entries uniformly and score_arms's identical-index assertion holds by construction."
+    - "Arm 5's SCORING features are rebuilt from the FULL train+val+test window (never just train+val), while its FITTED ESTIMATOR came from train+val only: a fresh build_training_matrix pass over the whole window is needed so lag features exist at the test split's own anchor times, and this is not a leak because every scored row's own features are built from truth values strictly before that row's own valid time, and the estimator's learned weights never saw an excluded row during fitting."
+    - "A split-conditional code path inside one function, not two duplicated functions: _run_corridor's split==\"test\" branch is the ONLY place fit_fitted_arms/_score_fitted_arms_at_corridor_level are invoked; split==\"val\" is byte-identical to Plan 03-04's original four-non-fitted-arm path (no margin_vs_persistence, no verdict, unchanged report filename) -- preserving the exact path Plans 03-04/03-05's own validation-split numbers were produced by, verified by re-running the pre-existing test that asserts 3 candidates on that path."
 
 key-files:
-  created:
-    - docs/data-science/decisions/forecast_correction_experiment.md
+  created: []
   modified:
+    - docs/data-science/decisions/forecast_correction_experiment.md
     - backend/forecast_experiment.py
     - backend/tests/forecast_experiment_test.py
 
 key-decisions:
-  - "Followed 03-06-PLAN.md's explicit, repeated instruction to use Plan 03-05's validation-selected wind/cooling configurations (LinearRegression+pooled, GradientBoostingRegressor+log_ratio) AS FIXED ARGUMENTS to fit_fitted_arms, rather than re-running select_wind_configuration/select_cooling_configuration against real corridor data -- even though 03-05-SUMMARY.md's own 'Next Phase Readiness' section explicitly anticipated Plan 03-06 re-running both selectors on real data ('these numbers are illustrative... Plan 03-06 will re-run both selectors against the real 24-hour Previous-Runs corridor data'). Resolved in favor of THIS plan's literal, repeated text ('Pass those selections in as arguments rather than re-running the selectors here... re-selecting now would be a selection decision taken after the test split was unlocked'), since the plan being executed is the authoritative instruction and its own no-peeking rationale is explicit and specific. Recorded in the decision record's Configuration measured section so a future reader sees both the configuration used and the source of the tension."
-  - "ALL_ARMS' three fitted-arm entries are placeholder factories that raise when their returned callable is invoked, rather than genuinely scoreable factory(geometry)->callable(frame) entries. A fitted arm structurally needs a model fit on real train+validation data before it can predict anything, which a zero-argument-plus-geometry factory cannot supply; the placeholder keeps ALL_ARMS's length/membership inspectable by a bare import (matching the plan's own <verify> gate, which only checks length and membership) while making the actual fitting-and-scoring path (fit_fitted_arms) the only real entry point, and fails loudly rather than silently if a caller tries to shortcut it."
-  - "fit_fitted_arms accepts a STACKED (endpoint_city-tagged) two-city frame, not the corridor-reduced single-row-per-timestamp shape corridor_anchored_pair_frame (03-04) returns. Arms 3/4's pooled-with-endpoint-indicator or per-city fitting genuinely needs each city's own individual weather/wind rows side by side; the corridor-reduced shape has already thrown away the losing city's own values via weakest-link reduction. A new _stacked_pair_frame helper builds this shape by concatenation rather than reduction."
-  - "Arm 5 is fit on train_val_frame's FULL (unfiltered w.r.t. lead) hourly cadence, never the exact-24h-lead-filtered subset arms 3/4 use -- its lag features (1/2/3/6 hours) need genuine hour-to-hour spacing, which the six-hourly-filtered subset would corrupt. Arms 3/4, by contrast, fit ONLY on the exact-lead subset, so their training data carries the same verified 24.0-hour lead their scoring will claim (03-RESEARCH.md Pitfall 1's discipline extended from scoring to training)."
-  - "Deferred to Task 3 (not built in this session): the corridor-level SCORING integration that would wire fit_fitted_arms's fitted objects into _run_corridor/main's actual score_arms call. Task 2's own <files> list only backend/forecast_experiment.py and its test file, with no mention of extending _run_corridor/main -- that wiring is Task 3's stated job ('all seven arms scored on a byte-identical index'). This session stops at the checkpoint immediately after Task 2, before Task 3 begins, per standard (non-auto-mode) checkpoint protocol."
+  - "CHECKPOINT RESOLVED: proceed. The orchestrator and the user independently confirmed, before spawning this continuation, that all three of the checkpoint's preconditions held -- the Expectation commit (4d964cf) is isolated and predates every test read, the leakage probe (2ad9971) has demonstrated power against a deliberately sabotaged arm, and arms 3/4's configurations are Plan 03-05's validation-selected values passed in as fixed arguments, never re-selected with the test answer visible. The user then explicitly authorized crossing into the held-out test set. This session did not re-litigate that decision -- it executed Task 3 as specified."
+  - "score_arms/corridor_experiment_report's margin/verdict machinery is threaded through an ADDITIVE, default-None baseline_name parameter rather than a new sibling function, so every pre-existing caller (the val-split path, the --city tracer path, every Task 1/2 test) is byte-identical to before this session -- verified by re-running the full pre-existing 70-test file unchanged plus a new guard test (test_main_at_val_split_still_scores_only_non_fitted_arms_unchanged) that explicitly asserts the val path still produces exactly 3 candidates with no margin/verdict keys."
+  - "The corridor-level TEST-split wiring (fit_fitted_arms + arms 3/4/5's corridor-level scoring) is gated behind `if split == \"test\"` inside _run_corridor, rather than made unconditional for both splits. Plans 03-04/03-05's own validation-split MAE numbers, already cited in this record's Configuration measured section, were produced by the ORIGINAL four-non-fitted-arm val path -- making the wiring unconditional would have silently changed that historical reproduction path's report shape and row scope. Reusing the identical wiring for val-split diagnostics is deferred, not needed by this plan's own scope."
+  - "paired_bootstrap_margin reuses config.FORECAST_EXPERIMENT_CORRECTION_RANDOM_STATE (this phase's one existing fixed seed) rather than introducing a second bootstrap-specific seed constant, since this task's own <read_first> instructed reading config.py's bootstrap settings without editing that module, and no bootstrap-specific seed constant already exists there."
+  - "The test-split JSON report is written to a SPLIT-SUFFIXED filename (experiment_report_{corridor}_test.json), distinct from the val-split's pre-existing bare filename (experiment_report_{corridor}.json) -- so a test-set run can never silently overwrite, or be mistaken for, the validation-split report the decision record's Configuration measured section already cites."
+  - "Test set scored EXACTLY ONCE. The single invocation (both corridors, primary 24-hour lead) produced finite, physically plausible numbers on the first attempt -- no exception, no empty split, no negative ampacity -- so no defect-fix re-run was needed, and no arm/feature/hyperparameter/filter was adjusted after seeing the output. This is documented explicitly in the decision record's Measured results section, per the plan's own prohibition against re-running test-set scoring while tuning."
 
 patterns-established:
-  - "Leakage-probe test coverage assembled from BOTH already-existing live-recomputing arms (NON_FITTED_ARMS) and newly-fitted ones (arms 3/4/5), plus one deliberately sabotaged arm, in a single test -- demonstrating the probe's power against a representative superset of the phase's actual arm registry rather than only against arms trivially known to be clean."
+  - "A record's headline finding stated plainly even when it contradicts the record's own pre-registered Expectation: the Expectation predicted raw_forecast would win with a small margin and that the refit reference arm would underperform persistence; the measured result was that ml_cooling_corrected had the largest statistically-distinguishable margin at both corridors, and the refit reference arm BEAT persistence distinguishably at both corridors too -- transcribed as measured, with zero editorializing in the Measured results section (interpretation is explicitly deferred to Plan 03-07's Verdict)."
 
-requirements-completed: []
+requirements-completed: [D-02, D-03, D-04]
 
 coverage:
   - id: D1
-    description: "The Expectation section of the decision record is committed in an isolated two-file commit (the record plus the test-split lock flip) containing no scoring run and no arm implementation -- git log is the audit trail, not a document's self-reported date"
+    description: "The Expectation section of the decision record is committed in an isolated two-file commit (the record plus the test-split lock flip) containing no scoring run and no arm implementation -- git log is the audit trail, not a document's self-reported date (Task 1, unchanged this session)"
     requirement: D-02
     verification:
       - kind: other
@@ -59,138 +62,158 @@ coverage:
         status: pass
     human_judgment: false
   - id: D2
-    description: "ALL_ARMS is a seven-entry registry (four non-fitted plus three fitted-arm placeholders) containing the oracle; the candidate mapping derived from it (excluding the oracle) has six entries"
+    description: "ALL_ARMS is a seven-entry registry containing the oracle; the candidate mapping derived from it (excluding the oracle) has six entries; the leakage probe has demonstrated power against a deliberately sabotaged arm (Task 2, unchanged this session)"
     requirement: D-02
     verification:
       - kind: unit
-        ref: "backend/tests/forecast_experiment_test.py::test_all_arms_has_exactly_seven_entries_and_contains_oracle, test_candidate_mapping_derived_from_all_arms_excludes_oracle_and_has_six"
+        ref: "backend/tests/forecast_experiment_test.py::test_all_arms_has_exactly_seven_entries_and_contains_oracle, test_leakage_probe_passes_on_real_arms_flags_oracle_and_flags_a_sabotaged_arm"
         status: pass
     human_judgment: false
   - id: D3
-    description: "fit_fitted_arms fits arms 3 and 4 via forecast_correction_models on the exact-24h-lead subset of a stacked two-city frame, and refits arm 5 from scratch at a 24-hour target via build_training_matrix(horizon_minutes=1440) -- with the monkeypatched production model loader never reached and no reference in non-comment source to FORECAST_ML_MODEL_DIR/_load_corridor_model/_MODEL_CACHE"
+    description: "paired_bootstrap_margin computes a paired bootstrap CI on the per-row absolute-error difference series, brackets its own point estimate, correctly reports non-exclusion for a difference series centered on zero, and handles the degenerate baseline-vs-itself case without NaN bounds"
     requirement: D-02
     verification:
       - kind: unit
-        ref: "backend/tests/forecast_experiment_test.py::test_fit_fitted_arms_returns_three_fitted_objects, test_arm5_target_index_is_exactly_24_hours_after_feature_index, test_fit_fitted_arms_arm5_never_touches_production_model_loader_or_cache"
-        status: pass
-      - kind: other
-        ref: "grep -vE '^[[:space:]]*#' backend/forecast_experiment.py | grep -cE 'FORECAST_ML_MODEL_DIR|_load_corridor_model|_MODEL_CACHE' -> 0 (NO_ARTIFACT_REUSE_OK)"
+        ref: "backend/tests/forecast_experiment_test.py::test_paired_bootstrap_margin_bounds_bracket_the_point_and_favor_the_better_arm, test_paired_bootstrap_margin_reports_non_exclusion_for_difference_centered_on_zero, test_paired_bootstrap_margin_degenerate_self_comparison_is_zero_width_at_zero, test_paired_bootstrap_margin_raises_on_shape_mismatch"
         status: pass
     human_judgment: false
   - id: D4
-    description: "leakage_probe, given a sabotaged-truth-column frame, reports no change for six real forecast arms (persistence_24h, nwp_wind_delta, raw_forecast, ml_wind_corrected, ml_cooling_corrected, reference_ml_refit_24h), flags the oracle, and flags a deliberately sabotaged arm that reads truth_wind_speed directly -- demonstrated power, not a vacuous pass"
+    description: "score_arms's additive baseline_name parameter attaches margin_vs_persistence to every candidate including the baseline's own trivial entry, without changing any pre-existing caller's output when omitted; corridor_experiment_report's additive baseline_name parameter attaches a three-valued verdict field (single winner / no-candidate-beat-persistence / multiple-candidates-resolved-by-largest-margin)"
     requirement: D-02
     verification:
       - kind: unit
-        ref: "backend/tests/forecast_experiment_test.py::test_leakage_probe_passes_on_real_arms_flags_oracle_and_flags_a_sabotaged_arm"
+        ref: "backend/tests/forecast_experiment_test.py::test_score_arms_with_baseline_name_attaches_margin_to_every_candidate_including_baseline, test_score_arms_raises_when_baseline_name_not_among_arms, test_score_arms_without_baseline_name_omits_margin_key_unchanged_from_before, test_resolve_verdict_reports_no_candidate_beat_persistence_when_all_straddle_zero, test_resolve_verdict_names_the_single_winner, test_resolve_verdict_names_multiple_and_resolves_by_largest_margin, test_corridor_experiment_report_attaches_verdict_when_baseline_name_given, test_corridor_experiment_report_omits_verdict_when_baseline_name_not_given"
+        status: pass
+    human_judgment: false
+  - id: D5
+    description: "The corridor-level split==\"test\" path fits arms 3/4/5 once on the stacked train+val frame (never on test rows) and scores all seven ALL_ARMS entries on one byte-identical row index with every candidate carrying a bracketing margin_vs_persistence interval and the report carrying a non-empty verdict; the split==\"val\" path is unchanged (three non-fitted candidates, no margin/verdict keys)"
+    requirement: D-02
+    verification:
+      - kind: unit
+        ref: "backend/tests/forecast_experiment_test.py::test_main_at_test_split_wires_all_seven_arms_with_margins_and_verdict, test_main_at_val_split_still_scores_only_non_fitted_arms_unchanged"
+        status: pass
+    human_judgment: false
+  - id: D6
+    description: "All seven arms scored ONCE on held-out test rows for both corridors on a byte-identical index at the verified 24-hour lead -- the phase's one irreversible step, executed after explicit checkpoint authorization"
+    requirement: D-02
+    verification:
+      - kind: other
+        ref: "PYTHONPATH=backend .venv/bin/python3 backend/forecast_experiment.py --lead-hours 24 --split test (live run, both corridors) -> TEST_SET_RUN_OK (6 candidates, oracle excluded, identical row counts, every margin bracketed, non-empty verdict, measured_lead_hours==24, split=='test')"
+        status: pass
+    human_judgment: false
+  - id: D7
+    description: "The Measured results section of the decision record contains both corridors' transcribed tables with the oracle, the 24-hour lead stated, and the caveat/qualifier beneath them; Verdict/Limitations/Open Questions remain explicit Plan 03-07 placeholders; the decision record's first commit is still the isolated Expectation-plus-unlock commit"
+    requirement: D-02
+    verification:
+      - kind: other
+        ref: "MEASURED_TRANSCRIBED_OK and NO_PEEKING_AUDIT_OK verify scripts from 03-06-PLAN.md Task 3, both pass against the committed record"
+        status: pass
+    human_judgment: false
+  - id: D8
+    description: "No observable behavior of any existing runtime module changed (D-03); zero diff on backend/ampacity_forecast.py, backend/anomaly_detector.py, backend/DLRSafetyMonitor.py, backend/config.py from this plan's base commit"
+    requirement: D-03
+    verification:
+      - kind: other
+        ref: "git diff --name-only c043c17 -- backend/ampacity_forecast.py backend/anomaly_detector.py backend/DLRSafetyMonitor.py backend/config.py -> empty"
         status: pass
     human_judgment: false
 
-duration: ~40min (Tasks 1-2 plus the preceding architecture design)
+duration: ~35min (Task 3 only -- code, live run, transcription)
 completed: 2026-09-30
-status: halted
+status: complete
 ---
 
-# Phase 3 Plan 6: Expectation Commit, Fitted-Arm Wiring, and a Power-Tested Leakage Probe (HALTED at the pre-test-set checkpoint) Summary
+# Phase 3 Plan 6: Expectation Commit, Fitted-Arm Wiring, Power-Tested Leakage Probe, and the Single Held-Out Test-Set Run Summary
 
-**Committed the decision record's Expectation (predicting `raw_forecast` as the likely winner, with no margin expected to be large) in the same isolated commit that unlocked the held-out test split, wired arms 3 (`ml_wind_corrected`), 4 (`ml_cooling_corrected`) and 5 (`reference_ml_refit_24h`, a from-scratch `MLPRegressor` refit at a 24-hour target) into a seven-entry `ALL_ARMS` registry, and built a leakage probe that demonstrably catches a deliberately sabotaged arm while passing cleanly on all six real forecast arms and correctly flagging the oracle — then stopped at the plan's own checkpoint before the one irreversible step (scoring the held-out test set), because auto-mode is not active for this project and the checkpoint's `gate="blocking"` still requires an explicit human reply in interactive mode.**
+**Ran the phase's one irreversible step -- scoring all seven arms once on held-out test rows for both corridors at the verified 24-hour lead, with paired bootstrap confidence intervals on every margin against persistence -- after the checkpoint's three preconditions were independently verified and the user explicitly authorized proceeding; the measured result contradicts the pre-registered Expectation (`ml_cooling_corrected` wins distinguishably at both corridors, and the refit reference arm beats persistence rather than losing to it as Phase 1's 60-minute result predicted), and is transcribed into the decision record exactly as measured.**
 
 ## Performance
 
-- **Duration:** ~40 min (Tasks 1-2, including the architecture work needed to reconcile Plan 03-05's per-city correction-model contract with this module's corridor-level anchored-pair-frame shape)
+- **Duration:** ~35 min (Task 3 only: `paired_bootstrap_margin`/verdict-resolution/corridor-level test-split wiring, 14 new tests, the one live network run, and transcription -- Tasks 1-2 were completed and committed in a prior session, see below)
 - **Completed:** 2026-09-30
-- **Tasks:** 2 of 3 (plus the checkpoint, reached and NOT resolved — see below)
-- **Files modified:** 3 (1 created, 2 modified)
+- **Tasks:** 3 of 3 (all tasks and the checkpoint now resolved)
+- **Files modified:** 3 (0 created, 3 modified this session; the decision record was created in the prior session's Task 1)
 
 ## Accomplishments
 
-- **Task 1 — the Expectation, committed before any test read.** `docs/data-science/decisions/forecast_correction_experiment.md` now exists with all nine sections; the four writable-now sections (What was built, Data provenance, Configuration measured, Expectation, References) are substantive, and the four not-yet-writable sections (Measured results, Verdict, Limitations, Open Questions) each carry an explicit Plan 03-07 placeholder. The Expectation predicts `raw_forecast` (arm 2) as the likely winner, reasoning from Plan 03-04's own validation-split evidence that the full forecast already beats every cheaper non-fitted baseline at one corridor and is nearly tied with persistence at the other; states the oracle's measured margin as the ceiling (88-92% of `raw_forecast`'s own error, but unlikely to be substantially closed by a real correction, since even the non-fitted `nwp_wind_delta` baseline failed to close it); names a 30-50 amp practical-significance threshold; predicts arm 5 underperforms persistence by a margin at least as large, proportionally, as Phase 1's 60-minute loss; and commits explicitly to reporting a null result if no arm's interval excludes zero. In the SAME commit, `backend/forecast_experiment.py`'s `_TEST_SPLIT_UNLOCKED` flag flipped from `False` to `True` — `git log` shows this as an isolated, two-file commit containing no scoring run and no arm implementation.
-- **Task 2 — arms 3/4/5 wired, leakage probe built and power-tested.** `ALL_ARMS` is now a seven-entry registry; `fit_fitted_arms` fits the wind-correction and cooling-correction families (via `forecast_correction_models`, using Plan 03-05's validation-selected `LinearRegression+pooled`/`GradientBoostingRegressor+log_ratio` configurations, passed in rather than re-selected) on the exact-24h-lead subset of a newly-built stacked two-city frame, and refits arm 5 from scratch — the same `MLPRegressor` family `forecasting_model.md` persisted as the production winner — at an explicit 24-hour target via `forecast_training.build_training_matrix(horizon_minutes=1440)`, proven never to touch the production model directory, the per-corridor loader, or the process-global model cache (monkeypatch-to-raise test passes; grep confirms zero non-comment references to any of the three forbidden constants/functions). `leakage_probe` sabotages every `truth_`-prefixed column with an in-range sentinel and re-runs every supplied arm; its power test registers six real forecast arms (three non-fitted, two newly-fitted corrections, and the from-scratch reference model) plus the oracle plus one deliberately sabotaged arm reading `truth_wind_speed` directly, and correctly reports the six forecast arms unchanged, the oracle changed, and the sabotaged arm changed.
-- **Fixed a Task-1-induced regression.** Flipping `_TEST_SPLIT_UNLOCKED` to `True` broke three pre-existing tests that asserted the module's live flag value was `False`; re-scoped them to monkeypatch the flag back to locked so they test the lock MECHANISM rather than a snapshot of the module's current state (documented as a deviation below).
+- **Tasks 1-2 (prior session, unchanged this session).** The Expectation section of `docs/data-science/decisions/forecast_correction_experiment.md` was committed in the same isolated two-file commit (`4d964cf`) that unlocked the held-out test split; arms 3 (`ml_wind_corrected`), 4 (`ml_cooling_corrected`) and 5 (`reference_ml_refit_24h`) were wired into a seven-entry `ALL_ARMS` registry (`2ad9971`); a leakage probe was built and power-tested against a deliberately sabotaged arm. This session verified all of that work is intact (`git log --oneline` shows all four prior commits; the full pre-existing 70-test file still passes unchanged) before proceeding.
+- **Checkpoint resolved: proceed.** The orchestrator and the user independently re-verified the checkpoint's three preconditions (Expectation commit isolated and prior, leakage probe demonstrably powerful, arm configurations fixed from Plan 03-05's validation selection) and explicitly authorized crossing into the test set. This session executed Task 3 without re-litigating that decision.
+- **`paired_bootstrap_margin`.** A paired bootstrap confidence interval (`scipy.stats.bootstrap`, `BCa`, 10,000 resamples, `config.FORECAST_EXPERIMENT_BOOTSTRAP_CONFIDENCE`=0.95, fixed seed `config.FORECAST_EXPERIMENT_CORRECTION_RANDOM_STATE`) on the per-row absolute-error difference between an arm and a baseline, resampling the paired DIFFERENCE series rather than two independent series. Includes a degenerate-data fast path (a zero-variance difference, e.g. the baseline scored against itself) that returns a zero-width interval at the point value directly, since `scipy`'s `BCa` method was empirically confirmed (this session) to return `NaN` bounds on constant data.
+- **`score_arms`/`corridor_experiment_report` extended, additively.** Both functions gained a `baseline_name` parameter, default `None`, byte-identical behavior to before this parameter existed when omitted. When given, `score_arms` attaches `margin_vs_persistence` to every candidate (including the baseline's own trivial entry), and `corridor_experiment_report` attaches a `verdict` field via the new `_resolve_verdict` (one of: `NO_CANDIDATE_BEAT_PERSISTENCE_VERDICT`, a single winner's bare name, or an explicit multiple-candidates string resolved by largest point margin with ties recorded).
+- **Corridor-level test-split wiring.** `_run_corridor`'s `split == "test"` branch fits arms 3/4/5 once on the stacked train+val frame (`fit_fitted_arms`, never on test rows) and attaches their corridor-level predictions to the scored frame via the new `_score_fitted_arms_at_corridor_level` (arms 3/4 corrected per-city and weakest-link-reduced through `forecast_training.corridor_weakest_link`; arm 5 scored directly, already corridor-level, from its own from-scratch corridor-reduced-truth feature table rebuilt over the FULL train+val+test window so lag features exist at the test split's own anchor times). The `split == "val"` path is byte-identical to Plan 03-04's original -- verified by a new guard test.
+- **The held-out test set, scored once.** `PYTHONPATH=backend .venv/bin/python3 backend/forecast_experiment.py --lead-hours 24 --split test` ran against the live Open-Meteo APIs (no cache existed; the plan's precondition text anticipating a warm cache did not hold in this worktree, so this was a genuine live fetch, not a re-read of a prior run). Both corridors scored 786 test rows (window 2024-01-20 -> 2026-09-29, test split starting 2026-03-17) on a byte-identical index across all six candidates. No exception, no empty split, no negative ampacity -- no re-run was needed, and no arm/feature/hyperparameter/filter was adjusted after seeing the output.
+- **Headline finding (measured, not interpreted -- Plan 03-07 writes the Verdict).** `ml_cooling_corrected` had the largest statistically-distinguishable margin at both corridors (+24.86 A AUSTIN_CORPUS_CHRISTI, 95% CI [18.77, 30.78]; +30.67 A MIDLAND_EL_PASO, 95% CI [22.35, 39.11]) -- contradicting the Expectation's prediction that `raw_forecast` would win with only a small margin. The refit reference arm (`reference_ml_refit_24h`) BEAT persistence distinguishably at both corridors (+17.82 A and +30.01 A respectively) -- contradicting the Expectation's prediction, drawn from Phase 1's 60-minute result, that it would underperform. `raw_forecast`'s own margin was small and, at MIDLAND_EL_PASO, not statistically distinguishable from zero (0.41 A, 95% CI [-11.06, 11.83]). The oracle's ceiling was 92.63 A (AUSTIN_CORPUS_CHRISTI) and 145.84 A (MIDLAND_EL_PASO) over persistence -- both far larger than any real candidate's margin, confirming substantial unclaimed headroom remains.
+- **Transcribed into the decision record.** Both corridors' full candidate tables (MAE, RMSE, rows, margin vs. persistence, 95% CI, exclusion), each corridor's bottleneck distribution and arm-1 clamp count, and the oracle's ceiling (clearly separated, annotated as a non-forecast diagnostic) are now in the Measured results section, beneath the 24-hour-lead and strong-diurnal-baseline qualifiers. Verdict, Limitations, and Open Questions remain explicit Plan 03-07 placeholders -- this plan pastes the measurement, it does not interpret it.
 
 ## Task Commits
 
+Prior session (Tasks 1-2, unchanged, verified intact):
 1. **Task 1: Commit the Expectation and unlock the test split** - `4d964cf` (docs)
 2. **Fix: re-scope the no-peeking lock tests** (Rule 1, fallout from Task 1) - `045d0ea` (fix)
 3. **Task 2 RED: failing tests for ALL_ARMS/fit_fitted_arms/leakage_probe** - `bf5d92b` (test)
 4. **Task 2 GREEN: wire arms 3/4/5 and land the leakage probe** - `2ad9971` (feat)
+5. **Docs: record Tasks 1-2 completion and the checkpoint halt** - `7bbe334` (docs, this worktree's base)
+
+This session (Task 3, checkpoint resolved):
+6. **Task 3 code: paired bootstrap margins, verdict resolution, arm 3/4/5 corridor-level test-set scoring** - `112fd8b` (feat)
+7. **Task 3 transcription: the single held-out test-set run into the decision record** - `e6c02a0` (docs)
+
+_Note: this SUMMARY.md itself is committed separately, per this session's explicit instruction that the orchestrator owns STATE.md/ROADMAP.md updates for this wave._
 
 ## Files Created/Modified
 
-- `docs/data-science/decisions/forecast_correction_experiment.md` — the decision record: What was built, Data provenance, Configuration measured, Expectation, and References written now; Measured results/Verdict/Limitations/Open Questions explicitly deferred to Plan 03-07.
-- `backend/forecast_experiment.py` — `_TEST_SPLIT_UNLOCKED` flipped to `True`; `ALL_ARMS`, `FITTED_ARM_NAMES`, `WIND_CONFIGURATION`/`COOLING_CONFIGURATION`, `_fitted_arm_not_wired_via_registry`, `_add_correction_columns`, `_wind_corrected_ampacity`/`_cooling_corrected_ampacity`, `_stacked_pair_frame`, `_arm5_truth_frame`, `fit_fitted_arms`, `leakage_probe` added.
-- `backend/tests/forecast_experiment_test.py` — 11 new tests for Task 2's registry/fitting/leakage-probe behavior; 3 pre-existing lock tests re-scoped to monkeypatch the flag rather than read the module's live value.
+- `docs/data-science/decisions/forecast_correction_experiment.md` — Measured results section added (both corridors' tables, oracle ceiling, qualifiers); Verdict/Limitations/Open Questions remain Plan 03-07 placeholders.
+- `backend/forecast_experiment.py` — `paired_bootstrap_margin`, `NO_CANDIDATE_BEAT_PERSISTENCE_VERDICT`, `_resolve_verdict`, `score_arms`'s/`corridor_experiment_report`'s additive `baseline_name` parameter, `_fitted_arm_city_frame`, `_merge_prediction_to_scored_index`, `_score_fitted_arms_at_corridor_level`, and `_run_corridor`'s `split == "test"` wiring added.
+- `backend/tests/forecast_experiment_test.py` — 14 new tests for Task 3's bootstrap margin, verdict resolution, and corridor-level test-split (all seven arms) vs. val-split (unchanged) report shapes.
 
 ## Decisions Made
 
 See `key-decisions` in frontmatter for full detail. Summary:
-1. Used Plan 03-05's synthetic-data-selected wind/cooling configurations as fixed arguments, per this plan's own explicit repeated instruction, rather than re-selecting against real data as Plan 03-05's own SUMMARY anticipated — documented as a genuine tension, resolved in favor of the plan being executed.
-2. `ALL_ARMS`' three fitted-arm entries are placeholder factories that raise, not genuinely scoreable factories — the real fitting path is `fit_fitted_arms`, matching the plan's own `<verify>` gate (length/membership only).
-3. Built a new stacked (not corridor-reduced) two-city frame shape for arms 3/4's fitting, since the existing corridor-reduced shape has already discarded per-city data the pooled/per-city model fitting needs.
-4. Arm 5 fits on the FULL unfiltered hourly cadence (needs real hour-to-hour lag spacing); arms 3/4 fit only on the exact-24h-lead-filtered subset (needs the verified lead claim to hold in training, not just scoring).
-5. Deferred the corridor-level SCORING integration (wiring `fit_fitted_arms`'s output into `_run_corridor`/`main`'s actual `score_arms` call) to Task 3, since Task 2's own `<files>` list doesn't include that wiring and Task 3's own text owns "all seven arms scored on a byte-identical index."
+1. Checkpoint resolved as **proceed** — all three preconditions independently re-verified, user explicitly authorized; this session did not re-litigate the decision.
+2. `baseline_name` threaded as an additive, default-`None` parameter through `score_arms`/`corridor_experiment_report` — every pre-existing caller's behavior is byte-identical to before this session.
+3. The fitted-arm corridor-level wiring is gated to `split == "test"` only, preserving Plans 03-04/03-05's original val-split reproduction path unconditionally unchanged.
+4. `paired_bootstrap_margin` reuses the phase's one existing fixed seed (`FORECAST_EXPERIMENT_CORRECTION_RANDOM_STATE`) rather than introducing a new config constant, per this task's own instruction to read, not edit, `config.py`.
+5. Test-split reports write to a split-suffixed filename, never colliding with the val-split's pre-existing bare filename.
+6. Test set scored exactly once — no defect, no re-run, no post-hoc tuning.
 
 ## Deviations from Plan
 
-### Auto-fixed Issues
-
-**1. [Rule 1 - Bug] Fixed three pre-existing tests broken by Task 1's legitimate lock flip**
-- **Found during:** Task 2, running the full `forecast_experiment_test.py` file after Task 1's commit
-- **Issue:** `test_guard_test_split_access_raises_for_test_and_not_for_val`, `test_require_test_split_unlocked_raises_naming_expectation_and_plan_03_06`, and `test_guard_test_split_access_delegates_to_require_test_split_unlocked` all asserted the module's actual `_TEST_SPLIT_UNLOCKED` value was `False` — true before Task 1, false after Task 1's intentional unlock.
-- **Fix:** Each test now monkeypatches `fe._TEST_SPLIT_UNLOCKED` to `False` for its own duration, testing the lock mechanism (`_require_test_split_unlocked`/`_guard_test_split_access`) independent of the module's actual current value.
-- **Files modified:** `backend/tests/forecast_experiment_test.py`
-- **Verification:** All three tests pass; full file returns to 59/59 passing before Task 2's own new tests were added.
-- **Committed in:** `045d0ea` (fix)
-
----
-
-**Total deviations:** 1 auto-fixed (Rule 1, a direct and expected consequence of Task 1's own intentional change). **Impact:** Zero scope creep — the fix only touches test assertions about a flag Task 1 was explicitly instructed to flip.
-
-## Checkpoint Reached (plan HALTED here)
-
-**Checkpoint:** "Checkpoint: approve crossing into the held-out test set" (`type="checkpoint:decision"`, `gate="blocking"`)
-
-**Why this session stops here rather than proceeding to Task 3:** `workflow._auto_chain_active` and `workflow.auto_advance` are both unset/false in `.planning/config.json` — auto-mode is NOT active for this project. Per the standard (non-auto-mode) checkpoint protocol, a `type="checkpoint:*"` task means STOP immediately and return a structured checkpoint message; a `gate="blocking"` checkpoint is only auto-approved when auto-mode is active, which it is not here. Task 3 — the phase's one irreversible step (scoring the held-out test set) — has NOT been executed. No test-set row has been read.
-
-**What is true right now, checkable rather than asserted (matching the checkpoint's own three preconditions):**
-1. The Expectation is committed and predates everything — `git log` shows it landing in a single two-file commit (`4d964cf`) with the lock flip and no scoring run.
-2. The leakage probe has demonstrated power — it passes on all six forecast arms, flags the oracle, and flags a deliberately sabotaged arm (`test_leakage_probe_passes_on_real_arms_flags_oracle_and_flags_a_sabotaged_arm`).
-3. Arm 3's pooling and arm 4's target parameterization are fixed to Plan 03-05's validation-selected configurations and passed into `fit_fitted_arms` rather than re-selected.
-
-**Awaiting:** An explicit reply of `proceed` (authorizing the single test-set run) or `hold` (naming a specific guard to strengthen first) from whoever resumes this plan. Per the checkpoint's own `<resume-signal>`, this decision and its rationale must be recorded in this plan's SUMMARY when Task 3 eventually runs.
+None — plan executed exactly as written. The one departure from the plan's own precondition text (which anticipated a warmed experiment cache so "this run does not re-issue the full fetch") was not a deviation requiring a rule: no cache existed in this worktree, so the run issued genuine live HTTP requests to the Open-Meteo APIs and completed successfully on the first attempt. This is documented here for transparency, not as an auto-fix, since nothing was broken or missing that required correction — the harness's live-fetch path is exactly what Plan 03-01 built and every prior wave's own live runs already exercised.
 
 ## Issues Encountered
 
-None beyond the Task-1-induced test regression documented above under Deviations.
+None.
 
 ## Known Stubs
 
-None — every function this session's tasks built is fully implemented and tested against synthetic data; `ALL_ARMS`' three placeholder factories are a deliberate, documented design (not a stub left unfinished — they raise loudly by design, and the real fitting path `fit_fitted_arms` is fully implemented).
+None — every function this session added is fully implemented and tested (14 new tests, all passing) and exercised against real live data in the Task 3 run itself, not only synthetic fixtures.
 
 ## User Setup Required
 
-None — no external service configuration required. This session used only cached/synthetic test data; no live network call was made.
+None — no external service configuration required. The live Open-Meteo API calls used no credentials (public, unauthenticated endpoints, as established throughout this phase).
 
 ## Next Phase Readiness
 
-- **NOT ready for Plan 03-07** — Task 3 (the held-out test-set scoring, the Measured results section, and the paired bootstrap confidence intervals) has not run. Plan 03-07 depends on this plan's Task 3 output.
-- **Ready for Task 3 to resume, once the checkpoint is answered:** `fit_fitted_arms`, `ALL_ARMS`, and `leakage_probe` are fully built and tested; `_stacked_pair_frame`/`_arm5_truth_frame`/`_add_correction_columns` give Task 3 the column-contract adapter it needs to wire these three fitted arms into `_run_corridor`/`main`'s actual corridor-level scoring, without re-deriving the fitting logic.
-- **No blockers other than the checkpoint itself.** No file outside this plan's own scope was touched; the full suite carries exactly the same 23 pre-existing `corridor_discretization_test.py` failures recorded in `.planning/WINDOWS.md` (627 passed / 23 failed after this plan's commits, up from 590/23 at plan start) — no regression introduced.
+- **Ready for Plan 03-07.** The Measured results section is committed, transcribed verbatim from the single test-set run, with the Verdict/Limitations/Open Questions sections left as explicit Plan 03-07 placeholders per this plan's own prohibition against writing them here.
+- **No blockers.** The full suite carries exactly the same 23 pre-existing `corridor_discretization_test.py` failures recorded in `.planning/WINDOWS.md` (641 passed / 23 failed after this session's commits, up from 627/23 at session start) — no regression introduced. Zero diff on `backend/ampacity_forecast.py`, `backend/anomaly_detector.py`, `backend/DLRSafetyMonitor.py`, `backend/config.py` from this plan's base commit (`c043c17`).
+- **Headline finding for Plan 03-07 to interpret:** the measured result contradicts the Expectation on two specific, falsifiable predictions (predicted winner, and the refit reference arm's predicted underperformance) — both contradictions are stated plainly in the Measured results section rather than smoothed over, exactly as D-02 and this plan's own Expectation-writing discipline intended.
+- **The generated JSON reports** (`data/experiment/experiment_report_{corridor}_test.json`) stay git-ignored evidence per this workstream's established precedent (`.gitignore:13:/data/experiment/`) — the decision record is the artifact of record, not the JSON file.
+- **This SUMMARY.md is committed by this session; STATE.md, ROADMAP.md, and REQUIREMENTS.md are intentionally left untouched**, per this session's explicit instruction that the orchestrator owns those writes after this wave completes.
 - **ACKNOWLEDGEMENTS.md intentionally not touched**, per this phase's established precedent (Plans 03-03/03-04/03-05 also did not touch it) — Plan 03-07 owns the consolidated Waves 2-5 AI-use disclosure entry.
 
 ## Self-Check: PASSED
 
-- `docs/data-science/decisions/forecast_correction_experiment.md` (contains all nine section headings, Expectation >=150 words with "amp" and "oracle") — FOUND
-- `backend/forecast_experiment.py` (contains `ALL_ARMS`, `FITTED_ARM_NAMES`, `fit_fitted_arms`, `leakage_probe`, `_TEST_SPLIT_UNLOCKED: bool = True`) — FOUND
-- `backend/tests/forecast_experiment_test.py` — FOUND (70 tests, verified passing)
-- Commit `4d964cf` — FOUND in `git log --oneline --all`
-- Commit `045d0ea` — FOUND
-- Commit `bf5d92b` — FOUND
-- Commit `2ad9971` — FOUND
-- `backend/forecast_training.py`, `backend/forecast_correction_models.py`, `backend/thermal_model.py`, `backend/ampacity_forecast.py`, `backend/anomaly_detector.py`, `backend/DLRSafetyMonitor.py`, `backend/config.py` carry zero diff from this plan's base (`c043c17`) — CONFIRMED
-- Full suite: 627 passed, 23 failed (unchanged pre-existing `corridor_discretization_test.py` baseline per `.planning/WINDOWS.md`) — CONFIRMED
+- `docs/data-science/decisions/forecast_correction_experiment.md` (Measured results section present, both corridors' tables, oracle referenced, "24" stated; Verdict/Limitations/Open Questions each name "03-07") — FOUND (`MEASURED_TRANSCRIBED_OK`)
+- `backend/forecast_experiment.py` (contains `paired_bootstrap_margin`, `_resolve_verdict`, `NO_CANDIDATE_BEAT_PERSISTENCE_VERDICT`, `_score_fitted_arms_at_corridor_level`) — FOUND
+- `backend/tests/forecast_experiment_test.py` — FOUND (84 tests, verified passing)
+- Commit `112fd8b` — FOUND in `git log --oneline --all`
+- Commit `e6c02a0` — FOUND
+- The decision record's FIRST commit is still `4d964cf` (isolated Expectation-plus-unlock, exactly 2 files) — CONFIRMED (`NO_PEEKING_AUDIT_OK`)
+- `backend/ampacity_forecast.py`, `backend/anomaly_detector.py`, `backend/DLRSafetyMonitor.py`, `backend/config.py` carry zero diff from this plan's base (`c043c17`) — CONFIRMED
+- Full suite: 641 passed, 23 failed (unchanged pre-existing `corridor_discretization_test.py` baseline per `.planning/WINDOWS.md`) — CONFIRMED
+- Live test-set run: `TEST_SET_RUN_OK` (6 candidates per corridor, oracle excluded, identical row counts, every margin bracketed, non-empty verdict, `measured_lead_hours==24`, `split=='test'`) — CONFIRMED
 
 ---
 *Phase: 03-ampacity-forecast-correction-experiment-compare-persistence*
-*Plan: 06 (HALTED at checkpoint before Task 3)*
+*Plan: 06 (COMPLETE — all three tasks and the checkpoint resolved)*
 *Completed: 2026-09-30*
