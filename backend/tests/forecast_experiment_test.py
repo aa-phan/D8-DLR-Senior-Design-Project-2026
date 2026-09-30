@@ -1139,6 +1139,197 @@ def test_main_scores_both_corridors_from_one_invocation(monkeypatch, tmp_path, c
 
 
 # ──────────────────────────────────────────────────────────────────────────
+# Plan 03-04 Task 3: the identical-index and no-peeking invariants,
+# asserted rather than assumed.
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def test_score_arms_raises_naming_both_arms_and_both_counts_on_length_mismatch():
+    frame = _minimal_test_frame(n=10)
+    arms = {
+        "arm_ok": lambda f: f["anchor_dlr_amps"].to_numpy(dtype=float),
+        "arm_short": lambda f: f["anchor_dlr_amps"].to_numpy(dtype=float)[:-2],
+    }
+    with pytest.raises(ValueError) as excinfo:
+        fe.score_arms(frame, arms)
+    msg = str(excinfo.value)
+    assert "arm_ok" in msg and "arm_short" in msg
+    assert "10" in msg and "8" in msg
+
+
+def test_score_arms_return_records_index_first_last_and_row_count():
+    frame = _minimal_test_frame(n=10)
+    arms = {"persistence": lambda f: f["anchor_dlr_amps"].to_numpy(dtype=float)}
+    result = fe.score_arms(frame, arms)
+    assert result["rows"] == 10
+    assert result["first_timestamp"] == str(frame["datetime_utc"].min())
+    assert result["last_timestamp"] == str(frame["datetime_utc"].max())
+
+
+def test_assert_identical_index_raises_before_any_arm_is_scored_for_mae():
+    """assert_identical_index is called by score_arms BEFORE MAE/RMSE
+    computation -- a length-mismatching second arm must raise even though
+    the FIRST arm in the dict would have scored successfully alone."""
+    frame = _minimal_test_frame(n=10)
+    arms = {
+        "first_ok": lambda f: f["anchor_dlr_amps"].to_numpy(dtype=float),
+        "second_bad": lambda f: f["anchor_dlr_amps"].to_numpy(dtype=float)[:5],
+    }
+    with pytest.raises(ValueError):
+        fe.score_arms(frame, arms)
+
+
+def test_score_arms_via_corridor_path_raises_on_short_returning_arm(monkeypatch, tmp_path):
+    """A deliberately short-returning arm added to a COPY of the registry
+    still raises through the corridor scoring path (real corridor-assembled
+    frame + real _corridor_arm_reader callables), not just in the minimal
+    hand-built frames the tests above use."""
+    monkeypatch.setattr(config, "FORECAST_EXPERIMENT_CACHE_DIR", str(tmp_path))
+    truth_a = _synthetic_weather_frame(periods=24 * 20)
+    truth_b = _synthetic_weather_frame(periods=24 * 20)
+    fcst_a = _synthetic_weather_frame(periods=24 * 20)
+    fcst_b = _synthetic_weather_frame(periods=24 * 20)
+    _patch_two_city_24h_fetches(
+        monkeypatch,
+        {AUSTIN_LATLON: truth_a, CC_LATLON: truth_b},
+        {AUSTIN_LATLON: fcst_a, CC_LATLON: fcst_b},
+    )
+
+    frame = fe.corridor_anchored_pair_frame(
+        CORRIDOR, "2025-10-01", "2025-10-20", lead_hours=PRIMARY_LEAD,
+    )
+    filtered = fe.filter_to_exact_lead(frame, lead_hours=PRIMARY_LEAD)
+    assert len(filtered) > 0
+
+    arms = {name: fe._corridor_arm_reader(name) for name in fe.NON_FITTED_ARMS}
+    arms["bad_short_arm"] = lambda f: f["pred_raw_forecast"].to_numpy(dtype=float)[:-1]
+
+    with pytest.raises(ValueError):
+        fe.score_arms(filtered, arms)
+
+
+def test_assert_filtered_split_disjoint_passes_for_properly_ordered_splits():
+    train = pd.DataFrame({
+        "datetime_utc": pd.date_range("2025-10-01", periods=5, freq="h", tz="UTC")
+    })
+    val = pd.DataFrame({
+        "datetime_utc": pd.date_range("2025-10-05", periods=5, freq="h", tz="UTC")
+    })
+    test = pd.DataFrame({
+        "datetime_utc": pd.date_range("2025-10-10", periods=5, freq="h", tz="UTC")
+    })
+    fe.assert_filtered_split_disjoint(train, val, test)  # no raise
+
+
+def test_assert_filtered_split_disjoint_raises_on_constructed_train_val_overlap():
+    train = pd.DataFrame({
+        "datetime_utc": pd.date_range("2025-10-01", periods=10, freq="h", tz="UTC")
+    })
+    val = pd.DataFrame({
+        # Overlaps train entirely -- the exact defect this assertion exists
+        # to catch.
+        "datetime_utc": pd.date_range("2025-10-01", periods=10, freq="h", tz="UTC")
+    })
+    test = pd.DataFrame({
+        "datetime_utc": pd.date_range("2025-10-10", periods=5, freq="h", tz="UTC")
+    })
+    with pytest.raises(ValueError) as excinfo:
+        fe.assert_filtered_split_disjoint(train, val, test)
+    assert "TRAIN" in str(excinfo.value) and "VAL" in str(excinfo.value)
+
+
+def test_assert_filtered_split_disjoint_raises_on_constructed_val_test_overlap():
+    train = pd.DataFrame({
+        "datetime_utc": pd.date_range("2025-10-01", periods=5, freq="h", tz="UTC")
+    })
+    val = pd.DataFrame({
+        "datetime_utc": pd.date_range("2025-10-10", periods=10, freq="h", tz="UTC")
+    })
+    test = pd.DataFrame({
+        # Overlaps val entirely.
+        "datetime_utc": pd.date_range("2025-10-10", periods=10, freq="h", tz="UTC")
+    })
+    with pytest.raises(ValueError) as excinfo:
+        fe.assert_filtered_split_disjoint(train, val, test)
+    assert "VAL" in str(excinfo.value) and "TEST" in str(excinfo.value)
+
+
+def test_require_test_split_unlocked_raises_naming_expectation_and_plan_03_06():
+    with pytest.raises(RuntimeError) as excinfo:
+        fe._require_test_split_unlocked()
+    msg = str(excinfo.value)
+    assert "03-06" in msg
+    assert "expectation" in msg.lower()
+
+
+def test_guard_test_split_access_delegates_to_require_test_split_unlocked():
+    with pytest.raises(RuntimeError) as excinfo:
+        fe._guard_test_split_access("test")
+    assert "03-06" in str(excinfo.value)
+    fe._guard_test_split_access("val")  # no exception
+
+
+def test_filtered_rows_satisfy_hour_modulus_and_anchor_gap_at_both_leads(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(config, "FORECAST_EXPERIMENT_CACHE_DIR", str(tmp_path))
+    truth = _synthetic_weather_frame(periods=24 * 20)
+    fcst_1h = _synthetic_weather_frame(periods=24 * 20)
+    fcst_24h = _synthetic_weather_frame(periods=24 * 20)
+    modulus = config.FORECAST_EXPERIMENT_LEAD_FILTER_MODULUS
+
+    _patch_fetches(monkeypatch, truth, fcst_1h)
+    frame_1h = fe.anchored_pair_frame(CITY, "2025-10-01", "2025-10-20", lead_hours=1)
+    filtered_1h = fe.filter_to_exact_lead(frame_1h, lead_hours=1)
+    assert len(filtered_1h) > 0
+    remainder_1h = config.FORECAST_EXPERIMENT_LEAD_FILTER_REMAINDER
+    assert (filtered_1h["datetime_utc"].dt.hour % modulus == remainder_1h).all()
+    assert (
+        (filtered_1h["datetime_utc"] - filtered_1h["anchor_datetime_utc"])
+        == pd.Timedelta(hours=1)
+    ).all()
+
+    _patch_fetches_24h(monkeypatch, truth, fcst_24h)
+    frame_24h = fe.anchored_pair_frame(CITY, "2025-10-01", "2025-10-20", lead_hours=PRIMARY_LEAD)
+    filtered_24h = fe.filter_to_exact_lead(frame_24h, lead_hours=PRIMARY_LEAD)
+    assert len(filtered_24h) > 0
+    remainder_24h = config.FORECAST_EXPERIMENT_24H_LEAD_FILTER_REMAINDER
+    assert (filtered_24h["datetime_utc"].dt.hour % modulus == remainder_24h).all()
+    assert (
+        (filtered_24h["datetime_utc"] - filtered_24h["anchor_datetime_utc"])
+        == pd.Timedelta(hours=PRIMARY_LEAD)
+    ).all()
+
+
+def test_main_raises_via_split_disjointness_check_on_corrupted_boundaries(
+    monkeypatch, tmp_path
+):
+    """If a future change ever desynchronizes calendar_split's boundaries
+    from the filter, main() must surface it as an exception rather than
+    silently scoring an overlapping split."""
+    monkeypatch.setattr(config, "FORECAST_EXPERIMENT_CACHE_DIR", str(tmp_path))
+    truth = _synthetic_weather_frame(periods=24 * 60)
+    fcst = _synthetic_weather_frame(periods=24 * 60)
+    _patch_fetches_24h(monkeypatch, truth, fcst)
+
+    real_calendar_split = fe.experiment_splits.calendar_split
+
+    def _corrupted_split(frame, boundaries):
+        train, val, test = real_calendar_split(frame, boundaries)
+        # Corrupt: val becomes an exact copy of train -- massively
+        # overlapping rather than chronologically disjoint.
+        return train, train.copy(), test
+
+    monkeypatch.setattr(fe.experiment_splits, "calendar_split", _corrupted_split)
+
+    with pytest.raises(ValueError):
+        fe.main([
+            "--city", CITY, "--start", "2025-10-01", "--end", "2025-11-30",
+            "--lead-hours", str(PRIMARY_LEAD),
+        ])
+
+
+# ──────────────────────────────────────────────────────────────────────────
 # Import-time no-side-effects
 # ──────────────────────────────────────────────────────────────────────────
 

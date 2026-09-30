@@ -236,20 +236,42 @@ def _lead_source_config(lead_hours: int) -> _LeadSourceConfig:
     )
 
 
+def _require_test_split_unlocked() -> None:
+    """
+    Plan 03-04's self-describing form of the no-peeking lock (Task 3):
+    unconditionally raise if `_TEST_SPLIT_UNLOCKED` is `False`, naming the
+    lock constant itself, Success Criterion 5's Expectation-record
+    requirement, and Plan 03-06 as the specific commit that flips it. A
+    lock whose error message does not say what to do next is a lock a
+    future executor deletes instead of satisfying -- this message names
+    both the WHY (the Expectation record) and the WHEN (Plan 03-06).
+
+    Distinct from `_guard_test_split_access(split_name)` below, which only
+    raises for a specific `"test"` request: this is the unconditional
+    "is the lock engaged at all" check, usable without first constructing
+    a split name.
+    """
+    if not _TEST_SPLIT_UNLOCKED:
+        raise RuntimeError(
+            "forecast_experiment: _TEST_SPLIT_UNLOCKED is False -- the "
+            "held-out TEST split stays locked until the Expectation record "
+            "(Success Criterion 5's no-peeking discipline) is committed. "
+            "Plan 03-06 flips this flag in the SAME commit that lands that "
+            "record; until then, no code path may score the test split."
+        )
+
+
 def _guard_test_split_access(split_name: str) -> None:
     """
     Raise if `split_name` names the held-out TEST split while
     `_TEST_SPLIT_UNLOCKED` is `False` -- the mechanical enforcement of
-    Success Criterion 5's no-peeking discipline. Plan 03-06 flips the
-    module-level flag in the same commit that lands the Expectation record.
+    Success Criterion 5's no-peeking discipline. Delegates the actual
+    raise to `_require_test_split_unlocked` so both entry points share one
+    message. Plan 03-06 flips the module-level flag in the same commit
+    that lands the Expectation record.
     """
-    if split_name == "test" and not _TEST_SPLIT_UNLOCKED:
-        raise RuntimeError(
-            "forecast_experiment: refusing to score the held-out TEST "
-            "split -- _TEST_SPLIT_UNLOCKED is False. Plan 03-06 unlocks "
-            "this in the same commit that lands the Expectation record "
-            "(Success Criterion 5's no-peeking discipline)."
-        )
+    if split_name == "test":
+        _require_test_split_unlocked()
 
 
 def _corridor_for_city(city: str) -> str:
@@ -858,29 +880,86 @@ def _corridor_arm_reader(arm_name: str):
     return reader
 
 
+def assert_identical_index(test_frame: pd.DataFrame, arms: dict) -> dict:
+    """
+    Called by `score_arms` BEFORE any arm's prediction is actually scored
+    (Task 3): the automated enforcement of D-02's single load-bearing claim
+    -- "identical held-out chronological test timestamps" -- turned into an
+    exception rather than a property that merely happens to hold.
+
+    Asserts `test_frame`'s index is unique and sorted, then computes every
+    arm's prediction length up front and raises `ValueError` the moment ANY
+    TWO arms disagree, naming BOTH arm names and BOTH their counts --
+    stronger than comparing each arm only to `test_frame`'s own length one
+    at a time, which can only ever name a single arm. Only after every pair
+    agrees does it check the shared length against `test_frame` itself
+    (still naming the one arm and both counts if that fails, e.g. every
+    arm agrees with each other but not with `test_frame`).
+
+    Returns:
+        `{"rows": int, "first_timestamp": str, "last_timestamp": str}` --
+        the scored index's own shape and span. Timestamps are included only
+        when `test_frame` carries a `datetime_utc` column. Merged into
+        `score_arms`'s returned mapping (outside `candidates`) so the
+        identical-index claim is INSPECTABLE from the report, not merely
+        enforced silently.
+    """
+    if not test_frame.index.is_unique:
+        raise ValueError("assert_identical_index: test_frame index is not unique")
+    if not test_frame.index.is_monotonic_increasing:
+        raise ValueError("assert_identical_index: test_frame index is not sorted")
+
+    n = len(test_frame)
+    lengths = {name: len(np.asarray(fn(test_frame))) for name, fn in arms.items()}
+
+    names = list(lengths)
+    for i in range(len(names)):
+        for j in range(i + 1, len(names)):
+            arm_a, arm_b = names[i], names[j]
+            if lengths[arm_a] != lengths[arm_b]:
+                raise ValueError(
+                    f"assert_identical_index: arm {arm_a!r} scored "
+                    f"{lengths[arm_a]} row(s) while arm {arm_b!r} scored "
+                    f"{lengths[arm_b]} row(s) -- every arm in this phase's "
+                    f"comparison MUST share one identical row index (D-02's "
+                    f"'identical held-out chronological test timestamps')"
+                )
+    for name, length in lengths.items():
+        if length != n:
+            raise ValueError(
+                f"assert_identical_index: arm {name!r} returned {length} "
+                f"prediction(s), expected {n} (test_frame's row count)"
+            )
+
+    index_info = {"rows": int(n)}
+    if "datetime_utc" in test_frame.columns:
+        index_info["first_timestamp"] = str(test_frame["datetime_utc"].min())
+        index_info["last_timestamp"] = str(test_frame["datetime_utc"].max())
+    return index_info
+
+
 def score_arms(test_frame: pd.DataFrame, arms: dict) -> dict:
     """
     Score every callable in `arms` (mapping of arm name -> a callable
     taking `test_frame` and returning a prediction array) against
     `test_frame["truth_dlr_amps"]`.
 
-    Asserts up front that `test_frame`'s index is unique and sorted (the
-    identical-test-timestamp-index requirement this phase's whole design
-    rests on), and that every arm returns an array of the same length as
-    `test_frame`.
+    Calls `assert_identical_index` FIRST, before any arm's prediction is
+    scored -- the automated enforcement of the identical-row-index claim
+    this phase's whole design rests on, extended (Task 3) to name BOTH
+    arms and BOTH counts when any two arms disagree with each other, not
+    only when one disagrees with `test_frame`'s own length.
 
     Returns:
         `{"candidates": {arm_name: {"mae", "rmse", "rows"}}, "test_index":
-        [the exact index values scored, as a list]}` -- `test_index` is
-        kept OUTSIDE `candidates` so `report["candidates"]` (this
-        function's `candidates` value) stays a clean per-arm score
-        mapping, matching `forecast_training.corridor_report`'s own
-        `candidates` shape.
+        [the exact index values scored, as a list], "rows": int,
+        "first_timestamp": str, "last_timestamp": str}` -- `test_index` and
+        the index-shape fields are kept OUTSIDE `candidates` so
+        `report["candidates"]` (this function's `candidates` value) stays
+        a clean per-arm score mapping, matching `forecast_training.
+        corridor_report`'s own `candidates` shape.
     """
-    if not test_frame.index.is_unique:
-        raise ValueError("score_arms: test_frame index is not unique")
-    if not test_frame.index.is_monotonic_increasing:
-        raise ValueError("score_arms: test_frame index is not sorted")
+    index_info = assert_identical_index(test_frame, arms)
 
     actual = test_frame["truth_dlr_amps"].to_numpy(dtype=float)
     n = len(test_frame)
@@ -888,11 +967,6 @@ def score_arms(test_frame: pd.DataFrame, arms: dict) -> dict:
     candidates = {}
     for name, fn in arms.items():
         pred = np.asarray(fn(test_frame), dtype=float)
-        if len(pred) != n:
-            raise ValueError(
-                f"score_arms: arm {name!r} returned {len(pred)} "
-                f"prediction(s), expected {n} (test_frame's row count)"
-            )
         residual = actual - pred
         candidates[name] = {
             "mae": float(np.mean(np.abs(residual))),
@@ -900,7 +974,11 @@ def score_arms(test_frame: pd.DataFrame, arms: dict) -> dict:
             "rows": int(n),
         }
 
-    return {"candidates": candidates, "test_index": list(test_frame.index)}
+    return {
+        "candidates": candidates,
+        "test_index": list(test_frame.index),
+        **index_info,
+    }
 
 
 def _default_split_boundaries(frame: pd.DataFrame, val_fraction=0.2, test_fraction=0.2):
@@ -918,6 +996,54 @@ def _default_split_boundaries(frame: pd.DataFrame, val_fraction=0.2, test_fracti
     val_start = min_dt + span * (1.0 - val_fraction - test_fraction)
     test_start = min_dt + span * (1.0 - test_fraction)
     return experiment_splits.SplitBoundaries(val_start, test_start)
+
+
+def assert_filtered_split_disjoint(
+    train_filtered: pd.DataFrame, val_filtered: pd.DataFrame, test_filtered: pd.DataFrame,
+) -> None:
+    """
+    Raise `ValueError` naming the overlapping timestamps when the FILTERED
+    train/val/test frames -- the ones actually scored, AFTER `filter_to_
+    exact_lead`, not the frames `experiment_splits.calendar_split` itself
+    received -- are not strictly chronologically disjoint: every train
+    timestamp strictly before every validation timestamp, and every
+    validation timestamp strictly before every test timestamp (Task 3).
+
+    `calendar_split` is already tested on its own unfiltered contract
+    (`experiment_splits_test.py`'s own ordering assertions) -- this
+    function does not re-derive that; it asserts the SAME property holds
+    on the subset this module actually scores, since the six-hourly filter
+    is applied per-side, independently, and a mismatched filter or a
+    boundary miscalculation could in principle desynchronize the two
+    without either side's own internal ordering ever breaking.
+
+    Reading test's own timestamps here (never its `truth_dlr_amps` or any
+    other value) is NOT a no-peeking violation -- it is calendar-boundary
+    arithmetic identical in kind to what `_default_split_boundaries`
+    already computes over the full frame; no target value is read.
+    """
+    if len(train_filtered) and len(val_filtered):
+        train_max = train_filtered["datetime_utc"].max()
+        val_min = val_filtered["datetime_utc"].min()
+        if not (train_max < val_min):
+            raise ValueError(
+                f"assert_filtered_split_disjoint: filtered TRAIN max "
+                f"timestamp {train_max} is not strictly before filtered "
+                f"VAL min timestamp {val_min} -- the filter and/or split "
+                f"boundaries have desynchronized on the frame actually "
+                f"scored"
+            )
+    if len(val_filtered) and len(test_filtered):
+        val_max = val_filtered["datetime_utc"].max()
+        test_min = test_filtered["datetime_utc"].min()
+        if not (val_max < test_min):
+            raise ValueError(
+                f"assert_filtered_split_disjoint: filtered VAL max "
+                f"timestamp {val_max} is not strictly before filtered "
+                f"TEST min timestamp {test_min} -- the filter and/or split "
+                f"boundaries have desynchronized on the frame actually "
+                f"scored"
+            )
 
 
 def corridor_experiment_report(
@@ -1004,7 +1130,16 @@ def _run_city_tracer(city, start, end, lead_hours, lead_cfg):
     boundaries = _default_split_boundaries(frame)
     train, val, test = experiment_splits.calendar_split(frame, boundaries)
 
-    filtered = filter_to_exact_lead(frame, lead_hours=lead_hours)
+    # Task 3: assert the FILTERED train/val/test frames -- the ones
+    # actually scored, after filter_to_exact_lead -- are still strictly
+    # chronologically disjoint, not only the unfiltered frames
+    # calendar_split itself received. Reads only test's own timestamps,
+    # never its truth values -- calendar-boundary arithmetic, not a
+    # no-peeking violation.
+    train_filtered = filter_to_exact_lead(train, lead_hours=lead_hours)
+    val_scored = filter_to_exact_lead(val, lead_hours=lead_hours)
+    test_filtered = filter_to_exact_lead(test, lead_hours=lead_hours)
+    assert_filtered_split_disjoint(train_filtered, val_scored, test_filtered)
 
     # Success Criterion 5's no-peeking discipline: this path scores the
     # VALIDATION split only. The guard call below is a no-op for "val" --
@@ -1012,7 +1147,6 @@ def _run_city_tracer(city, start, end, lead_hours, lead_cfg):
     # this call through "test" would be mechanically refused while
     # _TEST_SPLIT_UNLOCKED is False.
     _guard_test_split_access("val")
-    val_scored = filter_to_exact_lead(val, lead_hours=lead_hours)
     assert_exact_lead(val_scored, lead_hours=lead_hours)
 
     geometry = corridor_discretization.corridor_geometry(_corridor_for_city(city))
@@ -1079,13 +1213,22 @@ def _run_corridor(corridor, start, end, lead_hours, lead_cfg, split):
     boundaries = _default_split_boundaries(frame)
     train, val, test = experiment_splits.calendar_split(frame, boundaries)
 
+    # Task 3: assert the FILTERED train/val/test frames -- the ones
+    # actually scored, after filter_to_exact_lead -- are still strictly
+    # chronologically disjoint, not only the unfiltered frames
+    # calendar_split itself received. Reads only each split's own
+    # timestamps, never truth values -- not a no-peeking violation.
+    train_filtered = filter_to_exact_lead(train, lead_hours=lead_hours)
+    val_filtered = filter_to_exact_lead(val, lead_hours=lead_hours)
+    test_filtered = filter_to_exact_lead(test, lead_hours=lead_hours)
+    assert_filtered_split_disjoint(train_filtered, val_filtered, test_filtered)
+
     # Success Criterion 5's no-peeking discipline, routed through the
     # command line's own --split rather than around it: requesting "test"
     # while the module-level lock is engaged raises here, before any test
-    # row is ever filtered or scored.
+    # row is ever scored.
     _guard_test_split_access(split)
-    split_frame = {"val": val, "test": test}[split]
-    scored_frame = filter_to_exact_lead(split_frame, lead_hours=lead_hours)
+    scored_frame = {"val": val_filtered, "test": test_filtered}[split]
     assert_exact_lead(scored_frame, lead_hours=lead_hours)
 
     arms = {name: _corridor_arm_reader(name) for name in NON_FITTED_ARMS}
