@@ -114,6 +114,7 @@ import ampacity_forecast
 import config
 import corridor_discretization
 import experiment_splits
+import forecast_correction_models
 import forecast_training
 import open_meteo_forecast_provider
 import open_meteo_provider
@@ -863,6 +864,337 @@ def corridor_anchored_pair_frame(corridor: str, start=None, end=None, *, lead_ho
         result[f"pred_{arm_name}"] = pred_amps
         result[f"bottleneck_index_{arm_name}"] = pred_bottleneck
 
+    return result
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 03-06 Task 2: the three FITTED arms (D-02 approaches 3, 4, 5).
+#
+# Unlike NON_FITTED_ARMS' pure factory(geometry) -> callable(frame) shape,
+# a fitted arm's callable needs a MODEL fit on real train-plus-validation
+# rows before it can predict anything -- `fit_fitted_arms` is the one
+# entry point that fits all three, using the configurations Plan 03-05's
+# validation selectors already chose (passed in below as WIND_CONFIGURATION/
+# COOLING_CONFIGURATION, never re-selected here: re-selecting after the
+# test split is unlocked would itself be a configuration decision made
+# with more information available than the no-peeking discipline permits).
+# ──────────────────────────────────────────────────────────────────────────
+
+FITTED_ARM_NAMES: tuple[str, ...] = (
+    "ml_wind_corrected", "ml_cooling_corrected", "reference_ml_refit_24h",
+)
+
+# Plan 03-05's validation-selected configurations (03-05-SUMMARY.md
+# "Selection Evidence", measured on representative synthetic data --
+# that plan's own harness does not fetch real corridor data). Passed into
+# fit_fitted_arms as fixed arguments per this task's own instruction; never
+# re-selected against real data here.
+WIND_CONFIGURATION: dict = {"estimator": "LinearRegression", "pooling": "pooled"}
+COOLING_CONFIGURATION: dict = {"estimator": "GradientBoostingRegressor", "target": "log_ratio"}
+
+
+def _fitted_arm_not_wired_via_registry(arm_name: str):
+    """
+    Placeholder factory for `ALL_ARMS`' three fitted-arm entries. A fitted
+    arm cannot be scored via `factory(geometry) -> callable(frame)` the way
+    `NON_FITTED_ARMS`' entries can, because its callable needs a MODEL fit
+    on real train-plus-validation rows first. `ALL_ARMS` still carries all
+    seven names -- D-02's seven-approach registry is inspectable by length
+    and membership without a live fetch or a fit -- but invoking one of
+    these three placeholder factories' returned callable raises, naming
+    `fit_fitted_arms` as the correct entry point, rather than silently
+    returning a callable that would fail confusingly deep inside scoring.
+    """
+
+    def factory(geometry):
+        def not_ready(frame):
+            raise RuntimeError(
+                f"forecast_experiment: {arm_name!r} has no callable via "
+                f"ALL_ARMS[{arm_name!r}](geometry) -- fitted arms are only "
+                f"scoreable through fit_fitted_arms(train_val_frame, "
+                f"geometry, wind_configuration=..., cooling_configuration="
+                f"...)'s returned fitted objects, never through this "
+                f"placeholder"
+            )
+
+        return not_ready
+
+    return factory
+
+
+# The seven-arm registry D-02 commits this phase to (ROADMAP Success
+# Criterion 2). The oracle's presence does NOT make it a candidate --
+# `corridor_experiment_report` structurally pops it out of any candidate
+# mapping derived from this registry, exactly as it does for NON_FITTED_ARMS.
+ALL_ARMS: dict = {
+    **NON_FITTED_ARMS,
+    **{name: _fitted_arm_not_wired_via_registry(name) for name in FITTED_ARM_NAMES},
+}
+
+
+def _add_correction_columns(frame: pd.DataFrame, geometry) -> pd.DataFrame:
+    """
+    Add the columns `backend/forecast_correction_models.py` expects that
+    the anchored-pair-frame contract does not already provide under the
+    same name: `truth_ampacity` (an alias of `truth_dlr_amps` -- Plan
+    03-05's own module docstring flagged this exact adapter as Plan
+    03-06's job) and the perpendicular-projected wind speed for the
+    forecast, anchor, and truth groups (`fcst_perp_wind_ms`/
+    `anchor_perp_wind_ms`/`truth_perp_wind_ms`), computed via the SAME
+    `thermal_model.perpendicular_wind` seam `_city_ampacity` uses, on the
+    corridor's own bearing -- never a second wind-projection
+    implementation.
+    """
+    frame = frame.copy()
+    frame["truth_ampacity"] = frame["truth_dlr_amps"]
+    for prefix in ("fcst", "anchor", "truth"):
+        frame[f"{prefix}_perp_wind_ms"] = thermal_model.perpendicular_wind(
+            frame[f"{prefix}_wind_speed"].to_numpy(dtype=float),
+            frame[f"{prefix}_wind_direction"].to_numpy(dtype=float),
+            geometry.bearing_deg,
+        )
+    return frame
+
+
+def _wind_corrected_ampacity(
+    model: "forecast_correction_models.WindCorrectionModel", frame: pd.DataFrame, geometry,
+) -> np.ndarray:
+    """
+    Arm 3's live prediction: `forecast_correction_models.
+    predict_wind_correction` corrects the forecast's own wind, then the
+    corrected wind is projected and run through the SAME `_city_ampacity`
+    physics seam every other arm uses. Genuinely re-reads `frame`'s own
+    `fcst_*`/`anchor_*` columns on every call (never a cached lookup by
+    timestamp) -- the leakage probe's power depends on this arm actually
+    recomputing from whatever frame it is given.
+    """
+    prediction = forecast_correction_models.predict_wind_correction(model, frame)
+    perp = thermal_model.perpendicular_wind(
+        prediction.speed, prediction.direction, geometry.bearing_deg,
+    )
+    return np.asarray(
+        thermal_model.ieee738_ampacity(
+            frame["fcst_air_temp"].to_numpy(dtype=float), perp,
+            frame["fcst_solar_radiation"].to_numpy(dtype=float), geometry.conductor,
+        ),
+        dtype=float,
+    )
+
+
+def _cooling_corrected_ampacity(
+    model: "forecast_correction_models.CoolingCorrectionModel", frame: pd.DataFrame, geometry,
+) -> np.ndarray:
+    """
+    Arm 4's live prediction: `forecast_correction_models.
+    predict_cooling_correction` corrects the convective term, substituted
+    back through `thermal_model.ieee738_ampacity`'s `q_conv_override` seam
+    via `apply_cooling_correction` -- never a second heat-balance
+    implementation. Requires `frame` to already carry the `fcst_perp_
+    wind_ms`/`anchor_perp_wind_ms` columns `_add_correction_columns` adds;
+    genuinely re-reads them on every call, for the same leakage-probe-power
+    reason `_wind_corrected_ampacity` does.
+    """
+    prediction = forecast_correction_models.predict_cooling_correction(model, frame)
+    return np.asarray(
+        forecast_correction_models.apply_cooling_correction(frame, prediction.q_conv, geometry),
+        dtype=float,
+    )
+
+
+def _stacked_pair_frame(corridor: str, start=None, end=None, *, lead_hours: int) -> pd.DataFrame:
+    """
+    Assemble both endpoint cities' `anchored_pair_frame`s and STACK them
+    (concatenate, tag `endpoint_city`) rather than corridor-reduce them.
+    Arms 3 and 4 fit `pooled` (one model over both cities, with an
+    endpoint indicator) or `per_city` (one model per city) -- both need
+    each city's own individual weather/wind rows side by side, which the
+    corridor-reduced single-row-per-timestamp shape
+    `corridor_anchored_pair_frame` returns does not preserve. UNFILTERED
+    with respect to lead (every hour, not just the exact-24h-lead subset)
+    -- arm 5's own truth-only reduction (`_arm5_truth_frame`) needs a
+    genuine hourly cadence for its lag features; callers that need arms 3
+    or 4's exact-lead invariant apply `filter_to_exact_lead` themselves.
+    """
+    city_a, city_b = config.CORRIDOR_ENDPOINTS[corridor]
+    frame_a = anchored_pair_frame(city_a, start, end, lead_hours=lead_hours).copy()
+    frame_a["endpoint_city"] = city_a
+    frame_b = anchored_pair_frame(city_b, start, end, lead_hours=lead_hours).copy()
+    frame_b["endpoint_city"] = city_b
+    return (
+        pd.concat([frame_a, frame_b], ignore_index=True)
+        .sort_values("datetime_utc")
+        .reset_index(drop=True)
+    )
+
+
+def _arm5_truth_frame(stacked_frame: pd.DataFrame, city_a: str, city_b: str) -> pd.DataFrame:
+    """
+    Reduce a stacked (endpoint_city-tagged) two-city TRUTH series into one
+    corridor-level frame shaped for `forecast_training.
+    build_training_matrix`: `datetime_utc`, `dlr_amps`, `air_temp`,
+    `wind_speed`, `solar_radiation`. Arm 5 never sees `fcst_*`/`anchor_*`
+    at all -- it is refit purely on the corridor's own archived TRUTH
+    series, weakest-link-reduced via `forecast_training.
+    corridor_weakest_link` (the repository's one reduction), exactly the
+    way the production trainer builds its own corridor series.
+    """
+    a = stacked_frame[stacked_frame["endpoint_city"] == city_a].sort_values("datetime_utc").reset_index(drop=True)
+    b = stacked_frame[stacked_frame["endpoint_city"] == city_b].sort_values("datetime_utc").reset_index(drop=True)
+    merged = a.merge(b, on="datetime_utc", suffixes=("_a", "_b"))
+
+    truth_columns = ("truth_air_temp", "truth_wind_speed", "truth_solar_radiation")
+    dlr_amps, _, winning = forecast_training.corridor_weakest_link(
+        merged["truth_dlr_amps_a"].to_numpy(dtype=float),
+        merged["truth_dlr_amps_b"].to_numpy(dtype=float),
+        {c: merged[f"{c}_a"].to_numpy(dtype=float) for c in truth_columns},
+        {c: merged[f"{c}_b"].to_numpy(dtype=float) for c in truth_columns},
+    )
+
+    return pd.DataFrame({
+        "datetime_utc": merged["datetime_utc"],
+        "dlr_amps": dlr_amps,
+        "air_temp": winning["truth_air_temp"],
+        "wind_speed": winning["truth_wind_speed"],
+        "solar_radiation": winning["truth_solar_radiation"],
+    }).sort_values("datetime_utc").reset_index(drop=True)
+
+
+def fit_fitted_arms(
+    train_val_frame: pd.DataFrame, geometry, *, wind_configuration: dict, cooling_configuration: dict,
+) -> dict:
+    """
+    Fit arms 3 (`ml_wind_corrected`), 4 (`ml_cooling_corrected`) and 5
+    (`reference_ml_refit_24h`) on `train_val_frame` -- a STACKED,
+    per-city, UNFILTERED anchored-pair frame (`_stacked_pair_frame`'s
+    shape) spanning the train-plus-validation calendar range.
+
+    Arms 3 and 4 fit ONLY on the exact-24h-lead subset
+    (`filter_to_exact_lead`) of `train_val_frame` -- fitting on the
+    broader 24-29h-lead-smeared rows would blend inconsistent lead
+    semantics into the correction, the same risk 03-RESEARCH.md Pitfall 1
+    warns against for SCORING.
+
+    Arm 5 never sees `fcst_*`/`anchor_*` at all: its feature and target
+    matrices come from `forecast_training.build_training_matrix` at an
+    explicit `horizon_minutes=1440`, applied to `train_val_frame`'s own
+    weakest-link-reduced TRUTH series (`_arm5_truth_frame`) -- full hourly
+    cadence, never the exact-lead-filtered subset, since its lag features
+    need genuine hour-to-hour spacing. It is fit with `forecast_training.
+    CANDIDATE_ESTIMATORS["MLPRegressor"]` (the SAME estimator family
+    `forecasting_model.md` persisted as the production winner) via
+    `forecast_training.fit_corridor_model` -- which only calls
+    `estimator.fit(...)`, never `persist_corridor_model` and never
+    anything in `ampacity_forecast`, so arm 5 can never reach the
+    persisted production artifact, the runtime module's per-corridor
+    model loader, or its process-global model cache.
+
+    `wind_configuration`/`cooling_configuration` are Plan 03-05's
+    validation-selected (estimator, pooling)/(estimator, target) pairs,
+    passed in rather than re-selected here (see this module's
+    `WIND_CONFIGURATION`/`COOLING_CONFIGURATION`).
+
+    Returns:
+        `{"wind_model": WindCorrectionModel, "cooling_model":
+        CoolingCorrectionModel, "arm5_estimator": a fitted scikit-learn
+        estimator, "wind_configuration": dict, "cooling_configuration":
+        dict}`.
+
+    Raises:
+        ValueError: naming the found cities, if `train_val_frame` does not
+            carry exactly two distinct `endpoint_city` values.
+    """
+    lead_hours = config.FORECAST_EXPERIMENT_PRIMARY_LEAD_HOURS
+    cities = sorted(train_val_frame["endpoint_city"].unique())
+    if len(cities) != 2:
+        raise ValueError(
+            f"fit_fitted_arms: train_val_frame must carry exactly two "
+            f"endpoint_city values, found {cities!r}"
+        )
+    city_a, city_b = cities
+
+    exact_lead = filter_to_exact_lead(train_val_frame, lead_hours=lead_hours)
+    exact_lead = _add_correction_columns(exact_lead, geometry)
+
+    wind_model = forecast_correction_models.fit_wind_correction(
+        exact_lead,
+        forecast_correction_models.WIND_CORRECTION_ESTIMATORS[wind_configuration["estimator"]],
+        pooling=wind_configuration["pooling"],
+    )
+    cooling_model = forecast_correction_models.fit_cooling_correction(
+        exact_lead,
+        forecast_correction_models.COOLING_CORRECTION_ESTIMATORS[cooling_configuration["estimator"]],
+        target=cooling_configuration["target"], conductor=geometry.conductor,
+    )
+
+    arm5_frame = _arm5_truth_frame(train_val_frame, city_a, city_b)
+    X5, y5 = forecast_training.build_training_matrix(arm5_frame, horizon_minutes=1440)
+    arm5_estimator = forecast_training.fit_corridor_model(
+        X5, y5, forecast_training.CANDIDATE_ESTIMATORS["MLPRegressor"]()
+    )
+
+    return {
+        "wind_model": wind_model,
+        "cooling_model": cooling_model,
+        "arm5_estimator": arm5_estimator,
+        "wind_configuration": dict(wind_configuration),
+        "cooling_configuration": dict(cooling_configuration),
+    }
+
+
+def leakage_probe(scored_frame: pd.DataFrame, arms: dict) -> dict:
+    """
+    ROADMAP Success Criterion 3's measurement, not inspection: proves that
+    no arm's prediction depends on any value timestamped at or after its
+    own valid time. Builds a sabotaged copy of `scored_frame` in which
+    every column whose name marks it as a truth value AT THE VALID TIME
+    (every column starting with `truth_`) is overwritten with a sentinel
+    that is in-range but physically wrong -- a constant well inside the
+    schema bounds, chosen so any arm actually reading it would produce a
+    visibly different number -- then runs every `arms` callable against
+    both the original and the sabotaged frame and compares elementwise.
+
+    `arms` must be a mapping of arm name to a LIVE-RECOMPUTING callable
+    (one that genuinely reads `scored_frame`'s own columns on every call,
+    like `NON_FITTED_ARMS`' factories or `_wind_corrected_ampacity`/
+    `_cooling_corrected_ampacity`) -- a callable that looks up a
+    precomputed prediction by timestamp would trivially (and
+    meaninglessly) report no change regardless of sabotage.
+
+    This detects a DIRECT read of a truth column at the valid time. It
+    does NOT detect a leak through a fitted model that was trained on
+    test rows -- that failure mode is covered separately by arm 5's
+    from-scratch refit and by `assert_filtered_split_disjoint`.
+
+    Returns:
+        `{arm_name: {"changed": bool, "max_abs_change": float}}` -- the
+        max absolute change surfaces a PARTIAL dependency as a small
+        nonzero value rather than rounding it away into a boolean.
+    """
+    sentinels = {
+        "truth_air_temp": 15.0,
+        "truth_wind_speed": 1.0,
+        "truth_wind_direction": 200.0,
+        "truth_solar_radiation": 50.0,
+        "truth_relative_humidity": 40.0,
+        "truth_dlr_amps": 1000.0,
+        "truth_ampacity": 1000.0,
+        "truth_perp_wind_ms": 1.0,
+    }
+    truth_columns = [c for c in scored_frame.columns if c.startswith("truth_")]
+
+    sabotaged = scored_frame.copy()
+    for column in truth_columns:
+        sabotaged[column] = sentinels.get(column, 1.0)
+
+    result = {}
+    for name, fn in arms.items():
+        original_pred = np.asarray(fn(scored_frame), dtype=float)
+        sabotaged_pred = np.asarray(fn(sabotaged), dtype=float)
+        diff = np.abs(original_pred - sabotaged_pred)
+        result[name] = {
+            "changed": bool(np.any(diff > 1e-9)),
+            "max_abs_change": float(np.max(diff)) if diff.size else 0.0,
+        }
     return result
 
 
