@@ -122,11 +122,15 @@ import thermal_model
 logger = logging.getLogger(__name__)
 
 # Success Criterion 5's no-peeking discipline, mechanically enforced (a
-# comment asking a future executor not to peek is not enforcement). Plan
-# 03-06 flips this in the SAME commit that lands the Expectation record --
-# this module's own `main` never requests the test split while this plan
-# is executing.
-_TEST_SPLIT_UNLOCKED: bool = False
+# comment asking a future executor not to peek is not enforcement).
+# UNLOCKED by Plan 03-06 Task 1, in the SAME commit that lands the
+# Expectation section of docs/data-science/decisions/
+# forecast_correction_experiment.md -- git log is the audit trail: this
+# commit contains exactly the decision record and this one-line flip, no
+# scoring run and no arm implementation, so a reviewer can check from the
+# commit graph, not a document's own date field, that the Expectation
+# predates every held-out test read.
+_TEST_SPLIT_UNLOCKED: bool = True
 
 # 03-RESEARCH.md Pitfall 6: global NWP models are typically available
 # several hours after their nominal initialization, and no Open-Meteo
