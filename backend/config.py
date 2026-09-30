@@ -396,6 +396,65 @@ FORECAST_EXPERIMENT_HTTP_TIMEOUT_S: int = 60
 # least 30 stratified days."
 FORECAST_EXPERIMENT_CALIBRATION_SAMPLE_DAYS: int = 30
 
+# ──────────────────────────────────────────────────────────────────────────────
+# D-04 pivot: the 24-hour realizable-lead PRIMARY arm (Previous Runs API)
+# ──────────────────────────────────────────────────────────────────────────────
+# Plan 03-01 found the 1-hour bulk-forecast arm's data source is bit-identical
+# to "truth" for any usable (necessarily recent) window -- the 1-hour arm above
+# is retained unchanged as a labelled non-primary curiosity, never deleted, but
+# is no longer this phase's primary comparison. D-04 (03-CONTEXT.md) promotes
+# the 24-hour lead, via Open-Meteo's Previous Runs API, to primary.
+
+# D-04's primary realizable lead: 24 hours. The legacy 1-hour lead
+# (FORECAST_EXPERIMENT_LEAD_FILTER_REMAINDER == 1 above) is retained as a
+# labelled non-primary curiosity, not deleted -- per D-04's disposition, the
+# code stays in the repo, just demoted from the phase's primary verdict.
+FORECAST_EXPERIMENT_PRIMARY_LEAD_HOURS: int = 24
+
+# Sits alongside FORECAST_EXPERIMENT_LEAD_FILTER_REMAINDER (now legacy-scoped,
+# value 1) and reuses the SAME FORECAST_EXPERIMENT_LEAD_FILTER_MODULUS.
+# 03-RESEARCH.md Pattern 2 (live-verified this session, 96 hour-cells across
+# 2 cities, 2 dates, 2 variables and all 4 daily cycles, zero exceptions):
+# `previous_day1`'s effective lead is `24 + (valid_hour % 6)` hours -- exactly
+# 24.0h ONLY when `valid_hour % 6 == 0`. The remainder differs from the legacy
+# arm's remainder (1) because the legacy bulk product's exact-lead hours are
+# ONE HOUR AFTER each six-hourly run's issue time (the first hour of each
+# run's stitched output), whereas the Previous-Runs product's exact-24-hour
+# hours are the run issue hours THEMSELVES (previous_day1 at hour H equals the
+# run issued at H - 24h, i.e. at the same hour-of-day, floored to the
+# six-hourly cycle only when H itself is a cycle hour).
+FORECAST_EXPERIMENT_24H_LEAD_FILTER_REMAINDER: int = 0
+
+# The live-bisected Previous-Runs archive start for the newly pinned model
+# (gfs_seamless via best_match), confirmed identical for all four project
+# cities, and re-confirmed during this plan's own planning session (a
+# 2024-01-20 AUSTIN request returned 24 rows, zero nulls; 2024-01-19 returned
+# 12/24 null -- the run that would have populated the rest hadn't posted yet;
+# 2024-01-18 returned 24/24 null). This is a DIFFERENT and much EARLIER
+# boundary than FORECAST_EXPERIMENT_WINDOW_START (2025-10-01, the legacy
+# 1-hour arm's window) -- the two must never be conflated: this constant
+# bounds the Previous-Runs/24-hour primary path only.
+FORECAST_EXPERIMENT_PREVIOUS_RUNS_WINDOW_START: str = "2024-01-20"
+
+# Which `<var>_previous_dayN` column family fetch_previous_runs requests.
+# previous_day=1 is D-04's chosen 24-hour-lead family; N=2..7 exist on the
+# endpoint (48h, 72h, ... leads) but are out of this phase's scope.
+FORECAST_EXPERIMENT_PREVIOUS_DAY: int = 1
+
+# Consumed by Plan 03-05's correction estimators (ML-corrected wind,
+# ML-corrected cooling). Declared here, ahead of its consumer, so every
+# experiment tunable lives in this one block rather than being introduced
+# piecemeal -- the same forward-declaration discipline
+# OPEN_METEO_PREVIOUS_RUNS_BASE already established in Plan 03-01 for a
+# function this plan is the first to implement.
+FORECAST_EXPERIMENT_CORRECTION_RANDOM_STATE: int = 20260929
+
+# Consumed by Plan 03-06's paired bootstrap confidence intervals over the
+# seven-arm held-out comparison. Declared here for the same
+# forward-declaration reason as the random-state constant above.
+FORECAST_EXPERIMENT_BOOTSTRAP_RESAMPLES: int = 10000
+FORECAST_EXPERIMENT_BOOTSTRAP_CONFIDENCE: float = 0.95
+
 # D-06: the anomaly control limit is a per-location dict, not one global
 # scalar — a single global band is the exact shape of the historical
 # RATING_BOUNDS bug documented in

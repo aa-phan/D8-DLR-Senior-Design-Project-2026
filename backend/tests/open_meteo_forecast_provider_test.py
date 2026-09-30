@@ -400,3 +400,178 @@ def test_importing_module_adds_no_new_network_module_and_no_file_io(monkeypatch)
     import importlib
 
     importlib.reload(open_meteo_forecast_provider)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# fetch_previous_runs -- D-04's PRIMARY 24-hour-lead adapter (Plan 03-03)
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def _previous_runs_payload(n_hours: int = 4, previous_day: int = 1) -> dict:
+    """
+    Shared payload builder mirroring the live-confirmed Previous Runs API
+    response shape: every requested `hourly`/`hourly_units` key carries the
+    `_previous_dayN` suffix (03-RESEARCH.md Code Examples).
+    """
+    suffix = f"_previous_day{previous_day}"
+    times = [
+        ts.strftime("%Y-%m-%dT%H:%M")
+        for ts in pd.date_range("2024-01-20T00:00:00", periods=n_hours, freq="h")
+    ]
+    return {
+        "latitude": 30.269146,
+        "longitude": -97.75338,
+        "hourly_units": {
+            "time": "iso8601",
+            f"temperature_2m{suffix}": "°C",
+            f"wind_speed_10m{suffix}": "m/s",
+            f"wind_direction_10m{suffix}": "°",
+            f"shortwave_radiation{suffix}": "W/m²",
+            f"relative_humidity_2m{suffix}": "%",
+        },
+        "hourly": {
+            "time": times,
+            f"temperature_2m{suffix}": [22.0 + (i % 10) for i in range(n_hours)],
+            f"wind_speed_10m{suffix}": [2.5 + (i % 10) * 0.1 for i in range(n_hours)],
+            f"wind_direction_10m{suffix}": [(140 + i) % 360 for i in range(n_hours)],
+            f"shortwave_radiation{suffix}": [318.0 + (i % 10) for i in range(n_hours)],
+            f"relative_humidity_2m{suffix}": [55 + (i % 10) for i in range(n_hours)],
+        },
+    }
+
+
+def test_previous_runs_model_id_is_pinned_and_distinct_from_legacy():
+    assert open_meteo_forecast_provider.PREVIOUS_RUNS_MODEL_ID == "gfs_seamless"
+    assert (
+        open_meteo_forecast_provider.PREVIOUS_RUNS_MODEL_ID
+        != open_meteo_forecast_provider.FORECAST_MODEL_ID
+    )
+
+
+def test_fetch_previous_runs_strips_suffix_and_returns_six_pipeline_columns(monkeypatch):
+    _mock_get(monkeypatch, payload=_previous_runs_payload(n_hours=4))
+
+    frame = open_meteo_forecast_provider.fetch_previous_runs(
+        30.2711, -97.7437, "2024-01-20", "2024-01-20"
+    )
+
+    assert list(frame.columns) == [
+        "datetime_utc",
+        "air_temp",
+        "wind_speed",
+        "wind_direction",
+        "solar_radiation",
+        "relative_humidity",
+    ]
+    assert len(frame) == 4
+    assert str(frame["datetime_utc"].dt.tz) == "UTC"
+
+
+def test_fetch_previous_runs_sends_pinned_model_and_suffixed_hourly_names(monkeypatch):
+    recorder = {}
+    _mock_get(monkeypatch, payload=_previous_runs_payload(n_hours=4), recorder=recorder)
+
+    open_meteo_forecast_provider.fetch_previous_runs(
+        30.2711, -97.7437, "2024-01-20", "2024-01-20"
+    )
+
+    params = recorder["params"]
+    assert params["models"] == "gfs_seamless"
+    assert recorder["url"] == open_meteo_forecast_provider.OPEN_METEO_PREVIOUS_RUNS_BASE
+    assert recorder["calls"] == 1
+    requested_vars = params["hourly"].split(",")
+    assert len(requested_vars) == len(open_meteo_forecast_provider.OPEN_METEO_HOURLY_VARS)
+    for var in requested_vars:
+        assert var.endswith("_previous_day1")
+        base = var.removesuffix("_previous_day1")
+        assert base in open_meteo_forecast_provider.OPEN_METEO_HOURLY_VARS
+
+
+def test_fetch_previous_runs_wrong_unit_on_suffixed_key_raises(monkeypatch):
+    payload = _previous_runs_payload(n_hours=4)
+    payload["hourly_units"]["wind_speed_10m_previous_day1"] = "km/h"
+    _mock_get(monkeypatch, payload=payload)
+
+    with pytest.raises(ValueError) as excinfo:
+        open_meteo_forecast_provider.fetch_previous_runs(
+            30.2711, -97.7437, "2024-01-20", "2024-01-20"
+        )
+
+    assert "wind_speed_10m_previous_day1" in str(excinfo.value)
+    assert "km/h" in str(excinfo.value)
+
+
+def test_fetch_previous_runs_null_at_index_zero_of_solar_radiation_raises(monkeypatch):
+    # Unlike fetch_single_run's shortwave_radiation index-0 carve-out, a
+    # previous_dayN value never comes from a run's own analysis step -- a
+    # null at index 0 here is a genuine completeness failure and must raise
+    # (Pitfall 3).
+    payload = _previous_runs_payload(n_hours=4)
+    payload["hourly"]["shortwave_radiation_previous_day1"][0] = None
+    _mock_get(monkeypatch, payload=payload)
+
+    with pytest.raises(ValueError) as excinfo:
+        open_meteo_forecast_provider.fetch_previous_runs(
+            30.2711, -97.7437, "2024-01-20", "2024-01-20"
+        )
+
+    assert "shortwave_radiation_previous_day1" in str(excinfo.value)
+    assert "1/4" in str(excinfo.value)
+
+
+def test_fetch_previous_runs_interior_null_raises_naming_variable_and_count(monkeypatch):
+    payload = _previous_runs_payload(n_hours=4)
+    payload["hourly"]["wind_speed_10m_previous_day1"][2] = None
+    _mock_get(monkeypatch, payload=payload)
+
+    with pytest.raises(ValueError) as excinfo:
+        open_meteo_forecast_provider.fetch_previous_runs(
+            30.2711, -97.7437, "2024-01-20", "2024-01-20"
+        )
+
+    assert "wind_speed_10m_previous_day1" in str(excinfo.value)
+    assert "1/4" in str(excinfo.value)
+
+
+def test_fetch_previous_runs_value_outside_schema_range_still_raises(monkeypatch):
+    payload = _previous_runs_payload(n_hours=1)
+    high = units_def.PIPELINE_SCHEMA["wind_speed"]["range"][1] + 10.0
+    payload["hourly"]["wind_speed_10m_previous_day1"] = [high]
+    _mock_get(monkeypatch, payload=payload)
+
+    with pytest.raises(ValueError) as excinfo:
+        open_meteo_forecast_provider.fetch_previous_runs(
+            30.2711, -97.7437, "2024-01-20", "2024-01-20"
+        )
+
+    assert "wind_speed" in str(excinfo.value)
+
+
+def test_fetch_previous_runs_propagates_http_error_on_500(monkeypatch):
+    _mock_get(monkeypatch, payload=_previous_runs_payload(n_hours=4), status_code=500)
+
+    with pytest.raises(requests.HTTPError):
+        open_meteo_forecast_provider.fetch_previous_runs(
+            30.2711, -97.7437, "2024-01-20", "2024-01-20"
+        )
+
+
+def test_fetch_single_run_without_model_sends_legacy_constant(monkeypatch):
+    recorder = {}
+    _mock_get(monkeypatch, payload=_forecast_payload(n_hours=4), recorder=recorder)
+
+    open_meteo_forecast_provider.fetch_single_run(30.2711, -97.7437, "2025-07-01T00:00")
+
+    assert recorder["params"]["models"] == open_meteo_forecast_provider.FORECAST_MODEL_ID
+
+
+def test_fetch_single_run_with_explicit_model_sends_that_model(monkeypatch):
+    recorder = {}
+    _mock_get(monkeypatch, payload=_forecast_payload(n_hours=4), recorder=recorder)
+
+    open_meteo_forecast_provider.fetch_single_run(
+        30.2711, -97.7437, "2025-07-01T00:00",
+        model=open_meteo_forecast_provider.PREVIOUS_RUNS_MODEL_ID,
+    )
+
+    assert recorder["params"]["models"] == "gfs_seamless"
