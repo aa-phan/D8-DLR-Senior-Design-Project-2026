@@ -665,3 +665,281 @@ def build_basis_manifest(
     os.replace(tmp_path, manifest_path)
 
     return manifest
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 04-02 Task 1: what the lead-time calibration gate actually proves,
+# and where in time every column of the scored frame lives (D-01 bullets 2
+# and 3, first half).
+# ──────────────────────────────────────────────────────────────────────────
+
+# `decision_time_availability_finding`'s citations, named constants (never
+# buried in prose) so a later plan can re-assert them mechanically. Every
+# one of these was read directly this session, not carried over from
+# 04-RESEARCH.md's own citations.
+_CALIBRATION_MEASUREMENT_FN_CITATION: str = "backend/forecast_leadtime_calibration.py:390"
+_CALIBRATION_GATE_FN_CITATION: str = "backend/forecast_leadtime_calibration.py:515"
+_PREVIOUS_RUNS_FETCH_CITATION: str = "backend/open_meteo_forecast_provider.py:513"
+_SINGLE_RUNS_FETCH_CITATION: str = "backend/open_meteo_forecast_provider.py:374"
+_PREVIOUS_RUNS_ENDPOINT_CITATION: str = "backend/open_meteo_forecast_provider.py:80"
+_SINGLE_RUNS_ENDPOINT_CITATION: str = "backend/open_meteo_forecast_provider.py:79"
+_COMPARED_QUANTITY_CITATION: str = "backend/forecast_leadtime_calibration.py:412"
+_SUCCESS_CONDITION_CITATION: str = "backend/forecast_leadtime_calibration.py:552"
+_RECORDED_LIMITATION_CITATION: str = "docs/data-science/decisions/forecast_correction_experiment.md:392"
+
+
+def decision_time_availability_finding() -> dict:
+    """
+    D-01 bullet 2. Reads `forecast_leadtime_calibration.measure_previous_runs_alignment`
+    (`_CALIBRATION_MEASUREMENT_FN_CITATION`) and `assert_exact_offset_lead`
+    (`_CALIBRATION_GATE_FN_CITATION`) -- the gate's own measurement path --
+    and the two fetch functions it reaches (`open_meteo_forecast_provider.
+    fetch_previous_runs`, `.fetch_single_run`) to establish, from the code
+    and nothing else, exactly what the gate proves and what it cannot.
+
+    Both endpoints the gate's measurement path reaches
+    (`previous-runs-api.open-meteo.com`, `single-runs-api.open-meteo.com`)
+    are backward-looking archives -- confirmed by reading their own request
+    functions and the module docstring's own characterization of all three
+    forecast-family endpoints as archives, never a live dissemination feed.
+    A gate built entirely from two archive reads can therefore prove a
+    value-matching relationship between those two archives and nothing
+    about whether a real consumer received the value over the network at
+    the claimed decision time -- this is a structural argument, not a
+    rhetorical one, and `reachable_fetch_functions` below enumerates the
+    exact functions that make it checkable.
+    """
+    compared_products = {
+        "previous_runs_archive": {
+            "description": (
+                "Open-Meteo's Previous-Runs API `previous_day1` series -- a "
+                "backward-looking archive reconstructing, for each valid "
+                "time T, the stitched value the six-hourly run issued "
+                "`lead_hours` earlier produced for T."
+            ),
+            "endpoint": "previous-runs-api.open-meteo.com",
+            "endpoint_citation": _PREVIOUS_RUNS_ENDPOINT_CITATION,
+            "fetch_function": "open_meteo_forecast_provider.fetch_previous_runs",
+            "fetch_function_citation": _PREVIOUS_RUNS_FETCH_CITATION,
+        },
+        "single_runs_archive": {
+            "description": (
+                "Open-Meteo's Single-Runs API -- a backward-looking archive "
+                "reconstructing one exact, named model run (`run=<timestamp>`) "
+                "at its own native forecast leads."
+            ),
+            "endpoint": "single-runs-api.open-meteo.com",
+            "endpoint_citation": _SINGLE_RUNS_ENDPOINT_CITATION,
+            "fetch_function": "open_meteo_forecast_provider.fetch_single_run",
+            "fetch_function_citation": _SINGLE_RUNS_FETCH_CITATION,
+        },
+    }
+
+    compared_quantity = (
+        "wind_speed -- the variable measure_previous_runs_alignment requests "
+        "from both endpoints (matching the legacy 1-hour gate's own "
+        "convention), compared within a 0.1 m/s tolerance "
+        "(_MATCH_TOLERANCE_MS) to absorb independent-rounding noise between "
+        "the two endpoints' own JSON serialization, not to relax the rule."
+    )
+
+    success_condition = (
+        "assert_exact_offset_lead requires BOTH: (1) every offset in the "
+        "stitched band [lead_hours, lead_hours + modulus - 1] shows a "
+        "match rate >= 0.9 (_MATCH_RATE_FLOOR) between the two archives' "
+        "values, and (2) the per-row lead sample, restricted to the "
+        "exact-lead hour filter, is uniformly exactly lead_hours (min and "
+        "max both equal lead_hours, no percentile softening). Both "
+        "conditions are computed purely from comparing the two archived "
+        "series against each other -- neither reads, nor could read, any "
+        "real-time dissemination signal."
+    )
+
+    supported_claim = (
+        "The gate proves a value-matching relationship between two "
+        "retrospective archival products: the Previous-Runs archive's value "
+        "at valid time T equals, within rounding tolerance, the Single-Runs "
+        "archive's value from the run issued exactly lead_hours earlier -- "
+        "i.e. that the Previous-Runs product's construction genuinely "
+        "corresponds to a run labeled T-minus-lead_hours, not some other run."
+    )
+    unsupported_claim = (
+        "The gate does NOT prove that a real forecast consumer could have "
+        "received this exact value over the network at the actual wall-clock "
+        "moment T - lead_hours. Both endpoints the gate queries are "
+        "backward-looking archives -- neither is a live dissemination feed a "
+        "consumer could have polled in real time -- so no comparison between "
+        "two archives, however well they agree, can evidence that the value "
+        "was ever actually available for consumption at that clock moment; "
+        "it evidences only that the value is the one later archived under "
+        "that lead label."
+    )
+
+    reachable_fetch_functions = [
+        f"open_meteo_forecast_provider.fetch_previous_runs "
+        f"({_PREVIOUS_RUNS_FETCH_CITATION}, {compared_products['previous_runs_archive']['endpoint']}"
+        f" -- backward-looking archive, confirmed by its own request function"
+        f" and this module's docstring)",
+        f"open_meteo_forecast_provider.fetch_single_run "
+        f"({_SINGLE_RUNS_FETCH_CITATION}, {compared_products['single_runs_archive']['endpoint']}"
+        f" -- backward-looking archive, confirmed by its own request function"
+        f" and this module's docstring)",
+    ]
+
+    differs_from_recorded_limitation = (
+        "The frozen record's Limitations section "
+        f"({_RECORDED_LIMITATION_CITATION}) already discloses a COVERAGE "
+        "limitation: the Single-Runs archive for gfs_seamless only reaches "
+        "back to roughly mid-2026, so the stitching cross-check can only be "
+        "RUN over a handful of recent dates, and its applicability to the "
+        "bulk of the experiment's 2024-2025 window rests on the stitching "
+        "mechanism being general rather than on a direct historical "
+        "cross-check. That is a claim about HOW MUCH of the window the "
+        "cross-check can reach. This finding is a distinct CLAIM-TYPE "
+        "limitation: even over the dates the cross-check DOES reach, the "
+        "thing it proves is a value-match between two archives, and no "
+        "archive-to-archive comparison -- however completely it covers the "
+        "window -- can ever evidence real-time dissemination to a consumer. "
+        "A reader who conflates the two would wrongly conclude that a wider "
+        "cross-check (deeper archive reach) would close this gap; it would "
+        "not, because the gap is in what KIND of claim two archives can "
+        "jointly support, not in how much of the calendar they cover."
+    )
+
+    citations = {
+        "measurement_function": _CALIBRATION_MEASUREMENT_FN_CITATION,
+        "gate_function": _CALIBRATION_GATE_FN_CITATION,
+        "previous_runs_fetch": _PREVIOUS_RUNS_FETCH_CITATION,
+        "single_runs_fetch": _SINGLE_RUNS_FETCH_CITATION,
+        "previous_runs_endpoint": _PREVIOUS_RUNS_ENDPOINT_CITATION,
+        "single_runs_endpoint": _SINGLE_RUNS_ENDPOINT_CITATION,
+        "compared_quantity": _COMPARED_QUANTITY_CITATION,
+        "success_condition": _SUCCESS_CONDITION_CITATION,
+        "recorded_limitation": _RECORDED_LIMITATION_CITATION,
+    }
+
+    return {
+        "finding_id": "D-01-decision-time-availability",
+        "compared_products": compared_products,
+        "compared_quantity": compared_quantity,
+        "compared_quantity_citation": _COMPARED_QUANTITY_CITATION,
+        "success_condition": success_condition,
+        "success_condition_citation": _SUCCESS_CONDITION_CITATION,
+        "supported_claim": supported_claim,
+        "unsupported_claim": unsupported_claim,
+        "differs_from_recorded_limitation": differs_from_recorded_limitation,
+        "reachable_fetch_functions": reachable_fetch_functions,
+        "citations": citations,
+        "severity": "critical",
+    }
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# `frame_time_reference_groups` -- D-01 bullet 3, first half. Classification
+# rules are derived directly from `anchored_pair_frame`'s and
+# `corridor_anchored_pair_frame`'s own rename maps
+# (backend/forecast_experiment.py:611-651, :819-866), never from a guess
+# about naming conventions.
+# ──────────────────────────────────────────────────────────────────────────
+
+# The group labels this classification returns, in the order the plan's
+# <action> lists them (index/diagnostic last, mirroring how a reader would
+# scan the schema: data columns first, bookkeeping last). Every real column
+# in either assembled frame shape must land in exactly one of these seven
+# lists, or in `unclassified`.
+_TIME_REFERENCE_GROUP_LABELS: tuple = (
+    "observed_at_valid_time",
+    "observed_at_decision_time",
+    "forecast_valid_at_valid_time",
+    "forecast_valid_at_decision_time",
+    "corridor_reduced_predictions",
+    "bottleneck_selection_diagnostics",
+    "index_and_diagnostic_columns",
+)
+
+
+def _classify_time_reference_column(col: str):
+    """
+    Return `(group_label, instant)` for one column name, or `(None, None)`
+    if the column is not recognized. `instant` is `"valid_time"`,
+    `"decision_time"`, or `None` (for a column with no clock-instant
+    reference at all, e.g. a diagnostic flag or a bottleneck-selection
+    index).
+
+    Checked in an order that matters: `fcst_anchor_*` must be checked
+    before the plain `fcst_*` prefix (every `fcst_anchor_*` column also
+    starts with `fcst_`), and the three named index columns
+    (`datetime_utc`, `anchor_datetime_utc`, `fcst_anchor_datetime_utc`) are
+    checked as EXACT matches before any prefix rule, so they are never
+    absorbed into `anchor_*`/`forecast_valid_at_decision_time` by accident.
+    A column containing a recognized prefix as a SUBSTRING but not as its
+    actual PREFIX (e.g. a hypothetical `midwindow_truth_wind_speed_t_minus_12h`)
+    is deliberately NOT classified -- `startswith`, never `in`, is what makes
+    this an assertion about the schema's own naming convention rather than a
+    fuzzy match that could silently absorb an unrelated future column.
+    """
+    if col == "datetime_utc":
+        return "index_and_diagnostic_columns", "valid_time"
+    if col in ("anchor_datetime_utc", "fcst_anchor_datetime_utc"):
+        return "index_and_diagnostic_columns", "decision_time"
+    if col in (
+        "hour_mod_remainder", "nwp_wind_delta_clamped_a", "nwp_wind_delta_clamped_b",
+    ):
+        return "index_and_diagnostic_columns", None
+    if col.startswith("bottleneck_index_"):
+        return "bottleneck_selection_diagnostics", None
+    if col.startswith("fcst_anchor_"):
+        return "forecast_valid_at_decision_time", "decision_time"
+    if col.startswith("fcst_"):
+        return "forecast_valid_at_valid_time", "valid_time"
+    if col.startswith("anchor_"):
+        return "observed_at_decision_time", "decision_time"
+    if col.startswith("truth_"):
+        return "observed_at_valid_time", "valid_time"
+    if col.startswith("pred_"):
+        return "corridor_reduced_predictions", "valid_time"
+    return None, None
+
+
+def frame_time_reference_groups(frame: pd.DataFrame) -> dict:
+    """
+    Classify every column of `frame` into exactly one time-reference group,
+    proven exhaustive by assertion rather than claimed: any column this
+    function does not recognize lands in `unclassified` instead of being
+    silently absorbed into a group, so a future schema change (a new column
+    referencing an instant strictly between decision time and valid time,
+    for instance) surfaces as a non-empty `unclassified` list rather than
+    passing invisibly.
+
+    Works on both assembled frame shapes -- the per-city `anchored_pair_frame`
+    (which carries `fcst_*`/`fcst_anchor_*` groups) and the corridor-level
+    `corridor_anchored_pair_frame` (which does not, but carries
+    `pred_<arm>`/`bottleneck_index_<arm>` groups instead) -- since
+    `_classify_time_reference_column` recognizes both frames' column sets
+    from the same prefix rules.
+
+    Returns a mapping from each of `_TIME_REFERENCE_GROUP_LABELS` to the
+    list of this frame's columns carrying that label, plus `unclassified`
+    (columns recognized by none of the rules) and
+    `distinct_clock_instants_per_row` -- the count of distinct clock
+    instants (`"valid_time"`, `"decision_time"`) referenced by ANY column in
+    the frame, which is 2 for both real assembled frame shapes: no column in
+    either schema, today, references an instant strictly between decision
+    time and valid time.
+    """
+    groups = {label: [] for label in _TIME_REFERENCE_GROUP_LABELS}
+    unclassified = []
+    instants_seen = set()
+
+    for col in frame.columns:
+        label, instant = _classify_time_reference_column(col)
+        if label is None:
+            unclassified.append(col)
+            continue
+        groups[label].append(col)
+        if instant is not None:
+            instants_seen.add(instant)
+
+    groups["unclassified"] = unclassified
+    groups["distinct_clock_instants_per_row"] = len(instants_seen)
+    return groups

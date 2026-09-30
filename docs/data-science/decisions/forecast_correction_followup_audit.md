@@ -77,7 +77,9 @@ them:**
 
 ## Data provenance re-audit (D-01)
 
-**Finding 1 — the entire "truth" side of Phase 3's experiment is a physics-model output, not a
+### Finding 1 — truth-side provenance
+
+**Verdict: the entire "truth" side of Phase 3's experiment is a physics-model output, not a
 sensor measurement, and the frozen record never states this.** `open_meteo_provider.py`'s module
 docstring (`backend/open_meteo_provider.py:1-32`, read directly this session) states plainly that
 this provider fetches from Open-Meteo's Archive API, chosen specifically because it "reaches back to
@@ -113,7 +115,9 @@ ampere in the frozen record's Verdict section is an agreement between two model 
 unaware of this fact would read the reported margins as field-validated accuracy rather than
 self-consistency between two physics simulations run on two different weather inputs.
 
-**Finding 2 — the frozen record's stated split boundary is reproducible only because it was pinned;
+### Finding 2 — split-boundary reproducibility
+
+**Verdict: the frozen record's stated split boundary is reproducible only because it was pinned;
 recomputing it today would silently move it.** The frozen record states its held-out test split
 begins `2026-03-17` (`forecast_correction_experiment.md:205`, `:231`). `forecast_experiment.py`'s own
 boundary rule, `_default_split_boundaries` (`backend/forecast_experiment.py:1448-1462`), computes
@@ -146,7 +150,9 @@ boundary-adjacent rows per corridor rather than trusting the sub-day recomputati
 explicitly does not pin on. This costs nothing scientifically (2 rows out of 784) and keeps the
 frozen-window guard's coarser, safer boundary authoritative.
 
-**Finding 3 — the null-row drop is a one-time window-start boundary effect, not a scattered internal
+### Finding 3 — null-row drop (04-RESEARCH.md Open Question 1)
+
+**Verdict: the null-row drop is a one-time window-start boundary effect, not a scattered internal
 gap, and it does not threaten arm 5's positional lag assumption (closes 04-RESEARCH.md Open
 Question 1).** `anchored_pair_frame`'s `dropna()` (`backend/forecast_experiment.py:658`) drops
 exactly 24 rows for every one of the four project cities over the pinned frozen window — measured via
@@ -172,6 +178,95 @@ the earliest training rows, not adjacent to any split boundary that would misali
 same missing-timestamp scan finding zero additional gaps anywhere in the remaining ~23,592-row series.
 Plan 04-02's own lag-offset audit (04-CONTEXT.md D-01's fifth bullet) can therefore treat the interior
 hourly cadence as gap-free rather than as an open empirical question.
+
+### Finding 4 — decision-time availability (D-01 bullet 2)
+
+**Verdict: the lead-time calibration gate proves a value-match between two archives, not that
+any consumer could have received the forecast over the network at the claimed decision time
+(closes D-01 bullet 2).** `forecast_leadtime_calibration.measure_previous_runs_alignment`
+(`backend/forecast_leadtime_calibration.py:390`) fetches exactly two products, both read directly
+this session, not assumed from either the module's own docstring or `04-RESEARCH.md`'s prior read:
+the Previous-Runs archive's `previous_day1` series, via
+`open_meteo_forecast_provider.fetch_previous_runs` (`backend/open_meteo_forecast_provider.py:513`,
+endpoint `previous-runs-api.open-meteo.com`, `backend/open_meteo_forecast_provider.py:80`), and the
+Single-Runs archive's one exact named run, via `open_meteo_forecast_provider.fetch_single_run`
+(`backend/open_meteo_forecast_provider.py:374`, endpoint `single-runs-api.open-meteo.com`,
+`backend/open_meteo_forecast_provider.py:79`). Both are confirmed, by reading their own request
+functions and this module's own docstring (`backend/open_meteo_forecast_provider.py:1-58`), to be
+backward-looking archives — neither endpoint is, or could be, a live dissemination feed a real
+forecast consumer could have polled at a wall-clock moment. The compared quantity is `wind_speed`
+(`backend/forecast_leadtime_calibration.py:412`, matching the legacy gate's own convention),
+compared within a 0.1 m/s tolerance to absorb independent-rounding noise between the two endpoints'
+own JSON serialization. The gate's success condition
+(`assert_exact_offset_lead`, `backend/forecast_leadtime_calibration.py:515`) requires every
+offset in the stitched band to show a match rate at or above 90%, and requires the per-row lead
+sample to be uniformly exactly the claimed lead with no percentile softening
+(`backend/forecast_leadtime_calibration.py:552-615`) — both conditions computed purely from
+comparing the two archived series against each other.
+
+**Verdict: the gate supports "this archived value corresponds, by construction, to a run issued
+exactly `lead_hours` earlier" — it does not, and structurally cannot, support "this value was
+available for consumption at the real clock moment `T - lead_hours`."** No archive-to-archive
+comparison can ever evidence real-time dissemination, regardless of how well the two archives agree,
+because neither side of the comparison is a record of what was actually served over a network at a
+given wall-clock instant — both sides are retrospective reconstructions. This is a structural
+argument, not a rhetorical one: `decision_time_availability_finding()`'s
+`reachable_fetch_functions` field enumerates the exact two fetch functions reachable from the gate's
+measurement path, both flagged as backward-looking archives, so the claim is checkable by re-running
+the enumeration rather than by trusting this paragraph.
+
+This is a DIFFERENT limitation from the one the frozen record's Limitations section already
+discloses (`docs/data-science/decisions/forecast_correction_experiment.md:392-401`, "the stitching
+verification's reach is bounded, and the gap is not directly closed"). That existing disclosure is a
+**coverage** limitation: the Single-Runs archive for `gfs_seamless` only reaches back to roughly
+mid-2026, so the cross-check can only be *run* over a handful of recent dates, and its applicability
+to 2024–2025 rests on the stitching mechanism being general rather than on a direct historical
+cross-check. This finding is a **claim-type** limitation: even over the dates the cross-check *does*
+reach, the thing it proves is a value-match between two archives, and a deeper archive (more
+coverage) would not close this gap, because the gap is in what *kind* of claim two archives can
+jointly support, not in how much of the calendar they cover. A reader who conflates the two would
+wrongly conclude that resolving the coverage limitation (a deeper Single-Runs archive) would also
+resolve this one; it would not.
+
+### Finding 5 — exhaustive time-reference partition (D-01 bullet 3, first half)
+
+**Verdict: every column of both assembled frame shapes is classified into exactly one time
+reference, exhaustively and breakably, and no column references an instant strictly between
+decision time and valid time (D-01 bullet 3, first half).** `frame_time_reference_groups`
+(`backend/forecast_experiment_audit.py`) derives its classification rules directly from
+`anchored_pair_frame`'s rename maps (`backend/forecast_experiment.py:611-651`) and
+`corridor_anchored_pair_frame`'s own column construction (`backend/forecast_experiment.py:815-866`)
+— never from a guess about naming conventions — and classifies by exact `startswith` prefix match,
+never substring containment, so an unrecognized column (tested with a deliberately
+truth-substring-but-not-truth-prefix column,
+`midwindow_truth_wind_speed_t_minus_12h`) lands in `unclassified` rather than being silently
+absorbed into a group.
+
+| Label | Clock instant | Per-city frame columns | Corridor frame columns |
+|---|---|---|---|
+| `observed_at_valid_time` | valid time (T) | `truth_air_temp`, `truth_wind_speed`, `truth_wind_direction`, `truth_solar_radiation`, `truth_relative_humidity`, `truth_dlr_amps` | `truth_dlr_amps`, `truth_air_temp`, `truth_wind_speed`, `truth_wind_direction`, `truth_solar_radiation` |
+| `observed_at_decision_time` | decision time (T − lead) | `anchor_air_temp`, `anchor_wind_speed`, `anchor_wind_direction`, `anchor_solar_radiation`, `anchor_relative_humidity`, `anchor_dlr_amps` | `anchor_dlr_amps`, `anchor_air_temp`, `anchor_wind_speed`, `anchor_wind_direction`, `anchor_solar_radiation` |
+| `forecast_valid_at_valid_time` | valid time (T) | `fcst_air_temp`, `fcst_wind_speed`, `fcst_wind_direction`, `fcst_solar_radiation`, `fcst_relative_humidity` | *(none — corridor frame carries no `fcst_*` group)* |
+| `forecast_valid_at_decision_time` | decision time (T − lead) | `fcst_anchor_air_temp`, `fcst_anchor_wind_speed`, `fcst_anchor_wind_direction`, `fcst_anchor_solar_radiation`, `fcst_anchor_relative_humidity` | *(none — corridor frame carries no `fcst_anchor_*` group)* |
+| `corridor_reduced_predictions` | valid time (T) | *(none — per-city frame has no `pred_*` group)* | `pred_<arm_name>` for every `NON_FITTED_ARMS` entry |
+| `bottleneck_selection_diagnostics` | none | *(none)* | `bottleneck_index_truth`, `bottleneck_index_anchor`, `bottleneck_index_<arm_name>` |
+| `index_and_diagnostic_columns` | mixed (`datetime_utc`→valid time; `anchor_datetime_utc`/`fcst_anchor_datetime_utc`→decision time; `hour_mod_remainder`/`nwp_wind_delta_clamped_a`/`_b`→none) | `datetime_utc`, `anchor_datetime_utc`, `fcst_anchor_datetime_utc`, `hour_mod_remainder` | `datetime_utc`, `anchor_datetime_utc`, `hour_mod_remainder`, `nwp_wind_delta_clamped_a`, `nwp_wind_delta_clamped_b` |
+
+Both frame shapes report `distinct_clock_instants_per_row == 2` (valid time and decision time
+only) — verified on a real-shaped per-city frame (26 columns from `anchored_pair_frame`'s
+documented schema) and a real-shaped corridor frame (17 columns from
+`corridor_anchored_pair_frame`'s documented schema), both with an empty `unclassified` list.
+**Conclusion: no column in either schema, today, references an instant strictly between decision
+time and valid time — the "feature available only partway through the decision-to-valid window"
+leak class D-01 bullet 3 asks about is not expressible in this frame at all.** This makes the
+existing leakage probe's blindness to a mid-window leak a property of the schema (there is no
+mid-window column for it to fail to catch), not a gap in the probe itself. The corollary, stated
+explicitly so a future reader does not over-read this as a permanent guarantee: this argument is
+only as durable as the schema — a future column that shifts a value by some offset strictly between
+0 and `lead_hours` (rather than by exactly 0 or exactly `lead_hours`, the only two shifts either
+assembly function currently performs) would reopen this question, and `frame_time_reference_groups`
+would report that column as `unclassified` rather than silently mis-filing it, which is what makes
+this assertion re-checkable rather than a one-time snapshot.
 
 ## Strengthened comparison (D-02)
 

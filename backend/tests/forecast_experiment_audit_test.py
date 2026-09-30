@@ -337,3 +337,150 @@ def test_build_basis_manifest_roundtrips_with_documented_keys(tmp_path, monkeypa
     for city_entry in entry["cities"].values():
         for key in ("assembled_rows", "dropped_rows", "method", "hourly_span_expectation"):
             assert key in city_entry, sorted(city_entry)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 04-02 Task 1: decision_time_availability_finding (D-01 bullet 2) and
+# frame_time_reference_groups (D-01 bullet 3, first half). Both network-free.
+# ──────────────────────────────────────────────────────────────────────────
+
+def test_decision_time_availability_finding_has_required_fields():
+    f = fea.decision_time_availability_finding()
+    for key in (
+        "compared_products", "compared_quantity", "success_condition",
+        "supported_claim", "unsupported_claim", "differs_from_recorded_limitation",
+        "reachable_fetch_functions", "citations",
+    ):
+        assert key in f, sorted(f)
+    assert len(f["compared_products"]) == 2
+    for product in f["compared_products"].values():
+        assert "endpoint" in product and product["endpoint"]
+    assert len(f["reachable_fetch_functions"]) >= 2
+
+
+def test_decision_time_availability_finding_supported_and_unsupported_claims_distinct():
+    f = fea.decision_time_availability_finding()
+    for key in ("supported_claim", "unsupported_claim", "differs_from_recorded_limitation"):
+        assert isinstance(f[key], str) and f[key].strip(), (key, f.get(key))
+    assert f["supported_claim"].strip() != f["unsupported_claim"].strip()
+
+
+def test_decision_time_availability_finding_citations_parse_and_cover_calibration_module():
+    import re
+    f = fea.decision_time_availability_finding()
+    blob = repr(f)
+    cites = re.findall(r"[A-Za-z_./-]+\.(?:py|md):\d+", blob)
+    assert len(cites) >= 4, f"only {len(cites)} citation(s): {cites}"
+    assert any("forecast_leadtime_calibration.py" in c for c in cites), cites
+    sources = f.get("reachable_fetch_functions") or f.get("fetch_functions")
+    assert sources and len(sources) >= 2, sources
+
+
+def test_decision_time_availability_finding_distinguishes_from_recorded_limitation():
+    f = fea.decision_time_availability_finding()
+    limitation = f["differs_from_recorded_limitation"].lower()
+    # The distinction must actually be argued, not merely asserted: it must
+    # name both the existing coverage limitation and the new claim-type one.
+    assert "coverage" in limitation or "reach" in limitation
+    assert "claim-type" in limitation or "claim type" in limitation
+
+
+_PER_CITY_FRAME_COLUMNS = [
+    "datetime_utc", "anchor_datetime_utc", "fcst_anchor_datetime_utc", "hour_mod_remainder",
+    "truth_air_temp", "truth_wind_speed", "truth_wind_direction", "truth_solar_radiation",
+    "truth_relative_humidity", "truth_dlr_amps",
+    "anchor_air_temp", "anchor_wind_speed", "anchor_wind_direction", "anchor_solar_radiation",
+    "anchor_relative_humidity", "anchor_dlr_amps",
+    "fcst_air_temp", "fcst_wind_speed", "fcst_wind_direction", "fcst_solar_radiation", "fcst_relative_humidity",
+    "fcst_anchor_air_temp", "fcst_anchor_wind_speed", "fcst_anchor_wind_direction",
+    "fcst_anchor_solar_radiation", "fcst_anchor_relative_humidity",
+]
+
+
+def _synthetic_per_city_frame():
+    frame = pd.DataFrame({c: [0.0] for c in _PER_CITY_FRAME_COLUMNS})
+    frame["datetime_utc"] = pd.to_datetime(["2025-06-01T00:00:00Z"])
+    frame["anchor_datetime_utc"] = pd.to_datetime(["2025-05-31T00:00:00Z"])
+    frame["fcst_anchor_datetime_utc"] = pd.to_datetime(["2025-05-31T00:00:00Z"])
+    return frame
+
+
+def _synthetic_corridor_frame():
+    return pd.DataFrame({
+        "datetime_utc": pd.to_datetime(["2025-06-01T00:00:00Z"]),
+        "anchor_datetime_utc": pd.to_datetime(["2025-05-31T00:00:00Z"]),
+        "hour_mod_remainder": [0],
+        "truth_dlr_amps": [1000.0],
+        "bottleneck_index_truth": [0],
+        "truth_air_temp": [25.0], "truth_wind_speed": [3.0],
+        "truth_wind_direction": [180.0], "truth_solar_radiation": [500.0],
+        "anchor_dlr_amps": [980.0],
+        "bottleneck_index_anchor": [1],
+        "anchor_air_temp": [24.0], "anchor_wind_speed": [2.5],
+        "anchor_wind_direction": [170.0], "anchor_solar_radiation": [480.0],
+        "nwp_wind_delta_clamped_a": [False], "nwp_wind_delta_clamped_b": [True],
+        "pred_persistence_24h": [990.0], "bottleneck_index_persistence_24h": [0],
+        "pred_oracle_observed_future_wind": [1005.0],
+        "bottleneck_index_oracle_observed_future_wind": [1],
+    })
+
+
+def test_frame_time_reference_groups_per_city_frame_fully_classified():
+    frame = _synthetic_per_city_frame()
+    groups = fea.frame_time_reference_groups(frame)
+    assert groups["unclassified"] == [], groups["unclassified"]
+    assert groups["distinct_clock_instants_per_row"] == 2, groups["distinct_clock_instants_per_row"]
+    assert set(groups["observed_at_valid_time"]) == {
+        "truth_air_temp", "truth_wind_speed", "truth_wind_direction",
+        "truth_solar_radiation", "truth_relative_humidity", "truth_dlr_amps",
+    }
+    assert set(groups["observed_at_decision_time"]) == {
+        "anchor_air_temp", "anchor_wind_speed", "anchor_wind_direction",
+        "anchor_solar_radiation", "anchor_relative_humidity", "anchor_dlr_amps",
+    }
+    assert set(groups["forecast_valid_at_valid_time"]) == {
+        "fcst_air_temp", "fcst_wind_speed", "fcst_wind_direction",
+        "fcst_solar_radiation", "fcst_relative_humidity",
+    }
+    assert set(groups["forecast_valid_at_decision_time"]) == {
+        "fcst_anchor_air_temp", "fcst_anchor_wind_speed", "fcst_anchor_wind_direction",
+        "fcst_anchor_solar_radiation", "fcst_anchor_relative_humidity",
+    }
+    assert groups["corridor_reduced_predictions"] == []
+    assert groups["bottleneck_selection_diagnostics"] == []
+    assert set(groups["index_and_diagnostic_columns"]) == {
+        "datetime_utc", "anchor_datetime_utc", "fcst_anchor_datetime_utc", "hour_mod_remainder",
+    }
+
+
+def test_frame_time_reference_groups_unrecognized_column_is_unclassified_not_absorbed():
+    frame = _synthetic_per_city_frame()
+    frame["midwindow_truth_wind_speed_t_minus_12h"] = 0.0
+    groups = fea.frame_time_reference_groups(frame)
+    assert "midwindow_truth_wind_speed_t_minus_12h" in groups["unclassified"], groups["unclassified"]
+    # It must NOT have been absorbed into observed_at_valid_time just
+    # because "truth_" appears as a substring rather than a real prefix.
+    assert "midwindow_truth_wind_speed_t_minus_12h" not in groups["observed_at_valid_time"]
+
+
+def test_frame_time_reference_groups_corridor_frame_fully_classified_and_differs():
+    frame = _synthetic_corridor_frame()
+    groups = fea.frame_time_reference_groups(frame)
+    assert groups["unclassified"] == [], groups["unclassified"]
+    assert groups["distinct_clock_instants_per_row"] == 2, groups["distinct_clock_instants_per_row"]
+    # The corridor frame carries corridor-reduced predictions and
+    # bottleneck-selection diagnostics the per-city frame does not, and
+    # carries NO forecast_valid_at_* groups (no fcst_*/fcst_anchor_* columns
+    # in the corridor-level frame at all) -- the documented difference from
+    # the per-city frame's own classification.
+    assert set(groups["corridor_reduced_predictions"]) == {
+        "pred_persistence_24h", "pred_oracle_observed_future_wind",
+    }
+    assert set(groups["bottleneck_selection_diagnostics"]) == {
+        "bottleneck_index_truth", "bottleneck_index_anchor",
+        "bottleneck_index_persistence_24h", "bottleneck_index_oracle_observed_future_wind",
+    }
+    assert groups["forecast_valid_at_valid_time"] == []
+    assert groups["forecast_valid_at_decision_time"] == []
+    assert "nwp_wind_delta_clamped_a" in groups["index_and_diagnostic_columns"]
+    assert "nwp_wind_delta_clamped_b" in groups["index_and_diagnostic_columns"]
