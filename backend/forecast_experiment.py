@@ -312,6 +312,174 @@ def _city_ampacity(air_temp, wind_speed, wind_direction, solar_radiation, geomet
     )
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# D-02's four non-fitted arms (Plan 03-04): persistence, the NWP-wind-delta
+# baseline, the raw forecast, and the oracle diagnostic. Mirrors
+# `forecast_training.CANDIDATE_ESTIMATORS`'s convention -- a zero-argument
+# ... except here each entry is a ONE-argument factory taking the corridor
+# geometry (not zero-argument, since every arm needs a `ConductorConfig`/
+# bearing to turn weather into amps via `_city_ampacity`) and returning a
+# callable of the scored frame. Nothing is bound to a geometry at import
+# time; a caller resolves the geometry for its own corridor/city first
+# (`corridor_discretization.corridor_geometry`), then builds each arm's
+# callable from it. Order below is significant ONLY for report readability
+# (the order candidates print in) -- it has no effect on scoring. The
+# oracle's membership in this mapping does NOT make it a candidate: Task 2's
+# report assembly is what keeps it out of `report["candidates"]`, by
+# reading `NON_FITTED_ARMS` but excluding `ORACLE_ARM_NAME` before scoring
+# the candidate set.
+# ──────────────────────────────────────────────────────────────────────────
+
+# A rename of this string cannot desynchronize the oracle's isolation logic
+# from the arm it isolates -- every place that needs to single out the
+# oracle (Task 2's report assembly, every test) refers to this constant,
+# never a literal string.
+ORACLE_ARM_NAME: str = "oracle_observed_future_wind"
+
+
+def _make_persistence_24h_arm(geometry):
+    """
+    Arm 0 (D-02 approach 0, promoted to PRIMARY by D-04): the frame's
+    `anchor_dlr_amps` column directly -- the truth ampacity computed at
+    `T - lead_hours` from the FULL unfiltered series (`anchored_pair_
+    frame`'s anchor group), never re-derived here. This arm is deliberately
+    NOT routed through the production forecasting module's naive
+    point-forecast/backtest-walk-forward helpers: that code path's naive
+    branch returns the immediately preceding ROW, which is one hour at this
+    project's hourly cadence, so a twenty-four-hour claim routed through it
+    would silently score a one-hour-old baseline under a twenty-four-hour
+    label (03-RESEARCH.md Anti-Patterns). RESEARCH.md Pattern 4's
+    expectation-setting: at exactly 24 hours, persistence is diurnally
+    self-aligned to the SAME approximate solar angle and diurnal wind
+    regime as the valid time, making this the day-ago-same-hour baseline
+    time-series literature treats as genuinely hard to beat -- not the weak
+    baseline a "longer horizon is easier to beat" intuition predicts.
+    """
+
+    def arm(frame: pd.DataFrame) -> np.ndarray:
+        return frame["anchor_dlr_amps"].to_numpy(dtype=float)
+
+    return arm
+
+
+def _nwp_wind_delta_raw_wind_speed(frame: pd.DataFrame) -> np.ndarray:
+    """
+    Arm 1's wind speed BEFORE the physical zero-floor clamp: the observed
+    wind at the anchor time plus the forecast's own change between the
+    anchor time and the valid time. Factored out of the arm callable so
+    `nwp_wind_delta_clamp_count` can recompute the identical unclamped value
+    without duplicating the arithmetic.
+    """
+    return (
+        frame["anchor_wind_speed"].to_numpy(dtype=float)
+        + (
+            frame["fcst_wind_speed"].to_numpy(dtype=float)
+            - frame["fcst_anchor_wind_speed"].to_numpy(dtype=float)
+        )
+    )
+
+
+def nwp_wind_delta_clamp_count(frame: pd.DataFrame) -> int:
+    """
+    Count of rows where arm 1's raw (pre-clamp) wind speed was negative and
+    was brought to the schema's physical zero lower bound. This clamp is a
+    physical bound, not an imputation -- no value is invented, a physically
+    impossible one is brought to its bound -- but its hit rate is reported
+    on every output surface so the adjustment is visible rather than
+    silent (Task 2's `corridor_experiment_report` extension).
+    """
+    raw = _nwp_wind_delta_raw_wind_speed(frame)
+    return int(np.sum(raw < 0.0))
+
+
+def _make_nwp_wind_delta_arm(geometry):
+    """
+    Arm 1 (D-02 approach 1): the observed wind at the anchor time, adjusted
+    by the forecast's own change over the lead --
+    `anchor_wind_speed + (fcst_wind_speed - fcst_anchor_wind_speed)` --
+    with every OTHER input (air temperature, solar radiation, wind
+    direction) held at its latest-observed anchor value, exactly what D-02
+    specifies by "other inputs held at latest-observed". A wind speed
+    cannot be negative (the schema's physical lower bound is zero), so the
+    result is floored at zero with `np.maximum` rather than dropping the
+    row -- a physical bound, not an imputation; see
+    `nwp_wind_delta_clamp_count` for the visible hit-rate accounting. When
+    the forecast's anchor and valid values coincide
+    (`fcst_wind_speed == fcst_anchor_wind_speed`), the wind term reduces to
+    `anchor_wind_speed` exactly and every other input is already the anchor
+    value, so this arm's prediction equals arm 0's (`persistence_24h`).
+    """
+
+    def arm(frame: pd.DataFrame) -> np.ndarray:
+        wind_speed = np.maximum(_nwp_wind_delta_raw_wind_speed(frame), 0.0)
+        return _city_ampacity(
+            frame["anchor_air_temp"], wind_speed, frame["anchor_wind_direction"],
+            frame["anchor_solar_radiation"], geometry,
+        )
+
+    return arm
+
+
+def _make_raw_forecast_arm(geometry):
+    """
+    Arm 2 (D-02 approach 2): `_city_ampacity` applied to the four forecast
+    weather columns (`fcst_air_temp`, `fcst_wind_speed`,
+    `fcst_wind_direction`, `fcst_solar_radiation`) unchanged -- no
+    correction of any kind. Structurally identical to the tracer's arm 2
+    from Plan 03-03, now sourced from this registry.
+    """
+
+    def arm(frame: pd.DataFrame) -> np.ndarray:
+        return _city_ampacity(
+            frame["fcst_air_temp"], frame["fcst_wind_speed"], frame["fcst_wind_direction"],
+            frame["fcst_solar_radiation"], geometry,
+        )
+
+    return arm
+
+
+def _make_oracle_arm(geometry):
+    """
+    This is NOT a forecast and can never be a candidate. Arm 6 (D-02
+    approach 6, the oracle diagnostic): `_city_ampacity` applied to the
+    TRUTH wind speed and direction together with the FORECAST air
+    temperature and solar radiation. This is deliberate: substituting truth
+    for every variable would make the oracle simply reproduce
+    `truth_dlr_amps` and measure nothing; substituting truth for the WIND
+    ONLY isolates precisely the headroom a perfect wind correction could
+    capture, which is the diagnostic D-02 asks for. It substitutes observed
+    future weather that no real forecast could have had, so it bounds the
+    maximum benefit any wind correction could ever achieve rather than
+    representing an achievable method -- Task 2's report assembly keeps it
+    under its own top-level report key, structurally outside
+    `report["candidates"]`, so no winner-selection step iterating
+    candidates can ever reach it.
+    """
+
+    def arm(frame: pd.DataFrame) -> np.ndarray:
+        return _city_ampacity(
+            frame["fcst_air_temp"], frame["truth_wind_speed"], frame["truth_wind_direction"],
+            frame["fcst_solar_radiation"], geometry,
+        )
+
+    return arm
+
+
+# The named arm registry: name -> factory(geometry) -> callable(frame) ->
+# np.ndarray. Mirrors `forecast_training.CANDIDATE_ESTIMATORS`'s
+# zero-argument-factory convention, generalized to one argument (the
+# corridor geometry) since every arm here needs a `ConductorConfig`/bearing
+# to turn weather into amps. Order is significant only for report
+# readability; the oracle's presence here does NOT make it a candidate --
+# see `ORACLE_ARM_NAME`'s docstring and Task 2's report assembly.
+NON_FITTED_ARMS: dict = {
+    "persistence_24h": _make_persistence_24h_arm,
+    "nwp_wind_delta": _make_nwp_wind_delta_arm,
+    "raw_forecast": _make_raw_forecast_arm,
+    ORACLE_ARM_NAME: _make_oracle_arm,
+}
+
+
 def anchored_pair_frame(city: str, start=None, end=None, *, lead_hours: int) -> pd.DataFrame:
     """
     Assemble the anchored pair frame for `city` over `[start, end]` at

@@ -629,6 +629,211 @@ def test_main_at_24h_lead_scores_validation_split_with_24h_caveat(monkeypatch, t
 
 
 # ──────────────────────────────────────────────────────────────────────────
+# Plan 03-04 Task 1: NON_FITTED_ARMS registry -- the four non-fitted arms
+# (persistence_24h, nwp_wind_delta, raw_forecast, the oracle), all built
+# directly from Plan 03-03's anchor/fcst_anchor column groups, NEVER via
+# ampacity_forecast.forecast_ampacity/backtest_residuals/_point_forecast.
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def _synthetic_24h_frame(monkeypatch, tmp_path, *, truth=None, fcst=None, periods=24 * 30):
+    """
+    Build a real `anchored_pair_frame` at the D-04 primary 24h lead from
+    synthetic (or caller-supplied) truth/forecast weather, filtered to the
+    exact-lead subset -- shared setup for every Task 1 arm test below.
+    """
+    monkeypatch.setattr(config, "FORECAST_EXPERIMENT_CACHE_DIR", str(tmp_path))
+    truth = truth if truth is not None else _synthetic_weather_frame(periods=periods)
+    fcst = fcst if fcst is not None else _synthetic_weather_frame(periods=periods)
+    _patch_fetches_24h(monkeypatch, truth, fcst)
+
+    frame = fe.anchored_pair_frame(CITY, "2025-10-01", "2025-10-30", lead_hours=PRIMARY_LEAD)
+    filtered = fe.filter_to_exact_lead(frame, lead_hours=PRIMARY_LEAD)
+    assert len(filtered) > 0
+    return truth, fcst, filtered
+
+
+def test_non_fitted_arms_registry_has_exactly_four_entries_all_factories():
+    assert len(fe.NON_FITTED_ARMS) == 4
+    assert fe.ORACLE_ARM_NAME in fe.NON_FITTED_ARMS
+    geometry = corridor_discretization.corridor_geometry(fe._corridor_for_city(CITY))
+    for name, factory in fe.NON_FITTED_ARMS.items():
+        arm = factory(geometry)
+        assert callable(arm), f"{name!r} is not a factory returning a callable"
+
+
+def test_persistence_24h_arm_equals_anchor_dlr_amps_column(monkeypatch, tmp_path):
+    truth, fcst, filtered = _synthetic_24h_frame(monkeypatch, tmp_path)
+    geometry = corridor_discretization.corridor_geometry(fe._corridor_for_city(CITY))
+    arm = fe._make_persistence_24h_arm(geometry)
+    pred = arm(filtered)
+    np.testing.assert_allclose(pred, filtered["anchor_dlr_amps"].to_numpy(dtype=float))
+
+
+def test_persistence_24h_arm_matches_independent_24h_shift_of_truth(monkeypatch, tmp_path):
+    """
+    Arm 0's prediction must equal an INDEPENDENTLY hand-computed 24-hour
+    shift of the synthetic truth ampacity series -- never merely internally
+    self-consistent with anchored_pair_frame's own anchor column.
+    """
+    truth, fcst, filtered = _synthetic_24h_frame(monkeypatch, tmp_path)
+    geometry = corridor_discretization.corridor_geometry(fe._corridor_for_city(CITY))
+    dlr_amps = fe._city_ampacity(
+        truth["air_temp"], truth["wind_speed"], truth["wind_direction"],
+        truth["solar_radiation"], geometry,
+    )
+    truth_series = pd.Series(
+        dlr_amps, index=pd.to_datetime(truth["datetime_utc"], utc=True)
+    ).sort_index()
+    shifted = truth_series.copy()
+    shifted.index = shifted.index + pd.Timedelta(hours=PRIMARY_LEAD)
+
+    arm = fe._make_persistence_24h_arm(geometry)
+    pred = pd.Series(
+        arm(filtered), index=pd.to_datetime(filtered["datetime_utc"], utc=True)
+    )
+    expected = shifted.reindex(pred.index)
+    assert not expected.isna().any()
+    np.testing.assert_allclose(pred.to_numpy(), expected.to_numpy(), rtol=1e-9, atol=1e-6)
+
+
+def test_nwp_wind_delta_arm_reduces_to_persistence_when_forecast_anchor_equals_valid(
+    monkeypatch, tmp_path
+):
+    """When fcst_wind_speed == fcst_anchor_wind_speed on every row (a forecast
+    with zero change over the lead), arm 1 must equal arm 0 exactly."""
+    truth = _synthetic_weather_frame(periods=24 * 30)
+    # A constant forecast series: fcst_wind_speed at T equals fcst_anchor_
+    # wind_speed at T (both come from the SAME constant series shifted).
+    fcst = truth.copy()
+    fcst["wind_speed"] = 4.0  # constant -> zero delta over any shift
+    truth_frame, fcst_frame, filtered = _synthetic_24h_frame(
+        monkeypatch, tmp_path, truth=truth, fcst=fcst,
+    )
+    geometry = corridor_discretization.corridor_geometry(fe._corridor_for_city(CITY))
+
+    arm0 = fe._make_persistence_24h_arm(geometry)
+    arm1 = fe._make_nwp_wind_delta_arm(geometry)
+    np.testing.assert_allclose(arm1(filtered), arm0(filtered), rtol=1e-9, atol=1e-6)
+
+
+def test_nwp_wind_delta_arm_clamps_negative_wind_at_the_physical_zero_bound(
+    monkeypatch, tmp_path
+):
+    truth = _synthetic_weather_frame(periods=24 * 30)
+    fcst = _synthetic_weather_frame(periods=24 * 30)
+    # A steadily DECREASING forecast wind series (slope -1/hour) means the
+    # forecast's own value at valid time T is always exactly 24 units LOWER
+    # than its own value at T - 24h (fcst_anchor_wind_speed) -- a uniform
+    # delta of -24, far below the synthetic truth-derived anchor_wind_speed
+    # (~3-7 m/s), so anchor_wind_speed + delta is negative on every row.
+    t = np.arange(len(fcst), dtype=float)
+    fcst["wind_speed"] = 1000.0 - t
+
+    truth_frame, fcst_frame, filtered = _synthetic_24h_frame(
+        monkeypatch, tmp_path, truth=truth, fcst=fcst,
+    )
+
+    geometry = corridor_discretization.corridor_geometry(fe._corridor_for_city(CITY))
+    raw = fe._nwp_wind_delta_raw_wind_speed(filtered)
+    assert (raw < 0.0).any(), "test setup did not actually produce a negative raw wind speed"
+
+    clamp_count = fe.nwp_wind_delta_clamp_count(filtered)
+    assert clamp_count == int(np.sum(raw < 0.0))
+    assert clamp_count > 0
+
+    arm1 = fe._make_nwp_wind_delta_arm(geometry)
+    pred = arm1(filtered)
+    assert np.isfinite(pred).all()
+    # The clamped wind speed used inside _city_ampacity was floored at
+    # zero -- verified by re-deriving the same prediction from the
+    # explicitly-clamped wind array.
+    expected = fe._city_ampacity(
+        filtered["anchor_air_temp"], np.maximum(raw, 0.0), filtered["anchor_wind_direction"],
+        filtered["anchor_solar_radiation"], geometry,
+    )
+    np.testing.assert_allclose(pred, expected)
+
+
+def test_raw_forecast_arm_equals_city_ampacity_on_forecast_columns(monkeypatch, tmp_path):
+    truth, fcst, filtered = _synthetic_24h_frame(monkeypatch, tmp_path)
+    geometry = corridor_discretization.corridor_geometry(fe._corridor_for_city(CITY))
+    arm = fe._make_raw_forecast_arm(geometry)
+    expected = fe._city_ampacity(
+        filtered["fcst_air_temp"], filtered["fcst_wind_speed"], filtered["fcst_wind_direction"],
+        filtered["fcst_solar_radiation"], geometry,
+    )
+    np.testing.assert_allclose(arm(filtered), expected)
+
+
+def test_oracle_arm_uses_truth_wind_and_forecast_thermal_inputs(monkeypatch, tmp_path):
+    truth, fcst, filtered = _synthetic_24h_frame(monkeypatch, tmp_path)
+    geometry = corridor_discretization.corridor_geometry(fe._corridor_for_city(CITY))
+    arm = fe._make_oracle_arm(geometry)
+    expected = fe._city_ampacity(
+        filtered["fcst_air_temp"], filtered["truth_wind_speed"], filtered["truth_wind_direction"],
+        filtered["fcst_solar_radiation"], geometry,
+    )
+    np.testing.assert_allclose(arm(filtered), expected)
+
+
+def test_oracle_and_raw_forecast_agree_and_equal_truth_when_forecast_equals_truth(
+    monkeypatch, tmp_path
+):
+    """
+    Degenerate-input sanity check: when the forecast weather equals the
+    truth weather on every row, arm 2 (raw_forecast) and arm 6 (oracle)
+    must produce identical predictions, and both must equal the truth
+    ampacity. This is the shape the bit-identity artifact took in the real
+    1-hour data (03-CONTEXT.md D-04) -- a check that would have caught it
+    on synthetic data alone, without needing a live network call.
+    """
+    truth = _synthetic_weather_frame(periods=24 * 30)
+    fcst = truth.copy()  # forecast == truth on every row
+    truth_frame, fcst_frame, filtered = _synthetic_24h_frame(
+        monkeypatch, tmp_path, truth=truth, fcst=fcst,
+    )
+    geometry = corridor_discretization.corridor_geometry(fe._corridor_for_city(CITY))
+
+    raw_forecast_arm = fe._make_raw_forecast_arm(geometry)
+    oracle_arm = fe._make_oracle_arm(geometry)
+
+    pred_raw = raw_forecast_arm(filtered)
+    pred_oracle = oracle_arm(filtered)
+    np.testing.assert_allclose(pred_raw, pred_oracle)
+    np.testing.assert_allclose(pred_raw, filtered["truth_dlr_amps"].to_numpy(dtype=float))
+
+
+def test_oracle_arm_factory_docstring_first_line_states_not_a_forecast():
+    first_line = fe._make_oracle_arm.__doc__.strip().splitlines()[0].strip()
+    assert "not" in first_line.lower() and "forecast" in first_line.lower()
+
+
+def test_every_registry_arm_returns_full_length_array_for_the_scored_frame(
+    monkeypatch, tmp_path
+):
+    truth, fcst, filtered = _synthetic_24h_frame(monkeypatch, tmp_path)
+    geometry = corridor_discretization.corridor_geometry(fe._corridor_for_city(CITY))
+    for name, factory in fe.NON_FITTED_ARMS.items():
+        arm = factory(geometry)
+        pred = np.asarray(arm(filtered), dtype=float)
+        assert len(pred) == len(filtered), f"arm {name!r} returned the wrong length"
+
+
+def test_score_arms_scores_the_full_non_fitted_arm_registry(monkeypatch, tmp_path):
+    """score_arms still enforces its length/uniqueness/sort invariants when
+    scoring the real four-arm registry (not just the minimal hand-built
+    frames the pre-existing score_arms tests use)."""
+    truth, fcst, filtered = _synthetic_24h_frame(monkeypatch, tmp_path)
+    geometry = corridor_discretization.corridor_geometry(fe._corridor_for_city(CITY))
+    arms = {name: factory(geometry) for name, factory in fe.NON_FITTED_ARMS.items()}
+    scored = fe.score_arms(filtered, arms)
+    assert set(scored["candidates"]) == set(fe.NON_FITTED_ARMS)
+    for name, s in scored["candidates"].items():
+        assert s["rows"] == len(filtered)
+
+
+# ──────────────────────────────────────────────────────────────────────────
 # Import-time no-side-effects
 # ──────────────────────────────────────────────────────────────────────────
 
