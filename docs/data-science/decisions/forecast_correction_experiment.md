@@ -1,10 +1,11 @@
 # Ampacity Forecast Correction Experiment — 24-Hour Primary Comparison
 
-**Status:** In progress — this record is committed with only the sections that can honestly be
-written before the held-out test set is read. The Expectation below is written and frozen at this
-commit; Measured results, Verdict, Limitations, and Open Questions are filled in by Plan 03-06's
-own Task 3 (Measured results) and Plan 03-07 (Verdict, Limitations, Open Questions) after the
-single test-set run.
+**Status:** Complete — all nine sections below are finalized. The Expectation section was written
+and frozen before the held-out test set was read; `git log` on this file, not a self-reported date,
+is the audit trail proving that (see the isolated two-file commit, `4d964cf`, that landed the
+Expectation and unlocked the test split in the same commit). Measured results, Verdict,
+Limitations, and Open Questions were all written only after that commit, per this workstream's
+no-peeking discipline.
 
 **Purpose:** This document discharges D-02 (build and run the full seven-approach comparison,
 explicitly reporting a null result if nothing beats persistence) and D-04 (the 24-hour
@@ -274,30 +275,229 @@ invoked.
 
 ## Verdict
 
-*Written by Plan 03-07, reading the Measured results above against the Expectation above. Not yet
-written.*
+**`ml_cooling_corrected` wins on the held-out test set at both corridors** — it carries the largest
+statistically-distinguishable margin over `persistence_24h` of any candidate, at AUSTIN_CORPUS_CHRISTI
+(+24.862 A, 95% CI [18.771, 30.776]) and at MIDLAND_EL_PASO (+30.671 A, 95% CI [22.347, 39.107]).
+This is not the answer the Expectation predicted, and this record says so plainly rather than
+reframing the prediction after the fact.
+
+**Where the Expectation was wrong, and why.** The Expectation named `raw_forecast` as the predicted
+winner, reasoning that the full forecast trajectory already beat every cheaper non-fitted baseline
+on the validation split and that a wind-only correction (arms 3/4, each touching only one input
+channel) would therefore add little on top of it. The measurement falsifies that specific
+prediction: `raw_forecast`'s own margin over persistence was small at AUSTIN_CORPUS_CHRISTI
+(+9.809 A) and, at MIDLAND_EL_PASO, statistically indistinguishable from zero (+0.410 A, 95% CI
+[-11.058, 11.834]) — not a winner at either corridor. Both fitted correction arms beat
+`raw_forecast`'s own margin by a wide amount instead of landing close to it: `ml_wind_corrected`
+added roughly 5–21 amps of margin beyond `raw_forecast`'s own edge over persistence at the two
+corridors, and `ml_cooling_corrected` added roughly 15–30 amps beyond it. The reasoning error was
+assuming that because the full forecast trajectory already outperformed a wind-only *cheap,
+non-fitted* baseline (`nwp_wind_delta`) on the validation split, a *fitted* correction of a single
+channel would add little on top of it — that validation-split evidence about a non-fitted baseline
+did not generalize to what a fitted correction, trained specifically to reduce residual error,
+could recover on held-out rows.
+
+**Where the Expectation was also wrong, more decisively: arm 5.** The Expectation predicted
+`reference_ml_refit_24h` would underperform persistence by a margin at least as large,
+proportionally, as Phase 1's 60-minute loss to naive persistence (`forecasting_model.md`), reasoning
+that the same lag features (1, 2, 3, and 6 hours back) are far staler predictors of a target 24
+hours out than of a target 60 minutes out. Instead, `reference_ml_refit_24h` beat persistence
+distinguishably at both corridors (+17.818 A AUSTIN_CORPUS_CHRISTI, +30.010 A MIDLAND_EL_PASO) — a
+reversal of the reasoning, not just the number. The most likely explanation, though this phase's
+design does not isolate it directly and a future ablation would be needed to confirm it: at 24
+hours, the model's non-lag weather covariates (air temperature, wind speed, solar radiation,
+hour-of-day) carry meaningful predictive signal over a genuinely different physical horizon than the
+single last-observed value alone can access, even though the lag features specifically are far
+staler at this horizon than at 60 minutes. Persistence's own diurnal strength (see Limitations) does
+not eliminate that signal; it only raises the bar the model has to clear, which here it did.
+
+**Statistical distinguishability is not the same claim as practical significance.** The Expectation
+committed, before any test row was read, to a roughly 30–50 ampere threshold for a margin to be
+practically meaningful for a dynamic line rating decision — a distinct claim from a confidence
+interval merely excluding zero on a rating in the thousands of amps. Measured against that
+threshold: `ml_cooling_corrected`'s margin clears it at MIDLAND_EL_PASO (30.671 A, at the bottom
+edge of the stated range) but falls short at AUSTIN_CORPUS_CHRISTI (24.862 A, below the 30 A floor).
+`reference_ml_refit_24h` clears it at MIDLAND_EL_PASO (30.010 A) but not at AUSTIN_CORPUS_CHRISTI
+(17.818 A). `ml_wind_corrected` clears it nowhere (14.641 A / 21.328 A). `raw_forecast` clears it
+nowhere and is not even statistically distinguishable from zero at one corridor. In amperes-scale
+terms: every candidate reported above with an excluding confidence interval has won a measurement,
+but only `ml_cooling_corrected` has won anything resembling the practical argument the Expectation
+set out to require, and only at one of the two corridors.
+
+**The oracle's margin is a bound, not an achieved result, and real headroom remains unclaimed.** The
+oracle — which substitutes observed future wind no real forecast can supply — beat persistence by
+92.630 A at AUSTIN_CORPUS_CHRISTI and 145.835 A at MIDLAND_EL_PASO. `ml_cooling_corrected`, the
+winning real candidate, recovered only about 26.8% of that headroom at AUSTIN_CORPUS_CHRISTI
+(24.862 / 92.630) and about 21.0% at MIDLAND_EL_PASO (30.671 / 145.835). The gap between what a
+real, forecast-input-only correction achieved and what a perfect wind correction could achieve is
+large at both corridors — this is a modelling gap, not evidence that the ceiling itself is too small
+to matter. Substantial room remains for a better wind (or joint wind-plus-thermal) correction to
+close, and nothing in this measurement suggests that room is unreachable in principle.
+
+**Recommendation for `ampacity_forecast`'s shipped method.** `ml_cooling_corrected` is the
+strongest evidence-based candidate to replace the current `"ml"` method's underlying approach for a
+24-hour-ahead correction, given the largest and most consistent margin of the four fitted/raw arms
+across both corridors — but the margin's modest size relative to the Expectation's own practical
+threshold, its failure to clear that threshold at one of two corridors, and the still-unexplained
+mechanism behind arm 5's reversal from Phase 1's result all argue for further evaluation, not an
+immediate swap. Implementing any of this phase's candidates into
+`ampacity_forecast.FORECAST_METHODS` is explicitly out of scope for this phase (`03-CONTEXT.md`
+Phase Boundary) and belongs to a future phase that must also decide runtime forecast-fetch fallback
+behavior — what `ampacity_forecast` does when the forecast provider it would newly depend on is
+unavailable, a question this experiment's offline harness never had to answer.
+
+## Legacy 1-Hour Arm — A Non-Primary Curiosity, Not a Competing Candidate
+
+This section reports Wave 1's original, idealized-lead result honestly, but it is **not part of the
+primary verdict above** and must never be quoted without the finding immediately below travelling
+with it: the bulk forecast product this arm depends on was found to be **bit-identical to the
+reanalysis truth archive** for every hour tested, across three cities and nine-plus dates —
+confirmed independently via raw, wrapper-free HTTP requests that bypass every line of this
+repository's own code, ruling out a code-level bug in either provider adapter (full evidence in
+`03-01-SUMMARY.md`'s Critical Finding). A forecast that is empirically identical to the eventual
+observation cannot be scored for forecast skill; any near-zero error it produces demonstrates a
+property of that data source at that lead, not predictive accuracy.
+
+**What Wave 1 built and measured.** Plan 03-01 built a real, working, tested pipeline around
+Open-Meteo's Historical Forecast bulk API (`models=ecmwf_ifs`), gated by an empirical lead-time
+calibration step (`forecast_leadtime_calibration.py`) that measured — rather than assumed — the
+bulk product's effective lead and filtered to the subset (`hour % 6 == 1`) carrying an exact,
+verified 1-hour lead. Scored against persistence for AUSTIN over 145 held-out test rows (window
+2025-10-01 through 2026-03-31), the result was: persistence 54.985 MAE, and `raw_forecast` an exact
+**0.000 MAE / 0.000 RMSE**. This is the number the bit-identity caveat above exists to precede — it
+is not evidence of a genuinely skillful 1-hour-lead forecast; it is the signature of a forecast
+source that, at this lead and for the necessarily-recent window the calibration gate required, is
+not distinguishable from the truth it is meant to predict.
+
+**Disposition.** D-04 (`03-CONTEXT.md`) explicitly retains this arm's code rather than deleting it,
+because it is working, fully tested (the calibration gate, the anchored-pair-frame contract, and the
+tracer scoring itself all remain green in the current test suite), and documents a real, reusable
+negative finding about this specific data source at this specific lead that a future reader building
+on Open-Meteo's Historical Forecast bulk API would otherwise have to rediscover through the same
+live-network investigation this phase already did. It is excluded from this record's primary verdict
+for exactly the reason stated above, and it must remain excluded from any future comparison unless a
+genuinely independent forecast/truth pair can be established at a 1-hour lead for this data source —
+which, per `03-CONTEXT.md`'s own resolution, may not exist.
 
 ## Limitations
 
-*Written by Plan 03-07. Not yet written.*
+- **The exact-lead filter's cost.** The full assembled Previous-Runs window carries 23,592 hourly
+  rows per city before any filter. Filtering to the exact-24-hour-lead subset (`hour % 6 == 0`)
+  leaves roughly 3,932 scored rows per city over the full window — after the three-way calendar
+  split, 786 rows per corridor in the held-out test set scored above. The unfiltered series would
+  have offered roughly six times the row volume, but at the cost of silently blending five distinct
+  lead times (24 through 29 hours) into one number (`03-RESEARCH.md` Pattern 2, Pitfall 1) — no
+  honest point claim of "the 24-hour lead" could be made from that blend. The filter was chosen
+  anyway, trading statistical power for a claim this record can actually defend.
+- **The stitching verification's reach is bounded, and the gap is not directly closed.** The
+  cross-check proving the `24 + (hour % 6)` stitching rule against the exact Single-Runs product
+  could only be run over a handful of recent dates, because the Single-Runs archive for the pinned
+  `gfs_seamless` model reaches back only to roughly mid-2026 — it cannot reach the bulk of this
+  experiment's own window, which starts 2024-01-20. The rule's applicability to 2024 and 2025 dates
+  therefore rests on the stitching mechanism being general to any six-hourly NWP product's
+  bulk/previous-runs construction, not on a direct historical cross-check against those years
+  (`03-RESEARCH.md` Assumption B2). This is an open exposure, not a verified fact, and it is recorded
+  here rather than folded into the confident "measured, not assumed" framing the rest of this record
+  uses.
+- **24-hour persistence is a strong baseline, not a weak one — do not read the margins above with
+  the opposite intuition.** Twenty-four hours is exactly one full diurnal cycle, so
+  `persistence_24h` is a genuine day-ago-same-hour ("seasonal-naive") baseline, similar in kind to
+  time-series practice's own strong baseline for diurnally-cyclic series, not the weak baseline a
+  "longer horizon is easier to beat" intuition would suggest (`03-RESEARCH.md` Pattern 4). Every
+  margin reported in the Verdict above was measured against that strong baseline, not a weak one —
+  the modest size of even the winning margin is consistent with, not contradictory to, that framing.
+- **The oracle bounds the ceiling; it does not certify that the ceiling is reachable.** The oracle's
+  margin over persistence (92.630 A AUSTIN_CORPUS_CHRISTI, 145.835 A MIDLAND_EL_PASO) is the maximum
+  any wind correction could ever recover, because it substitutes observed future wind no real
+  forecast can supply. No real candidate came close to it (the best, `ml_cooling_corrected`,
+  recovered roughly a quarter of it at each corridor) — this bounds the size of the opportunity but
+  says nothing about whether a better model, more data, or a different correction target could
+  actually close more of that gap; this record does not claim it could.
+- **Two endpoint cities per corridor, two corridors, one conductor configuration, one NWP model.** As
+  in Phase 1's own bottleneck proxy (`forecasting_model.md` Limitations), the corridor-level target
+  and every arm's own prediction reduce two endpoint cities' computed ampacity via the weakest-link
+  convention — a proxy for the true multi-point bottleneck a richer corridor-discretization dataset
+  would eventually measure. Both corridors share an identical `ConductorConfig` (795 kcmil Drake
+  ACSR) except for bearing, and both share an identical elevation (900.0 m, no per-corridor split
+  implemented). Every forecast arm in the primary comparison is built from exactly one pinned NWP
+  model (`gfs_seamless`); nothing in this record generalizes to a different model, a different
+  conductor, or a third corridor.
+- **The leakage probe's coverage is partial by design.** `leakage_probe` detects a direct read of a
+  truth-column value at or after the valid time being predicted — it does not, and was never
+  designed to, detect a leak through a model that was trained on rows inside the test window. That
+  second failure mode is covered instead by arm 5's from-scratch refit on train-plus-validation rows
+  only (never the persisted production artifact, never touching its process-global cache) and by the
+  explicit split-disjointness assertion on the filtered frame actually scored. A reader relying on
+  the leakage probe alone to certify the absence of test-set contamination would be trusting it for a
+  guarantee it does not provide.
+- **The test set was scored exactly once, with no defect-forced re-run.** Plan 03-06's own transcript
+  confirms the single invocation (`--lead-hours 24 --split test`, both corridors) produced finite,
+  physically plausible numbers on the first attempt — no exception, no empty split, no negative
+  ampacity — so the "same-run" exception (a second run permitted only to reproduce an identical
+  number after a non-scoring code change) was never invoked, and no arm, feature, hyperparameter, or
+  filter was adjusted after seeing this record's Measured results.
 
 ## Open Questions
 
-*Written by Plan 03-07. Not yet written.*
+- **Probabilistic and quantile evaluation of the winning correction.** This record scores mean
+  absolute error alone; it says nothing about calibrated confidence bounds around a corrected
+  forecast. Worth doing if `ml_cooling_corrected` (or any correction arm) is ever considered for
+  production wiring, since a dynamic line rating decision needs a defensible uncertainty band, not
+  just a point estimate — deferred here per `03-CONTEXT.md`'s Phase Boundary.
+- **Regime-specific correction models.** `raw_forecast`'s own margin was real at
+  AUSTIN_CORPUS_CHRISTI but statistically indistinguishable from zero at MIDLAND_EL_PASO, and the
+  winning correction's margin similarly varies by corridor. Worth investigating whether that
+  variation tracks a specific weather regime (frontal passage, wind regime, season) rather than a
+  corridor-level property, since a regime-conditional correction could plausibly recover more of the
+  oracle's headroom than a single corridor-wide model — deferred here as originally scoped.
+- **Multi-source NWP fusion.** Every arm in the primary comparison depends on exactly one pinned
+  model (`gfs_seamless`). Worth doing if a second independent NWP source becomes available, since
+  this record cannot distinguish "this correction generalizes to real forecast error" from "this
+  correction is tuned to `gfs_seamless`'s particular error signature" — deferred here as originally
+  scoped.
+- **Production wiring, and the runtime forecast-fetch fallback decision it requires.** Explicitly out
+  of scope for this phase. Worth pursuing given that a real, distinguishable (if modest) margin now
+  exists at one corridor for at least two candidates — but any such phase must also decide what
+  `ampacity_forecast` does when the forecast provider it would newly depend on is unavailable, a
+  question this offline experiment harness never had to answer.
+- **Why did the reference `"ml"` model reverse from a loss at 60 minutes (Phase 1) to a win at 24
+  hours?** Newly raised by this measurement, not anticipated by the Expectation. The Verdict above
+  offers a plausible but unconfirmed explanation (non-lag weather covariates carrying more signal
+  over a longer, physically distinct horizon); a feature-ablation study isolating the lag features
+  from the weather covariates would be needed to confirm it, and would inform whether the same
+  architecture is worth retrying at other horizons.
+- **Would accepting the broader, unfiltered 24–29-hour lead range (trading a point claim for roughly
+  six times the row volume, with an explicit range caveat per `03-RESEARCH.md` Pitfall 1) change
+  which margins are statistically distinguishable?** Not attempted in this phase, since the
+  Expectation and this record's own no-peeking discipline committed to the exact-lead filter before
+  any test row was read. A future sensitivity pass could re-run the same seven arms against the wider
+  window to see whether the added statistical power changes any of this record's borderline calls
+  (`ml_wind_corrected`'s and `reference_ml_refit_24h`'s margins at AUSTIN_CORPUS_CHRISTI, both
+  currently below the practical threshold).
 
 ## References
 
-- `.planning/workstreams/ml-modeling/ROADMAP.md` — Phase 3's entry and its five success criteria.
+- `.planning/workstreams/ml-modeling/ROADMAP.md` — Phase 3's entry, its five success criteria, and
+  their disposition as executed.
 - `.planning/workstreams/ml-modeling/phases/03-ampacity-forecast-correction-experiment-compare-persistence/03-CONTEXT.md`
-  — D-01 through D-04, including D-04's full pivot narrative.
+  — D-01 through D-04, including D-04's full pivot narrative and the Phase Boundary/Deferred Ideas
+  this record's Open Questions section reads from.
 - `.planning/workstreams/ml-modeling/phases/03-ampacity-forecast-correction-experiment-compare-persistence/03-RESEARCH.md`
-  — the live-verified Previous-Runs stitching mechanism (Pattern 2) and the diurnal-persistence-strength
-  argument (Pattern 4) this Expectation is built on.
-- `docs/data-science/decisions/forecasting_model.md` — Phase 1's 60-minute bake-off, the reason this
-  phase exists, and the 9-section record format this document mirrors.
+  — the live-verified Previous-Runs stitching mechanism (Pattern 2), the exact-lead filter tradeoff
+  (Pitfall 1), the diurnal-persistence-strength argument (Pattern 4), and the stitching-verification
+  reach limitation (Assumption B2) this record's Limitations section is built on.
+- `docs/data-science/decisions/forecasting_model.md` — Phase 1's 60-minute bake-off (both trained
+  candidates lost to naive persistence), the reason this phase exists, and the 9-section record
+  format this document mirrors.
 - `.planning/workstreams/ml-modeling/phases/03-ampacity-forecast-correction-experiment-compare-persistence/03-01-SUMMARY.md`
-  through `03-05-SUMMARY.md` — Waves 1 through 3's build record, including the bit-identity finding
-  that forced D-04's pivot and the live validation-split scores this Expectation cites.
+  through `03-06-SUMMARY.md` — the build record for this phase's plans, including the bit-identity
+  finding that forced D-04's pivot (03-01), the in-repo refutation of that finding at a 24-hour lead
+  (03-03), the four non-fitted arms and the oracle's isolation (03-04), the two ML correction
+  families and the horizon seam (03-05), and the single held-out test-set run this record's Measured
+  results and Verdict are built on (03-06).
+- `.planning/workstreams/ml-modeling/phases/03-ampacity-forecast-correction-experiment-compare-persistence/03-01-BOUNDARY-INVESTIGATION.md`
+  — the addendum documenting the corrected window-start boundary and the bit-identity finding's
+  initial discovery.
 - `backend/forecast_experiment.py` — the harness itself: `ALL_ARMS`, `fit_fitted_arms`,
   `leakage_probe`, `paired_bootstrap_margin`, `corridor_experiment_report`.
 - `backend/forecast_correction_models.py` — the wind and cooling correction families arms 3 and 4
