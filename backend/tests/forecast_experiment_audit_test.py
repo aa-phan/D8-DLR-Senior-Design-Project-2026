@@ -1467,17 +1467,28 @@ def test_pinball_loss_alpha_half_equals_half_mae():
 
 
 def test_fit_calibrate_evaluate_quantile_reports_improvement_when_distributions_match():
-    rng = np.random.default_rng(7)
-    n = 400
+    # Fixed, deterministic seeds (never Python's randomized `hash()`, whose
+    # per-process salt would make this test's own synthetic fixtures --
+    # and therefore its pass/fail outcome -- silently different between
+    # separate test-runner invocations, e.g. this file run alone versus as
+    # part of the full suite). The fit period's own noise is deliberately
+    # NARROWER than calibrate/evaluate's -- a model trained on narrow
+    # residuals is reliably miscalibrated against a wider residual
+    # distribution, so "before" is reliably far from the nominal alpha
+    # regardless of sampling noise, and the offset learned on calibrate
+    # reliably generalizes to evaluate because they share the SAME (wide)
+    # residual distribution.
+    n = 600
 
-    def _frame(start, bias):
+    def _frame(start, noise_std, seed):
+        rng = np.random.default_rng(seed)
         truth = 1000.0 + rng.normal(0.0, 30.0, n)
-        pred = truth + bias + rng.normal(0.0, 20.0, n)
-        return _synthetic_quantile_frame(start, truth, pred, seed=hash((start, bias)) % (2 ** 31))
+        pred = truth + rng.normal(0.0, noise_std, n)
+        return _synthetic_quantile_frame(start, truth, pred, seed=seed)
 
-    fit_frame = _frame("2020-01-01", 15.0)
-    calibrate_frame = _frame("2020-03-01", 15.0)
-    evaluate_frame = _frame("2020-05-01", 15.0)  # SAME error distribution as calibrate
+    fit_frame = _frame("2020-01-01", noise_std=10.0, seed=3000)
+    calibrate_frame = _frame("2020-03-01", noise_std=40.0, seed=3100)
+    evaluate_frame = _frame("2020-05-01", noise_std=40.0, seed=3200)  # SAME (wide) distribution as calibrate
 
     result = fea._fit_calibrate_evaluate_quantile(
         fit_frame, calibrate_frame, evaluate_frame, alpha=0.05,
