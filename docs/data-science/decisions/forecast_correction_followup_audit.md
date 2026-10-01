@@ -1045,15 +1045,356 @@ accruing a FRESH basis, or by Plan 04-06's minimum data contract):
 
 ## Integration readiness plan (D-05)
 
-Placeholder — filled by Plan 04-06 (the minimum data contract, the now-vs-later split of
-recommendations, the packaging/fetch/fallback/shadow-eval/monitoring/rollback outline, and the
-explicitly-left-open 60-minute-vs-24-hour-vs-both product question).
+This section is a plan, not an implementation. Nothing in it builds any part of an integration —
+no packaging artifact exists, no runtime forecast fetch has been added to a production module, and
+no monitoring hook or change to `ampacity_forecast.py` or its method registry has been made.
+`04-CONTEXT.md`'s Deferred Ideas name building any of this as explicitly out of this phase's scope.
+
+### Candidates, and why they perform as they do
+
+Both `ml_cooling_corrected` and `reference_ml_refit_24h` remain live integration candidates.
+Neither is narrowed away on this phase's evidence — the Corrected verdict above already says so,
+and the ablation below explains *why* the refit model performs as well as it does without
+resolving which of the two candidates should ultimately be preferred.
+
+The frozen record's own Open Question — why the reference `"ml"` model reversed from a loss at
+60 minutes (Phase 1) to a win at 24 hours (Phase 3) — is answered here by a measurement, not a
+second deferral. `lag_vs_covariate_ablation` fit three variants of the SAME refit-reference
+estimator family on the real ABLATION train rows, differing only in which named feature columns
+each received, and scored all three on the real ABLATION validation rows:
+
+| Corridor | Variant | MAE (A) | RMSE (A) | Margin vs. all-features MAE |
+|---|---|---|---|---|
+| AUSTIN_CORPUS_CHRISTI | all_features | 127.215 | 161.639 | — |
+| AUSTIN_CORPUS_CHRISTI | lags_only | 131.983 | 165.013 | all-features wins by 4.768 A, 95% CI [0.727, 8.879] (excludes zero) |
+| AUSTIN_CORPUS_CHRISTI | covariates_only | 127.759 | 162.042 | all-features wins by 0.545 A, 95% CI [-0.986, 2.046] (does not exclude zero) |
+| MIDLAND_EL_PASO | all_features | 136.558 | 166.750 | — |
+| MIDLAND_EL_PASO | lags_only | 131.450 | 162.529 | lags-only wins by 5.108 A, 95% CI [-8.504, -1.732] (excludes zero) |
+| MIDLAND_EL_PASO | covariates_only | 137.636 | 168.501 | all-features wins by 1.078 A, 95% CI [-0.070, 2.271] (does not exclude zero) |
+
+The verdict differs by corridor. At AUSTIN_CORPUS_CHRISTI the covariates-only variant approaches
+the full model's own skill (a 0.545 A MAE gap, statistically indistinguishable from the
+all-features variant) while the lags-only variant does not (a 4.768 A gap that DOES exclude zero)
+— the pattern the frozen record's own explanation predicts, and it SUPPORTS the hypothesis that
+the non-lag weather covariates carry the skill the lag features lose as they go stale over a
+24-hour horizon. At MIDLAND_EL_PASO the opposite pattern holds: the lags-only variant is
+measurably closer to (in fact slightly better than) the full model, and the covariates-only
+variant is the one that falls away — this DOES NOT SUPPORT the frozen record's proposed
+explanation at this corridor. Taken together, the ablation's own finding is itself corridor-
+dependent: the refit model's 24-hour skill is not explained by one single mechanism at both
+corridors, and a reader should not generalize the Austin pattern to Midland or vice versa.
+
+**The cooling-rediscovery hypothesis.** `cooling_rediscovery_hypothesis` tested the sharper
+question D-05 actually asks: is the refit model (or, more precisely, its covariates-only variant)
+implicitly rediscovering a cooling-like correction, or doing something else? Residual correlation
+is the informative measure here — two models can produce highly correlated PREDICTIONS simply
+because both track the same strong diurnal ampacity signal, while correlated RESIDUALS mean the
+two models are failing in the SAME places, which is the signature of a shared mechanism rather
+than a shared target:
+
+| Corridor | Variant | Prediction correlation (Pearson) | Residual correlation (Pearson) | Residual correlation (Spearman) |
+|---|---|---|---|---|
+| AUSTIN_CORPUS_CHRISTI | all_features | 0.590 | 0.849 | 0.846 |
+| AUSTIN_CORPUS_CHRISTI | lags_only | 0.470 | 0.831 | 0.829 |
+| AUSTIN_CORPUS_CHRISTI | covariates_only | 0.583 | 0.846 | 0.844 |
+| MIDLAND_EL_PASO | all_features | 0.542 | 0.806 | 0.822 |
+| MIDLAND_EL_PASO | lags_only | 0.449 | 0.781 | 0.787 |
+| MIDLAND_EL_PASO | covariates_only | 0.531 | 0.803 | 0.821 |
+
+The covariates-only variant's residual correlation against `ml_cooling_corrected`'s own residuals
+(0.846 at Austin, 0.803 at Midland) is high, comparable to the full-feature variant's own
+correlation, and noticeably higher than the lags-only variant's. A high residual correlation here
+is CONSISTENT WITH — but does not PROVE — the covariates-only variant implicitly rediscovering a
+cooling-like correction, since two models trained on the same series can share an error structure
+for reasons that have nothing to do with the convective term (both are, after all, trying to
+predict the same physically-driven ampacity series). What remains unexplained after this ablation:
+why the lags-only variant ALSO shows a substantial residual correlation (0.831 / 0.781) against the
+cooling correction, nearly as high as the full-feature variant's — a pure rediscovery story would
+predict a sharper gap between the lags-only and covariates-only correlations than what was
+measured. An explanation that would close this gap: the lag features themselves encode a smoothed
+proxy for recent cooling trends (a dlr_amps lag IS partly a function of recent wind and temperature
+history), so even the "lags only" variant is not actually blind to cooling-relevant information —
+only a feature-level ablation finer than lag-vs-covariate (e.g., decorrelating lagged ampacity from
+its own underlying weather drivers) could separate these two explanations further, and that is
+itself a "now" item in the split below.
+
+### The minimum data contract
+
+A field-level specification, because a vague instruction to improve the inputs is not a data
+contract — a contract is a list of named fields with types, units, cadences and owners, each
+traceable to something this audit actually found. Every row below cites the finding that motivates
+it and names a real field, never a stand-in to be named later.
+
+| Field | Type | Unit | Cadence | Required/Desirable | Owner | Motivating finding |
+|---|---|---|---|---|---|---|
+| `forecast_model_id` | string | n/a | per-run, static once pinned | Required | Pipeline/data team | Mirrors `open_meteo_forecast_provider.py`'s own pinning discipline (`FORECAST_MODEL_ID`/`PREVIOUS_RUNS_MODEL_ID`) — an un-pinned model selection silently resolves to a different model domain per endpoint (D-01). |
+| `forecast_value` | float | project-native (m/s, degC, W/m^2 per variable) | hourly | Required | Pipeline/data team | Finding 1 / the null-handling discipline: an absent forecast value must never be padded, truncated, or zero-filled — it is a failed fetch, and the contract must carry the value as nullable rather than defaulted. |
+| `forecast_lead_hours` | float | hours | per-row | Required | Pipeline/data team | D-01 Finding 4 — lead must be carried explicitly on the record itself, not re-derived after the fact from an init/valid difference that archive-to-archive comparison cannot evidence. |
+| `initialization_timestamp` | datetime (UTC, ISO-8601) | n/a | per-run | Required | Pipeline/data team | D-01 Finding 4 — the model-run issuance instant, the first of the three distinct timestamps this contract requires. |
+| `availability_timestamp` | datetime (UTC, ISO-8601), recorded at ingestion | n/a | per-run | Required | Ingestion team | D-01 Finding 4 — the audit's central finding: two retrospective archives can prove a value MATCHES a run issued `lead_hours` earlier, but cannot evidence that the value was actually available to a consumer at that wall-clock instant. Nothing except a timestamp recorded live, at ingestion, closes this gap. |
+| `valid_timestamp` | datetime (UTC, ISO-8601) | n/a | per-row | Required | Pipeline/data team | D-01 Finding 5 — the exhaustive time-reference partition found exactly two clock instants per row (decision time, valid time) in every column this audit's assembled frames carry; a contract must keep that partition explicit rather than collapsing it. |
+| `observed_dlr_amps` | float | amps | hourly or finer | Required | Field/instrumentation team | D-01 Finding 1 — the entire "truth" side of this project's experiments is itself a physics-model reanalysis output, never a sensor measurement; D-03's reanalysis-scope limitation says plainly that no claim in this record establishes conductor-level safety without one. |
+| `observed_air_temp` | float | degC | hourly | Required | Field/instrumentation team | Same as `observed_dlr_amps` — a sensor-measured input is needed for an independent ampacity computation, not only a sensor-measured output. |
+| `observed_wind_speed` | float | m/s | hourly | Required | Field/instrumentation team | Same. |
+| `observed_wind_direction` | float | degrees | hourly | Desirable | Field/instrumentation team | Improves the perpendicular-wind projection D-03's regime analysis already depends on (`thermal_model.perpendicular_wind`). |
+| `observation_quality_flag` | categorical (`ok`/`suspect`/`missing`/`out_of_range`) | n/a | per-observation | Required | Field/instrumentation team | D-03's reanalysis-scope limitation, read forward: without a quality flag, a single bad sensor reading could silently become a false field-validated safety claim rather than a flagged, excluded one. |
+| `observation_availability_timestamp` | datetime (UTC), recorded at ingestion | n/a | per-observation | Required | Ingestion team | The same decision-time-availability reasoning as `availability_timestamp` above, applied to local observations rather than archived forecasts — a local reading has its own ingestion-time availability question too. |
+| `unit_of_record` | string (SI unit code) | n/a | static, per field | Required | Data team | Finding 1's own citation discipline, generalized: this project's existing `units_def.PIPELINE_SCHEMA` convention already names every pipeline field's unit explicitly; a new external field entering the pipeline must do the same rather than relying on an assumed convention. |
+| `sensor_location` | lat/lon (float pair) | degrees | static | Required | Field team | Needed to map a sensor reading onto a specific corridor endpoint — without it, an observation cannot be attributed to either city in a two-endpoint corridor. |
+| `sensor_height_above_ground` | float | meters | static | Required | Field team | D-03's low-wind finding: overrating concentrates at 100% below the measured convection crossover, and the physics consumes a wind speed AT CONDUCTOR HEIGHT. Wind speed varies with height (the atmospheric boundary layer's own log-wind profile); a sensor reading with no recorded height cannot be corrected to conductor height, and a surface-level reading misapplied as a conductor-height reading would bias the regime the data already shows is most overrating-prone. |
+| `sensor_exposure_class` | categorical (`open`/`sheltered`/`obstructed`) | n/a | static | Desirable | Field team | An obstructed site could bias readings specifically in the low-wind regime D-03 already found to be the most overrating-sensitive. |
+| `conductor_type_per_span` | string (e.g. ACSR code) | n/a | static, per span | Required | Engineering team | The frozen record's own Limitations section states this project uses a single, shared conductor configuration across both corridors — a per-span field is what would replace that assumption with measured per-span truth. |
+| `span_geometry` | structured (endpoint coordinates, length, bearing) | meters / degrees | static, per span | Required | Engineering team | The frozen record's and this audit's shared weakest-link-proxy limitation — the two-endpoint-minimum convention is a documented proxy for a richer, per-span discretization this field would enable. |
+| `span_count_per_corridor` | integer | n/a | static | Desirable | Engineering team | Same — replacing the two-endpoint proxy with the actual number of discretizable spans a corridor contains. |
+
+### Timestamps: why three, not one
+
+Collapsing these into one timestamp is the error this contract exists to prevent, so they get
+their own subsection rather than living only as three table rows.
+
+- **`initialization_timestamp`** — when the forecast model run was ISSUED. A data engineer can
+  implement this directly from the NWP provider's own run-identifier field (mirroring
+  `open_meteo_forecast_provider.py`'s own `run=<timestamp>` parameter for the Single-Runs
+  endpoint). Closes no audit finding on its own — it is the baseline the other two timestamps are
+  measured relative to.
+- **`availability_timestamp`** — when the run's OUTPUT became available for a consumer to fetch,
+  recorded live at ingestion time, never reconstructed after the fact from two archives' agreement.
+  This is the field that closes D-01 Finding 4 — this audit's own finding that two backward-looking
+  archives can prove a value corresponds, by construction, to a run issued `lead_hours` earlier, but
+  cannot and structurally never could prove that value was actually reachable over a network at that
+  wall-clock moment. Without this field recorded at ingestion time, going forward, no future
+  experiment can make a decision-time-availability claim any stronger than this audit's own could.
+- **`valid_timestamp`** — the time the forecast VALUE is valid for (the moment being predicted). A
+  data engineer implements this as the NWP provider's own forecast-hour offset applied to
+  `initialization_timestamp`. Closes D-01 Finding 5's exhaustive time-reference partition — every
+  column in this project's assembled frames already resolves to exactly one of two clock instants
+  (decision time or valid time), and this field is what keeps that partition intact going forward
+  rather than letting it collapse back into one ambiguous "timestamp" column.
+
+### Now versus later
+
+Every recommendation this audit produced sits in exactly one of the two tables below.
+
+**Table 1 — the ML track can do this now, with existing data and tools.**
+
+| Recommendation | Owner | Rough size |
+|---|---|---|
+| Re-tune arm 3/4's pooling and target-parameterization selection against real (not synthetic) development data, closing D-02's synthetic-configuration-selection limitation | ML track | Medium |
+| Run the FRESH-basis confirmation once the reserved period accrues its 56-row/14-day minimum (roughly two weeks after this audit's run date) | ML track | Small — one scheduled script run |
+| Apply a formal multiple-comparisons correction (e.g. Holm-Bonferroni) across D-02's own uncorrected pairwise table, closing this audit's own D-04 Limitations item about its own statistical machinery | ML track | Small |
+| Extend the low-wind sensitivity sweep across the full observed ambient-temperature range, closing a named D-04 Limitations item (the measured 0.1428 m/s crossover is representative at 35.0°C, not universal) | ML track | Small |
+| Harden `predict_cooling_correction`'s guard so a positive, below-the-natural-convection-floor corrected term is explicitly rejected rather than permitted through the `q_conv_override` seam — the exposure this audit's own sub-floor-routing attempt found and measured | ML track (owns `forecast_correction_models.py`) | Small |
+| Build the leakage probe into the scoring path itself for any future frozen run, so a future audit does not need a retroactive re-run (D-01 Finding 6's remaining gap) | ML track | Medium — a process change for the next experiment, not a fix to this one |
+
+**Table 2 — blocked on the data contract above.**
+
+| Recommendation | Blocked on | Why |
+|---|---|---|
+| Any claim that a candidate's conservative-rating behavior reflects field-validated conductor safety, not self-consistency with a reanalysis simulation (D-03's reanalysis-scope limitation) | `observed_dlr_amps`, `observed_air_temp`, `observed_wind_speed`, `observation_quality_flag`, `observation_availability_timestamp` | D-03's every overrating, calibration, and retained-capacity number is checked against the same reanalysis-derived truth series Finding 1 names — only a sensor-measured series closes this gap. |
+| A genuine decision-time-availability claim for any future forecast-lead calibration, stronger than "two archives agree" | `availability_timestamp` | D-01 Finding 4 is structural: no archive-to-archive comparison can ever evidence real-time availability, regardless of archive depth. |
+| Replacing the two-endpoint weakest-link proxy with a richer, per-span corridor discretization | `conductor_type_per_span`, `span_geometry`, `span_count_per_corridor` | The frozen record's own Limitations and this audit's D-03 section both carry the weakest-link proxy forward unchanged — a richer dataset is what would let a future phase measure, not assume, whether the proxy is conservative. |
+| Testing model-choice sensitivity against a second, independently-provisioned NWP source | `forecast_model_id` (a second pinned value) plus its own `forecast_value`/timestamps | The frozen record's Limitations section already names the single-pinned-NWP-model scope as a limitation this audit neither strengthened nor narrowed; a second source is what a future comparison would need. |
+| Wiring a corrected-model candidate's runtime forecast fetch into a production module | `initialization_timestamp`, `availability_timestamp`, `valid_timestamp`, `forecast_value`, `forecast_lead_hours` | The packaging/fetch outline below can be scoped now, but cannot be implemented without a live forecast source carrying all three timestamps distinctly — exactly the gap D-05 was convened to specify. |
+| Correcting any sensor-height-dependent bias in the low-wind regime D-03 already found to be most overrating-sensitive | `sensor_height_above_ground`, `sensor_exposure_class` | Without a recorded sensor height, a surface-level reading cannot be corrected to the conductor-height wind speed the physics consumes. |
+
+### Packaging
+
+A fitted correction model (whichever of the two candidates, or a future successor, is eventually
+chosen) would be persisted, versioned, and loaded the SAME way `forecast_training.
+persist_corridor_model`/`ampacity_forecast._load_corridor_model` already do for the production "ml"
+method today — an atomic `joblib.dump` to a temp file, `os.replace`d onto a per-corridor path, with
+a version tag recorded alongside the artifact so a loader can refuse a stale or incompatible file
+rather than silently deserializing one. It would sit BEHIND `ampacity_forecast.py`'s existing
+`forecast_ampacity(history, horizon_min, method=...)` signature and `ForecastResult` schema — a new
+entry in `FORECAST_METHODS` (alongside `"naive"`, `"ewm"`, `"ml"`), never a change to the function's
+signature or to `forecast_columns()`'s four-key `PIPELINE_SCHEMA` mapping. This mirrors exactly the
+precedent the `"ml"` method itself already set for FCST-01/FCST-02, and preserves the public
+interface contract this workstream's own `ROADMAP.md` names as not renegotiable.
+
+### Runtime forecast fetching
+
+The corrected candidate's 24-hour lead would be served by Open-Meteo's Previous-Runs endpoint
+(`previous-runs-api.open-meteo.com`), the same primary data source this phase's own ABLATION and
+Phase 3's frozen comparison already use — not a new, unvetted source. Cadence would match the
+pipeline's own existing measurement cycle (hourly, per `DLRSafetyMonitor.run_check`'s own calling
+convention), with the fetched forecast cached per corridor between cycles rather than re-fetched on
+every call, since the provider's own archive updates at most once per model run. The request budget
+against the provider's documented limits would need to be sized against this project's four-city,
+two-corridor footprint before any production cutover — a concrete sizing exercise, not estimated
+here, since it depends on the provider's own rate-limit terms at integration time.
+
+### Stale and missing data
+
+At a 24-hour lead, a forecast is stale once its own `initialization_timestamp` is further in the
+past than this project's own measured effective lead (`24 + hour % 6` hours, per Phase 3's D-04
+finding) would predict for the current valid time — i.e., the fetched run is not the run that
+SHOULD cover the current decision. Staleness is detected the same way `open_meteo_forecast_
+provider.py`'s own completeness check already works: comparing the fetched run's own carried
+timestamp fields against the expected ones, not by trusting the provider's HTTP 200 status alone.
+That module's own null-handling discipline — nothing is ever padded, truncated, zero-filled,
+forward-filled, or back-filled; an absent value is a failed fetch, never a null column — is the
+exact discipline this stale-data check must also apply once it is live in production rather than in
+an offline harness: a stale OR missing forecast is the SAME signal, and both route to the identical
+fallback below.
+
+### Fallback
+
+The standing commitment is not negotiable here: a failed, stale, or incomplete forecast fetch
+degrades to a KNOWN-SAFE path, never to an optimistic guess — this project's own
+`REQUIREMENTS.md` "Out of Scope" table names changing this fail-safe contract as explicitly out of
+this entire workstream's scope, and D-05's own fifth bullet names the same commitment specifically
+for forecast fallback. The concrete existing mechanism this mirrors is `DLRSafetyMonitor`'s own G6
+gate: `anomaly_detector.check(...)` is wrapped in `except Exception`, and ANY failure — not only an
+anomalous result, but a broken call itself — resolves to `self.static_rating`, the corridor's
+nameplate rating, never a computed value that happens to look plausible. A corrected-forecast
+integration would route through the identical pattern, as an explicit degradation ladder:
+
+1. **Rung 1 — the corrected forecast.** Requires a fresh, complete, on-time forecast fetch with all
+   three timestamp fields present and consistent. Gives the full candidate accuracy this audit
+   measured.
+2. **Rung 2 — the raw (uncorrected) forecast through IEEE-738.** Requires only that the underlying
+   weather forecast itself fetched successfully; gives up the correction's own measured headroom
+   (this audit's own ablation and D-02's pairwise work both bound how much that headroom actually
+   is) but keeps a physics-informed forecast.
+3. **Rung 3 — persistence (the last known-good value, lagged).** Requires nothing beyond the
+   pipeline's own existing last-observed-value path; gives up any forecast skill at all beyond
+   simple extrapolation.
+4. **Rung 4 — the corridor's static rating.** Requires nothing. This is the known-safe floor every
+   rung above is permitted to fall back to, and the ONLY rung this fallback may ever resolve to on
+   any genuine failure — mirroring G6's own `_fallback(result, "G6", ..., self.static_rating)` call
+   exactly.
+
+No rung in this ladder is permitted to substitute an "optimistic" value for a missing one at any
+stage — a forecast that cannot be trusted degrades toward the static rating, never toward a
+guessed number dressed up as a measurement.
+
+### Shadow evaluation before cutover
+
+The candidate would run alongside the incumbent `"ml"` method for a defined observation window,
+computing and logging its own prediction and confidence band on every cycle WITHOUT that prediction
+ever reaching `DLRSafetyMonitor.run_check`'s own rating decision — an additive, observation-only
+path, the same non-interference discipline `anomaly_detector`'s own G6 injection already
+established for C10 ("None = C10 disabled, G1-G5 untouched" per `DLRSafetyMonitor.py`'s own
+docstring). What would be logged: the candidate's own point prediction, its confidence band, the
+incumbent method's prediction on the same cycle, and whichever of the two this audit's own
+conservative-rating or pairwise-margin work would eventually need to re-measure once live data
+accrues. What would justify cutover: a FRESH-basis (not ABLATION-basis) measurement reproducing, on
+genuinely new rows, the Corrected verdict's own stated bar for confidence — specifically, the same
+distinguishable margin and the same matched-overrating-rate retained-capacity advantage this phase
+measured on the ABLATION basis, now measured on data neither this phase nor Phase 3 has already
+seen.
+
+### Monitoring
+
+Once live, at minimum: the overrating rate this audit's own D-03 analysis introduced, measured
+continuously against whatever truth source is available at that point (the reanalysis-derived
+series today, a sensor-measured one once the data contract above is satisfied); the pinball
+loss/exceedance rate of any deployed lower-ampacity quantile, the same measure D-03's own
+calibration work already established; and the shadow-vs-incumbent prediction divergence from the
+evaluation above, continued past cutover rather than discarded. A threshold that would raise an
+alarm: the live overrating rate exceeding, by a stated margin, the rate this phase measured on the
+ABLATION basis for the same candidate — a live rate meaningfully worse than the offline measurement
+would mean the offline numbers no longer describe production behavior.
+
+### Rollback
+
+Triggered by: the monitoring threshold above firing, a sustained increase in the fallback rate at
+the packaging layer (a proxy for forecast-fetch reliability degrading), or a manual override by
+whoever owns production operation. Mechanism: revert `FORECAST_METHODS`'s default back to the
+incumbent `"ml"` method for the affected corridor — the SAME kind of single-value configuration
+change this project's own method-registry pattern already makes cheap, never a code rollback of the
+packaging itself. Time to execute: bounded by how quickly that configuration change propagates to
+the running pipeline, which is an operational question for whoever owns deployment at integration
+time, not estimated here. State returned to: the incumbent `"ml"` method's own existing behavior,
+unchanged by anything this plan proposes — the new method's packaged artifact remains on disk,
+available to re-enable once whatever triggered the rollback is resolved.
+
+### The product question, named and left open
+
+This audit cannot determine, and was not convened to determine, whether the product needs
+60-minute forecasting, 24-hour forecasting, or both — and the 24-hour result measured throughout
+this phase does not settle that question. No integration of the 24-hour-lead candidates (either
+`ml_cooling_corrected` or `reference_ml_refit_24h`) is recommended as a blanket replacement for the
+production 60-minute `"ml"` method until this question is answered. This is unresolved, and it is
+assigned to whoever owns product scope for this project — not to the ML track, and not to this
+audit. What an answer would need to consider: how far ahead a DLR-informed operating decision
+actually acts on a forecast (a 60-minute lead serves a materially different operational use than a
+24-hour lead), and whether the two horizons in fact serve two different decisions entirely (e.g. a
+short-horizon dispatch decision versus a day-ahead planning decision) rather than one horizon simply
+superseding the other. Until that scoping decision is made, both horizons' own existing production
+and experimental paths should be left as they are.
 
 ## References
 
-- `docs/data-science/decisions/forecast_correction_experiment.md` — the frozen record under audit.
-- `.planning/workstreams/ml-modeling/phases/04-forecast-correction-experiment-follow-up-audit-data-provenan/04-CONTEXT.md` — this phase's locked scope (D-01 through D-05).
-- `.planning/workstreams/ml-modeling/phases/04-forecast-correction-experiment-follow-up-audit-data-provenan/04-RESEARCH.md` — the persisted-artifact scope gap and fresh-holdout constraint that shape this phase.
-- `backend/forecast_experiment.py` — the harness under audit (assembly, filtering, scoring, boundary computation).
-- `backend/open_meteo_provider.py` — the truth-source provider module (Archive API / ERA5-ERA5-Land reanalysis).
-- `.planning/workstreams/ml-modeling/phases/04-forecast-correction-experiment-follow-up-audit-data-provenan/04-01-PLAN.md` — this plan.
+**The record under audit, and its appended amendment.**
+
+- `docs/data-science/decisions/forecast_correction_experiment.md` — the frozen record under audit,
+  read-only to this document except for Plan 04-05's permitted append-only `## Follow-up Audit
+  Amendment (Phase 4, D-04)` section.
+- `.planning/workstreams/ml-modeling/ROADMAP.md`'s `### Phase 3: Ampacity Forecast Correction
+  Experiment` entry — the frozen record's own closing ROADMAP disposition, five success criteria
+  each marked MET.
+
+**This phase's own locked scope and research.**
+
+- `.planning/workstreams/ml-modeling/phases/04-forecast-correction-experiment-follow-up-audit-data-provenan/04-CONTEXT.md`
+  — this phase's locked scope (D-01 through D-05).
+- `.planning/workstreams/ml-modeling/phases/04-forecast-correction-experiment-follow-up-audit-data-provenan/04-RESEARCH.md`
+  — the persisted-artifact scope gap and fresh-holdout constraint that shape this phase.
+- `.planning/workstreams/ml-modeling/phases/04-forecast-correction-experiment-follow-up-audit-data-provenan/04-PATTERNS.md`
+  — the reusable patterns (named audit bases, the frozen-window guard, the dispositions-table
+  convention) every plan in this phase, including this one, followed.
+
+**All six Phase 4 plan summaries.**
+
+- `.planning/workstreams/ml-modeling/phases/04-forecast-correction-experiment-follow-up-audit-data-provenan/04-01-SUMMARY.md`
+  — the audit spine, the three named bases, and the first provenance finding.
+- `.planning/workstreams/ml-modeling/phases/04-forecast-correction-experiment-follow-up-audit-data-provenan/04-02-SUMMARY.md`
+  — the data-provenance re-audit closing all five D-01 bullets.
+- `.planning/workstreams/ml-modeling/phases/04-forecast-correction-experiment-follow-up-audit-data-provenan/04-03-SUMMARY.md`
+  — the strengthened block-bootstrap comparison and the Austin-replicates/Midland-contradicted
+  finding.
+- `.planning/workstreams/ml-modeling/phases/04-forecast-correction-experiment-follow-up-audit-data-provenan/04-04-SUMMARY.md`
+  — the conservative-rating analysis, the measured convection crossover, and the matched-
+  overrating-rate retained-capacity headline.
+- `.planning/workstreams/ml-modeling/phases/04-forecast-correction-experiment-follow-up-audit-data-provenan/04-05-SUMMARY.md`
+  — the low-wind-sensitivity-is-physics measurement, the frozen record's six-item amendment, and
+  this record's own corrected verdict.
+- `.planning/workstreams/ml-modeling/phases/04-forecast-correction-experiment-follow-up-audit-data-provenan/04-06-SUMMARY.md`
+  — this plan's own closing summary: the lag-versus-covariate ablation, the integration-readiness
+  plan above, and the project's AI-use disclosure.
+
+**The audit module and its tests.**
+
+- `backend/forecast_experiment_audit.py` — every audit routine this phase built, including this
+  plan's own `lag_vs_covariate_ablation`/`cooling_rediscovery_hypothesis`.
+- `backend/tests/forecast_experiment_audit_test.py` — the full test suite backing every routine
+  above, network-free throughout.
+
+**The harness and production modules under audit (read, never modified by this phase).**
+
+- `backend/forecast_experiment.py` — the harness under audit (assembly, filtering, scoring, boundary
+  computation).
+- `backend/open_meteo_provider.py` — the truth-source provider module (Archive API / ERA5-ERA5-Land
+  reanalysis).
+- `backend/open_meteo_forecast_provider.py` — the forecast-archive provider module (Previous-Runs,
+  Single-Runs, Historical-Forecast endpoints) this plan's runtime-fetch outline builds on.
+- `backend/ampacity_forecast.py` — the production forecasting interface
+  (`forecast_ampacity`/`ForecastResult`/`forecast_columns`) this plan's packaging outline fits
+  behind without changing.
+- `backend/DLRSafetyMonitor.py` — the G6 safety gate whose fail-safe resolution this plan's fallback
+  ladder mirrors.
+- `.planning/workstreams/ml-modeling/REQUIREMENTS.md` — the standing fail-safe commitment this
+  plan's fallback section is not permitted to renegotiate.
+
+**Git-ignored evidence, not the artifact of record.** Every JSON report named below is generated,
+reproducible, and gitignored — this document, not any report file, is the citable record. Re-running
+the function named alongside each path reproduces it from the real repository:
+
+- `data/experiment/audit_basis_manifest.json` — `build_basis_manifest()`, Plan 04-01.
+- `data/experiment/leakage_probe_coverage_report_<CORRIDOR>.json` — `leakage_probe_coverage_report(corridor)`, Plan 04-02.
+- `data/experiment/audit_ablation_report_<CORRIDOR>.json` — `ablation_basis_report(corridor)`, Plan 04-03.
+- `data/experiment/audit_overrating_report_<CORRIDOR>.json` — `overrating_basis_report(corridor)`, Plan 04-04.
+- `data/experiment/audit_ablation_features_<CORRIDOR>.json` — `lag_vs_covariate_ablation(corridor)` /
+  `cooling_rediscovery_hypothesis(corridor)`, this plan (Plan 04-06) — the per-variant MAE/RMSE/
+  margins and the cooling-rediscovery correlations transcribed into this section above.
