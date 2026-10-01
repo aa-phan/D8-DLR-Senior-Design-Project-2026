@@ -312,7 +312,7 @@ are carried in each plan's `requirements:` field, exactly as Phase 3's plans use
      needs-that-dataset work split, and packaging/runtime-fetch/fallback/shadow-eval/monitoring/
      rollback outlined — with the 60-minute-vs-24-hour-vs-both product question named explicitly as
      unresolved rather than assumed.
-**Plans**: 3/6 plans executed across 6 waves (planned 2026-09-30; sequential by necessity — each wave's findings
+**Plans**: 4/6 plans executed across 6 waves (planned 2026-09-30; sequential by necessity — each wave's findings
 are cited by the next, and all six plans write to the same new audit record, so no two can run in
 parallel without a file conflict)
 
@@ -341,7 +341,7 @@ parallel without a file conflict)
 
 **Wave 4** *(blocked on Wave 3)*
 
-- [ ] 04-04-PLAN.md — D-03's genuinely new analysis: overrating frequency, magnitude and run length by
+- [x] 04-04-PLAN.md — D-03's genuinely new analysis: overrating frequency, magnitude and run length by
   weather regime with the low-wind boundary set at the conductor's own measured convection crossover,
   lower-tail quantiles fitted/calibrated/checked on three disjoint periods via pinball loss, and
   retained capacity at matched overrating rates as the headline comparison
@@ -372,7 +372,7 @@ and may be executed first or in parallel if that better fits available capacity)
 | 1. Forecasting Model | 3/3 | Complete    | 2026-09-24 |
 | 2. Anomaly Detection Model | 5/5 | Complete   | 2026-09-28 |
 | 3. Ampacity Forecast Correction Experiment | 7/7 | Complete   | 2026-09-30 |
-| 4. Forecast Correction Follow-up Audit | 3/6 | In Progress|  |
+| 4. Forecast Correction Follow-up Audit | 4/6 | In Progress|  |
 
 ## Backlog
 
