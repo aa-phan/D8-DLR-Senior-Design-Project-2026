@@ -459,9 +459,152 @@ with more than one distinct spacing reported.
 
 ## Strengthened comparison (D-02)
 
-Placeholder — filled by Plan 04-03 (block-bootstrap confidence intervals with block-length
-sensitivity, direct pairwise comparisons, MAE+RMSE reporting, the multiple-comparisons/fresh-holdout
-reservation).
+**Basis.** Both corridors were re-scored on the real **ABLATION** basis: all seven candidates were
+evaluated on the 784 validation rows per corridor (782 after Plan 04-01's 2-row pin-safety clip),
+with the three fitted arms (`ml_wind_corrected`, `ml_cooling_corrected`, `reference_ml_refit_24h`)
+refit on the ABLATION TRAIN rows (2,360 rows/corridor) alone — not train+val, unlike the frozen
+harness's own test-scoring convention. This is the one deliberate difference from Phase 3's setup:
+it costs a smaller fit sample in exchange for a genuinely held-out validation score for exactly the
+three candidates this audit most needs to re-examine, verified by assertion that the maximum fit
+timestamp is strictly earlier than the minimum scored timestamp (a test proves the assertion raises
+on a deliberately overlapping pair). An ABLATION-basis number may support replication of the frozen
+record's own candidate ordering and relative-ordering findings between candidates; it may not claim
+confirmation — this is not a confirmation basis — because this calendar range (2024-01-20 through 2026-03-16) was
+already assembled and read during Phase 3's own development and its own validation-split runs
+(Plans 03-04/03-05) — a number computed on it is a replication of already-seen evidence, not new
+evidence. The **FRESH** branch was not attempted beyond a zero-row check: the resolved fresh window
+`[2026-09-30, 2026-09-30]` produced zero rows after the exact-lead filter (both corridors), matching
+Plan 04-01's checkpoint-approved finding exactly — no confirmation claim is built on a below-minimum
+sample.
+
+### Does the candidate ordering replicate?
+
+**AUSTIN_CORPUS_CHRISTI replicates.** `ml_cooling_corrected` wins (MAE 107.190, RMSE 140.031),
+beating persistence by 49.121 A (95% CI [40.746, 57.623], excludes zero) and beating the refit model
+by 21.198 A (95% CI [15.966, 26.340], excludes zero) — the same winner the frozen record reports.
+
+**MIDLAND_EL_PASO does NOT replicate — this is the phase's single most important finding.**
+`ml_wind_corrected` now leads by MAE (127.129), ahead of `ml_cooling_corrected` (132.239) and
+`reference_ml_refit_24h` (135.547). Cooling's margin over the refit model is 3.308 A, 95% CI
+[-2.667, 9.055] — **statistically indistinguishable from zero** — where the frozen record reported a
+distinguishable edge at this exact pair (132.865 vs. 133.525 MAE; see below). The frozen record's
+candidate ordering is **contradicted** at this corridor on this real-data basis: the method that was
+reported as the winner no longer carries a distinguishable advantage over the runner-up it was
+declared to beat, and a different candidate (`ml_wind_corrected`) now has the lowest point MAE.
+Neither ordering is comparable row-for-row to the frozen numbers — a smaller fit sample was used,
+scored on a different held-out period — but the direction of this disagreement, not its exact
+magnitude, is the finding: a decision this audit exists to check for would have shipped the wrong
+answer on evidence this fragile.
+
+### Block-bootstrap intervals with block-length sensitivity
+
+| Margin | Corridor | Block 1 CI | Block 4 CI | Block 8 CI | Block 28 CI | Stable? |
+|---|---|---|---|---|---|---|
+| cooling vs. persistence | AUSTIN_CORPUS_CHRISTI | [40.774, 57.529] | [39.043, 58.359] | [38.142, 59.302] | [36.076, 62.004] | Yes |
+| cooling vs. refit | AUSTIN_CORPUS_CHRISTI | [15.875, 26.339] | [14.623, 26.638] | [14.311, 27.027] | [13.328, 27.504] | Yes |
+| cooling vs. persistence | MIDLAND_EL_PASO | [19.918, 37.416] | [19.102, 38.123] | [18.990, 38.637] | [17.870, 39.189] | Yes |
+| cooling vs. refit | MIDLAND_EL_PASO | [-2.562, 9.041] | [-3.042, 9.487] | [-2.992, 9.307] | [-3.074, 8.958] | Yes (never excludes zero at any length) |
+| **wind vs. refit** | **MIDLAND_EL_PASO** | **[0.254, 16.641] excl=True** | **[-0.127, 17.581] excl=False** | **[-0.190, 17.337] excl=False** | **[-0.675, 18.007] excl=False** | **No — flips at block lengths 4, 8, 28** |
+
+At AUSTIN_CORPUS_CHRISTI, every pairwise margin's favourable-exclusion flag is stable across all
+four block lengths (percentile widths run 1.03x–1.57x the i.i.d. percentile width at the same
+confidence level, mean 1.30x) — the frozen record's intervals, while narrower than these, do not
+change which margins are distinguishable from noise. At MIDLAND_EL_PASO the width ratio is smaller
+on average (0.98x–1.31x, mean 1.11x) but one margin **flips**: `ml_wind_corrected` vs.
+`reference_ml_refit_24h` excludes zero at block length 1 (CI [0.254, 16.641]) but stops excluding
+zero at block lengths 4, 8, and 28 (e.g. block 28: [-0.675, 18.007]). The harness's own accelerated
+i.i.d. (BCa) interval for this same margin was already barely excluding zero (CI low = 0.036) before
+any autocorrelation structure was accounted for — the block interval shows this apparent "win" is
+fragile at the frozen record's own interval method, not only at this audit's stricter one. **This
+means the frozen record's intervals are optimistic at Midland**: a margin reported there as
+distinguishable would not survive a block-length sweep accounting for serial correlation in the
+hourly series, and the corrected language in Plan 04-05 must say so.
+
+### Direct pairwise comparison
+
+| Baseline → Candidate | Corridor | Point margin (A) | 95% CI (percentile) | Excludes zero favorably? |
+|---|---|---|---|---|
+| persistence → cooling | AUSTIN_CORPUS_CHRISTI | 49.121 | [40.746, 57.623] | Yes |
+| raw_forecast → cooling | AUSTIN_CORPUS_CHRISTI | 4.123 | [-1.390, 9.724] | No |
+| wind_corrected → cooling | AUSTIN_CORPUS_CHRISTI | 5.365 | [-1.609, 12.465] | No |
+| refit → cooling | AUSTIN_CORPUS_CHRISTI | 21.198 | [15.966, 26.340] | Yes |
+| persistence → cooling | MIDLAND_EL_PASO | 28.742 | [19.962, 37.640] | Yes |
+| raw_forecast → cooling | MIDLAND_EL_PASO | 27.748 | [20.961, 34.655] | Yes |
+| wind_corrected → cooling | MIDLAND_EL_PASO | -5.110 | [-11.987, 1.924] | No (wind now ahead) |
+| refit → cooling | MIDLAND_EL_PASO | 3.308 | [-2.667, 9.055] | No |
+
+`ml_cooling_corrected` is statistically distinguishable from `persistence_24h` at both corridors —
+but beating persistence is a **different comparison axis**: persistence is temporal extrapolation
+(the ampacity 24 hours ago), not a physics-informed forecast, and establishes nothing about
+superiority over `raw_forecast`, `ml_wind_corrected`, or `reference_ml_refit_24h`. Against those
+three real candidates, cooling's margin excludes zero only once (vs. refit at Austin); every other
+real-candidate comparison at both corridors is statistically indistinguishable from zero, including
+the margin against the current real winner's own closest competitor. `oracle_observed_future_wind`
+appears nowhere in this table — it is a labelled diagnostic (MAE 12.873/12.254, an unrealizable
+upper bound using observed future wind), never a comparison reference.
+
+### Both error metrics, and the disagreements
+
+| Candidate | MAE (A), AUSTIN_CORPUS_CHRISTI | RMSE (A), AUSTIN_CORPUS_CHRISTI | MAE (A), MIDLAND_EL_PASO | RMSE (A), MIDLAND_EL_PASO |
+|---|---|---|---|---|
+| persistence_24h | 156.311 | 199.649 | 160.981 | 199.652 |
+| raw_forecast | 111.313 | 147.449 | 159.987 | 207.182 |
+| ml_wind_corrected | 112.554 | 146.899 | 127.129 | 163.348 |
+| **ml_cooling_corrected** | **107.190** | **140.031** | **132.239** | **163.957** |
+| reference_ml_refit_24h | 128.388 | 161.521 | 135.547 | 165.596 |
+
+The frozen record's own Midland numbers for the cooling-versus-refit pair were MAE 132.865 vs.
+133.525 (a 0.66 A MAE advantage for cooling) against RMSE 170.869 vs. 166.668 (a 4.2 A RMSE
+*disadvantage* for cooling) — a MAE/RMSE ordering disagreement the frozen record already carried.
+This replication's own measurement reproduces the same qualitative pattern on different rows: MAE
+favors cooling by a similarly thin margin (132.239 vs. 135.547, now not even distinguishable from
+zero per the pairwise table above) while RMSE still favors refit (163.957 vs. 165.596, though here
+the gap narrows to near-parity). A candidate that wins on mean absolute error while losing on
+root-mean-square error has a lighter typical error and a heavier tail — and for a rating decision the
+tail is the part that matters, because it is the large errors that would have overstated capacity.
+If the frozen record's verdict text had led with RMSE instead of MAE at Midland, it would have read
+differently: `reference_ml_refit_24h`, not `ml_cooling_corrected`, has the better (lower) RMSE at
+this corridor in the frozen numbers (166.668 vs. 170.869), the opposite of what the MAE-led verdict
+states.
+
+### Multiple comparisons and the reserved period
+
+Six candidates (persistence, nwp_wind_delta, raw_forecast, ml_wind_corrected, ml_cooling_corrected,
+reference_ml_refit_24h) were scored once against one baseline (persistence) at each corridor, and a
+winner resolved by largest point margin — a single read used for both discovery (which candidate
+looks best) and confirmation (is that candidate actually better), the exact conflation a
+no-peeking discipline exists to prevent. No correction for multiple comparisons was applied to
+either the frozen record's test-set read or this replication's ABLATION-basis read. This phase
+therefore reserves a genuinely fresh chronological period for any future confirmation claim: it
+begins the day after `FROZEN_WINDOW_END`, **2026-09-30**, requires a minimum of **56 rows** (**14.0
+days** at this lead's four-scored-rows-per-day exact-lead filter) before any statistic may be
+computed on it, and is enforced disjoint from Phase 3's train, validation, and test ranges by the
+same frozen-window guard (`assert_basis_excludes_frozen_test_rows`) Plan 04-01 built — the FRESH
+basis in this plan's own measurement run confirmed zero rows available today, so no revised or
+promoted method is settled until a future run reports a nonzero FRESH count there.
+
+### The synthetic configuration selection
+
+Plan 03-05's pooling selection for arm 3 (pooled, `LinearRegression`) and target selection for arm 4
+(log-ratio, `GradientBoostingRegressor`) were made on representative **synthetic** data during
+development, because that plan's own harness does not fetch real corridor data. This does not
+invalidate the real-data test performed here or in Phase 3 — that test ran on real corridor rows,
+and the configurations were fixed before either test split was read — but it equally does not
+establish that those configurations are optimal for real data, because the selection process itself
+never saw a single real corridor row. This plan deliberately reused those same configurations
+unchanged rather than re-selecting against real data, so that its numbers remain comparable in kind
+to the frozen ones; any future re-tuning of arm 3/4 pooling or target choice should be run against
+real development data, not synthetic data, to close this gap.
+
+### D-02 dispositions
+
+| Bullet | Disposition | Where answered |
+|---|---|---|
+| Block-bootstrap intervals + block-length sensitivity | Confirmed issue at Midland (one margin's exclusion flips at longer block lengths; frozen intervals are optimistic there) | "Block-bootstrap intervals with block-length sensitivity" above |
+| Direct pairwise comparison | Confirmed: cooling distinguishable from persistence only; indistinguishable from raw_forecast/wind_corrected at Austin and from refit at Midland | "Direct pairwise comparison" above |
+| MAE + RMSE reporting, including the Midland divergence | Confirmed: MAE/RMSE ordering disagreement reproduces at Midland; RMSE favors refit, not cooling | "Both error metrics, and the disagreements" above |
+| Multiple-comparisons / fresh-holdout reservation | Confirmed issue (single-read discovery+confirmation conflation); fresh period reserved from 2026-09-30, 56-row/14-day minimum, currently zero rows available | "Multiple comparisons and the reserved period" above |
+| Synthetic-data configuration selection | Confirmed limitation, both halves stated; real-data re-tuning recommended for future work | "The synthetic configuration selection" above |
 
 ## Conservative-rating analysis (D-03)
 
