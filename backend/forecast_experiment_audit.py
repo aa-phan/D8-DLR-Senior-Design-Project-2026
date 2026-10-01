@@ -42,6 +42,7 @@ import numpy as np
 import pandas as pd
 import scipy.stats
 
+import ampacity_forecast
 import config
 import corridor_discretization
 import experiment_splits
@@ -4139,3 +4140,569 @@ def reverify_convective_seam_bit_identity() -> dict:
         "perturbed_override_changes_result": perturbed_override_changes_result,
         "sub_floor_attempt": sub_floor_attempt,
     }
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 04-06 Task 1: the lag-versus-covariate feature ablation for the refit
+# reference model (`reference_ml_refit_24h`), and the cooling-rediscovery
+# hypothesis test. Answers the frozen record's own Open Question -- why the
+# reference "ml" model reversed from a loss at 60 minutes to a win at 24
+# hours -- with a measurement rather than a second deferral.
+#
+# Reuses `ablation_basis_report`'s own proven assembly sequence (Plan 04-03)
+# almost exactly: corridor_frame at the pinned frozen window, calendar_split,
+# exact-lead filter, pin-safety clip, frozen-window guard, stacked_train for
+# fitting, train_val_stacked for the scored feature table. The ONE
+# deliberate difference is downstream of that assembly: instead of fitting
+# ONE arm-5 estimator on the full feature set, this fits THREE -- all
+# features, lags only, covariates only -- each a fresh
+# `forecast_training.CANDIDATE_ESTIMATORS["MLPRegressor"]()` (same family,
+# same hardcoded seed, same target horizon), built by column-subsetting the
+# SAME already-null-dropped feature frame `build_training_matrix` returns,
+# never by zeroing a column in place (a zeroed lag is a constant lag, which
+# an MLP can still exploit as an intercept shift -- the ablation would
+# measure nothing).
+# ──────────────────────────────────────────────────────────────────────────
+
+def _ablation_features_report_path(corridor: str) -> str:
+    return os.path.join(
+        config.FORECAST_EXPERIMENT_CACHE_DIR,
+        f"audit_ablation_features_{corridor}.json",
+    )
+
+
+def _feature_column_partition() -> dict:
+    """
+    Partition `ampacity_forecast.ML_FEATURE_COLUMNS` (the one ordered
+    feature-name tuple both the runtime "ml" method and this experiment's
+    arm 5 are built from, `backend/ampacity_forecast.py:66-71`) into the
+    lag-feature set -- enumerated directly from
+    `config.FORECAST_ML_LAG_HOURS` (`backend/config.py:252`) as
+    `dlr_amps_lag_{h}h` for each configured lag hour, never pattern-matched
+    off the column names -- and everything else: the rolling-mean history
+    feature (`dlr_amps_roll_mean_{window}h`, itself built from past
+    `dlr_amps` values but not one of the enumerated lag columns), the
+    weather covariates (`air_temp`, `wind_speed`, `solar_radiation`), and
+    the two cyclical time encodings (`hour_sin`, `hour_cos`).
+
+    Asserts disjointness, non-emptiness, and union-completeness against the
+    REAL column names returned by `ML_FEATURE_COLUMNS` -- not merely
+    against each other -- so a future change to either config constant that
+    silently breaks the partition (e.g. a lag hour added to
+    `FORECAST_ML_LAG_HOURS` but the enumeration not updated to match) is
+    caught here as a loud `ValueError`, rather than producing two
+    covertly-overlapping "ablation" variants that would make the whole
+    measurement meaningless.
+
+    Returns:
+        `{"lag": sorted list, "covariate": sorted list, "all": sorted
+        list}` of column names, plus "lag_ordered"/"covariate_ordered"/
+        "all_ordered" carrying the SAME sets in `ML_FEATURE_COLUMNS`'s own
+        order (the order every variant's estimator is actually built in).
+
+    Raises:
+        ValueError: naming the offending set(s), if the lag set or the
+            covariate set is empty, if they overlap, or if their union does
+            not equal the full real column set.
+    """
+    all_columns = tuple(ampacity_forecast.ML_FEATURE_COLUMNS)
+    all_set = set(all_columns)
+    lag_set = {f"dlr_amps_lag_{h}h" for h in config.FORECAST_ML_LAG_HOURS}
+    covariate_set = all_set - lag_set
+
+    if not lag_set or not covariate_set:
+        raise ValueError(
+            f"_feature_column_partition: lag set {sorted(lag_set)} and "
+            f"covariate set {sorted(covariate_set)} must both be "
+            f"non-empty -- a mis-split would make one ablation variant "
+            f"either identical to the full model or empty"
+        )
+    if lag_set & covariate_set:
+        raise ValueError(
+            f"_feature_column_partition: lag and covariate sets overlap: "
+            f"{sorted(lag_set & covariate_set)} -- the 'covariates only' "
+            f"variant would still see a lag feature"
+        )
+    if (lag_set | covariate_set) != all_set:
+        raise ValueError(
+            f"_feature_column_partition: lag ∪ covariate does not "
+            f"equal the real feature column set -- symmetric difference: "
+            f"{sorted(all_set ^ (lag_set | covariate_set))}"
+        )
+
+    return {
+        "lag": sorted(lag_set),
+        "covariate": sorted(covariate_set),
+        "all": sorted(all_set),
+        "lag_ordered": [c for c in all_columns if c in lag_set],
+        "covariate_ordered": [c for c in all_columns if c in covariate_set],
+        "all_ordered": list(all_columns),
+    }
+
+
+def _margin_entry(candidate_residual, baseline_residual, block_lengths) -> dict:
+    """
+    One pairwise-margin entry, in the exact shape `ablation_basis_report`'s
+    own `pairwise` section already uses (Plan 04-03) -- `iid_bca` (the
+    frozen harness's own accelerated-interval method), `iid_percentile` and
+    `block` (the method-matched percentile comparator and the full
+    block-length sweep, both from `block_length_sensitivity`), plus the
+    sweep's own stability verdict. Reused verbatim by this task's own
+    margin-vs-persistence and margin-vs-all-features computations so both
+    carry the SAME three labelled interval families.
+    """
+    sensitivity = block_length_sensitivity(candidate_residual, baseline_residual, block_lengths=block_lengths)
+    return {
+        "iid_bca": forecast_experiment.paired_bootstrap_margin(candidate_residual, baseline_residual),
+        "iid_percentile": sensitivity["iid_percentile"],
+        "block": sensitivity["by_block_length"],
+        "block_lengths_used": sensitivity["block_lengths_used"],
+        "conclusion_stable": sensitivity["conclusion_stable"],
+        "disagreeing_block_lengths": sensitivity["disagreeing_block_lengths"],
+    }
+
+
+def _correlate_aligned(a, b, *, a_name: str, b_name: str, a_index=None, b_index=None) -> dict:
+    """
+    Pearson and Spearman correlation between two arrays that MUST already
+    be scored on the identical row index -- the sibling of
+    `_validate_paired_shapes` for a correlation rather than a paired-margin
+    computation. A length match alone is not proof of row alignment (two
+    series of the same length could still be scored on different
+    timestamps); when `a_index`/`b_index` are both given, they are compared
+    by VALUE (`pandas.Index.equals`), not merely by length, so a caller
+    that accidentally correlates two differently-ordered or
+    differently-dated series gets a loud `ValueError` naming both names
+    rather than a confident, meaningless number.
+
+    Returns:
+        `{"pearson": float, "spearman": float}`.
+
+    Raises:
+        ValueError: naming both shapes, if `a` and `b` are not the same
+            length.
+        ValueError: naming both names, if `a_index`/`b_index` are both
+            given and are not equal.
+    """
+    arr_a = np.asarray(a, dtype=float)
+    arr_b = np.asarray(b, dtype=float)
+    if arr_a.shape != arr_b.shape:
+        raise ValueError(
+            f"_correlate_aligned: {a_name} has shape {arr_a.shape} but "
+            f"{b_name} has shape {arr_b.shape} -- both must be scored on "
+            f"the identical row index"
+        )
+    if a_index is not None and b_index is not None:
+        if not pd.Index(a_index).equals(pd.Index(b_index)):
+            raise ValueError(
+                f"_correlate_aligned: {a_name}'s index does not equal "
+                f"{b_name}'s index -- correlating them would pair the "
+                f"wrong rows even though the lengths happen to match"
+            )
+
+    pearson_r, _ = scipy.stats.pearsonr(arr_a, arr_b)
+    spearman_r, _ = scipy.stats.spearmanr(arr_a, arr_b)
+    return {"pearson": float(pearson_r), "spearman": float(spearman_r)}
+
+
+def _load_ablation_report(corridor: str, *, report_path: str = None) -> dict:
+    """
+    Load Plan 04-03's persisted `audit_ablation_report_<CORRIDOR>.json`
+    (`ablation_basis_report`'s own output) -- never re-score arm 5 or the
+    cooling-correction arm to get what is already measured and persisted
+    there.
+
+    Raises:
+        FileNotFoundError: naming the missing path and the function that
+            produces it, if the report does not exist -- this task's own
+            `<precondition>` names this as a re-runnable, idempotent step,
+            not a silent fallback to inventing a number.
+    """
+    if report_path is None:
+        report_path = _ablation_report_path(corridor)
+    if not os.path.exists(report_path):
+        raise FileNotFoundError(
+            f"_load_ablation_report: {report_path} does not exist -- run "
+            f"ablation_basis_report({corridor!r}) first (Plan 04-03 Task "
+            f"2); that path is cached and idempotent"
+        )
+    with open(report_path, "r", encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def _cooling_rediscovery_from_predictions(
+    corridor: str, predictions: dict, val_filtered: pd.DataFrame, *, ablation_report_path: str = None,
+) -> dict:
+    """
+    D-05's sharper question: is the refit reference model's covariate-only
+    behaviour correlated with the cooling correction's own behaviour, and
+    is that correlation specific to the covariate-only variant or just what
+    any two skilful models of the same series look like?
+
+    Loads Plan 04-03's persisted `ml_cooling_corrected` residuals (never
+    re-scoring that arm) and reconstructs its PREDICTIONS on the scored
+    index from `truth - residual` -- the truth column comes from THIS run's
+    own `val_filtered`, which is the same deterministic ABLATION-basis
+    assembly `ablation_basis_report` used to produce the persisted
+    residuals in the first place, so `truth - persisted_residual` recovers
+    exactly the prediction the persisted run made, without re-running the
+    cooling-correction model at all.
+
+    For each of the three ablation variants, computes the Pearson and
+    Spearman correlation between that variant's own predictions and the
+    reconstructed cooling predictions, and the same pair between their
+    RESIDUALS -- asserting, via `_correlate_aligned`, that both sides are
+    scored on the identical `datetime_utc` index before correlating, so a
+    length coincidence can never silently pair the wrong rows.
+
+    Raises:
+        ValueError: naming both row counts, if the persisted cooling
+            residual array and this run's own scored validation frame
+            disagree in length -- the persisted report and this run's own
+            ABLATION basis would then disagree about what was scored.
+    """
+    ablation_report = _load_ablation_report(corridor, report_path=ablation_report_path)
+    cooling_residual = np.asarray(ablation_report["residuals"]["ml_cooling_corrected"], dtype=float)
+    truth = val_filtered["truth_dlr_amps"].to_numpy(dtype=float)
+    if cooling_residual.shape != truth.shape:
+        raise ValueError(
+            f"_cooling_rediscovery_from_predictions: the persisted "
+            f"ml_cooling_corrected residual has {cooling_residual.shape[0]} "
+            f"row(s) but this corridor's own scored ABLATION validation "
+            f"frame has {truth.shape[0]} row(s) -- the persisted report "
+            f"(Plan 04-03) and this run's own basis disagree in size, so "
+            f"correlating them would pair the wrong rows"
+        )
+    cooling_pred = truth - cooling_residual
+    scored_index = pd.Index(val_filtered["datetime_utc"])
+
+    result = {}
+    for name, pred in predictions.items():
+        pred_corr = _correlate_aligned(
+            pred, cooling_pred, a_name=f"{name}_predictions", b_name="cooling_predictions",
+            a_index=scored_index, b_index=scored_index,
+        )
+        residual_corr = _correlate_aligned(
+            truth - pred, cooling_residual, a_name=f"{name}_residuals", b_name="cooling_residuals",
+            a_index=scored_index, b_index=scored_index,
+        )
+        result[name] = {"predictions": pred_corr, "residuals": residual_corr}
+
+    covariates_resid_r = result["covariates_only"]["residuals"]["pearson"]
+    covariates_pred_r = result["covariates_only"]["predictions"]["pearson"]
+    lags_resid_r = result["lags_only"]["residuals"]["pearson"]
+    full_resid_r = result["all_features"]["residuals"]["pearson"]
+    result["interpretation"] = (
+        f"Residual correlation is the more informative of the two measures here, and the two "
+        f"should not be conflated: two models can produce highly correlated PREDICTIONS simply "
+        f"because both track the same strong diurnal ampacity signal, while correlated RESIDUALS "
+        f"mean the two models are failing in the SAME places, which is the signature of a shared "
+        f"mechanism rather than merely a shared target. The covariates-only variant's residual "
+        f"correlation against ml_cooling_corrected's own residuals is {covariates_resid_r:.3f} "
+        f"(its prediction correlation is {covariates_pred_r:.3f}), compared against "
+        f"{lags_resid_r:.3f} for the lags-only variant and {full_resid_r:.3f} for the full-feature "
+        f"variant, so the covariates-only number has comparators rather than standing alone. "
+        f"A high correlation here is CONSISTENT WITH -- but does not PROVE -- the covariate-only "
+        f"variant implicitly rediscovering a cooling-like correction, since two models trained on "
+        f"the same series can share an error structure for reasons that have nothing to do with "
+        f"the convective term."
+    )
+    return result
+
+
+def lag_vs_covariate_ablation(corridor: str, *, block_lengths=None, report_path: str = None) -> dict:
+    """
+    Answer the frozen record's own Open Question (`docs/data-science/
+    decisions/forecast_correction_experiment.md` `## Open Questions`, "Why
+    did the reference `"ml"` model reverse...") with a measurement: fit
+    THREE variants of the SAME refit-reference estimator family
+    (`forecast_training.CANDIDATE_ESTIMATORS["MLPRegressor"]`) on the real
+    ABLATION train rows, differing ONLY in which named feature columns each
+    receives -- all features, lag features only, weather-covariate-and-
+    time-encoding features only -- and score all three on the real
+    ABLATION validation rows.
+
+    Assembly mirrors `ablation_basis_report`'s own proven sequence (Plan
+    04-03) exactly up to the point of fitting: the pinned-window corridor
+    frame, `_default_split_boundaries`, `calendar_split`, the exact-lead
+    filter, `assert_filtered_split_disjoint`, the pin-safety clip to
+    strictly before `FROZEN_TEST_SPLIT_START`, and the frozen-window guard
+    on both the fit-side and scored-side frames BEFORE anything else. Arm
+    5's own truth frame is built the harness's way
+    (`forecast_experiment._arm5_truth_frame`) from `stacked_train` (fit) and
+    from the combined `train_val_stacked` range reindexed onto the
+    validation split's own anchor timestamps (scored) -- the SAME
+    fit-on-train-alone, score-on-genuinely-held-out-rows discipline
+    `ablation_basis_report` already established for arm 5, never the
+    frozen harness's own train+val convention.
+
+    `build_training_matrix` is called ONCE per side (fit, scored) with the
+    FULL feature set, so its own null-dropping (`RESEARCH.md Pitfall 4` --
+    a lag/rolling-window warm-up has no valid value for the earliest rows)
+    determines ONE row set shared by all three variants; each variant then
+    SELECTS a column subset from that already-cleaned frame. This is
+    deliberate: if each variant instead called `build_training_matrix`
+    independently, subsetting only part of `ampacity_forecast.
+    build_ml_features`'s pre-subset output, the null-dropping itself would
+    not change (every feature is still computed over the same raw frame
+    before being selected), so this is also what guarantees the three
+    variants are scored on the identical row index that `_correlate_aligned`
+    later checks.
+
+    Each variant's MAE/RMSE/margin-against-persistence/margin-against-the-
+    full-feature-variant (each with a block-bootstrap interval across
+    `block_lengths`, default `_DEFAULT_ABLATION_BLOCK_LENGTHS`) is reported,
+    plus a structured `finding` stating whether the measured pattern
+    supports or refutes the frozen record's own proposed explanation (that
+    the covariates-only variant approaches the full model's skill while the
+    lags-only variant does not).
+
+    Also composes `cooling_rediscovery_hypothesis`'s own result into the
+    SAME report under the `cooling_rediscovery` key (see
+    `_cooling_rediscovery_from_predictions`) -- one combined git-ignored
+    JSON report per corridor, per this task's own `<action>` instruction,
+    rather than two divergent computations of the same three variants'
+    predictions.
+
+    Returns:
+        A dict with `corridor`, `lead_hours`, `feature_columns` (`lag`/
+        `covariate`/`all` name lists), `variants` (keyed `all_features`/
+        `lags_only`/`covariates_only`, each with `mae`/`rmse`/`rows`/
+        `feature_names`/`margin_vs_persistence`/`margin_vs_all_features`),
+        `ablation_guard_passed_fit`/`ablation_guard_passed_scored`,
+        `max_fit_timestamp`/`min_scored_timestamp`, `finding`, and
+        `cooling_rediscovery` (see `_cooling_rediscovery_from_predictions`).
+        Also persisted to `report_path` (default
+        `data/experiment/audit_ablation_features_<CORRIDOR>.json`).
+
+    Raises:
+        ValueError: naming the valid corridors, for an unknown `corridor`.
+        ValueError: naming both offending timestamps, if the fit frame's
+            own max timestamp is not strictly before the scored frame's own
+            min timestamp (the measurement would not be out-of-sample).
+    """
+    valid_corridors = sorted(config.CORRIDOR_ENDPOINTS)
+    if corridor not in config.CORRIDOR_ENDPOINTS:
+        raise ValueError(
+            f"lag_vs_covariate_ablation: unknown corridor {corridor!r} -- "
+            f"valid corridors: {valid_corridors}"
+        )
+    if block_lengths is None:
+        block_lengths = _DEFAULT_ABLATION_BLOCK_LENGTHS
+    if report_path is None:
+        report_path = _ablation_features_report_path(corridor)
+
+    lead_hours = config.FORECAST_EXPERIMENT_PRIMARY_LEAD_HOURS
+    city_a, city_b = config.CORRIDOR_ENDPOINTS[corridor]
+
+    partition = _feature_column_partition()
+    lag_cols, covariate_cols, all_cols = partition["lag"], partition["covariate"], partition["all"]
+
+    # ---- The real ABLATION-basis corridor frame, the SAME boundary/filter/
+    # pin-safety-clip discipline `ablation_basis_report` already uses, so
+    # this report's val split is the SAME ~782-row ABLATION validation
+    # basis Plan 04-01 measured. ----
+    corridor_frame = forecast_experiment.corridor_anchored_pair_frame(
+        corridor, FROZEN_WINDOW_START, FROZEN_WINDOW_END, lead_hours=lead_hours,
+    )
+    boundaries = forecast_experiment._default_split_boundaries(corridor_frame)
+    train, val, test = experiment_splits.calendar_split(corridor_frame, boundaries)
+    train_filtered = forecast_experiment.filter_to_exact_lead(train, lead_hours=lead_hours)
+    val_filtered = forecast_experiment.filter_to_exact_lead(val, lead_hours=lead_hours)
+    test_filtered = forecast_experiment.filter_to_exact_lead(test, lead_hours=lead_hours)
+    forecast_experiment.assert_filtered_split_disjoint(train_filtered, val_filtered, test_filtered)
+    del test_filtered  # never referenced again -- this task never touches the frozen test split.
+
+    pinned_boundary = pd.Timestamp(FROZEN_TEST_SPLIT_START, tz="UTC")
+    train_filtered = train_filtered[train_filtered["datetime_utc"] < pinned_boundary].reset_index(drop=True)
+    val_filtered = val_filtered[val_filtered["datetime_utc"] < pinned_boundary].reset_index(drop=True)
+
+    # The frozen-window guard runs on BOTH the fit-side and scored-side
+    # frames BEFORE anything else touches either.
+    fit_guard = assert_basis_excludes_frozen_test_rows(train_filtered, basis="ABLATION")
+    scored_guard = assert_basis_excludes_frozen_test_rows(val_filtered, basis="ABLATION")
+
+    max_fit_timestamp = train_filtered["datetime_utc"].max()
+    min_scored_timestamp = val_filtered["datetime_utc"].min()
+    if not (max_fit_timestamp < min_scored_timestamp):
+        raise ValueError(
+            f"lag_vs_covariate_ablation: fit frame's own max timestamp "
+            f"{max_fit_timestamp} is not strictly before the scored "
+            f"frame's own min timestamp {min_scored_timestamp} -- the "
+            f"measurement is not out-of-sample"
+        )
+
+    # ---- Stacked, per-city, ABLATION-only frames -- train alone for
+    # fitting, train+val combined for building the scored feature table
+    # (arm 5's lag features need the full hourly cadence, never the
+    # exact-lead-filtered subset). Never `stacked_test`. ----
+    stacked_full = forecast_experiment._stacked_pair_frame(
+        corridor, FROZEN_WINDOW_START, FROZEN_WINDOW_END, lead_hours=lead_hours,
+    )
+    stacked_train, stacked_val, stacked_test = experiment_splits.calendar_split(stacked_full, boundaries)
+    del stacked_test  # never touched again -- this task never assembles against the frozen test window.
+    train_val_stacked = (
+        pd.concat([stacked_train, stacked_val], ignore_index=True)
+        .sort_values("datetime_utc").reset_index(drop=True)
+    )
+
+    # ---- FIT: arm 5's truth frame built from ABLATION TRAIN rows ALONE
+    # (mirroring `fit_fitted_arms(stacked_train, ...)`'s own arm-5 fit),
+    # the FULL feature set built ONCE so all three variants share one
+    # null-dropped row set. ----
+    fit_truth_frame = forecast_experiment._arm5_truth_frame(stacked_train, city_a, city_b)
+    x_fit_full, y_fit = forecast_training.build_training_matrix(
+        fit_truth_frame, horizon_minutes=lead_hours * 60,
+    )
+
+    # ---- SCORE: arm 5's truth frame built from the combined train+val
+    # range, reindexed onto the validation split's own anchor timestamps --
+    # the SAME reindex `ablation_basis_report`/`fit_fitted_arms` use. ----
+    score_truth_frame = forecast_experiment._arm5_truth_frame(train_val_stacked, city_a, city_b)
+    x_score_all, _ = forecast_training.build_training_matrix(
+        score_truth_frame, horizon_minutes=lead_hours * 60,
+    )
+    anchor_index = pd.DatetimeIndex(pd.to_datetime(val_filtered["anchor_datetime_utc"], utc=True))
+    x_score_full = x_score_all.reindex(anchor_index)
+    missing_mask = x_score_full.isna().any(axis=1)
+    if missing_mask.any():
+        missing = anchor_index[missing_mask]
+        raise ValueError(
+            f"lag_vs_covariate_ablation: arm 5's feature table is missing "
+            f"{int(missing_mask.sum())} anchor timestamp(s) needed by the "
+            f"validation split, e.g. {list(missing[:3])}"
+        )
+
+    y_true = val_filtered["truth_dlr_amps"].to_numpy(dtype=float)
+    persistence_residual = y_true - val_filtered["pred_persistence_24h"].to_numpy(dtype=float)
+
+    variant_column_sets = {
+        "all_features": set(all_cols),
+        "lags_only": set(lag_cols),
+        "covariates_only": set(covariate_cols),
+    }
+
+    variants = {}
+    predictions = {}
+    residuals = {}
+    for name, cols in variant_column_sets.items():
+        # `all_cols`' own order (ML_FEATURE_COLUMNS' order), never a set's
+        # arbitrary iteration order -- so fit/predict column order is
+        # deterministic and consistent between the two calls below.
+        ordered_cols = [c for c in all_cols if c in cols]
+        x_fit = x_fit_full[ordered_cols]
+        x_score = x_score_full[ordered_cols]
+
+        # A FRESH, never-before-fit estimator per variant -- same family,
+        # same hardcoded seed (`forecast_training._make_neural_network_
+        # candidate`'s `random_state=20260924`), same target horizon,
+        # differing ONLY in which columns it is given.
+        estimator = forecast_training.CANDIDATE_ESTIMATORS["MLPRegressor"]()
+        estimator = forecast_training.fit_corridor_model(x_fit, y_fit, estimator)
+        pred = np.asarray(estimator.predict(x_score.to_numpy(dtype=float)), dtype=float)
+        residual = y_true - pred
+
+        predictions[name] = pred
+        residuals[name] = residual
+        variants[name] = {
+            "mae": float(np.mean(np.abs(residual))),
+            "rmse": float(np.sqrt(np.mean(residual ** 2))),
+            "rows": int(len(y_true)),
+            "feature_names": ordered_cols,
+        }
+
+    for name in variant_column_sets:
+        variants[name]["margin_vs_persistence"] = _margin_entry(
+            residuals[name], persistence_residual, block_lengths,
+        )
+        variants[name]["margin_vs_all_features"] = _margin_entry(
+            residuals[name], residuals["all_features"], block_lengths,
+        )
+
+    full_mae, full_rmse = variants["all_features"]["mae"], variants["all_features"]["rmse"]
+    lags_mae, lags_rmse = variants["lags_only"]["mae"], variants["lags_only"]["rmse"]
+    covs_mae, covs_rmse = variants["covariates_only"]["mae"], variants["covariates_only"]["rmse"]
+    cov_mae_gap = abs(covs_mae - full_mae)
+    lag_mae_gap = abs(lags_mae - full_mae)
+    supports_frozen_explanation = bool(cov_mae_gap < lag_mae_gap and covs_mae < lags_mae)
+    finding = (
+        f"{'SUPPORTS' if supports_frozen_explanation else 'DOES NOT SUPPORT'} the frozen record's "
+        f"own proposed explanation (that the non-lag weather covariates carry skill the lag "
+        f"features lose as they go stale over a 24-hour horizon, while the lag features alone do "
+        f"not). Measured on the real ABLATION basis: all-features MAE {full_mae:.3f} / RMSE "
+        f"{full_rmse:.3f}; covariates-only MAE {covs_mae:.3f} / RMSE {covs_rmse:.3f} (gap to "
+        f"all-features MAE {cov_mae_gap:.3f}); lags-only MAE {lags_mae:.3f} / RMSE {lags_rmse:.3f} "
+        f"(gap to all-features MAE {lag_mae_gap:.3f}). "
+        + (
+            "The covariates-only variant approaches the full model's own skill (the smaller MAE "
+            "gap to all-features) while the lags-only variant does not, and the covariates-only "
+            "variant beats the lags-only variant outright -- the pattern the frozen record's own "
+            "explanation predicts."
+            if supports_frozen_explanation else
+            "The covariates-only variant does NOT approach the full model's own skill more closely "
+            "than the lags-only variant does, so the measured pattern does not match the frozen "
+            "record's own proposed explanation -- some other mechanism (or a genuinely mixed "
+            "contribution from both feature groups) explains the refit model's reversal."
+        )
+    )
+
+    cooling_rediscovery = _cooling_rediscovery_from_predictions(corridor, predictions, val_filtered)
+
+    report = {
+        "corridor": corridor,
+        "lead_hours": lead_hours,
+        "feature_columns": {"lag": lag_cols, "covariate": covariate_cols, "all": all_cols},
+        "variants": variants,
+        "ablation_guard_passed_fit": True,
+        "ablation_guard_passed_scored": True,
+        "fit_guard": fit_guard,
+        "scored_guard": scored_guard,
+        "max_fit_timestamp": str(max_fit_timestamp),
+        "min_scored_timestamp": str(min_scored_timestamp),
+        "finding": finding,
+        "cooling_rediscovery": cooling_rediscovery,
+        "basis_caveat": (
+            "ABLATION basis: real rows strictly before the frozen test split start (2026-03-17). "
+            "May support replication of the frozen record's own candidate ordering, and ablation "
+            "studies of the harness's own code. May NOT support a confirmation claim -- this "
+            "calendar range was already assembled and read during Phase 3's own development."
+        ),
+    }
+
+    manifest_dir = os.path.dirname(report_path)
+    if manifest_dir:
+        os.makedirs(manifest_dir, exist_ok=True)
+    tmp_path = report_path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as fh:
+        json.dump(report, fh, indent=2, default=str)
+    os.replace(tmp_path, report_path)
+
+    return report
+
+
+def cooling_rediscovery_hypothesis(corridor: str, *, block_lengths=None, report_path: str = None) -> dict:
+    """
+    D-05's sharper question, as its own named entry point: is the refit
+    reference model's covariate-only behaviour correlated with the cooling
+    correction's own behaviour, more than a ranking of feature subsets
+    would show?
+
+    Thin and idempotent by design: re-runs `lag_vs_covariate_ablation`
+    (whose own computation already builds all three variants' predictions
+    and composes the rediscovery correlations into one combined report
+    under the `cooling_rediscovery` key -- see that function's own
+    docstring) and returns just that key, so this function's documented,
+    independently-callable behaviour never diverges from what the combined
+    report persists. Never a second, parallel fit of the three variants.
+
+    Returns:
+        See `_cooling_rediscovery_from_predictions` -- per-variant
+        `predictions`/`residuals` Pearson/Spearman correlations against the
+        cooling correction, plus an `interpretation` field.
+
+    Raises:
+        ValueError: naming the valid corridors, for an unknown `corridor`
+            (propagated from `lag_vs_covariate_ablation`).
+    """
+    report = lag_vs_covariate_ablation(corridor, block_lengths=block_lengths, report_path=report_path)
+    return report["cooling_rediscovery"]

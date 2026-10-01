@@ -1808,3 +1808,218 @@ def test_low_wind_sensitivity_sweep_custom_wind_grid_still_locates_crossover():
     assert crossover in s["wind_perp_ms"]
     grid = np.asarray(s["wind_perp_ms"], dtype=float)
     assert abs(grid[s["crossover_index"]] - crossover) < 1e-9
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 04-06 Task 1: lag_vs_covariate_ablation and
+# cooling_rediscovery_hypothesis. Network-free throughout, reusing Plan
+# 04-02/04-03's own `_patch_leakage_test_assembly` synthetic per-city
+# fixture (entirely before FROZEN_TEST_SPLIT_START by construction -- it
+# starts 2024-01-01 and runs 220 days).
+# ──────────────────────────────────────────────────────────────────────────
+
+def test_feature_column_partition_disjoint_nonempty_union_complete_against_real_columns():
+    partition = fea._feature_column_partition()
+    lag, cov, full = set(partition["lag"]), set(partition["covariate"]), set(partition["all"])
+    assert full == set(fea.ampacity_forecast.ML_FEATURE_COLUMNS)
+    assert lag and cov
+    assert not (lag & cov)
+    assert lag | cov == full
+    # The lag set is EXACTLY the lag-hours-enumerated names, never a
+    # pattern match -- a future config change that adds a differently-named
+    # lag-like column would not silently join this set.
+    assert lag == {f"dlr_amps_lag_{h}h" for h in config.FORECAST_ML_LAG_HOURS}
+    # The rolling-mean history feature is NOT one of the enumerated lag
+    # columns, so it falls into the covariate bucket alongside the weather
+    # columns and the time encodings.
+    roll_col = f"dlr_amps_roll_mean_{config.FORECAST_ML_ROLLING_WINDOW_HOURS}h"
+    assert roll_col in cov
+    assert partition["lag_ordered"] == [c for c in fea.ampacity_forecast.ML_FEATURE_COLUMNS if c in lag]
+    assert partition["covariate_ordered"] == [c for c in fea.ampacity_forecast.ML_FEATURE_COLUMNS if c in cov]
+
+
+def test_correlate_aligned_raises_on_mismatched_index():
+    idx_a = pd.DatetimeIndex(pd.date_range("2024-01-01", periods=5, freq="h", tz="UTC"))
+    idx_b = pd.DatetimeIndex(pd.date_range("2024-02-01", periods=5, freq="h", tz="UTC"))
+    a = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    b = np.array([2.0, 3.0, 4.0, 5.0, 6.0])
+    # Same length, same values -- would correlate perfectly if length alone
+    # were the check -- but the indices (timestamps) genuinely differ.
+    with pytest.raises(ValueError, match="does not equal"):
+        fea._correlate_aligned(a, b, a_name="a", b_name="b", a_index=idx_a, b_index=idx_b)
+
+    # Identical index: must NOT raise, and must return a real correlation.
+    result = fea._correlate_aligned(a, b, a_name="a", b_name="b", a_index=idx_a, b_index=idx_a)
+    assert result["pearson"] == pytest.approx(1.0)
+
+
+def test_correlate_aligned_raises_on_shape_mismatch():
+    with pytest.raises(ValueError, match="shape"):
+        fea._correlate_aligned(np.zeros(5), np.zeros(6), a_name="a", b_name="b")
+
+
+def test_lag_vs_covariate_ablation_refuses_unknown_corridor():
+    with pytest.raises(ValueError) as exc_info:
+        fea.lag_vs_covariate_ablation("NOT_A_REAL_CORRIDOR")
+    message = str(exc_info.value)
+    for name in config.CORRIDOR_ENDPOINTS:
+        assert name in message, message
+
+
+def test_cooling_rediscovery_hypothesis_refuses_unknown_corridor():
+    with pytest.raises(ValueError) as exc_info:
+        fea.cooling_rediscovery_hypothesis("NOT_A_REAL_CORRIDOR")
+    message = str(exc_info.value)
+    for name in config.CORRIDOR_ENDPOINTS:
+        assert name in message, message
+
+
+def _write_fake_ablation_report_for_cooling(tmp_path, *, rows: int) -> str:
+    """A minimal, hand-written stand-in for Plan 04-03's own persisted
+    `audit_ablation_report_<CORRIDOR>.json`, carrying only the one field
+    `_cooling_rediscovery_from_predictions` actually reads."""
+    path = str(tmp_path / "fake_ablation_report.json")
+    report = {"residuals": {"ml_cooling_corrected": [1.0] * rows}}
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(report, fh)
+    return path
+
+
+def test_cooling_rediscovery_from_predictions_raises_on_length_mismatch(tmp_path):
+    report_path = _write_fake_ablation_report_for_cooling(tmp_path, rows=5)
+    val_filtered = pd.DataFrame({
+        "datetime_utc": pd.date_range("2024-01-01", periods=7, freq="6h", tz="UTC"),
+        "truth_dlr_amps": np.linspace(900.0, 906.0, 7),
+    })
+    predictions = {"all_features": np.linspace(890.0, 896.0, 7)}
+    with pytest.raises(ValueError, match="disagree in size"):
+        fea._cooling_rediscovery_from_predictions(
+            "AUSTIN_CORPUS_CHRISTI", predictions, val_filtered, ablation_report_path=report_path,
+        )
+
+
+def test_lag_vs_covariate_ablation_runs_and_returns_documented_shape(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "FORECAST_EXPERIMENT_CACHE_DIR", str(tmp_path))
+    _patch_leakage_test_assembly(monkeypatch)
+
+    # The ablation's own cooling-rediscovery half needs Plan 04-03's
+    # persisted report to already exist for this corridor -- write a
+    # minimal stand-in carrying the one field it reads, sized to match
+    # whatever row count this synthetic fixture's own validation split
+    # produces (measured via a dry run of the harness's own split/filter
+    # pipeline, not guessed).
+    corridor_frame = fea.forecast_experiment.corridor_anchored_pair_frame(
+        _LEAKAGE_TEST_CORRIDOR, fea.FROZEN_WINDOW_START, fea.FROZEN_WINDOW_END,
+        lead_hours=_LEAKAGE_TEST_LEAD_HOURS,
+    )
+    boundaries = fea.forecast_experiment._default_split_boundaries(corridor_frame)
+    _, val, _ = fea.experiment_splits.calendar_split(corridor_frame, boundaries)
+    val_filtered = fea.forecast_experiment.filter_to_exact_lead(val, lead_hours=_LEAKAGE_TEST_LEAD_HOURS)
+    pinned_boundary = pd.Timestamp(fea.FROZEN_TEST_SPLIT_START, tz="UTC")
+    val_filtered = val_filtered[val_filtered["datetime_utc"] < pinned_boundary]
+    expected_rows = len(val_filtered)
+
+    # A non-constant fake residual series -- a constant one would make
+    # every correlation against it undefined (NaN), which is a property of
+    # this fixture's own degeneracy, not of the correlation routine.
+    fake_cooling_residuals = (np.sin(np.arange(expected_rows) / 7.0) * 5.0).tolist()
+    ablation_report_path = str(tmp_path / f"audit_ablation_report_{_LEAKAGE_TEST_CORRIDOR}.json")
+    with open(ablation_report_path, "w", encoding="utf-8") as fh:
+        json.dump({"residuals": {"ml_cooling_corrected": fake_cooling_residuals}}, fh)
+    monkeypatch.setattr(fea, "_ablation_report_path", lambda corridor: ablation_report_path)
+
+    report_path = str(tmp_path / "ablation_features_report.json")
+    r = fea.lag_vs_covariate_ablation(_LEAKAGE_TEST_CORRIDOR, report_path=report_path)
+
+    cols = r["feature_columns"]
+    lag, cov, full = set(cols["lag"]), set(cols["covariate"]), set(cols["all"])
+    assert lag and cov and not (lag & cov) and lag | cov == full
+
+    v = r["variants"]
+    for name in ("all_features", "lags_only", "covariates_only"):
+        assert name in v, sorted(v)
+        e = v[name]
+        assert e["mae"] > 0 and e["rmse"] > 0, (name, e)
+        assert "margin_vs_persistence" in e and "margin_vs_all_features" in e
+        assert "block" in e["margin_vs_persistence"]
+        assert len(e["margin_vs_persistence"]["block"]) >= 4
+    assert set(v["all_features"]["feature_names"]) == full
+    assert set(v["lags_only"]["feature_names"]) == lag
+    assert set(v["covariates_only"]["feature_names"]) == cov
+    # The all-features variant's margin against itself is degenerate
+    # (point mass at zero) -- proving the SAME baseline residual array was
+    # used for both sides rather than two independently-computed ones.
+    self_margin = v["all_features"]["margin_vs_all_features"]["iid_bca"]
+    assert self_margin["point"] == pytest.approx(0.0)
+    assert self_margin["ci_low"] == pytest.approx(0.0)
+    assert self_margin["ci_high"] == pytest.approx(0.0)
+
+    assert r["ablation_guard_passed_fit"] is True
+    assert r["ablation_guard_passed_scored"] is True
+    assert r["max_fit_timestamp"] < r["min_scored_timestamp"]
+    assert isinstance(r["finding"], str) and r["finding"].strip()
+    assert "SUPPORT" in r["finding"]
+
+    h = r["cooling_rediscovery"]
+    for name in ("all_features", "lags_only", "covariates_only"):
+        for kind in ("predictions", "residuals"):
+            assert "pearson" in h[name][kind] and "spearman" in h[name][kind]
+    assert isinstance(h["interpretation"], str) and "residual" in h["interpretation"].lower()
+
+    with open(report_path, "r", encoding="utf-8") as fh:
+        on_disk = json.load(fh)
+    assert on_disk["corridor"] == _LEAKAGE_TEST_CORRIDOR
+    assert "cooling_rediscovery" in on_disk
+
+
+def test_lag_vs_covariate_ablation_raises_on_overlapping_fit_and_score_frames(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "FORECAST_EXPERIMENT_CACHE_DIR", str(tmp_path))
+    _patch_leakage_test_assembly(monkeypatch)
+
+    real_calendar_split = fea.experiment_splits.calendar_split
+
+    def _corrupted_split(frame, boundaries):
+        train, val, test = real_calendar_split(frame, boundaries)
+        # Corrupt: val becomes an exact copy of train -- the fit frame and
+        # the scored frame now overlap completely, which must raise rather
+        # than silently producing an in-sample "out-of-sample" measurement.
+        return train, train.copy(), test
+
+    monkeypatch.setattr(fea.experiment_splits, "calendar_split", _corrupted_split)
+
+    with pytest.raises(ValueError):
+        fea.lag_vs_covariate_ablation(_LEAKAGE_TEST_CORRIDOR, report_path=str(tmp_path / "report.json"))
+
+
+def test_cooling_rediscovery_hypothesis_matches_lag_vs_covariate_ablation_embedded_result(monkeypatch, tmp_path):
+    """Calling the two entry points separately must agree exactly -- both
+    ultimately run the SAME fit (fixed estimator seed), so this is a
+    determinism check, not merely a shape check."""
+    monkeypatch.setattr(config, "FORECAST_EXPERIMENT_CACHE_DIR", str(tmp_path))
+    _patch_leakage_test_assembly(monkeypatch)
+
+    corridor_frame = fea.forecast_experiment.corridor_anchored_pair_frame(
+        _LEAKAGE_TEST_CORRIDOR, fea.FROZEN_WINDOW_START, fea.FROZEN_WINDOW_END,
+        lead_hours=_LEAKAGE_TEST_LEAD_HOURS,
+    )
+    boundaries = fea.forecast_experiment._default_split_boundaries(corridor_frame)
+    _, val, _ = fea.experiment_splits.calendar_split(corridor_frame, boundaries)
+    val_filtered = fea.forecast_experiment.filter_to_exact_lead(val, lead_hours=_LEAKAGE_TEST_LEAD_HOURS)
+    pinned_boundary = pd.Timestamp(fea.FROZEN_TEST_SPLIT_START, tz="UTC")
+    val_filtered = val_filtered[val_filtered["datetime_utc"] < pinned_boundary]
+    expected_rows = len(val_filtered)
+
+    # A non-constant fake residual series -- a constant one would make
+    # every correlation against it undefined (NaN), which is a property of
+    # this fixture's own degeneracy, not of the correlation routine.
+    fake_cooling_residuals = (np.sin(np.arange(expected_rows) / 7.0) * 5.0).tolist()
+    ablation_report_path = str(tmp_path / f"audit_ablation_report_{_LEAKAGE_TEST_CORRIDOR}.json")
+    with open(ablation_report_path, "w", encoding="utf-8") as fh:
+        json.dump({"residuals": {"ml_cooling_corrected": fake_cooling_residuals}}, fh)
+    monkeypatch.setattr(fea, "_ablation_report_path", lambda corridor: ablation_report_path)
+
+    report_path = str(tmp_path / "ablation_features_report.json")
+    full_report = fea.lag_vs_covariate_ablation(_LEAKAGE_TEST_CORRIDOR, report_path=report_path)
+    standalone = fea.cooling_rediscovery_hypothesis(_LEAKAGE_TEST_CORRIDOR, report_path=report_path)
+
+    assert standalone == full_report["cooling_rediscovery"]
