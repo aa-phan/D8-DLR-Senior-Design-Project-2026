@@ -45,8 +45,10 @@ import scipy.stats
 import config
 import corridor_discretization
 import experiment_splits
+import forecast_correction_models
 import forecast_experiment
 import forecast_training
+import thermal_model
 
 # ──────────────────────────────────────────────────────────────────────────
 # Frozen-window pins, sourced from the frozen decision record
@@ -2429,4 +2431,433 @@ def fresh_basis_attempt(
         "confirmation_claim_permitted": True,
         "frozen_window_guard": guard,
         "scored": scored,
+    }
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 04-04 Task 1: how often, by how much, for how long -- and in which
+# weather regime (D-03 bullet 1). Three new, self-contained functions:
+# `overrating_profile` (generic truth/prediction/timestamp triple, no
+# corridor dependency), `convection_crossover_wind_speed` (the measured,
+# physics-derived low-wind regime boundary, computed by calling
+# `thermal_model`'s own existing public functions -- never reimplementing
+# either expression), and `overrating_by_regime` (the per-bin profile,
+# binned on perpendicular wind with the measured crossover as the lowest
+# interior boundary).
+#
+# NOTE on this task's own first inline verify script (`OVERRATING_PROFILE_OK`
+# in 04-04-PLAN.md): the plan's hand-literal fixture asserts `count == 6` and
+# `mean_exceedance_amps == (10+20+5+30+40+1)/6.0` while separately asserting
+# `max_exceedance_amps == 50.0` on the SAME `pred`/`truth` pair -- but
+# `pred[7] - truth[7] == 150.0 - 100.0 == 50.0 > 0` is unambiguously an
+# overrating row under the <behavior>/<action> text's own definition
+# ("the prediction exceeds the truth"), making the correct count 7 (not 6)
+# and the correct mean 156.0/7 (not 106.0/6) for this exact fixture -- the
+# literal's "6" sum silently omits index 7's own 50.0 exceedance while the
+# separate max-assertion still expects that same row's value. All four
+# assertions in that one script cannot be simultaneously true for ANY
+# consistent definition of "overrating" matching the <behavior> text, which
+# explicitly requires count/mean/max to be computed "over the overrating
+# rows" (the SAME set) -- this is a verify-script defect, not a profiler
+# ambiguity, the same class of defect already logged in `.planning/
+# WINDOWS.md` (phase 04, id 2) for this phase's own `##+ ` doc-regex bug.
+# `overrating_profile` below implements the textbook-correct, internally
+# consistent definition (count/mean/median/p95/max all computed over the
+# SAME overrating-row set); this task's own pytest fixture
+# (`forecast_experiment_audit_test.py`) hand-verifies a corrected literal
+# against it. See this plan's SUMMARY.md for the full diagnosis.
+# ──────────────────────────────────────────────────────────────────────────
+
+def overrating_profile(truth, prediction, timestamps, *, cadence_hours=None) -> dict:
+    """
+    Overrating is a prediction above the truth: the model told a consumer
+    the line could carry more than the modelled safe rating. Returns the
+    count and rate of overrating rows over ALL scored rows, then --
+    computed over the overrating rows ONLY, the SAME set `count`/`rate`
+    describe -- the mean, median, 95th-percentile and maximum exceedance in
+    amperes, plus the distribution of run lengths of CONSECUTIVE overrating
+    rows in timestamp order (with the longest run and its own start/end
+    timestamps).
+
+    The scored cadence (inferred from the modal spacing between consecutive
+    sorted timestamps, or passed explicitly via `cadence_hours`) and an
+    explicit statement that a run counts consecutive SCORED rows -- never a
+    continuous wall-clock exceedance duration -- travel as RETURNED DATA
+    (`cadence_hours`, `run_length_caveat`, `scored_rows_only`), not only in
+    this docstring, so a downstream record can quote the caveat verbatim
+    rather than a writer having to remember to restate it.
+
+    A prediction that never exceeds truth returns a zero count, a zero
+    rate, an empty run-length distribution, and `None` (never
+    not-a-number) for every magnitude statistic, so a zero-overrating
+    candidate serializes cleanly and a reader cannot mistake a `null` for a
+    computed zero.
+
+    Raises:
+        ValueError: naming all three lengths, if `truth`, `prediction` and
+            `timestamps` are not the same length.
+    """
+    truth = np.asarray(truth, dtype=float)
+    prediction = np.asarray(prediction, dtype=float)
+    ts = pd.to_datetime(pd.Series(np.asarray(timestamps)).reset_index(drop=True), utc=True)
+    if not (len(truth) == len(prediction) == len(ts)):
+        raise ValueError(
+            f"overrating_profile: truth ({len(truth)}), prediction "
+            f"({len(prediction)}) and timestamps ({len(ts)}) must all be "
+            f"the same length"
+        )
+    n = len(truth)
+
+    order = np.argsort(ts.to_numpy())
+    truth_o = truth[order]
+    prediction_o = prediction[order]
+    ts_o = ts.iloc[order].reset_index(drop=True)
+
+    diff = prediction_o - truth_o
+    overrating_mask = diff > 0.0
+    count = int(overrating_mask.sum())
+    rate = float(count / n) if n else 0.0
+    exceedances = diff[overrating_mask]
+
+    if count == 0:
+        mean_exceedance = median_exceedance = p95_exceedance = max_exceedance = None
+    else:
+        mean_exceedance = float(np.mean(exceedances))
+        median_exceedance = float(np.median(exceedances))
+        p95_exceedance = float(np.percentile(exceedances, 95.0))
+        max_exceedance = float(np.max(exceedances))
+
+    if cadence_hours is None and len(ts_o) > 1:
+        spacing_hours = ts_o.diff().dropna().dt.total_seconds() / 3600.0
+        cadence_hours = float(spacing_hours.mode().iloc[0]) if len(spacing_hours) else None
+
+    run_length_counts: dict = {}
+    longest_run = None
+    i = 0
+    while i < n:
+        if overrating_mask[i]:
+            j = i
+            while j < n and overrating_mask[j]:
+                j += 1
+            length = j - i
+            run_length_counts[length] = run_length_counts.get(length, 0) + 1
+            if longest_run is None or length > longest_run["length"]:
+                longest_run = {
+                    "length": length,
+                    "start": str(ts_o.iloc[i]),
+                    "end": str(ts_o.iloc[j - 1]),
+                }
+            i = j
+        else:
+            i += 1
+
+    if cadence_hours is not None:
+        run_length_caveat = (
+            f"A run counts CONSECUTIVE SCORED rows only, {cadence_hours:g} "
+            f"hour(s) apart -- a run of k scored rows spans roughly "
+            f"{cadence_hours:g}*k hours of wall-clock time with unscored "
+            f"gaps inside it, and this profile says nothing about whether "
+            f"the condition held during those unscored hours. This is a "
+            f"scored-cadence exceedance bound, not a continuous wall-clock "
+            f"exceedance duration."
+        )
+    else:
+        run_length_caveat = (
+            "A run counts CONSECUTIVE SCORED rows only -- the scored "
+            "cadence could not be inferred from fewer than two timestamps. "
+            "This is a scored-cadence exceedance bound, not a continuous "
+            "wall-clock exceedance duration."
+        )
+
+    return {
+        "rows": n,
+        "count": count,
+        "rate": rate,
+        "mean_exceedance_amps": mean_exceedance,
+        "median_exceedance_amps": median_exceedance,
+        "p95_exceedance_amps": p95_exceedance,
+        "max_exceedance_amps": max_exceedance,
+        "run_length_counts": {str(k): v for k, v in sorted(run_length_counts.items())},
+        "longest_run": longest_run,
+        "cadence_hours": cadence_hours,
+        "run_length_caveat": run_length_caveat,
+        "scored_rows_only": True,
+    }
+
+
+# A representative ERCOT summer peak ambient temperature (Claude's
+# discretion, per 04-RESEARCH.md) -- the crossover moves with ambient
+# temperature (`natural_convection` scales with `(T_max - T_amb)**1.25`),
+# so this is a stated, documented default a caller can override, never a
+# silent assumption.
+_DEFAULT_CROSSOVER_AIR_TEMP_C: float = 35.0
+
+
+def convection_crossover_wind_speed(corridor: str, *, air_temp_c: float = None) -> dict:
+    """
+    The perpendicular wind speed at which `thermal_model.
+    convective_heat_loss`'s forced-convection term equals its
+    natural-convection term (`thermal_model.natural_convection`), for
+    `corridor`'s own conductor configuration, at a stated ambient
+    temperature -- the low-wind regime boundary D-03 asks for, measured
+    rather than chosen, by calling the thermal module's own existing
+    public functions over a bisection on their difference. Neither
+    expression is reimplemented here.
+
+    `convective_heat_loss` returns `max(forced, natural)`
+    (`backend/thermal_model.py:189`): below the crossover this is a FLAT
+    function of wind speed (always `natural`, since forced has not yet
+    overtaken it); above the crossover it is a STRICTLY INCREASING
+    function of wind speed (`natural`'s own value, held constant). This
+    function bisects on `convective_heat_loss(air_temp_c, v, conductor) -
+    natural_convection(air_temp_c, conductor)`, which is exactly zero
+    below the true crossover and strictly positive above it -- a
+    well-behaved bisection target.
+
+    Returns the crossover wind speed, the ambient temperature it was
+    computed at, the conductor configuration's identifying parameters, a
+    note that the crossover moves with ambient temperature, and an
+    assertion result: `thermal_model.convective_heat_loss` evaluated
+    slightly below and slightly above the returned crossover, confirmed
+    (`below_equals_natural`, `above_exceeds_natural`) to equal the
+    natural-convection value below and exceed it above -- a crossover that
+    does not satisfy both is not the crossover.
+
+    Raises:
+        ValueError: naming the valid corridors, for an unknown one.
+        ValueError: naming the corridor and the search ceiling, if no
+            crossover can be bracketed below 1000 m/s (would indicate a
+            conductor configuration pathological enough to warrant direct
+            investigation, not a silent fallback).
+    """
+    valid_corridors = sorted(config.CORRIDOR_ENDPOINTS)
+    if corridor not in config.CORRIDOR_ENDPOINTS:
+        raise ValueError(
+            f"convection_crossover_wind_speed: unknown corridor {corridor!r} "
+            f"-- valid corridors: {valid_corridors}"
+        )
+    if air_temp_c is None:
+        air_temp_c = _DEFAULT_CROSSOVER_AIR_TEMP_C
+
+    geometry = corridor_discretization.corridor_geometry(corridor)
+    conductor = geometry.conductor
+
+    natural = float(np.asarray(thermal_model.natural_convection(air_temp_c, conductor)))
+
+    def _convective_minus_natural(v: float) -> float:
+        return float(np.asarray(thermal_model.convective_heat_loss(air_temp_c, v, conductor))) - natural
+
+    lo, hi = 0.0, 1.0
+    while _convective_minus_natural(hi) <= 0.0:
+        hi *= 2.0
+        if hi > 1000.0:
+            raise ValueError(
+                f"convection_crossover_wind_speed: could not bracket a "
+                f"crossover below {hi:g} m/s for corridor {corridor!r} at "
+                f"air_temp_c={air_temp_c!r}"
+            )
+    for _ in range(80):
+        mid = (lo + hi) / 2.0
+        if _convective_minus_natural(mid) > 0.0:
+            hi = mid
+        else:
+            lo = mid
+    crossover = hi
+
+    below = float(np.asarray(thermal_model.convective_heat_loss(air_temp_c, max(crossover * 0.5, 1e-6), conductor)))
+    above = float(np.asarray(thermal_model.convective_heat_loss(air_temp_c, crossover * 2.0, conductor)))
+
+    return {
+        "corridor": corridor,
+        "crossover_wind_perp_ms": crossover,
+        "air_temp_c": air_temp_c,
+        "conductor": {
+            "diameter_m": conductor.D,
+            "line_azimuth_deg": conductor.line_az,
+            "elevation_m": conductor.elev,
+            "max_temp_c": conductor.T_max,
+        },
+        "temperature_dependence_note": (
+            "The crossover wind speed moves with ambient temperature: "
+            "natural convection scales with (T_max - T_amb)**1.25 while "
+            "the forced term depends on the Reynolds number at the film "
+            "temperature (T_max + T_amb) / 2 -- a different air_temp_c "
+            "generally yields a different crossover."
+        ),
+        "natural_convection_wm": natural,
+        "below_crossover_check_wm": below,
+        "above_crossover_check_wm": above,
+        "below_equals_natural": bool(abs(below - natural) < 1e-6 * max(1.0, abs(natural))),
+        "above_exceeds_natural": bool(above > natural),
+    }
+
+
+_DEFAULT_MINIMUM_BIN_ROWS: int = 20
+
+
+def overrating_by_regime(
+    scored_frame: pd.DataFrame, prediction, *, corridor: str, minimum_bin_rows: int = None,
+) -> dict:
+    """
+    The overrating profile broken out by weather regime: perpendicular-wind
+    bins whose lowest INTERIOR boundary is the measured natural-vs-forced
+    convection crossover (`convection_crossover_wind_speed`), plus
+    secondary breakdowns by ambient-temperature band and by hour of day,
+    every bin reporting its own row count.
+
+    The perpendicular wind is `scored_frame`'s own valid-time truth wind
+    (`truth_wind_speed`/`truth_wind_direction`), projected onto
+    `corridor`'s own bearing via `thermal_model.perpendicular_wind` -- the
+    convective term consumes perpendicular wind, so binning on raw wind
+    speed would mix a strong cross-corridor wind with a weak along-corridor
+    one.
+
+    Bin edges partition the data PROVABLY: the per-bin row counts are
+    asserted to sum to the scored row count before this function returns
+    (`ValueError` if not, naming both counts) -- a silent gap or overlap in
+    the bin edges would distribute rows into neither bin or both, and the
+    reported rates would not describe the data. `edge_provenance` and each
+    bin's own `is_crossover_edge` flag let a reader tell the
+    physically-derived boundary (the crossover) from the presentational
+    ones (the spans above it, and the floor at zero).
+
+    A bin whose row count is below `minimum_bin_rows` (default
+    `_DEFAULT_MINIMUM_BIN_ROWS` = 20) is flagged (`flagged_insufficient_rows:
+    True`) and its own `profile` field is `None` rather than a rate
+    computed from a handful of rows -- a 100% overrating rate over three
+    rows is not a finding.
+
+    Raises:
+        ValueError: naming the valid corridors, for an unknown one.
+        ValueError: naming both counts, if the perpendicular-wind bins do
+            not partition every scored row (should not occur by
+            construction; asserted defensively).
+    """
+    valid_corridors = sorted(config.CORRIDOR_ENDPOINTS)
+    if corridor not in config.CORRIDOR_ENDPOINTS:
+        raise ValueError(
+            f"overrating_by_regime: unknown corridor {corridor!r} -- valid "
+            f"corridors: {valid_corridors}"
+        )
+    if minimum_bin_rows is None:
+        minimum_bin_rows = _DEFAULT_MINIMUM_BIN_ROWS
+
+    geometry = corridor_discretization.corridor_geometry(corridor)
+    scored_frame = scored_frame.reset_index(drop=True)
+    truth = scored_frame["truth_dlr_amps"].to_numpy(dtype=float)
+    prediction = np.asarray(prediction, dtype=float)
+    timestamps = pd.to_datetime(scored_frame["datetime_utc"], utc=True).to_numpy()
+    n = len(truth)
+
+    perp_wind = np.asarray(
+        thermal_model.perpendicular_wind(
+            scored_frame["truth_wind_speed"].to_numpy(dtype=float),
+            scored_frame["truth_wind_direction"].to_numpy(dtype=float),
+            geometry.bearing_deg,
+        ),
+        dtype=float,
+    )
+
+    crossover = convection_crossover_wind_speed(corridor)
+    crossover_v = crossover["crossover_wind_perp_ms"]
+
+    perp_max = float(np.max(perp_wind)) if n else crossover_v
+    top = max(perp_max, crossover_v) * 1.0001 + 1e-6
+    if crossover_v < top:
+        secondary = np.linspace(crossover_v, top, 4)[1:]
+        edges = sorted(set([0.0, float(crossover_v)] + [float(e) for e in secondary]))
+    else:
+        edges = sorted(set([0.0, float(crossover_v), float(top)]))
+    if len(edges) < 2:
+        edges = [0.0, max(top, 1.0)]
+
+    def _profile_for(mask):
+        if int(mask.sum()) < minimum_bin_rows:
+            return None
+        return overrating_profile(truth[mask], prediction[mask], timestamps[mask])
+
+    assigned = np.full(n, -1, dtype=int)
+    perp_bins = []
+    for i in range(len(edges) - 1):
+        lo, hi = edges[i], edges[i + 1]
+        if i == len(edges) - 2:
+            mask = (perp_wind >= lo) & (perp_wind <= hi)
+        else:
+            mask = (perp_wind >= lo) & (perp_wind < hi)
+        assigned[mask] = i
+        rows = int(mask.sum())
+        perp_bins.append({
+            "bin_index": i,
+            "lower_edge": lo,
+            "upper_edge": hi,
+            "rows": rows,
+            "is_crossover_edge": bool(abs(lo - crossover_v) < 1e-9),
+            "flagged_insufficient_rows": rows < minimum_bin_rows,
+            "profile": _profile_for(mask),
+        })
+
+    if (assigned < 0).any():
+        raise ValueError(
+            f"overrating_by_regime: {int((assigned < 0).sum())} scored "
+            f"row(s) fell outside every perpendicular-wind bin -- edges: "
+            f"{edges}"
+        )
+    total_binned = sum(b["rows"] for b in perp_bins)
+    if total_binned != n:
+        raise ValueError(
+            f"overrating_by_regime: perpendicular-wind bin rows sum to "
+            f"{total_binned}, expected {n} -- the bins do not partition "
+            f"the scored rows"
+        )
+    crossover_edge_index = next((b["bin_index"] for b in perp_bins if b["is_crossover_edge"]), None)
+
+    temp = scored_frame["truth_air_temp"].to_numpy(dtype=float)
+    temp_edges = np.unique(np.percentile(temp, [0.0, 25.0, 50.0, 75.0, 100.0])) if n else np.array([0.0, 1.0])
+    if len(temp_edges) < 2:
+        base = float(temp_edges[0]) if len(temp_edges) else 0.0
+        temp_edges = np.array([base - 1.0, base + 1.0])
+    temp_bins = []
+    for i in range(len(temp_edges) - 1):
+        lo, hi = float(temp_edges[i]), float(temp_edges[i + 1])
+        if i == len(temp_edges) - 2:
+            mask = (temp >= lo) & (temp <= hi)
+        else:
+            mask = (temp >= lo) & (temp < hi)
+        rows = int(mask.sum())
+        temp_bins.append({
+            "lower_edge": lo, "upper_edge": hi, "rows": rows,
+            "flagged_insufficient_rows": rows < minimum_bin_rows,
+            "profile": _profile_for(mask),
+        })
+
+    hours = pd.to_datetime(scored_frame["datetime_utc"], utc=True).dt.hour.to_numpy()
+    hour_bins = []
+    for h in range(0, 24, 3):
+        mask = (hours >= h) & (hours < h + 3)
+        rows = int(mask.sum())
+        hour_bins.append({
+            "hour_start": h, "hour_end": h + 3, "rows": rows,
+            "flagged_insufficient_rows": rows < minimum_bin_rows,
+            "profile": _profile_for(mask),
+        })
+
+    return {
+        "corridor": corridor,
+        "scored_rows": n,
+        "minimum_bin_rows": minimum_bin_rows,
+        "perpendicular_wind": {
+            "bins": perp_bins,
+            "crossover_edge_index": crossover_edge_index,
+            "crossover_wind_perp_ms": crossover_v,
+            "crossover_air_temp_c": crossover["air_temp_c"],
+            "edge_provenance": (
+                "edges[0]=0.0 is PRESENTATIONAL (the floor); the next edge "
+                "equal to crossover_wind_perp_ms is the measured, "
+                "PHYSICALLY-DERIVED natural-vs-forced convection crossover "
+                "(flagged per-bin via is_crossover_edge); every edge above "
+                "that is a PRESENTATIONAL span over the observed range."
+            ),
+        },
+        "by_ambient_temperature": temp_bins,
+        "by_hour_of_day": hour_bins,
     }

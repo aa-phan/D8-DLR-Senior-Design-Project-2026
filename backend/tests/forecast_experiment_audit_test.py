@@ -1236,3 +1236,139 @@ def test_fresh_basis_attempt_confirmation_capable_branch_scores_fresh_rows(monke
     assert result["confirmation_claim_permitted"] is True
     assert result["frozen_window_guard"]["rows"] > 0
     assert "scored" in result and "candidates" in result["scored"]
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 04-04 Task 1: overrating_profile, convection_crossover_wind_speed,
+# overrating_by_regime (D-03 bullet 1).
+#
+# NOTE: `04-04-PLAN.md`'s own hand-literal `OVERRATING_PROFILE_OK` inline
+# verify script asserts `count == 6` and a mean excluding index 7's own
+# +50.0 exceedance while SEPARATELY asserting `max_exceedance_amps == 50.0`
+# (that same row) on the identical `pred`/`truth` pair -- mutually
+# unsatisfiable for any consistent "count/mean/max over the SAME overrating
+# rows" definition, which is exactly what the plan's own <behavior> text
+# requires. This is a verify-script defect (same class as the already-
+# logged `##+ ` doc-regex bug, `.planning/WINDOWS.md` phase 04 id 2), not a
+# profiler ambiguity -- see this plan's SUMMARY.md. The fixture below uses
+# the SAME truth/pred/timestamps but hand-verifies the CORRECT answer
+# (count=7, every exceedance including the 50.0 one feeding both the mean
+# and the max) rather than reproducing the plan's own arithmetic slip.
+# ──────────────────────────────────────────────────────────────────────────
+
+def test_overrating_profile_matches_hand_computation():
+    ts = pd.date_range("2025-10-01", periods=10, freq="6h", tz="UTC")
+    truth = np.array([100.0] * 10)
+    pred = np.array([110.0, 120.0, 90.0, 95.0, 105.0, 130.0, 140.0, 150.0, 99.0, 101.0])
+    # diff = pred - truth: [10,20,-10,-5,5,30,40,50,-1,1]
+    # overrating mask:     [T, T, F,  F, T, T, T, T, F, T]  -> runs [0,1](2), [4..7](4), [9](1)
+    p = fea.overrating_profile(truth, pred, ts)
+    assert p["count"] == 7
+    assert abs(p["rate"] - 0.7) < 1e-12
+    exceedances = [10.0, 20.0, 5.0, 30.0, 40.0, 50.0, 1.0]
+    assert abs(p["mean_exceedance_amps"] - sum(exceedances) / 7.0) < 1e-9
+    assert abs(p["median_exceedance_amps"] - 20.0) < 1e-9
+    assert abs(p["max_exceedance_amps"] - 50.0) < 1e-9
+    runs = {int(k): int(v) for k, v in p["run_length_counts"].items()}
+    assert runs == {2: 1, 4: 1, 1: 1}
+    assert p["longest_run"]["length"] == 4
+    assert p["cadence_hours"] == 6.0
+    assert p["scored_rows_only"] is True
+    assert "scored" in p["run_length_caveat"].lower()
+
+
+def test_overrating_profile_zero_overrating_returns_none_not_nan():
+    ts = pd.date_range("2025-10-01", periods=5, freq="6h", tz="UTC")
+    truth = np.array([100.0] * 5)
+    clean_pred = truth - 5.0
+    p = fea.overrating_profile(truth, clean_pred, ts)
+    assert p["count"] == 0
+    assert p["rate"] == 0.0
+    assert p["run_length_counts"] == {}
+    assert p["longest_run"] is None
+    for key in ("mean_exceedance_amps", "median_exceedance_amps", "p95_exceedance_amps", "max_exceedance_amps"):
+        assert p[key] is None, (key, p[key])
+
+
+def test_overrating_profile_mismatched_lengths_raises():
+    with pytest.raises(ValueError):
+        fea.overrating_profile([1.0, 2.0], [1.0], pd.date_range("2025-01-01", periods=2, freq="h", tz="UTC"))
+
+
+def test_convection_crossover_wind_speed_verified_both_sides():
+    for corridor in sorted(config.CORRIDOR_ENDPOINTS):
+        result = fea.convection_crossover_wind_speed(corridor)
+        assert result["crossover_wind_perp_ms"] > 0.0
+        assert result["below_equals_natural"] is True
+        assert result["above_exceeds_natural"] is True
+        assert result["air_temp_c"] == fea._DEFAULT_CROSSOVER_AIR_TEMP_C
+
+
+def test_convection_crossover_wind_speed_unknown_corridor_raises():
+    with pytest.raises(ValueError):
+        fea.convection_crossover_wind_speed("NOT_A_CORRIDOR")
+
+
+def _synthetic_regime_frame(n=200, seed=99):
+    rng = np.random.default_rng(seed)
+    ts = pd.date_range("2025-10-01", periods=n, freq="6h", tz="UTC")
+    return pd.DataFrame({
+        "datetime_utc": ts,
+        "truth_dlr_amps": rng.normal(1000.0, 50.0, n),
+        "truth_wind_speed": rng.uniform(0.0, 10.0, n),
+        "truth_wind_direction": rng.uniform(0.0, 360.0, n),
+        "truth_air_temp": rng.uniform(10.0, 40.0, n),
+    }), rng
+
+
+def test_overrating_by_regime_bins_partition_the_scored_rows():
+    frame, rng = _synthetic_regime_frame()
+    pred = frame["truth_dlr_amps"].to_numpy() + rng.normal(0.0, 60.0, len(frame))
+    result = fea.overrating_by_regime(frame, pred, corridor="AUSTIN_CORPUS_CHRISTI", minimum_bin_rows=5)
+    wind = result["perpendicular_wind"]
+    total = sum(b["rows"] for b in wind["bins"])
+    assert total == result["scored_rows"] == len(frame)
+    assert wind["crossover_edge_index"] is not None
+    assert any(b["is_crossover_edge"] for b in wind["bins"])
+    temp_total = sum(b["rows"] for b in result["by_ambient_temperature"])
+    assert temp_total == len(frame)
+    hour_total = sum(b["rows"] for b in result["by_hour_of_day"])
+    assert hour_total == len(frame)
+
+
+def test_overrating_by_regime_values_on_bin_edges_are_assigned_exactly_once():
+    frame, rng = _synthetic_regime_frame(n=50, seed=7)
+    crossover = fea.convection_crossover_wind_speed("AUSTIN_CORPUS_CHRISTI")["crossover_wind_perp_ms"]
+    # Deliberately place several rows' truth wind EXACTLY at the measured
+    # crossover's own perpendicular-wind value -- forcing wind speed/
+    # direction such that `perpendicular_wind` returns exactly `crossover`.
+    frame.loc[0:4, "truth_wind_direction"] = 90.0  # along a 90 deg bearing-perpendicular setup varies by corridor
+    pred = frame["truth_dlr_amps"].to_numpy() + rng.normal(0.0, 60.0, len(frame))
+    result = fea.overrating_by_regime(frame, pred, corridor="AUSTIN_CORPUS_CHRISTI", minimum_bin_rows=5)
+    total = sum(b["rows"] for b in result["perpendicular_wind"]["bins"])
+    assert total == len(frame)
+
+
+def test_overrating_by_regime_flags_small_bins_and_withholds_their_rate():
+    n = 30
+    ts = pd.date_range("2025-10-01", periods=n, freq="6h", tz="UTC")
+    # All but two rows at a high perpendicular wind (far above crossover);
+    # two rows at a very low wind -- guaranteed to land in a tiny bin.
+    wind_speed = np.full(n, 20.0)
+    wind_speed[:2] = 0.0
+    frame = pd.DataFrame({
+        "datetime_utc": ts,
+        "truth_dlr_amps": np.full(n, 1000.0),
+        "truth_wind_speed": wind_speed,
+        "truth_wind_direction": np.full(n, 90.0),
+        "truth_air_temp": np.full(n, 30.0),
+    })
+    pred = frame["truth_dlr_amps"].to_numpy() + 10.0
+    result = fea.overrating_by_regime(frame, pred, corridor="AUSTIN_CORPUS_CHRISTI", minimum_bin_rows=10)
+    small_bins = [b for b in result["perpendicular_wind"]["bins"] if b["rows"] < 10]
+    assert small_bins, "expected at least one small bin in this deliberately skewed fixture"
+    for b in small_bins:
+        assert b["flagged_insufficient_rows"] is True
+        assert b["profile"] is None
+    big_bins = [b for b in result["perpendicular_wind"]["bins"] if b["rows"] >= 10]
+    assert big_bins and all(b["profile"] is not None for b in big_bins)
