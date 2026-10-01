@@ -2861,3 +2861,835 @@ def overrating_by_regime(
         "by_ambient_temperature": temp_bins,
         "by_hour_of_day": hour_bins,
     }
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 04-04 Task 2: lower quantiles fitted, calibrated and checked on
+# three chronologically disjoint periods, then retained capacity at
+# matched overrating rates (D-03 bullets 2 and 3).
+#
+# DESIGN NOTE -- why the three periods partition the COMBINED
+# ABLATION-basis range (train+val) rather than reusing the harness's own
+# train/val boundary verbatim. Plan 04-03's persisted
+# `audit_ablation_report_<CORRIDOR>.json` carries per-row RESIDUALS for the
+# VALIDATION rows only (truth minus prediction, no timestamp, no truth
+# column) -- confirmed by inspection, not assumed. The quantile model needs
+# real per-row features (decision-time weather) and a real truth column for
+# every row it touches, which the persisted residuals alone cannot supply.
+# `_quantile_source_frame` below therefore reconstructs the full ABLATION
+# train+val frame directly (mirroring `ablation_basis_report`'s own proven
+# assembly sequence, fitting arms 3/4/5 on the ABLATION TRAIN rows ALONE --
+# the same non-frozen, already-established discipline Plan 04-03 uses, not
+# a new violation of the "never re-score the frozen test rows" rule, which
+# is about the FROZEN TEST window only) and attaches every one of the seven
+# arms' own point predictions to every row of that combined range. The three
+# fit/calibrate/evaluate periods are then carved from this combined range's
+# OWN chronological span via `experiment_splits.SplitBoundaries`/
+# `calendar_split` (the project's one calendar splitter, never a hand-rolled
+# slice) at the SAME 60/20/20 default fractions `forecast_experiment.
+# _default_split_boundaries` already uses elsewhere in this project --
+# applied here to the ABLATION basis's own narrower span, not to the full
+# frozen-window span, so the three periods described below are a
+# deliberately-chosen chronological partition of the ABLATION basis, not a
+# reproduction of Phase 3's original train/val boundary. Every period is
+# asserted strictly before `FROZEN_TEST_SPLIT_START` and the frozen-window
+# guard runs on each.
+# ──────────────────────────────────────────────────────────────────────────
+
+# Lower-tail alphas D-03 asks this phase to report a spread across (Claude's
+# discretion, per 04-RESEARCH.md): the 5th and 10th percentile of the
+# ampacity distribution.
+_DEFAULT_LOWER_QUANTILE_ALPHAS: tuple = (0.05, 0.10)
+
+# Target overrating rates for the matched-rate retained-capacity comparison
+# (Claude's discretion): a stricter and a looser acceptable-risk level,
+# bracketing the two quantile alphas above so a reader can compare a flat
+# derating against a calibrated quantile at the SAME nominal risk level.
+_DEFAULT_MATCHED_OVERRATING_TARGET_RATES: tuple = (0.05, 0.10)
+
+# Below this many rows, a period is too short to fit, calibrate or check a
+# quantile model honestly. Stated in both rows and days per the plan's own
+# instruction: at this lead's four-scored-rows-per-calendar-day exact-lead
+# filter, 50 rows is 12.5 days.
+_DEFAULT_MIN_ROWS_PER_QUANTILE_PERIOD: int = 50
+
+# D-03 bullet 4: the limitation that must travel with every overrating rate
+# and every calibration number this report emits, as a FIELD of the report
+# itself (not only in surrounding prose) -- carried forward from the module
+# docstring's own AUDIT_BASES statements and Finding 1's provenance finding.
+_REANALYSIS_SCOPE_LIMITATION: str = (
+    "Every overrating rate and calibration number in this report is "
+    "measured against a reanalysis-derived truth series -- an IEEE-738 "
+    "output computed from ERA5/ERA5-Land reanalysis weather (see this "
+    "audit's Finding 1, 'truth-side provenance'), not a sensor-measured "
+    "observation. Every number below is a statement about a candidate's "
+    "self-consistency with a physics simulation, not evidence of "
+    "field-validated conductor-level safety."
+)
+
+# Decision-time weather feature columns `_quantile_source_frame` attaches to
+# every row: the corridor-level average of both endpoint cities' own
+# forecast-at-decision-time inputs (`fcst_air_temp`/`fcst_perp_wind_ms`/
+# `fcst_solar_radiation`, the SAME per-city columns `_cooling_feature_frame`
+# already uses for arm 4) -- averaged across both cities because the
+# corridor-REDUCED frame (`corridor_anchored_pair_frame`) carries no
+# `fcst_*` group at all (Finding 5's time-reference table: "corridor frame
+# carries no fcst_* group"), so there is no single corridor-level forecast
+# column to read directly. This is a stated proxy, the same discipline this
+# phase already uses for the static-rating reference (the weakest-link
+# minimum of two endpoint cities, Finding/'static reference' note below) --
+# never a silent assumption.
+_QUANTILE_DECISION_TIME_COLUMNS: tuple = (
+    "decision_time_air_temp", "decision_time_perp_wind_ms", "decision_time_solar_radiation",
+)
+
+
+def _overrating_report_path(corridor: str) -> str:
+    return os.path.join(
+        config.FORECAST_EXPERIMENT_CACHE_DIR,
+        f"audit_overrating_report_{corridor}.json",
+    )
+
+
+def _quantile_source_frame(corridor: str, *, lead_hours: int = None) -> dict:
+    """
+    Assemble the combined ABLATION train+val corridor frame with every one
+    of the seven `forecast_experiment.ALL_ARMS` entries' own point
+    predictions attached to EVERY row (train and val alike) -- the shared
+    source every quantile-pipeline function below slices its three periods
+    from.
+
+    Mirrors `ablation_basis_report`'s own proven assembly sequence
+    (corridor frame at the pinned frozen window, `calendar_split`,
+    exact-lead filter, pin-safety clip, frozen-window guard on the fit and
+    scored sides, `fit_fitted_arms` on the ABLATION TRAIN rows ALONE) with
+    exactly one addition: `ablation_basis_report` only ever computes the
+    three fitted arms' predictions for the VAL side (what it needs to
+    score); this function ALSO computes them for the TRAIN side, so this
+    module's own `quantile_period_boundaries` has real per-row predictions
+    to partition over the full ABLATION basis, not only its validation
+    slice.
+
+    Decision-time weather features (`_QUANTILE_DECISION_TIME_COLUMNS`) are
+    attached as the corridor-level MEAN of both endpoint cities' own
+    `fcst_air_temp`/`fcst_perp_wind_ms`/`fcst_solar_radiation` columns
+    (see this function's own module-level comment above
+    `_QUANTILE_DECISION_TIME_COLUMNS` for why a mean, not a corridor-reduced
+    column that does not exist at this level).
+
+    Raises:
+        ValueError: naming the valid corridors, for an unknown one.
+        ValueError: naming the two offending timestamps, if the fit side's
+            own maximum timestamp is not strictly before the scored side's
+            own minimum timestamp (the same out-of-sample assertion
+            `ablation_basis_report` makes).
+    """
+    valid_corridors = sorted(config.CORRIDOR_ENDPOINTS)
+    if corridor not in config.CORRIDOR_ENDPOINTS:
+        raise ValueError(
+            f"_quantile_source_frame: unknown corridor {corridor!r} -- "
+            f"valid corridors: {valid_corridors}"
+        )
+    if lead_hours is None:
+        lead_hours = config.FORECAST_EXPERIMENT_PRIMARY_LEAD_HOURS
+
+    city_a, city_b = config.CORRIDOR_ENDPOINTS[corridor]
+    geometry = corridor_discretization.corridor_geometry(corridor)
+
+    corridor_frame = forecast_experiment.corridor_anchored_pair_frame(
+        corridor, FROZEN_WINDOW_START, FROZEN_WINDOW_END, lead_hours=lead_hours,
+    )
+    boundaries = forecast_experiment._default_split_boundaries(corridor_frame)
+    train, val, test = experiment_splits.calendar_split(corridor_frame, boundaries)
+    train_filtered = forecast_experiment.filter_to_exact_lead(train, lead_hours=lead_hours)
+    val_filtered = forecast_experiment.filter_to_exact_lead(val, lead_hours=lead_hours)
+    test_filtered = forecast_experiment.filter_to_exact_lead(test, lead_hours=lead_hours)
+    forecast_experiment.assert_filtered_split_disjoint(train_filtered, val_filtered, test_filtered)
+    del test_filtered  # never referenced -- this function never touches the test split.
+
+    pinned_boundary = pd.Timestamp(FROZEN_TEST_SPLIT_START, tz="UTC")
+    train_filtered = train_filtered[train_filtered["datetime_utc"] < pinned_boundary].reset_index(drop=True)
+    val_filtered = val_filtered[val_filtered["datetime_utc"] < pinned_boundary].reset_index(drop=True)
+
+    fit_guard = assert_basis_excludes_frozen_test_rows(train_filtered, basis="ABLATION")
+    scored_guard = assert_basis_excludes_frozen_test_rows(val_filtered, basis="ABLATION")
+
+    max_fit_timestamp = train_filtered["datetime_utc"].max()
+    min_scored_timestamp = val_filtered["datetime_utc"].min()
+    if not (max_fit_timestamp < min_scored_timestamp):
+        raise ValueError(
+            f"_quantile_source_frame: fit frame's own max timestamp "
+            f"{max_fit_timestamp} is not strictly before the scored "
+            f"frame's own min timestamp {min_scored_timestamp}"
+        )
+
+    stacked_full = forecast_experiment._stacked_pair_frame(
+        corridor, FROZEN_WINDOW_START, FROZEN_WINDOW_END, lead_hours=lead_hours,
+    )
+    stacked_train, stacked_val, stacked_test = experiment_splits.calendar_split(stacked_full, boundaries)
+    del stacked_test
+    train_val_stacked = (
+        pd.concat([stacked_train, stacked_val], ignore_index=True)
+        .sort_values("datetime_utc").reset_index(drop=True)
+    )
+
+    fitted = forecast_experiment.fit_fitted_arms(
+        stacked_train, geometry,
+        wind_configuration=forecast_experiment.WIND_CONFIGURATION,
+        cooling_configuration=forecast_experiment.COOLING_CONFIGURATION,
+    )
+
+    def _side_city_frame(city: str, side: str) -> pd.DataFrame:
+        city_frame = (
+            train_val_stacked[train_val_stacked["endpoint_city"] == city]
+            .sort_values("datetime_utc").reset_index(drop=True)
+        )
+        if side == "train":
+            side_frame = city_frame[city_frame["datetime_utc"] < boundaries.val_start]
+        else:
+            side_frame = city_frame[city_frame["datetime_utc"] >= boundaries.val_start]
+        side_frame = forecast_experiment.filter_to_exact_lead(side_frame, lead_hours=lead_hours)
+        return side_frame[side_frame["datetime_utc"] < pinned_boundary].reset_index(drop=True)
+
+    arm5_truth_frame = forecast_experiment._arm5_truth_frame(train_val_stacked, city_a, city_b)
+    x5_all, _ = forecast_training.build_training_matrix(arm5_truth_frame, horizon_minutes=lead_hours * 60)
+
+    # Arm 5's own feature table (`x5_all`) needs lag/rolling-window history
+    # (`config.FORECAST_ML_LAG_HOURS`, `FORECAST_ML_ROLLING_WINDOW_HOURS`)
+    # before its first valid row -- deeper than the single-day dropna edge
+    # effect Plan 04-01's Finding 3 already documented. `ablation_basis_
+    # report` never hits this because it only ever reindexes onto VAL
+    # anchor times (deep into the series); this function also needs TRAIN-
+    # side predictions, including the handful of earliest TRAIN rows whose
+    # own anchor time falls inside that lag/rolling warm-up window. Those
+    # few rows (observed: 5 for a 2024-01-20 window start) are excluded
+    # from the combined quantile-pipeline basis -- a documented, bounded
+    # edge trim, never a silent drop: `edge_trimmed_rows` on the returned
+    # dict below names exactly how many.
+    x5_min_anchor_time = x5_all.index.min()
+    edge_trimmed_rows = {"train": 0, "val": 0}
+
+    def _augment(side: str, scored_frame: pd.DataFrame) -> pd.DataFrame:
+        anchor_times = pd.to_datetime(scored_frame["anchor_datetime_utc"], utc=True)
+        in_range = anchor_times >= x5_min_anchor_time
+        edge_trimmed_rows[side] = int((~in_range).sum())
+        scored_frame = scored_frame[in_range].reset_index(drop=True)
+
+        city_a_frame = forecast_experiment._add_correction_columns(_side_city_frame(city_a, side), geometry)
+        city_b_frame = forecast_experiment._add_correction_columns(_side_city_frame(city_b, side), geometry)
+
+        wind_pred_a = forecast_experiment._wind_corrected_ampacity(fitted["wind_model"], city_a_frame, geometry)
+        wind_pred_b = forecast_experiment._wind_corrected_ampacity(fitted["wind_model"], city_b_frame, geometry)
+        wind_reduced, _ = forecast_experiment._merge_prediction_to_scored_index(
+            scored_frame, city_a_frame["datetime_utc"], wind_pred_a, city_b_frame["datetime_utc"], wind_pred_b,
+        )
+
+        cooling_pred_a = forecast_experiment._cooling_corrected_ampacity(fitted["cooling_model"], city_a_frame, geometry)
+        cooling_pred_b = forecast_experiment._cooling_corrected_ampacity(fitted["cooling_model"], city_b_frame, geometry)
+        cooling_reduced, _ = forecast_experiment._merge_prediction_to_scored_index(
+            scored_frame, city_a_frame["datetime_utc"], cooling_pred_a, city_b_frame["datetime_utc"], cooling_pred_b,
+        )
+
+        anchor_index = pd.DatetimeIndex(pd.to_datetime(scored_frame["anchor_datetime_utc"], utc=True))
+        x5_scored = x5_all.reindex(anchor_index)
+        missing_mask = x5_scored.isna().any(axis=1)
+        if missing_mask.any():
+            missing = anchor_index[missing_mask]
+            raise ValueError(
+                f"_quantile_source_frame: arm 5's feature table is missing "
+                f"{int(missing_mask.sum())} anchor timestamp(s) needed by "
+                f"the {side} side, e.g. {list(missing[:3])}"
+            )
+        arm5_pred = np.asarray(fitted["arm5_estimator"].predict(x5_scored.to_numpy(dtype=float)), dtype=float)
+
+        def _mean_align(column: str) -> np.ndarray:
+            target_index = pd.DatetimeIndex(pd.to_datetime(scored_frame["datetime_utc"], utc=True))
+            idx_a = pd.DatetimeIndex(pd.to_datetime(city_a_frame["datetime_utc"], utc=True))
+            idx_b = pd.DatetimeIndex(pd.to_datetime(city_b_frame["datetime_utc"], utc=True))
+            series_a = pd.Series(city_a_frame[column].to_numpy(dtype=float), index=idx_a).reindex(target_index)
+            series_b = pd.Series(city_b_frame[column].to_numpy(dtype=float), index=idx_b).reindex(target_index)
+            return (series_a.to_numpy(dtype=float) + series_b.to_numpy(dtype=float)) / 2.0
+
+        augmented = scored_frame.copy()
+        augmented["pred_ml_wind_corrected"] = wind_reduced
+        augmented["pred_ml_cooling_corrected"] = cooling_reduced
+        augmented["pred_reference_ml_refit_24h"] = arm5_pred
+        augmented["decision_time_air_temp"] = _mean_align("fcst_air_temp")
+        augmented["decision_time_perp_wind_ms"] = _mean_align("fcst_perp_wind_ms")
+        augmented["decision_time_solar_radiation"] = _mean_align("fcst_solar_radiation")
+        return augmented
+
+    augmented_train = _augment("train", train_filtered)
+    augmented_val = _augment("val", val_filtered)
+
+    combined = (
+        pd.concat([augmented_train, augmented_val], ignore_index=True)
+        .sort_values("datetime_utc").reset_index(drop=True)
+    )
+
+    return {
+        "corridor": corridor,
+        "lead_hours": lead_hours,
+        "geometry": geometry,
+        "combined": combined,
+        "train_filtered": augmented_train,
+        "val_filtered": augmented_val,
+        "fit_guard": fit_guard,
+        "scored_guard": scored_guard,
+        "max_fit_timestamp": str(max_fit_timestamp),
+        "min_scored_timestamp": str(min_scored_timestamp),
+    }
+
+
+def quantile_period_boundaries(scored_timestamps, *, minimum_rows_per_period: int = None) -> dict:
+    """
+    Partition `scored_timestamps` (the combined ABLATION train+val
+    timestamps `_quantile_source_frame` attaches predictions to) into three
+    chronologically disjoint sub-periods -- fit, calibrate, evaluate --
+    via `experiment_splits.SplitBoundaries`/`calendar_split` at
+    `forecast_experiment._default_split_boundaries`'s own default 60/20/20
+    calendar fractions, applied here to the ABLATION basis's own
+    chronological span (never to the full frozen-window span), so these
+    three periods are a chronological partition of the ABLATION basis
+    itself, not a reproduction of Phase 3's original train/val boundary.
+
+    All three periods are asserted strictly before `FROZEN_TEST_SPLIT_START`
+    (guaranteed by construction whenever `scored_timestamps` itself never
+    carries a frozen-test-window timestamp -- asserted directly here
+    anyway, never merely assumed from the caller's own discipline), share
+    no timestamp with one another, and are strictly ordered
+    (fit < calibrate < evaluate). The frozen-window guard
+    (`assert_basis_excludes_frozen_test_rows`, basis `"ABLATION"`) is run
+    on each of the three periods independently.
+
+    `minimum_rows_per_period` (default `_DEFAULT_MIN_ROWS_PER_QUANTILE_
+    PERIOD` = 50 rows, i.e. 12.5 days at this lead's four-scored-rows-per-
+    calendar-day exact-lead filter) is a floor below which a period is too
+    short to fit, calibrate, or check a quantile model honestly.
+
+    Returns:
+        `{"val_start": str, "test_start": str, "minimum_rows_per_period":
+        int, "fit"/"calibrate"/"evaluate": {"rows": int, "start": str,
+        "end": str, "frozen_window_guard_passed": True}}`.
+
+    Raises:
+        ValueError: if fewer than 3 timestamps are given.
+        ValueError: naming all three period row counts and both boundary
+            dates, if any period falls below `minimum_rows_per_period`.
+    """
+    if minimum_rows_per_period is None:
+        minimum_rows_per_period = _DEFAULT_MIN_ROWS_PER_QUANTILE_PERIOD
+
+    ts = pd.to_datetime(pd.Series(np.asarray(scored_timestamps)), utc=True).sort_values().reset_index(drop=True)
+    if len(ts) < 3:
+        raise ValueError(
+            f"quantile_period_boundaries: need at least 3 scored "
+            f"timestamps to carve three periods, got {len(ts)}"
+        )
+
+    tmp_frame = pd.DataFrame({"datetime_utc": ts})
+    boundaries = forecast_experiment._default_split_boundaries(tmp_frame)
+    fit, calibrate, evaluate = experiment_splits.calendar_split(tmp_frame, boundaries, min_rows_per_side=1)
+
+    pinned_test_start = pd.Timestamp(FROZEN_TEST_SPLIT_START, tz="UTC")
+    for name, side in (("fit", fit), ("calibrate", calibrate), ("evaluate", evaluate)):
+        if side["datetime_utc"].max() >= pinned_test_start:
+            raise ValueError(
+                f"quantile_period_boundaries: the {name} period's own "
+                f"maximum timestamp {side['datetime_utc'].max()} is not "
+                f"strictly before FROZEN_TEST_SPLIT_START "
+                f"({FROZEN_TEST_SPLIT_START}) -- scored_timestamps carried "
+                f"a frozen-test-window row"
+            )
+
+    counts = {"fit": len(fit), "calibrate": len(calibrate), "evaluate": len(evaluate)}
+    too_small = {name: n for name, n in counts.items() if n < minimum_rows_per_period}
+    if too_small:
+        raise ValueError(
+            f"quantile_period_boundaries: period(s) below "
+            f"minimum_rows_per_period={minimum_rows_per_period} "
+            f"({minimum_rows_per_period / 4.0:.1f} days at four scored "
+            f"rows/calendar day): {too_small} -- full counts={counts}, "
+            f"val_start={boundaries.val_start}, test_start={boundaries.test_start}"
+        )
+
+    fit_ts, calibrate_ts, evaluate_ts = (
+        set(fit["datetime_utc"]), set(calibrate["datetime_utc"]), set(evaluate["datetime_utc"]),
+    )
+    if (fit_ts & calibrate_ts) or (calibrate_ts & evaluate_ts) or (fit_ts & evaluate_ts):
+        raise ValueError(
+            "quantile_period_boundaries: fit/calibrate/evaluate periods "
+            "share at least one timestamp -- calendar_split's own "
+            "partition predicate should make this impossible; this is a "
+            "defensive assertion"
+        )
+
+    fit_guard = assert_basis_excludes_frozen_test_rows(fit, basis="ABLATION")
+    calibrate_guard = assert_basis_excludes_frozen_test_rows(calibrate, basis="ABLATION")
+    evaluate_guard = assert_basis_excludes_frozen_test_rows(evaluate, basis="ABLATION")
+
+    return {
+        "val_start": str(boundaries.val_start),
+        "test_start": str(boundaries.test_start),
+        "minimum_rows_per_period": minimum_rows_per_period,
+        "fit": {
+            "rows": len(fit), "start": str(fit["datetime_utc"].min()), "end": str(fit["datetime_utc"].max()),
+            "frozen_window_guard_passed": True, "frozen_window_guard": fit_guard,
+        },
+        "calibrate": {
+            "rows": len(calibrate), "start": str(calibrate["datetime_utc"].min()),
+            "end": str(calibrate["datetime_utc"].max()),
+            "frozen_window_guard_passed": True, "frozen_window_guard": calibrate_guard,
+        },
+        "evaluate": {
+            "rows": len(evaluate), "start": str(evaluate["datetime_utc"].min()),
+            "end": str(evaluate["datetime_utc"].max()),
+            "frozen_window_guard_passed": True, "frozen_window_guard": evaluate_guard,
+        },
+    }
+
+
+def _quantile_feature_matrix(frame: pd.DataFrame, candidate_prediction) -> np.ndarray:
+    """
+    Shared feature-matrix builder for `fit_lower_quantile_model` and every
+    caller that must predict with an already-fitted quantile model on a
+    DIFFERENT frame: `candidate_prediction` (the candidate's own point
+    forecast, passed in rather than read from a column so this never
+    silently assumes which candidate it is fitting/predicting around),
+    `_QUANTILE_DECISION_TIME_COLUMNS` (decision-time weather, never a
+    `truth_*` valid-time column), and a cyclical hour-of-day encoding.
+    """
+    candidate_prediction = np.asarray(candidate_prediction, dtype=float)
+    if len(candidate_prediction) != len(frame):
+        raise ValueError(
+            f"_quantile_feature_matrix: candidate_prediction has "
+            f"{len(candidate_prediction)} row(s), frame has {len(frame)}"
+        )
+    hours = pd.to_datetime(frame["datetime_utc"], utc=True).dt.hour.to_numpy(dtype=float)
+    hour_sin = np.sin(2.0 * np.pi * hours / 24.0)
+    hour_cos = np.cos(2.0 * np.pi * hours / 24.0)
+    columns = [candidate_prediction]
+    for col in _QUANTILE_DECISION_TIME_COLUMNS:
+        if col not in frame.columns:
+            raise ValueError(f"_quantile_feature_matrix: frame is missing decision-time column {col!r}")
+        columns.append(frame[col].to_numpy(dtype=float))
+    columns.append(hour_sin)
+    columns.append(hour_cos)
+    return np.column_stack(columns)
+
+
+_QUANTILE_FEATURE_NAMES: tuple = (
+    "candidate_point_prediction", *_QUANTILE_DECISION_TIME_COLUMNS, "hour_sin", "hour_cos",
+)
+
+
+def fit_lower_quantile_model(fit_frame: pd.DataFrame, *, alpha: float, candidate_prediction) -> dict:
+    """
+    Fit `sklearn.ensemble.GradientBoostingRegressor(loss="quantile",
+    alpha=alpha)`, seeded from `config.FORECAST_EXPERIMENT_CORRECTION_
+    RANDOM_STATE` (the phase's ONE random-state constant -- never a second
+    seed), on `fit_frame`'s own rows: features
+    `_QUANTILE_FEATURE_NAMES` (the candidate's own point prediction plus
+    decision-time weather plus an hour-of-day encoding -- see
+    `_quantile_feature_matrix`), target `fit_frame["truth_dlr_amps"]`
+    (the valid-time truth ampacity).
+
+    Asserts, by construction and by name, that no valid-time `truth_*`
+    column enters the feature set: `_QUANTILE_FEATURE_NAMES` is a fixed
+    tuple containing no `truth_`-prefixed name, and this function raises if
+    that ever stops being true (a defensive assertion against a future
+    edit silently adding one).
+
+    Returns:
+        `{"model": the fitted estimator, "alpha": float, "feature_names":
+        _QUANTILE_FEATURE_NAMES, "rows": int}`.
+    """
+    assert not any(name.startswith("truth_") for name in _QUANTILE_FEATURE_NAMES), (
+        "fit_lower_quantile_model: a valid-time truth_* column has entered "
+        "the quantile model's own feature set -- this must never happen"
+    )
+    from sklearn.ensemble import GradientBoostingRegressor
+
+    X = _quantile_feature_matrix(fit_frame, candidate_prediction)
+    y = fit_frame["truth_dlr_amps"].to_numpy(dtype=float)
+    model = GradientBoostingRegressor(
+        loss="quantile", alpha=alpha, random_state=config.FORECAST_EXPERIMENT_CORRECTION_RANDOM_STATE,
+    )
+    model.fit(X, y)
+    return {
+        "model": model,
+        "alpha": alpha,
+        "feature_names": _QUANTILE_FEATURE_NAMES,
+        "rows": len(fit_frame),
+    }
+
+
+def _fit_calibrate_evaluate_quantile(
+    fit_frame: pd.DataFrame, calibrate_frame: pd.DataFrame, evaluate_frame: pd.DataFrame, *,
+    alpha: float, fit_prediction, calibrate_prediction, evaluate_prediction,
+) -> dict:
+    """
+    The shared engine behind `quantile_calibration_report` and this
+    module's own matched-rate quantile rows: fits `fit_lower_quantile_
+    model` on `fit_frame`, predicts on `calibrate_frame` and
+    `evaluate_frame`, scores both with `sklearn.metrics.mean_pinball_loss`
+    (never a hand-rolled asymmetric loss) and the empirical exceedance
+    rate (the fraction of rows where truth fell below the predicted lower
+    quantile), BEFORE and AFTER applying a calibration offset LEARNED ON
+    THE CALIBRATE PERIOD ONLY -- the additive shift equal to the
+    `alpha`-quantile of the calibrate period's own (truth minus predicted-
+    quantile) residuals, which by construction brings the calibrate
+    period's own empirical exceedance rate to (approximately) `alpha` --
+    then applies that SAME offset, UNCHANGED, on the evaluate period and
+    reports what it achieves there, never re-fitting or re-learning
+    anything on the evaluate period itself.
+
+    Returns the serializable before/after stats for both periods plus the
+    raw post-calibration predicted-quantile arrays for calibrate/evaluate
+    (keyed `"_calibrate_prediction_after"`/`"_evaluate_prediction_after"`,
+    leading underscore: an internal field this module's own matched-rate
+    step reads, never written to a persisted JSON report as-is since a
+    full per-row array would bloat it for no reader benefit beyond what
+    the aggregate stats already carry).
+    """
+    fitted = fit_lower_quantile_model(fit_frame, alpha=alpha, candidate_prediction=fit_prediction)
+    model = fitted["model"]
+
+    X_cal = _quantile_feature_matrix(calibrate_frame, calibrate_prediction)
+    X_eval = _quantile_feature_matrix(evaluate_frame, evaluate_prediction)
+    q_cal_before = np.asarray(model.predict(X_cal), dtype=float)
+    q_eval_before = np.asarray(model.predict(X_eval), dtype=float)
+
+    y_cal = calibrate_frame["truth_dlr_amps"].to_numpy(dtype=float)
+    y_eval = evaluate_frame["truth_dlr_amps"].to_numpy(dtype=float)
+
+    from sklearn.metrics import mean_pinball_loss
+
+    residual_cal = y_cal - q_cal_before
+    offset = float(np.quantile(residual_cal, alpha))
+    q_cal_after = q_cal_before + offset
+    q_eval_after = q_eval_before + offset
+
+    pinball_cal_before = float(mean_pinball_loss(y_cal, q_cal_before, alpha=alpha))
+    pinball_eval_before = float(mean_pinball_loss(y_eval, q_eval_before, alpha=alpha))
+    pinball_cal_after = float(mean_pinball_loss(y_cal, q_cal_after, alpha=alpha))
+    pinball_eval_after = float(mean_pinball_loss(y_eval, q_eval_after, alpha=alpha))
+
+    exceed_cal_before = float(np.mean(y_cal < q_cal_before))
+    exceed_eval_before = float(np.mean(y_eval < q_eval_before))
+    exceed_cal_after = float(np.mean(y_cal < q_cal_after))
+    exceed_eval_after = float(np.mean(y_eval < q_eval_after))
+
+    dist_before = abs(exceed_eval_before - alpha)
+    dist_after = abs(exceed_eval_after - alpha)
+
+    return {
+        "alpha": alpha,
+        "calibration_offset_amps": offset,
+        "rows": {"fit": len(fit_frame), "calibrate": len(calibrate_frame), "evaluate": len(evaluate_frame)},
+        "calibrate": {
+            "before": {"pinball_loss": pinball_cal_before, "empirical_exceedance_rate": exceed_cal_before},
+            "after": {"pinball_loss": pinball_cal_after, "empirical_exceedance_rate": exceed_cal_after},
+        },
+        "evaluate": {
+            "before": {"pinball_loss": pinball_eval_before, "empirical_exceedance_rate": exceed_eval_before},
+            "after": {"pinball_loss": pinball_eval_after, "empirical_exceedance_rate": exceed_eval_after},
+        },
+        "evaluate_exceedance_distance_from_nominal_before": dist_before,
+        "evaluate_exceedance_distance_from_nominal_after": dist_after,
+        "improved": bool(dist_after < dist_before),
+        "_calibrate_prediction_after": q_cal_after,
+        "_evaluate_prediction_after": q_eval_after,
+    }
+
+
+def quantile_calibration_report(
+    fit_frame: pd.DataFrame, calibrate_frame: pd.DataFrame, evaluate_frame: pd.DataFrame, *,
+    candidate_names, alphas=None,
+) -> dict:
+    """
+    For each `alpha` in `alphas` (default `_DEFAULT_LOWER_QUANTILE_ALPHAS`)
+    and each candidate in `candidate_names`: fits a lower-tail quantile
+    model on `fit_frame` around that candidate's own point prediction
+    (`fit_lower_quantile_model`), predicts on `calibrate_frame` and
+    `evaluate_frame`, and reports PINBALL LOSS (`sklearn.metrics.
+    mean_pinball_loss` -- never a hand-rolled asymmetric loss) and
+    EMPIRICAL EXCEEDANCE RATE for both periods, before and after a
+    calibration offset learned on the calibrate period only and applied
+    unchanged on the evaluate period (`_fit_calibrate_evaluate_quantile`).
+
+    Reports, per alpha, an aggregate `calibration_improved_on_evaluate`
+    flag: `True` when calibration brought the MEAN (across candidates)
+    evaluate-period exceedance-rate distance from nominal `alpha` closer
+    to zero than before calibration, `False` otherwise -- a case where
+    calibration does not generalize from the calibrate period to the
+    evaluate period is reported as `False`, never hidden or silently
+    reported as success.
+
+    Returns:
+        `{"alphas": list, "by_alpha": {str(alpha): {"candidates":
+        {candidate_name: {...}}, "calibration_improved_on_evaluate":
+        bool}}}`.
+    """
+    if alphas is None:
+        alphas = _DEFAULT_LOWER_QUANTILE_ALPHAS
+
+    by_alpha = {}
+    for alpha in alphas:
+        candidates_entry = {}
+        dist_before_all, dist_after_all = [], []
+        for cand in candidate_names:
+            pred_col = f"pred_{cand}"
+            result = _fit_calibrate_evaluate_quantile(
+                fit_frame, calibrate_frame, evaluate_frame, alpha=alpha,
+                fit_prediction=fit_frame[pred_col].to_numpy(dtype=float),
+                calibrate_prediction=calibrate_frame[pred_col].to_numpy(dtype=float),
+                evaluate_prediction=evaluate_frame[pred_col].to_numpy(dtype=float),
+            )
+            dist_before_all.append(result["evaluate_exceedance_distance_from_nominal_before"])
+            dist_after_all.append(result["evaluate_exceedance_distance_from_nominal_after"])
+            candidates_entry[cand] = {
+                k: v for k, v in result.items()
+                if k not in ("_calibrate_prediction_after", "_evaluate_prediction_after")
+            }
+        alpha_improved = bool(float(np.mean(dist_after_all)) < float(np.mean(dist_before_all)))
+        by_alpha[str(alpha)] = {
+            "candidates": candidates_entry,
+            "calibration_improved_on_evaluate": alpha_improved,
+        }
+
+    return {"alphas": list(alphas), "by_alpha": by_alpha}
+
+
+def _matched_rate_row(name: str, *, pred_cal, y_cal, pred_eval, y_eval, target_rates, static_reference_amps) -> dict:
+    """
+    For one named prediction series: for each target overrating rate,
+    finds the additive derating `d` such that `mean((pred_cal - d) >
+    y_cal) == rate` -- equivalently, `d` is the `(1 - rate)`-quantile of
+    `(pred_cal - y_cal)`, since the fraction of calibrate rows with
+    `d < (pred_cal - y_cal)` equals `rate` exactly at that quantile --
+    fitted on the CALIBRATE period only, then applies that SAME `d`
+    unchanged on the evaluate period and reports the overrating rate it
+    ACTUALLY achieves there (never the target, which is not guaranteed to
+    be hit), the mean retained capacity in amperes, and that capacity as a
+    fraction of `static_reference_amps`.
+    """
+    pred_cal = np.asarray(pred_cal, dtype=float)
+    pred_eval = np.asarray(pred_eval, dtype=float)
+    y_cal = np.asarray(y_cal, dtype=float)
+    y_eval = np.asarray(y_eval, dtype=float)
+
+    by_target_rate = {}
+    for rate in target_rates:
+        derating = float(np.quantile(pred_cal - y_cal, 1.0 - rate))
+        derated_eval = pred_eval - derating
+        achieved_rate = float(np.mean(derated_eval > y_eval))
+        retained_capacity_amps = float(np.mean(derated_eval))
+        retained_fraction = (
+            retained_capacity_amps / static_reference_amps if static_reference_amps else None
+        )
+        by_target_rate[str(rate)] = {
+            "target_rate": rate,
+            "derating_amps_fitted_on_calibrate": derating,
+            "achieved_rate_on_evaluate": achieved_rate,
+            "retained_capacity_amps": retained_capacity_amps,
+            "retained_capacity_fraction_of_static": retained_fraction,
+        }
+    return {"name": name, "by_target_rate": by_target_rate}
+
+
+def retained_capacity_at_matched_overrating(
+    calibrate_frame: pd.DataFrame, evaluate_frame: pd.DataFrame, *,
+    candidate_names, static_reference_amps: float, target_rates=None, extra_rows: dict = None,
+) -> dict:
+    """
+    D-03's headline comparison. For every candidate in `candidate_names`
+    (reading `pred_<candidate>` directly from `calibrate_frame`/
+    `evaluate_frame`) plus every entry in `extra_rows` (a mapping of row
+    name to `{"calibrate_prediction": array, "evaluate_prediction":
+    array}` -- used by `overrating_basis_report` for the static-rating
+    reference row and the calibrated-lower-quantile rows, so every row in
+    the returned table is scored through the exact same
+    `_matched_rate_row` procedure), computes the matched-overrating-rate
+    table via `_matched_rate_row`.
+
+    `static_reference_amps` is the corridor's own weakest-link static
+    reference (the minimum of its two endpoint cities' `config.
+    STATIC_RATINGS`, consistent with this phase's own weakest-link
+    convention elsewhere) -- a documented PROXY, never an independently
+    sourced corridor-level static rating.
+
+    Returns:
+        `{"target_rates": list, "static_reference_amps": float, "rows":
+        [{"name": str, "by_target_rate": {...}}, ...]}`.
+    """
+    if target_rates is None:
+        target_rates = _DEFAULT_MATCHED_OVERRATING_TARGET_RATES
+    extra_rows = extra_rows or {}
+
+    y_cal = calibrate_frame["truth_dlr_amps"].to_numpy(dtype=float)
+    y_eval = evaluate_frame["truth_dlr_amps"].to_numpy(dtype=float)
+
+    rows = []
+    for cand in candidate_names:
+        pred_col = f"pred_{cand}"
+        rows.append(_matched_rate_row(
+            cand,
+            pred_cal=calibrate_frame[pred_col].to_numpy(dtype=float), y_cal=y_cal,
+            pred_eval=evaluate_frame[pred_col].to_numpy(dtype=float), y_eval=y_eval,
+            target_rates=target_rates, static_reference_amps=static_reference_amps,
+        ))
+    for name, arrays in extra_rows.items():
+        rows.append(_matched_rate_row(
+            name,
+            pred_cal=arrays["calibrate_prediction"], y_cal=y_cal,
+            pred_eval=arrays["evaluate_prediction"], y_eval=y_eval,
+            target_rates=target_rates, static_reference_amps=static_reference_amps,
+        ))
+
+    return {
+        "target_rates": list(target_rates),
+        "static_reference_amps": static_reference_amps,
+        "rows": rows,
+    }
+
+
+# The regime breakdown is computed once per report, not once per candidate
+# (D-03 bullet 1 asks for ONE regime breakdown, not a per-candidate table --
+# see 04-04-PLAN.md's own action text, "Then the regime breakdown", singular).
+# `ml_cooling_corrected` is the frozen record's own stated winner and the
+# estimator family D-03's quantile work also reuses (`COOLING_CONFIGURATION`)
+# -- a documented choice, never a silent default.
+_OVERRATING_PRIMARY_CANDIDATE: str = "ml_cooling_corrected"
+
+
+def overrating_basis_report(
+    corridor: str, *, lead_hours: int = None, report_path: str = None,
+    alphas=None, target_rates=None, minimum_bin_rows: int = None, minimum_rows_per_period: int = None,
+) -> dict:
+    """
+    Composes Task 1's `overrating_profile`/`overrating_by_regime` and this
+    task's quantile calibration and matched-rate work into ONE git-ignored
+    JSON report per corridor (`data/experiment/audit_overrating_report_
+    <CORRIDOR>.json`), recording the frozen-window guard result for every
+    period it used and carrying `_REANALYSIS_SCOPE_LIMITATION` as a
+    top-level field (`"limitation"`) so the number and its qualifier can
+    never be separated when a later plan writes from this report.
+
+    Sequence: `_quantile_source_frame(corridor)` assembles the combined
+    ABLATION basis with every arm's prediction attached to every row;
+    `overrating_profile` is computed per real candidate (every `ALL_ARMS`
+    entry except the oracle) on the VALIDATION rows only (the same scored
+    set `ablation_basis_report` itself scores); `overrating_by_regime` is
+    computed once, for `_OVERRATING_PRIMARY_CANDIDATE`, also on the
+    validation rows; `quantile_period_boundaries` carves the combined
+    frame's own fit/calibrate/evaluate periods; `quantile_calibration_
+    report` is run across `alphas`; `retained_capacity_at_matched_
+    overrating` is run with the static-rating reference row and, for
+    `_OVERRATING_PRIMARY_CANDIDATE` at every alpha, a calibrated-quantile
+    row (`"quantile_alpha_<alpha>_<candidate>"`) built from the SAME
+    post-calibration predictions `quantile_calibration_report` itself
+    computed for that (alpha, candidate) pair -- never a second, separately
+    fitted quantile model.
+
+    Raises:
+        ValueError: naming the valid corridors, for an unknown one.
+    """
+    valid_corridors = sorted(config.CORRIDOR_ENDPOINTS)
+    if corridor not in config.CORRIDOR_ENDPOINTS:
+        raise ValueError(
+            f"overrating_basis_report: unknown corridor {corridor!r} -- "
+            f"valid corridors: {valid_corridors}"
+        )
+    if report_path is None:
+        report_path = _overrating_report_path(corridor)
+    if alphas is None:
+        alphas = _DEFAULT_LOWER_QUANTILE_ALPHAS
+    if target_rates is None:
+        target_rates = _DEFAULT_MATCHED_OVERRATING_TARGET_RATES
+
+    source = _quantile_source_frame(corridor, lead_hours=lead_hours)
+    combined = source["combined"]
+    val_filtered = source["val_filtered"]
+
+    real_candidate_names = [n for n in forecast_experiment.ALL_ARMS if n != forecast_experiment.ORACLE_ARM_NAME]
+
+    timestamps = pd.to_datetime(val_filtered["datetime_utc"], utc=True)
+    truth_val = val_filtered["truth_dlr_amps"].to_numpy(dtype=float)
+    overrating = {
+        cand: overrating_profile(truth_val, val_filtered[f"pred_{cand}"].to_numpy(dtype=float), timestamps)
+        for cand in real_candidate_names
+    }
+
+    regime = overrating_by_regime(
+        val_filtered, val_filtered[f"pred_{_OVERRATING_PRIMARY_CANDIDATE}"].to_numpy(dtype=float),
+        corridor=corridor, minimum_bin_rows=minimum_bin_rows,
+    )
+
+    periods = quantile_period_boundaries(combined["datetime_utc"], minimum_rows_per_period=minimum_rows_per_period)
+    split_boundaries = experiment_splits.SplitBoundaries(val_start=periods["val_start"], test_start=periods["test_start"])
+    fit_frame, calibrate_frame, evaluate_frame = experiment_splits.calendar_split(
+        combined, split_boundaries, min_rows_per_side=1,
+    )
+
+    calibration = quantile_calibration_report(
+        fit_frame, calibrate_frame, evaluate_frame, candidate_names=real_candidate_names, alphas=alphas,
+    )
+
+    city_a, city_b = config.CORRIDOR_ENDPOINTS[corridor]
+    static_reference_amps = min(
+        config.STATIC_RATINGS.get(city_a, config.DEFAULT_STATIC_RATING),
+        config.STATIC_RATINGS.get(city_b, config.DEFAULT_STATIC_RATING),
+    )
+
+    extra_rows = {
+        "static_rating_reference": {
+            "calibrate_prediction": np.full(len(calibrate_frame), static_reference_amps, dtype=float),
+            "evaluate_prediction": np.full(len(evaluate_frame), static_reference_amps, dtype=float),
+        },
+    }
+    primary_pred_col = f"pred_{_OVERRATING_PRIMARY_CANDIDATE}"
+    for alpha in alphas:
+        quantile_result = _fit_calibrate_evaluate_quantile(
+            fit_frame, calibrate_frame, evaluate_frame, alpha=alpha,
+            fit_prediction=fit_frame[primary_pred_col].to_numpy(dtype=float),
+            calibrate_prediction=calibrate_frame[primary_pred_col].to_numpy(dtype=float),
+            evaluate_prediction=evaluate_frame[primary_pred_col].to_numpy(dtype=float),
+        )
+        extra_rows[f"quantile_alpha_{alpha}_{_OVERRATING_PRIMARY_CANDIDATE}"] = {
+            "calibrate_prediction": quantile_result["_calibrate_prediction_after"],
+            "evaluate_prediction": quantile_result["_evaluate_prediction_after"],
+        }
+
+    matched = retained_capacity_at_matched_overrating(
+        calibrate_frame, evaluate_frame, candidate_names=real_candidate_names,
+        static_reference_amps=static_reference_amps, target_rates=target_rates, extra_rows=extra_rows,
+    )
+
+    report = {
+        "corridor": corridor,
+        "generated_at": pd.Timestamp.now(tz="UTC").isoformat(),
+        "scored_rows": len(val_filtered),
+        "limitation": _REANALYSIS_SCOPE_LIMITATION,
+        "primary_candidate_for_regime_and_quantile_rows": _OVERRATING_PRIMARY_CANDIDATE,
+        "static_reference_amps": static_reference_amps,
+        "periods": periods,
+        "overrating": overrating,
+        "by_regime": regime,
+        "quantiles": calibration,
+        "matched_overrating": matched,
+        "fit_guard": source["fit_guard"],
+        "scored_guard": source["scored_guard"],
+        "max_fit_timestamp": source["max_fit_timestamp"],
+        "min_scored_timestamp": source["min_scored_timestamp"],
+    }
+
+    report_dir = os.path.dirname(report_path)
+    if report_dir:
+        os.makedirs(report_dir, exist_ok=True)
+    tmp_path = report_path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as fh:
+        json.dump(report, fh, indent=2, default=str)
+    os.replace(tmp_path, report_path)
+
+    return report
