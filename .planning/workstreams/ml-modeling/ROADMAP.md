@@ -57,7 +57,7 @@ during phase planning/execution before any new dependency is added.
 - [x] **Phase 1: Forecasting Model** - Replace/extend `ampacity_forecast.py`'s naive/EWM methods with a trained regression or neural-network model, validated against real historical data (completed 2026-09-24)
 - [x] **Phase 2: Anomaly Detection Model** - Replace/augment `anomaly_detector.py`'s mean±k·std threshold with a trained model on historical per-variable baselines, validated against real historical data (completed 2026-09-28)
 - [x] **Phase 3: Ampacity Forecast Correction Experiment** - Determine what should replace the current lagged-ampacity `"ml"` method: compare persistence, raw-forecast-through-IEEE-738, ML-corrected-wind, and ML-corrected-cooling approaches (plus an oracle diagnostic) against a real, empirically lead-time-calibrated weather forecast archive on a fixed chronological train/val/test split (supersedes backlog Phase 999.1) (completed 2026-09-30)
-- [ ] **Phase 4: Forecast Correction Follow-up Audit** - Adversarial follow-up audit of Phase 3's frozen results: data provenance/leakage re-check, strengthened statistical comparison (block-bootstrap, direct pairwise, RMSE), conservative-rating/overrating analysis with calibrated quantiles, corrected verdict language, and integration-readiness scoping — does not replace the production model or re-run the frozen test set
+- [x] **Phase 4: Forecast Correction Follow-up Audit** - Adversarial follow-up audit of Phase 3's frozen results: data provenance/leakage re-check, strengthened statistical comparison (block-bootstrap, direct pairwise, RMSE), conservative-rating/overrating analysis with calibrated quantiles, corrected verdict language, and integration-readiness scoping (completed 2026-10-01) — does not replace the production model or re-run the frozen test set
 
 ## Phase Details
 
@@ -291,30 +291,53 @@ are carried in each plan's `requirements:` field, exactly as Phase 3's plans use
      checked at decision time (not just init-to-valid lead); every feature is checked against
      decision time, not just at/after valid time; hourly lag features are confirmed to retain their
      intended time offsets after the six-hourly filter.
+     **Disposition: MET** — Plan 04-01 (Findings 1-3) and Plan 04-02 (Findings 4-9), closed by the
+     five-row dispositions table in `forecast_correction_followup_audit.md`'s `## Data provenance
+     re-audit (D-01)` section (see 04-01-SUMMARY.md, 04-02-SUMMARY.md).
   2. The comparison is strengthened: paired block-bootstrap CIs (with block-length sensitivity)
      replace or supplement the original i.i.d. bootstrap where temporal dependence matters; cooling
      correction is directly compared against raw forecast, wind correction, and the refit MLP (not
      only against persistence); both MAE and RMSE are reported at both corridors; the multiple-
      comparisons/selection-on-test-set issue is acknowledged and a fresh chronological holdout is
      reserved for confirming any revised method.
+     **Disposition: MET IN PART** — Plan 04-03's `## Strengthened comparison (D-02)` section delivers
+     the block-bootstrap sensitivity sweep, the direct pairwise comparison, and both error metrics at
+     both corridors in full (04-03-SUMMARY.md). The fresh-chronological-holdout half is a
+     RESERVATION, not an executed confirmation: the period is reserved (begins 2026-09-30, minimum
+     56 rows / 14 days) and enforced disjoint from Phase 3's splits, but the measured FRESH row count
+     is 0 as of this audit's run date — no confirmation run has actually been performed. Outstanding
+     until roughly two weeks of calendar time accrue past this audit's run date.
   3. Conservative-rating behavior is measured: overrating frequency/magnitude/duration by regime
      (including low-wind), calibrated lower-ampacity quantiles (pinball loss, calibration period
      separate from the audit), and retained-capacity comparisons at matched overrating rates — with
      any reliability claim explicitly scoped to the reanalysis-based verification data used, not
      conductor-level safety.
+     **Disposition: MET** — Plan 04-04's `## Conservative-rating analysis (D-03)` section: the
+     regime breakdown with the low-wind boundary set at the measured 0.1428 m/s convection crossover,
+     the three-period quantile calibration, and the matched-overrating-rate retained-capacity
+     headline, with the reanalysis-scope limitation stated before every table (04-04-SUMMARY.md).
   4. Overstated language from the original record is corrected: cooling is described as the lowest-
      observed-MAE candidate, not an established unique winner; the 30A practical threshold claim is
      scoped honestly for Midland; the future-wind oracle is treated as a diagnostic, not a rigorous
      ceiling; correction headroom is measured relative to raw forecast; the invalid 1-hour experiment
      stays excluded; low-wind sensitivity is distinguished from numerical instability.
+     **Disposition: MET** — Plan 04-05's append-only, byte-identity-gated `## Follow-up Audit
+     Amendment (Phase 4, D-04)` section in the frozen record (all six items), cross-referenced from
+     `forecast_correction_followup_audit.md`'s own `## Corrected language in the frozen record (D-04)`
+     table (04-05-SUMMARY.md).
   5. A concrete next-integration-phase plan exists: candidates named, MLP ablations scoped, the
      minimum data contract needed from the pipeline team specified, ML-track-now vs.
      needs-that-dataset work split, and packaging/runtime-fetch/fallback/shadow-eval/monitoring/
      rollback outlined — with the 60-minute-vs-24-hour-vs-both product question named explicitly as
      unresolved rather than assumed.
-**Plans**: 5/6 plans executed across 6 waves (planned 2026-09-30; sequential by necessity — each wave's findings
-are cited by the next, and all six plans write to the same new audit record, so no two can run in
-parallel without a file conflict)
+     **Disposition: MET** — Plan 04-06's `## Integration readiness plan (D-05)` section: both
+     candidates named live with the lag-vs-covariate ablation and cooling-rediscovery hypothesis test,
+     a 19-field data contract with its three distinct timestamps, the now-versus-blocked split, the
+     seven-part packaging/fetch/fallback/shadow-eval/monitoring/rollback outline, and the horizon
+     product question named and left open (04-06-SUMMARY.md).
+**Plans**: 6/6 plans complete across 6 waves — all complete. Sequential by necessity: each wave's
+findings are cited by the next, and all six plans write to the same new audit record, so no two could
+run in parallel without a file conflict.
 
 **Wave 1**
 
@@ -353,9 +376,9 @@ parallel without a file conflict)
   append-only amendment to the frozen record under a byte-identity gate on its Expectation and
   Measured-results sections, and the audit's own corrected verdict and limitations
 
-**Wave 6** *(blocked on Wave 5)*
+**Wave 6**
 
-- [ ] 04-06-PLAN.md — D-05's integration-readiness plan: the lag-versus-covariate ablation answering the
+- [x] 04-06-PLAN.md — D-05's integration-readiness plan: the lag-versus-covariate ablation answering the
   frozen record's own open question plus a testable cooling-rediscovery hypothesis, the field-level
   minimum data contract with its three distinct timestamps, the now-versus-blocked recommendation split,
   the packaging/fetch/fallback/shadow-eval/monitoring/rollback outline, and the horizon product question
@@ -372,7 +395,7 @@ and may be executed first or in parallel if that better fits available capacity)
 | 1. Forecasting Model | 3/3 | Complete    | 2026-09-24 |
 | 2. Anomaly Detection Model | 5/5 | Complete   | 2026-09-28 |
 | 3. Ampacity Forecast Correction Experiment | 7/7 | Complete   | 2026-09-30 |
-| 4. Forecast Correction Follow-up Audit | 5/6 | In Progress|  |
+| 4. Forecast Correction Follow-up Audit | 6/6 | Complete   | 2026-10-01 |
 
 ## Backlog
 
