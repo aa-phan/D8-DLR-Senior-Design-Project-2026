@@ -21,13 +21,13 @@
     {
       "number": "4",
       "name": "Forecast Correction Follow-up Audit",
-      "status": "pending"
+      "status": "complete"
     }
   ],
   "next": {
-    "command": "/gsd:progress --next",
-    "label": "Advance to the next step",
-    "reason": "Phase 4 of 4 · 71% · executing"
+    "command": "/gsd:new-milestone",
+    "label": "Start a new milestone",
+    "reason": "All phases complete — start a new milestone"
   },
-  "updated_at": "2026-09-30T22:47:24.471Z"
+  "updated_at": "2026-10-01T05:30:41.199Z"
 }
