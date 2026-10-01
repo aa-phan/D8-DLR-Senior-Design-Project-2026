@@ -1008,3 +1008,231 @@ def test_block_length_sensitivity_custom_block_lengths_are_recorded():
     sweep = fea.block_length_sensitivity(errors_arm, errors_baseline, block_lengths=(1, 4, 8, 28))
     assert sweep["block_lengths_used"] == [1, 4, 8, 28]
     assert sorted(int(k) for k in sweep["by_block_length"]) == [1, 4, 8, 28]
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 04-03 Task 2: ablation_basis_report, fresh_basis_attempt.
+#
+# Reuses the Plan 04-02 fixture directly: `_patch_leakage_test_assembly`
+# monkeypatches `forecast_experiment.anchored_pair_frame` (one level below
+# `corridor_anchored_pair_frame`/`_stacked_pair_frame`), so the REAL
+# corridor-reduction and stacking logic runs unmodified against a
+# deterministic synthetic two-city frame whose timestamps (2024-01-01
+# onward, 220 days) sit entirely before the frozen test split start
+# (2026-03-17) -- genuinely network-free, no fetch monkeypatching needed
+# beyond that one seam.
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def _write_zero_fresh_manifest(tmp_path, corridor=_LEAKAGE_TEST_CORRIDOR, lead_hours=_LEAKAGE_TEST_LEAD_HOURS):
+    """
+    A pre-built manifest recording the FRESH basis at zero rows -- the
+    REAL, measured state for both corridors as of this phase's own
+    research date (04-01-SUMMARY.md) -- so `ablation_basis_report`'s own
+    call to `fresh_basis_attempt` reads this file directly rather than
+    triggering `build_basis_manifest`'s own live-assembly path (which
+    would otherwise need a date-range-aware fake, since the FRESH window's
+    requested start/end differ from the ABLATION window's).
+    """
+    manifest_path = str(tmp_path / "manifest.json")
+    manifest = {
+        "generated_at": "test-fixture",
+        "resolved_window_end": fea.FROZEN_WINDOW_END,
+        "lead_hours": lead_hours,
+        "corridors": {
+            corridor: {
+                "fresh": {
+                    "rows": 0,
+                    "reason": "test fixture: no fresh data",
+                    "resolved_window_end": fea.FROZEN_WINDOW_END,
+                },
+            },
+        },
+    }
+    with open(manifest_path, "w", encoding="utf-8") as fh:
+        json.dump(manifest, fh)
+    return manifest_path
+
+
+def test_ablation_basis_report_refuses_unknown_corridor():
+    with pytest.raises(ValueError) as exc_info:
+        fea.ablation_basis_report("NOT_A_REAL_CORRIDOR")
+    message = str(exc_info.value)
+    for name in config.CORRIDOR_ENDPOINTS:
+        assert name in message, message
+
+
+def test_ablation_basis_report_runs_and_returns_documented_shape(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "FORECAST_EXPERIMENT_CACHE_DIR", str(tmp_path))
+    _patch_leakage_test_assembly(monkeypatch)
+    manifest_path = _write_zero_fresh_manifest(tmp_path)
+
+    report_path = str(tmp_path / "ablation_report.json")
+    r = fea.ablation_basis_report(
+        _LEAKAGE_TEST_CORRIDOR, report_path=report_path, fresh_manifest_path=manifest_path,
+    )
+
+    assert r["ablation_guard_passed_fit"] is True
+    assert r["ablation_guard_passed_scored"] is True
+    assert r["max_fit_timestamp"] < r["min_scored_timestamp"]
+
+    cand = r["candidates"]
+    for name in (
+        "persistence_24h", "nwp_wind_delta", "raw_forecast",
+        "ml_wind_corrected", "ml_cooling_corrected", "reference_ml_refit_24h",
+    ):
+        assert name in cand, sorted(cand)
+        assert cand[name]["mae"] > 0 and cand[name]["rmse"] > 0, (name, cand[name])
+    assert cand[r["oracle_arm_name"]]["is_oracle_diagnostic"] is True
+
+    baselines = r["pairwise"]
+    assert len(baselines) >= 4, sorted(baselines)
+    assert "ml_cooling_corrected" in baselines and "raw_forecast" in baselines, sorted(baselines)
+    for bname, entry in baselines.items():
+        assert bname != r["oracle_arm_name"], f"the oracle was used as a baseline"
+        for arm, m in entry.items():
+            assert arm != r["oracle_arm_name"], f"the oracle appeared as a compared arm under baseline {bname}"
+            assert "iid_bca" in m and "iid_percentile" in m and "block" in m, (bname, arm, sorted(m))
+            assert len(m["block"]) >= 4, (bname, arm, sorted(m["block"]))
+            assert "conclusion_stable" in m, (bname, arm, sorted(m))
+
+    assert isinstance(r["mae_rmse_ordering_disagreements"], list)
+
+    res = r["residuals"]
+    for name in ("persistence_24h", "ml_cooling_corrected"):
+        arr = np.asarray(res[name], dtype=float)
+        assert abs(float(np.mean(np.abs(arr))) - cand[name]["mae"]) < 1e-9, (name, arr.mean(), cand[name]["mae"])
+
+    assert r["fresh_basis"]["branch"] == "not_attempted_zero_rows"
+    assert "ABLATION" in r["basis_caveat"]
+
+    with open(report_path, "r", encoding="utf-8") as fh:
+        on_disk = json.load(fh)
+    assert on_disk["corridor"] == _LEAKAGE_TEST_CORRIDOR
+
+
+def test_ablation_basis_report_raises_on_overlapping_fit_and_score_frames(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "FORECAST_EXPERIMENT_CACHE_DIR", str(tmp_path))
+    _patch_leakage_test_assembly(monkeypatch)
+    manifest_path = _write_zero_fresh_manifest(tmp_path)
+
+    real_calendar_split = fea.experiment_splits.calendar_split
+
+    def _corrupted_split(frame, boundaries):
+        train, val, test = real_calendar_split(frame, boundaries)
+        # Corrupt: val becomes an exact copy of train -- the fit frame and
+        # the scored frame now overlap completely, which must raise rather
+        # than silently produce an in-sample "out-of-sample" measurement.
+        return train, train.copy(), test
+
+    monkeypatch.setattr(fea.experiment_splits, "calendar_split", _corrupted_split)
+
+    with pytest.raises(ValueError):
+        fea.ablation_basis_report(
+            _LEAKAGE_TEST_CORRIDOR,
+            report_path=str(tmp_path / "report.json"),
+            fresh_manifest_path=manifest_path,
+        )
+
+
+def test_ablation_basis_report_residual_cross_check_raises_on_perturbed_scorer(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "FORECAST_EXPERIMENT_CACHE_DIR", str(tmp_path))
+    _patch_leakage_test_assembly(monkeypatch)
+    manifest_path = _write_zero_fresh_manifest(tmp_path)
+
+    real_score_arms = fea.forecast_experiment.score_arms
+
+    def _corrupted_score_arms(frame, arms, **kwargs):
+        result = real_score_arms(frame, arms, **kwargs)
+        # Perturb one arm's reported MAE so it disagrees with this
+        # function's own independently recomputed residual-based MAE --
+        # proving the cross-check actually raises rather than always
+        # trivially agreeing with itself.
+        any_name = next(iter(result["candidates"]))
+        result["candidates"][any_name]["mae"] += 999.0
+        return result
+
+    monkeypatch.setattr(fea.forecast_experiment, "score_arms", _corrupted_score_arms)
+
+    with pytest.raises(ValueError):
+        fea.ablation_basis_report(
+            _LEAKAGE_TEST_CORRIDOR,
+            report_path=str(tmp_path / "report.json"),
+            fresh_manifest_path=manifest_path,
+        )
+
+
+def test_fresh_basis_attempt_refuses_unknown_corridor():
+    with pytest.raises(ValueError) as exc_info:
+        fea.fresh_basis_attempt("NOT_A_REAL_CORRIDOR")
+    message = str(exc_info.value)
+    for name in config.CORRIDOR_ENDPOINTS:
+        assert name in message, message
+
+
+def test_fresh_basis_attempt_zero_rows_branch(tmp_path):
+    manifest_path = _write_zero_fresh_manifest(tmp_path)
+    result = fea.fresh_basis_attempt(_LEAKAGE_TEST_CORRIDOR, manifest_path=manifest_path)
+    assert result["branch"] == "not_attempted_zero_rows"
+    assert result["rows"] == 0
+    assert result["minimum_rows"] > 0
+    assert result["minimum_days"] == result["minimum_rows"] / 4.0
+    assert result["reason"]
+    assert result["confirmation_claim_permitted"] is False
+
+
+def test_fresh_basis_attempt_below_minimum_branch(tmp_path):
+    manifest_path = str(tmp_path / "manifest.json")
+    manifest = {
+        "generated_at": "test-fixture", "resolved_window_end": fea.FROZEN_WINDOW_END,
+        "lead_hours": _LEAKAGE_TEST_LEAD_HOURS,
+        "corridors": {_LEAKAGE_TEST_CORRIDOR: {"fresh": {"rows": 8, "resolved_window_end": fea.FROZEN_WINDOW_END}}},
+    }
+    with open(manifest_path, "w", encoding="utf-8") as fh:
+        json.dump(manifest, fh)
+
+    result = fea.fresh_basis_attempt(_LEAKAGE_TEST_CORRIDOR, minimum_rows=56, manifest_path=manifest_path)
+    assert result["branch"] == "below_minimum"
+    assert result["rows"] == 8
+    assert 0 < result["rows"] < result["minimum_rows"]
+    assert result["confirmation_claim_permitted"] is False
+
+
+def test_fresh_basis_attempt_confirmation_capable_branch_scores_fresh_rows(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "FORECAST_EXPERIMENT_CACHE_DIR", str(tmp_path))
+
+    fresh_start = pd.Timestamp(fea.FROZEN_WINDOW_END, tz="UTC") + pd.Timedelta(days=1)
+    fresh_frames = {
+        city: _synthetic_anchored_pair_frame(
+            city, periods=24 * 20, start=fresh_start.strftime("%Y-%m-%d"), seed=seed,
+        )
+        for city, seed in zip(config.CORRIDOR_ENDPOINTS[_LEAKAGE_TEST_CORRIDOR], (555, 556))
+    }
+
+    def fake_anchored_pair_frame(city, start=None, end=None, *, lead_hours):
+        return fresh_frames[city].copy()
+
+    monkeypatch.setattr(fea.forecast_experiment, "anchored_pair_frame", fake_anchored_pair_frame)
+
+    manifest_path = str(tmp_path / "manifest.json")
+    manifest = {
+        "generated_at": "test-fixture", "resolved_window_end": "2026-10-19",
+        "lead_hours": _LEAKAGE_TEST_LEAD_HOURS,
+        "corridors": {
+            _LEAKAGE_TEST_CORRIDOR: {
+                "fresh": {
+                    "rows": 60,
+                    "resolved_window_start": fresh_start.strftime("%Y-%m-%d"),
+                    "resolved_window_end": "2026-10-19",
+                },
+            },
+        },
+    }
+    with open(manifest_path, "w", encoding="utf-8") as fh:
+        json.dump(manifest, fh)
+
+    result = fea.fresh_basis_attempt(_LEAKAGE_TEST_CORRIDOR, minimum_rows=56, manifest_path=manifest_path)
+    assert result["branch"] == "confirmation_capable"
+    assert result["confirmation_claim_permitted"] is True
+    assert result["frozen_window_guard"]["rows"] > 0
+    assert "scored" in result and "candidates" in result["scored"]

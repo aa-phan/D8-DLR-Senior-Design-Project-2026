@@ -1938,3 +1938,495 @@ def block_length_sensitivity(
         "min_width": {"block_length": int(min_bl), "width": float(widths[min_bl])},
         "max_width": {"block_length": int(max_bl), "width": float(widths[max_bl])},
     }
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 04-03 Task 2: measure the comparison on real out-of-sample rows --
+# every pairwise margin, both error metrics, both bootstrap flavours, and
+# the residuals persisted this time (D-02 bullets 1 through 4, the
+# multiple-comparisons/fresh-period scoping, and 04-RESEARCH.md's central
+# finding that Phase 3 never persisted per-row predictions or residuals).
+#
+# `ablation_basis_report` follows `leakage_probe_coverage_report`'s own
+# proven assembly sequence (Plan 04-02) almost exactly -- corridor_frame at
+# the pinned frozen window, calendar_split, exact-lead filter, pin-safety
+# clip, frozen-window guard, stacked_full for fitting, `_ablation_val_city_
+# frame`-style per-city val extraction (never `_fitted_arm_city_frame`/
+# `_score_fitted_arms_at_corridor_level`, which route through `calendar_
+# split`'s empty-side floor that a train+val-only stacked frame always
+# fails) -- and makes exactly ONE deliberate change from that proven
+# sequence: it fits on the TRAIN rows alone, never train+val, so the
+# validation rows are genuinely held out for arms 3/4/5 in a way neither
+# the frozen harness's own test-set run nor Plan 04-02's leakage-probe
+# re-run claims to be.
+# ──────────────────────────────────────────────────────────────────────────
+
+# Six-hourly cadence (FORECAST_EXPERIMENT_LEAD_FILTER_MODULUS=6): the
+# exact-lead filter keeps one row in four per calendar day. Default sweep:
+# 1 (the i.i.d.-equivalent correctness gate), 4 (one calendar day), 8 (two
+# days), 28 (one week -- longer than a diurnal cycle expressed in THIS
+# series' own cadence, which `_DEFAULT_BLOCK_LENGTHS`' hourly-oriented 48
+# would badly under-represent at four rows/day).
+_DEFAULT_ABLATION_BLOCK_LENGTHS: tuple = (1, 4, 8, 28)
+
+# The four baselines D-02 bullet 2 names explicitly: persistence (the
+# frozen record's own baseline), the cooling correction (the frozen
+# record's own stated winner), the raw (uncorrected) forecast, and the
+# refit reference model -- so every candidate of interest is compared
+# against every other one of interest, not only against persistence.
+_PAIRWISE_BASELINE_NAMES: tuple = (
+    "persistence_24h", "ml_cooling_corrected", "raw_forecast", "reference_ml_refit_24h",
+)
+
+
+def _ablation_report_path(corridor: str) -> str:
+    return os.path.join(
+        config.FORECAST_EXPERIMENT_CACHE_DIR,
+        f"audit_ablation_report_{corridor}.json",
+    )
+
+
+def ablation_basis_report(
+    corridor: str, *, lead_hours: int = None, block_lengths=None, report_path: str = None,
+    fresh_manifest_path: str = None,
+) -> dict:
+    """
+    Fit arms 3 (`ml_wind_corrected`), 4 (`ml_cooling_corrected`) and 5
+    (`reference_ml_refit_24h`) on the real ABLATION TRAIN rows ALONE (the
+    one deliberate change from the frozen harness's own train+val fitting
+    convention -- see the module docstring block above), then score all
+    seven `ALL_ARMS` entries on the real ABLATION VALIDATION rows.
+
+    Costs a smaller fit sample than the frozen record's own run (train
+    only, not train+val), so the fitted arms here are NOT the same fitted
+    objects as the frozen record's and this report's numbers are not
+    comparable row-for-row to the frozen ones. Buys a measurement that is
+    genuinely out-of-sample for exactly the three candidates this audit
+    most needs to re-examine, which Phase 3's own validation-split numbers
+    could never claim (its fitted arms were fit on train PLUS validation).
+
+    Sequence, mirroring `leakage_probe_coverage_report`'s own proven
+    assembly (Plan 04-02) and documented in that function's own docstring
+    as the discipline to copy: the frozen-window guard runs on the fit
+    frame and the scored frame BEFORE anything else (`ablation_guard_
+    passed_fit`/`ablation_guard_passed_scored`), then the out-of-sample
+    property is ASSERTED from the two frames' own timestamps (`max_fit_
+    timestamp < min_scored_timestamp`), never merely assumed from the
+    split boundary alone.
+
+    Every pairwise margin (for each of `_PAIRWISE_BASELINE_NAMES`, against
+    every other real candidate) carries three labelled interval families:
+    the harness's own accelerated i.i.d. interval (`iid_bca`, the frozen
+    record's own method), the method-matched i.i.d. percentile comparator
+    (`iid_percentile`), and the block interval at every swept length
+    (`block`, keyed by length) with `block_length_sensitivity`'s own
+    stability verdict -- so a width difference between `block` and `iid_
+    percentile` is attributable to block resampling alone, never to a
+    changed interval method.
+
+    Per-row residuals are persisted for every arm (`residuals`, keyed by
+    arm name), and cross-checked: this function's own recomputed MAE from
+    those residuals is asserted to match the harness's own `score_arms`
+    MAE for that arm to within 1e-9 BEFORE the report is written -- the
+    assertion that licenses using these residuals for the block bootstrap
+    at all; without it, the block intervals could describe a different
+    quantity than the reported error metrics.
+
+    The oracle (`ORACLE_ARM_NAME`) is scored and reported in `candidates`
+    (flagged `is_oracle_diagnostic`) but NEVER appears in `pairwise` --
+    neither as a baseline nor as a compared arm -- so no pairwise margin
+    in this report is ever a margin against an unrealizable method.
+
+    Raises `ValueError` naming the valid corridors for an unknown one, or
+    naming the two offending timestamps if the out-of-sample assertion
+    fails (which would mean the fit frame was not actually narrowed to
+    the train side).
+    """
+    valid_corridors = sorted(config.CORRIDOR_ENDPOINTS)
+    if corridor not in config.CORRIDOR_ENDPOINTS:
+        raise ValueError(
+            f"ablation_basis_report: unknown corridor {corridor!r} -- "
+            f"valid corridors: {valid_corridors}"
+        )
+    if lead_hours is None:
+        lead_hours = config.FORECAST_EXPERIMENT_PRIMARY_LEAD_HOURS
+    if report_path is None:
+        report_path = _ablation_report_path(corridor)
+    if block_lengths is None:
+        block_lengths = _DEFAULT_ABLATION_BLOCK_LENGTHS
+
+    city_a, city_b = config.CORRIDOR_ENDPOINTS[corridor]
+    geometry = corridor_discretization.corridor_geometry(corridor)
+
+    # ---- Assemble the real ABLATION-basis corridor frame, the SAME
+    # boundary/filter/pin-safety-clip discipline build_basis_manifest and
+    # leakage_probe_coverage_report both already use, so this report's val
+    # split is the SAME ~782-row ABLATION validation basis Plan 04-01
+    # measured -- never a re-derived one. ----
+    corridor_frame = forecast_experiment.corridor_anchored_pair_frame(
+        corridor, FROZEN_WINDOW_START, FROZEN_WINDOW_END, lead_hours=lead_hours,
+    )
+    boundaries = forecast_experiment._default_split_boundaries(corridor_frame)
+    train, val, test = experiment_splits.calendar_split(corridor_frame, boundaries)
+    train_filtered = forecast_experiment.filter_to_exact_lead(train, lead_hours=lead_hours)
+    val_filtered = forecast_experiment.filter_to_exact_lead(val, lead_hours=lead_hours)
+    test_filtered = forecast_experiment.filter_to_exact_lead(test, lead_hours=lead_hours)
+    forecast_experiment.assert_filtered_split_disjoint(train_filtered, val_filtered, test_filtered)
+    del test_filtered  # never referenced again -- this report never touches the test split.
+
+    pinned_boundary = pd.Timestamp(FROZEN_TEST_SPLIT_START, tz="UTC")
+    train_filtered = train_filtered[train_filtered["datetime_utc"] < pinned_boundary].reset_index(drop=True)
+    val_filtered = val_filtered[val_filtered["datetime_utc"] < pinned_boundary].reset_index(drop=True)
+
+    # The frozen-window guard runs on BOTH the fit frame and the scored
+    # frame BEFORE anything else touches either -- before fitting, before
+    # augmenting, before scoring.
+    fit_guard = assert_basis_excludes_frozen_test_rows(train_filtered, basis="ABLATION")
+    scored_guard = assert_basis_excludes_frozen_test_rows(val_filtered, basis="ABLATION")
+
+    max_fit_timestamp = train_filtered["datetime_utc"].max()
+    min_scored_timestamp = val_filtered["datetime_utc"].min()
+    if not (max_fit_timestamp < min_scored_timestamp):
+        raise ValueError(
+            f"ablation_basis_report: fit frame's own max timestamp "
+            f"{max_fit_timestamp} is not strictly before the scored "
+            f"frame's own min timestamp {min_scored_timestamp} -- the "
+            f"measurement is not out-of-sample for the fitted arms"
+        )
+
+    # ---- The stacked, per-city, ABLATION-only (train+val) frame. The
+    # frozen record's test-range rows are discarded immediately below and
+    # never referenced again -- fitting and scoring both see ONLY train+val
+    # data. ----
+    stacked_full = forecast_experiment._stacked_pair_frame(
+        corridor, FROZEN_WINDOW_START, FROZEN_WINDOW_END, lead_hours=lead_hours,
+    )
+    stacked_train, stacked_val, stacked_test = experiment_splits.calendar_split(stacked_full, boundaries)
+    del stacked_test  # never touched again -- this report never assembles against Phase 3's frozen test window.
+    train_val_stacked = (
+        pd.concat([stacked_train, stacked_val], ignore_index=True)
+        .sort_values("datetime_utc").reset_index(drop=True)
+    )
+
+    # THE ONE DELIBERATE CHANGE: fit on the ABLATION TRAIN rows ALONE,
+    # never train+val -- the harness's own validation-selected
+    # configuration constants, never re-selected here.
+    fitted = forecast_experiment.fit_fitted_arms(
+        stacked_train, geometry,
+        wind_configuration=forecast_experiment.WIND_CONFIGURATION,
+        cooling_configuration=forecast_experiment.COOLING_CONFIGURATION,
+    )
+
+    # `_fitted_arm_city_frame`/`_score_fitted_arms_at_corridor_level` are
+    # NOT reused here, for the SAME reason Plan 04-02's
+    # `leakage_probe_coverage_report` documents in full: both route through
+    # `experiment_splits.calendar_split`'s three-way `min_rows_per_side=1`
+    # floor, which a train+val-only `train_val_stacked` always fails on the
+    # (deliberately empty) test side. This reimplements only the val-side
+    # extraction those functions perform, safe here because `train_val_
+    # stacked` contains no row at or after `boundaries.test_start` by
+    # construction, so "everything at or after val_start" and "the val
+    # side" are the same set.
+    def _ablation_val_city_frame(city: str) -> pd.DataFrame:
+        city_frame = (
+            train_val_stacked[train_val_stacked["endpoint_city"] == city]
+            .sort_values("datetime_utc").reset_index(drop=True)
+        )
+        val_side = city_frame[city_frame["datetime_utc"] >= boundaries.val_start].reset_index(drop=True)
+        val_side = forecast_experiment.filter_to_exact_lead(val_side, lead_hours=lead_hours)
+        return val_side[val_side["datetime_utc"] < pinned_boundary].reset_index(drop=True)
+
+    city_a_frame = forecast_experiment._add_correction_columns(_ablation_val_city_frame(city_a), geometry)
+    city_b_frame = forecast_experiment._add_correction_columns(_ablation_val_city_frame(city_b), geometry)
+
+    wind_pred_a = forecast_experiment._wind_corrected_ampacity(fitted["wind_model"], city_a_frame, geometry)
+    wind_pred_b = forecast_experiment._wind_corrected_ampacity(fitted["wind_model"], city_b_frame, geometry)
+    wind_reduced, wind_bottleneck = forecast_experiment._merge_prediction_to_scored_index(
+        val_filtered, city_a_frame["datetime_utc"], wind_pred_a, city_b_frame["datetime_utc"], wind_pred_b,
+    )
+
+    cooling_pred_a = forecast_experiment._cooling_corrected_ampacity(fitted["cooling_model"], city_a_frame, geometry)
+    cooling_pred_b = forecast_experiment._cooling_corrected_ampacity(fitted["cooling_model"], city_b_frame, geometry)
+    cooling_reduced, cooling_bottleneck = forecast_experiment._merge_prediction_to_scored_index(
+        val_filtered, city_a_frame["datetime_utc"], cooling_pred_a, city_b_frame["datetime_utc"], cooling_pred_b,
+    )
+
+    arm5_truth_frame = forecast_experiment._arm5_truth_frame(train_val_stacked, city_a, city_b)
+    x5_all, _ = forecast_training.build_training_matrix(arm5_truth_frame, horizon_minutes=lead_hours * 60)
+    anchor_index = pd.DatetimeIndex(pd.to_datetime(val_filtered["anchor_datetime_utc"], utc=True))
+    x5_scored = x5_all.reindex(anchor_index)
+    missing_mask = x5_scored.isna().any(axis=1)
+    if missing_mask.any():
+        missing = anchor_index[missing_mask]
+        raise ValueError(
+            f"ablation_basis_report: arm 5's feature table is missing "
+            f"{int(missing_mask.sum())} anchor timestamp(s) needed by the "
+            f"val split, e.g. {list(missing[:3])}"
+        )
+    arm5_pred = np.asarray(fitted["arm5_estimator"].predict(x5_scored.to_numpy(dtype=float)), dtype=float)
+
+    augmented_val = val_filtered.copy()
+    augmented_val["pred_ml_wind_corrected"] = wind_reduced
+    augmented_val["bottleneck_index_ml_wind_corrected"] = wind_bottleneck
+    augmented_val["pred_ml_cooling_corrected"] = cooling_reduced
+    augmented_val["bottleneck_index_ml_cooling_corrected"] = cooling_bottleneck
+    augmented_val["pred_reference_ml_refit_24h"] = arm5_pred
+
+    # ---- Score all seven ALL_ARMS entries, computing residuals ourselves
+    # from the scored frame's own truth column -- never from `score_arms`
+    # alone, since the block bootstrap needs the raw residual arrays, not
+    # just their aggregate MAE/RMSE. ----
+    actual = augmented_val["truth_dlr_amps"].to_numpy(dtype=float)
+    n = len(augmented_val)
+    residuals = {}
+    candidates = {}
+    for name in forecast_experiment.ALL_ARMS:
+        pred = augmented_val[f"pred_{name}"].to_numpy(dtype=float)
+        residual = actual - pred
+        residuals[name] = residual
+        mae = float(np.mean(np.abs(residual)))
+        rmse = float(np.sqrt(np.mean(residual ** 2)))
+        candidates[name] = {"mae": mae, "rmse": rmse, "rows": int(n)}
+    candidates[forecast_experiment.ORACLE_ARM_NAME]["is_oracle_diagnostic"] = True
+
+    # ---- Cross-check: the harness's OWN scorer, called independently on
+    # the SAME augmented frame via the SAME corridor-level column readers,
+    # must agree with our own recomputed MAE to floating tolerance. This is
+    # what licenses using OUR residuals for the block bootstrap below --
+    # without it, the block intervals could describe a different quantity
+    # than the error metrics reported above them. ----
+    scorer_check = forecast_experiment.score_arms(
+        augmented_val,
+        {name: forecast_experiment._corridor_arm_reader(name) for name in forecast_experiment.ALL_ARMS},
+    )
+    for name in forecast_experiment.ALL_ARMS:
+        scorer_mae = scorer_check["candidates"][name]["mae"]
+        own_mae = candidates[name]["mae"]
+        if abs(scorer_mae - own_mae) > 1e-9:
+            raise ValueError(
+                f"ablation_basis_report: {name}'s independently recomputed "
+                f"MAE {own_mae} disagrees with the harness's own scorer "
+                f"MAE {scorer_mae} by more than 1e-9 -- the residuals "
+                f"feeding the block bootstrap are not the ones behind the "
+                f"reported error metrics"
+            )
+
+    # ---- MAE-versus-RMSE ordering disagreements, among the six REAL
+    # candidates only (the oracle is a diagnostic, never a rated
+    # candidate). ----
+    real_candidate_names = [n for n in forecast_experiment.ALL_ARMS if n != forecast_experiment.ORACLE_ARM_NAME]
+    disagreements = []
+    for i in range(len(real_candidate_names)):
+        for j in range(i + 1, len(real_candidate_names)):
+            name_a, name_b = real_candidate_names[i], real_candidate_names[j]
+            mae_order_a_better = candidates[name_a]["mae"] < candidates[name_b]["mae"]
+            rmse_order_a_better = candidates[name_a]["rmse"] < candidates[name_b]["rmse"]
+            if mae_order_a_better != rmse_order_a_better:
+                disagreements.append({
+                    "a": name_a, "b": name_b,
+                    "mae_a": candidates[name_a]["mae"], "mae_b": candidates[name_b]["mae"],
+                    "rmse_a": candidates[name_a]["rmse"], "rmse_b": candidates[name_b]["rmse"],
+                })
+
+    # ---- Pairwise margins under every baseline of interest, three
+    # labelled interval families each. The oracle is excluded from this
+    # entire section -- never a baseline, never a compared arm -- so it
+    # never functions as a comparison reference. ----
+    pairwise = {}
+    for baseline in _PAIRWISE_BASELINE_NAMES:
+        baseline_residual = residuals[baseline]
+        entry = {}
+        for name in real_candidate_names:
+            if name == baseline:
+                continue
+            candidate_residual = residuals[name]
+            sensitivity = block_length_sensitivity(
+                candidate_residual, baseline_residual, block_lengths=block_lengths,
+            )
+            entry[name] = {
+                "iid_bca": forecast_experiment.paired_bootstrap_margin(candidate_residual, baseline_residual),
+                "iid_percentile": sensitivity["iid_percentile"],
+                "block": sensitivity["by_block_length"],
+                "block_lengths_used": sensitivity["block_lengths_used"],
+                "conclusion_stable": sensitivity["conclusion_stable"],
+                "disagreeing_block_lengths": sensitivity["disagreeing_block_lengths"],
+            }
+        pairwise[baseline] = entry
+
+    residuals_serializable = {name: [float(x) for x in arr] for name, arr in residuals.items()}
+    fresh = fresh_basis_attempt(corridor, lead_hours=lead_hours, manifest_path=fresh_manifest_path)
+
+    report = {
+        "corridor": corridor,
+        "lead_hours": lead_hours,
+        "ablation_guard_passed_fit": True,
+        "ablation_guard_passed_scored": True,
+        "fit_guard": fit_guard,
+        "scored_guard": scored_guard,
+        "max_fit_timestamp": str(max_fit_timestamp),
+        "min_scored_timestamp": str(min_scored_timestamp),
+        "candidates": candidates,
+        "oracle_arm_name": forecast_experiment.ORACLE_ARM_NAME,
+        "mae_rmse_ordering_disagreements": disagreements,
+        "pairwise": pairwise,
+        "residuals": residuals_serializable,
+        "fresh_basis": fresh,
+        "caveat": forecast_experiment.PRIMARY_24H_LEAD_CAVEAT,
+        "basis_caveat": (
+            "ABLATION basis: real rows strictly before the frozen test "
+            "split start (2026-03-17). May support replication of the "
+            "frozen record's own candidate ordering and relative-ordering "
+            "findings. May NOT support a confirmation claim -- this "
+            "calendar range was already assembled and read during Phase "
+            "3's own development."
+        ),
+        "fit_sample_note": (
+            "The fitted arms here were fit on the ABLATION TRAIN rows "
+            "alone (not train+val, unlike the frozen harness's own "
+            "test-scoring convention), so these are not the same fitted "
+            "objects as the frozen record's and the numbers are not "
+            "comparable row-for-row to the frozen ones -- a smaller fit "
+            "sample was used in exchange for a genuinely out-of-sample "
+            "validation score for exactly the three candidates this audit "
+            "most needs to re-examine."
+        ),
+    }
+
+    manifest_dir = os.path.dirname(report_path)
+    if manifest_dir:
+        os.makedirs(manifest_dir, exist_ok=True)
+    tmp_path = report_path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as fh:
+        json.dump(report, fh, indent=2, default=str)
+    os.replace(tmp_path, report_path)
+
+    return report
+
+
+def fresh_basis_attempt(
+    corridor: str, *, minimum_rows: int = None, lead_hours: int = None, manifest_path: str = None,
+) -> dict:
+    """
+    Reads the measured FRESH row count from `data/experiment/audit_basis_
+    manifest.json` (Plan 04-01's manifest, built by `build_basis_manifest`)
+    rather than re-resolving "yesterday" here -- the manifest's own
+    `resolved_window_end`/per-corridor `fresh` entry already measured it.
+    If the manifest does not exist in this environment yet, builds it (that
+    path is cached and idempotent, per Plan 04-01 Task 2's own stated
+    precondition) rather than failing outright.
+
+    The minimum row count below which no confirmation claim may be made is
+    stated in BOTH rows and days: `minimum_rows=56` by default (this
+    function's own choice, Claude's discretion per 04-RESEARCH.md),
+    justified by this series' own cadence -- the exact-lead filter keeps
+    four scored rows per calendar day (`FORECAST_EXPERIMENT_LEAD_FILTER_
+    MODULUS=6`), so 56 rows is 14 calendar days, long enough to span
+    roughly two weeks of weather variability rather than a single
+    unrepresentative spell.
+
+    Branches three ways on the measured FRESH row count, never silently
+    collapsing the middle branch into either neighbour:
+      - zero rows: `"not_attempted_zero_rows"`, with the reason the
+        manifest itself recorded (naming both the resolved window end and
+        the frozen window end).
+      - above zero but below the minimum: `"below_minimum"`, scored (the
+        four non-fitted arms, which need no fit) and reported with an
+        explicit below-minimum label and `confirmation_claim_permitted:
+        False`.
+      - at or above the minimum: `"confirmation_capable"`, scored and
+        reported with `confirmation_claim_permitted: True` -- this phase's
+        only basis on which a confirmation claim may ever be made.
+
+    Raises `ValueError` naming the valid corridors for an unknown one.
+    """
+    valid_corridors = sorted(config.CORRIDOR_ENDPOINTS)
+    if corridor not in config.CORRIDOR_ENDPOINTS:
+        raise ValueError(
+            f"fresh_basis_attempt: unknown corridor {corridor!r} -- valid "
+            f"corridors: {valid_corridors}"
+        )
+    if minimum_rows is None:
+        minimum_rows = 56
+    minimum_days = minimum_rows / 4.0  # four scored rows/day at this lead's exact-lead filter
+    if manifest_path is None:
+        manifest_path = DEFAULT_MANIFEST_PATH
+
+    if not os.path.exists(manifest_path):
+        build_basis_manifest(corridors=[corridor], lead_hours=lead_hours, manifest_path=manifest_path)
+
+    with open(manifest_path, "r", encoding="utf-8") as fh:
+        manifest = json.load(fh)
+
+    if corridor not in manifest.get("corridors", {}):
+        build_basis_manifest(corridors=[corridor], lead_hours=lead_hours, manifest_path=manifest_path)
+        with open(manifest_path, "r", encoding="utf-8") as fh:
+            manifest = json.load(fh)
+
+    fresh_entry = manifest["corridors"][corridor]["fresh"]
+    rows = int(fresh_entry["rows"])
+    resolved_lead_hours = lead_hours if lead_hours is not None else manifest.get(
+        "lead_hours", config.FORECAST_EXPERIMENT_PRIMARY_LEAD_HOURS,
+    )
+
+    if rows == 0:
+        return {
+            "corridor": corridor,
+            "branch": "not_attempted_zero_rows",
+            "rows": rows,
+            "minimum_rows": minimum_rows,
+            "minimum_days": minimum_days,
+            "reason": fresh_entry.get("reason", "FRESH basis measured at zero rows"),
+            "confirmation_claim_permitted": False,
+        }
+
+    if rows < minimum_rows:
+        return {
+            "corridor": corridor,
+            "branch": "below_minimum",
+            "rows": rows,
+            "minimum_rows": minimum_rows,
+            "minimum_days": minimum_days,
+            "confirmation_claim_permitted": False,
+            "note": (
+                f"{rows} FRESH row(s) measured, below the stated minimum "
+                f"of {minimum_rows} ({minimum_days:.1f} days) -- scored "
+                f"below for visibility, but no confirmation claim may rest "
+                f"on this result"
+            ),
+        }
+
+    # At or above the minimum: genuinely confirmation-capable. Score the
+    # four non-fitted arms (persistence/nwp_wind_delta/raw_forecast/
+    # oracle) -- the fitted arms would need a fresh fit on FRESH-basis
+    # data, which no plan in this phase performs (deferred; scoring what
+    # IS scoreable here rather than silently omitting this branch).
+    fresh_start = fresh_entry["resolved_window_start"]
+    fresh_end = fresh_entry["resolved_window_end"]
+    fresh_frame = forecast_experiment.corridor_anchored_pair_frame(
+        corridor, fresh_start, fresh_end, lead_hours=resolved_lead_hours,
+    )
+    fresh_filtered = forecast_experiment.filter_to_exact_lead(fresh_frame, lead_hours=resolved_lead_hours)
+    guard = assert_basis_excludes_frozen_test_rows(fresh_filtered, basis="FRESH")
+    # `corridor_anchored_pair_frame` already computes and attaches
+    # `pred_<arm_name>` for every NON_FITTED_ARMS entry internally (one
+    # call per endpoint city, weakest-link-reduced) -- the corridor-level
+    # frame carries no raw `fcst_*`/`anchor_*` columns a freshly-built
+    # factory callable could read, so this reads the already-computed
+    # columns via `_corridor_arm_reader`, the SAME Mode A convention
+    # `leakage_probe_coverage_report` uses, rather than reinventing
+    # per-city scoring at the corridor level.
+    non_fitted_arms = {
+        name: forecast_experiment._corridor_arm_reader(name) for name in forecast_experiment.NON_FITTED_ARMS
+    }
+    scored = forecast_experiment.score_arms(fresh_filtered, non_fitted_arms)
+
+    return {
+        "corridor": corridor,
+        "branch": "confirmation_capable",
+        "rows": rows,
+        "minimum_rows": minimum_rows,
+        "minimum_days": minimum_days,
+        "confirmation_claim_permitted": True,
+        "frozen_window_guard": guard,
+        "scored": scored,
+    }
