@@ -1372,3 +1372,299 @@ def test_overrating_by_regime_flags_small_bins_and_withholds_their_rate():
         assert b["profile"] is None
     big_bins = [b for b in result["perpendicular_wind"]["bins"] if b["rows"] >= 10]
     assert big_bins and all(b["profile"] is not None for b in big_bins)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 04-04 Task 2: three-period quantile fit/calibrate/evaluate pipeline
+# and the matched-overrating-rate retained-capacity comparison.
+#
+# `quantile_period_boundaries`/`fit_lower_quantile_model`/
+# `_fit_calibrate_evaluate_quantile`/`_matched_rate_row` are all pure,
+# network-free transforms over in-memory frames -- no monkeypatching
+# needed. `overrating_basis_report`'s own integration tests reuse this
+# file's existing `_patch_leakage_test_assembly`/`_synthetic_anchored_pair_
+# frame` helpers (the SAME synthetic fixture `ablation_basis_report`'s own
+# tests already use), so they make no network call either.
+# ──────────────────────────────────────────────────────────────────────────
+
+def test_quantile_period_boundaries_disjoint_ordered_and_before_frozen_test_start():
+    ts = pd.date_range("2020-01-01", periods=1000, freq="6h", tz="UTC")
+    result = fea.quantile_period_boundaries(ts)
+
+    for name in ("fit", "calibrate", "evaluate"):
+        assert result[name]["rows"] > 0, (name, result)
+        assert result[name]["frozen_window_guard_passed"] is True
+
+    assert result["fit"]["end"] < result["calibrate"]["start"]
+    assert result["calibrate"]["start"] <= result["calibrate"]["end"]
+    assert result["calibrate"]["end"] < result["evaluate"]["start"]
+    assert result["evaluate"]["end"] < fea.FROZEN_TEST_SPLIT_START
+
+    total = result["fit"]["rows"] + result["calibrate"]["rows"] + result["evaluate"]["rows"]
+    assert total == len(ts)
+
+
+def test_quantile_period_boundaries_raises_below_minimum_rows_naming_all_three():
+    ts = pd.date_range("2020-01-01", periods=10, freq="6h", tz="UTC")
+    with pytest.raises(ValueError) as exc_info:
+        fea.quantile_period_boundaries(ts, minimum_rows_per_period=50)
+    message = str(exc_info.value)
+    for name in ("fit", "calibrate", "evaluate"):
+        assert name in message, message
+
+
+def test_quantile_period_boundaries_raises_on_too_few_timestamps():
+    with pytest.raises(ValueError):
+        fea.quantile_period_boundaries(pd.date_range("2020-01-01", periods=2, freq="6h", tz="UTC"))
+
+
+def _synthetic_quantile_frame(start: str, truth, pred, *, seed: int) -> pd.DataFrame:
+    n = len(truth)
+    rng = np.random.default_rng(seed)
+    ts = pd.date_range(start, periods=n, freq="6h", tz="UTC")
+    return pd.DataFrame({
+        "datetime_utc": ts,
+        "truth_dlr_amps": truth,
+        "pred_cand": pred,
+        "decision_time_air_temp": rng.uniform(10.0, 40.0, n),
+        "decision_time_perp_wind_ms": rng.uniform(0.0, 10.0, n),
+        "decision_time_solar_radiation": rng.uniform(0.0, 800.0, n),
+        # A deliberately-present valid-time truth column that must NEVER
+        # enter the quantile model's own feature set.
+        "truth_wind_speed": rng.uniform(0.0, 10.0, n),
+    })
+
+
+def test_fit_lower_quantile_model_feature_names_exclude_any_truth_column():
+    rng = np.random.default_rng(1)
+    truth = 1000.0 + rng.normal(0.0, 30.0, 200)
+    pred = truth + rng.normal(0.0, 20.0, 200)
+    frame = _synthetic_quantile_frame("2020-01-01", truth, pred, seed=1)
+
+    fitted = fea.fit_lower_quantile_model(frame, alpha=0.1, candidate_prediction=pred)
+    assert not any(name.startswith("truth_") for name in fitted["feature_names"])
+    assert fitted["alpha"] == 0.1
+    assert fitted["rows"] == len(frame)
+    # The model is genuinely fitted and callable.
+    X = fea._quantile_feature_matrix(frame, pred)
+    preds = fitted["model"].predict(X)
+    assert len(preds) == len(frame)
+
+
+def test_pinball_loss_alpha_half_equals_half_mae():
+    # Mirrors 04-04-PLAN.md's own inline verify (`PINBALL_SANITY_OK`): the
+    # library metric's own identity at alpha=0.5, independent of this
+    # module's code -- catches a hand-rolled asymmetric loss off by a
+    # factor of two.
+    from sklearn.metrics import mean_pinball_loss
+
+    rng = np.random.default_rng(20260929)
+    y = rng.normal(1500.0, 200.0, 500)
+    p = y + rng.normal(0.0, 80.0, 500)
+    half = mean_pinball_loss(y, p, alpha=0.5)
+    mae = float(np.mean(np.abs(y - p)))
+    assert abs(half - mae / 2.0) < 1e-9
+
+
+def test_fit_calibrate_evaluate_quantile_reports_improvement_when_distributions_match():
+    rng = np.random.default_rng(7)
+    n = 400
+
+    def _frame(start, bias):
+        truth = 1000.0 + rng.normal(0.0, 30.0, n)
+        pred = truth + bias + rng.normal(0.0, 20.0, n)
+        return _synthetic_quantile_frame(start, truth, pred, seed=hash((start, bias)) % (2 ** 31))
+
+    fit_frame = _frame("2020-01-01", 15.0)
+    calibrate_frame = _frame("2020-03-01", 15.0)
+    evaluate_frame = _frame("2020-05-01", 15.0)  # SAME error distribution as calibrate
+
+    result = fea._fit_calibrate_evaluate_quantile(
+        fit_frame, calibrate_frame, evaluate_frame, alpha=0.05,
+        fit_prediction=fit_frame["pred_cand"].to_numpy(),
+        calibrate_prediction=calibrate_frame["pred_cand"].to_numpy(),
+        evaluate_prediction=evaluate_frame["pred_cand"].to_numpy(),
+    )
+    assert result["improved"] is True
+    assert result["evaluate_exceedance_distance_from_nominal_after"] < result["evaluate_exceedance_distance_from_nominal_before"]
+
+
+def test_fit_calibrate_evaluate_quantile_reports_no_improvement_when_distributions_diverge():
+    rng = np.random.default_rng(123)
+    n = 300
+
+    truth_fit = 1000.0 + rng.normal(0.0, 30.0, n)
+    pred_fit = truth_fit + rng.normal(0.0, 20.0, n)
+    fit_frame = _synthetic_quantile_frame("2020-01-01", truth_fit, pred_fit, seed=10)
+
+    truth_cal = 1000.0 + rng.normal(0.0, 30.0, n)
+    pred_cal = truth_cal + rng.normal(0.0, 20.0, n)
+    calibrate_frame = _synthetic_quantile_frame("2020-03-01", truth_cal, pred_cal, seed=11)
+
+    # Evaluate period's error distribution is a different shape entirely
+    # (a large, oppositely-signed shift) -- the offset learned on the
+    # calibrate period's own residuals does not generalize here.
+    truth_eval = 1000.0 + rng.normal(0.0, 30.0, n)
+    pred_eval = truth_eval - 200.0 + rng.normal(0.0, 20.0, n)
+    evaluate_frame = _synthetic_quantile_frame("2020-05-01", truth_eval, pred_eval, seed=12)
+
+    result = fea._fit_calibrate_evaluate_quantile(
+        fit_frame, calibrate_frame, evaluate_frame, alpha=0.05,
+        fit_prediction=fit_frame["pred_cand"].to_numpy(),
+        calibrate_prediction=calibrate_frame["pred_cand"].to_numpy(),
+        evaluate_prediction=evaluate_frame["pred_cand"].to_numpy(),
+    )
+    assert result["improved"] is False
+    assert "calibration_offset_amps" in result
+
+
+def test_quantile_calibration_report_shape_and_aggregate_flag():
+    rng = np.random.default_rng(42)
+    n = 300
+
+    def _frame(start, seed):
+        local_rng = np.random.default_rng(seed)
+        truth = 1000.0 + local_rng.normal(0.0, 30.0, n)
+        pred_a = truth + 10.0 + local_rng.normal(0.0, 20.0, n)
+        pred_b = truth - 5.0 + local_rng.normal(0.0, 15.0, n)
+        ts = pd.date_range(start, periods=n, freq="6h", tz="UTC")
+        return pd.DataFrame({
+            "datetime_utc": ts,
+            "truth_dlr_amps": truth,
+            "pred_cand_a": pred_a,
+            "pred_cand_b": pred_b,
+            "decision_time_air_temp": local_rng.uniform(10.0, 40.0, n),
+            "decision_time_perp_wind_ms": local_rng.uniform(0.0, 10.0, n),
+            "decision_time_solar_radiation": local_rng.uniform(0.0, 800.0, n),
+        })
+
+    fit_frame = _frame("2020-01-01", 1)
+    calibrate_frame = _frame("2020-03-01", 2)
+    evaluate_frame = _frame("2020-05-01", 3)
+
+    report = fea.quantile_calibration_report(
+        fit_frame, calibrate_frame, evaluate_frame,
+        candidate_names=["cand_a", "cand_b"], alphas=[0.05, 0.1],
+    )
+    assert report["alphas"] == [0.05, 0.1]
+    for alpha_key in ("0.05", "0.1"):
+        entry = report["by_alpha"][alpha_key]
+        assert "calibration_improved_on_evaluate" in entry
+        for cand in ("cand_a", "cand_b"):
+            res = entry["candidates"][cand]
+            for period in ("calibrate", "evaluate"):
+                for stage in ("before", "after"):
+                    assert "pinball_loss" in res[period][stage]
+                    assert "empirical_exceedance_rate" in res[period][stage]
+
+
+def test_matched_rate_row_matches_hand_computation():
+    y_cal = np.array([1000.0] * 10)
+    pred_cal = y_cal + np.arange(10, dtype=float)  # diff = [0..9]
+    expected_derating = float(np.quantile(pred_cal - y_cal, 0.7))
+
+    y_eval = np.array([1000.0] * 5)
+    pred_eval = y_eval + np.array([0.0, 2.0, 4.0, 6.0, 8.0])
+
+    row = fea._matched_rate_row(
+        "test", pred_cal=pred_cal, y_cal=y_cal, pred_eval=pred_eval, y_eval=y_eval,
+        target_rates=[0.3], static_reference_amps=2000.0,
+    )
+    res = row["by_target_rate"]["0.3"]
+    derated_eval = pred_eval - expected_derating
+    expected_achieved = float(np.mean(derated_eval > y_eval))
+    expected_retained = float(np.mean(derated_eval))
+
+    assert row["name"] == "test"
+    assert abs(res["derating_amps_fitted_on_calibrate"] - expected_derating) < 1e-9
+    assert abs(res["achieved_rate_on_evaluate"] - expected_achieved) < 1e-9
+    assert abs(res["retained_capacity_amps"] - expected_retained) < 1e-9
+    assert abs(res["retained_capacity_fraction_of_static"] - expected_retained / 2000.0) < 1e-9
+
+
+def test_retained_capacity_at_matched_overrating_includes_extra_rows():
+    n = 50
+    ts = pd.date_range("2020-01-01", periods=n, freq="6h", tz="UTC")
+    rng = np.random.default_rng(5)
+    truth = 1000.0 + rng.normal(0.0, 10.0, n)
+    frame = pd.DataFrame({
+        "datetime_utc": ts,
+        "truth_dlr_amps": truth,
+        "pred_persistence_24h": truth + rng.normal(5.0, 10.0, n),
+    })
+    extra_rows = {
+        "static_rating_reference": {
+            "calibrate_prediction": np.full(n, 1900.0),
+            "evaluate_prediction": np.full(n, 1900.0),
+        },
+    }
+    result = fea.retained_capacity_at_matched_overrating(
+        frame, frame, candidate_names=["persistence_24h"],
+        static_reference_amps=1900.0, target_rates=[0.1, 0.2], extra_rows=extra_rows,
+    )
+    names = {row["name"] for row in result["rows"]}
+    assert "persistence_24h" in names and "static_rating_reference" in names
+    assert result["target_rates"] == [0.1, 0.2]
+
+
+def test_overrating_basis_report_refuses_unknown_corridor():
+    with pytest.raises(ValueError) as exc_info:
+        fea.overrating_basis_report("NOT_A_REAL_CORRIDOR")
+    message = str(exc_info.value)
+    for name in config.CORRIDOR_ENDPOINTS:
+        assert name in message, message
+
+
+def test_overrating_basis_report_runs_and_returns_documented_shape(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "FORECAST_EXPERIMENT_CACHE_DIR", str(tmp_path))
+    _patch_leakage_test_assembly(monkeypatch, periods=24 * 220)
+
+    report_path = str(tmp_path / "overrating_report.json")
+    r = fea.overrating_basis_report(_LEAKAGE_TEST_CORRIDOR, report_path=report_path)
+
+    assert "reanalys" in r["limitation"].lower()
+    assert r["scored_rows"] > 0
+
+    periods = r["periods"]
+    assert periods["fit"]["end"] < periods["calibrate"]["start"]
+    assert periods["calibrate"]["end"] < periods["evaluate"]["start"]
+    assert periods["evaluate"]["end"] < fea.FROZEN_TEST_SPLIT_START
+    for name in ("fit", "calibrate", "evaluate"):
+        assert periods[name]["frozen_window_guard_passed"] is True
+
+    overrating = r["overrating"]
+    for name in ("persistence_24h", "ml_cooling_corrected", "reference_ml_refit_24h"):
+        assert name in overrating
+        assert overrating[name]["cadence_hours"] in (6, 6.0)
+
+    regime = r["by_regime"]["perpendicular_wind"]
+    assert regime["crossover_edge_index"] is not None
+    assert sum(b["rows"] for b in regime["bins"]) == r["scored_rows"]
+
+    q = r["quantiles"]
+    assert len(q["alphas"]) >= 2
+    for alpha_key, entry in q["by_alpha"].items():
+        assert "calibration_improved_on_evaluate" in entry
+        for cand, res in entry["candidates"].items():
+            for period in ("calibrate", "evaluate"):
+                for stage in ("before", "after"):
+                    assert "pinball_loss" in res[period][stage]
+                    assert "empirical_exceedance_rate" in res[period][stage]
+
+    matched = r["matched_overrating"]
+    names = {row["name"] for row in matched["rows"]}
+    assert "persistence_24h" in names
+    assert any("static" in n for n in names)
+    assert any("quantile" in n for n in names)
+    for row in matched["rows"]:
+        for rate_key, res in row["by_target_rate"].items():
+            for key in (
+                "derating_amps_fitted_on_calibrate", "achieved_rate_on_evaluate",
+                "retained_capacity_amps", "retained_capacity_fraction_of_static",
+            ):
+                assert key in res, (row["name"], rate_key, sorted(res))
+
+    with open(report_path, "r", encoding="utf-8") as fh:
+        on_disk = json.load(fh)
+    assert on_disk["corridor"] == _LEAKAGE_TEST_CORRIDOR
+    assert "reanalys" in json.dumps(on_disk).lower()
