@@ -824,20 +824,224 @@ reanalysis-derived truth series, honestly scoped to that basis, and no further.
 
 ## Corrected language in the frozen record (D-04)
 
-Placeholder — filled by Plan 04-05 (the lowest-observed-MAE language correction, the 30A/CI-lower-
-bound honesty correction, the oracle-as-diagnostic reframing, the raw_forecast-relative headroom
-correction, the 1-hour-arm exclusion reaffirmation, and the low-wind-sensitivity-vs-numerical-
-instability distinction).
+Every row below maps a D-04 bullet to the frozen record's own wording, this audit's revision, and the
+amendment subsection in `docs/data-science/decisions/forecast_correction_experiment.md` where the full
+correction lives (quoted original, what is wrong with it, and the revised wording in full):
+
+| D-04 bullet | Frozen record's wording (brief) | Audit's revision (brief) | Amendment subsection |
+|---|---|---|---|
+| 1 | `ml_cooling_corrected` "wins on the held-out test set at both corridors" | Lowest-observed-24-hour-MAE candidate only; its margin over `reference_ml_refit_24h` is not distinguishable from zero at MIDLAND_EL_PASO (3.308 A, 95% CI [-2.667, 9.055]) | Amendment § 1 |
+| 2 | Point margins "clear" the 30A practical-significance threshold at MIDLAND_EL_PASO | Interval lower bounds (22.347 A / 22.343 A) sit well below the threshold; a related margin (wind vs. refit) flips from excluding zero to not excluding zero across block lengths | Amendment § 2 |
+| 3 | Oracle's margin framed by "recovered fraction" (26.8% / 21.0%) | The oracle is a diagnostic bound on one unrealizable intervention, not an achievable performance ceiling | Amendment § 3 |
+| 4 | Headroom measured against `persistence_24h` | The headroom attributable to correction is the raw_forecast-relative margin (15.053 A / 30.260 A), numerically distinct from the persistence-relative one | Amendment § 4 |
+| 5 | Legacy 1-hour arm excluded (reaffirmed, not revised) | Adds: a 24-hour-lead result does not, by itself, establish a replacement for the 60-minute production method | Amendment § 5 |
+| 6 | Frozen record never states a position on low-wind sensitivity vs. numerical instability | Measured, not asserted: the response is physics (a floor), not a defect | Amendment § 6 |
+
+**The two structural guarantees this amendment was made under.** The frozen record's `## Expectation`
+and `## Measured results` sections remain byte-identical to their committed versions — proven by
+extracting both sections from the committed file and the working copy and comparing them byte-for-byte
+(`EXPECTATION_AND_MEASURED_BYTE_IDENTICAL_OK`) — and every line of the committed file still appears, in
+order, in the amended one, under an append-only discipline that only ever adds lines beside an original
+claim rather than replacing it (`FROZEN_RECORD_APPEND_ONLY_OK`, 246 lines added, zero deleted or
+reworded). Both gates run as automated verification before the amendment commit, not as a documentation
+convention trusted after the fact.
+
+**This phase's own physics measurement (Amendment § 6 in full).** The natural-vs-forced convection
+crossover for both corridors' shared conductor configuration, at a representative 35.0°C ambient
+temperature, is 0.1428 m/s. Sweeping perpendicular wind across a grid bracketing this crossover, the
+ampacity response is measured finite and non-negative everywhere, including at exactly zero wind;
+monotone non-decreasing across the whole grid; and continuous across the crossover (a vanishing step on
+either side produces a vanishing ampacity gap, not a fixed-size jump). Below the crossover the response
+is exactly flat — `convective_heat_loss` returns the natural-convection expression unchanged there, and
+that expression does not contain the wind variable at all, so the convective term cannot respond to wind
+in that regime by construction. The peak sensitivity to wind is located well above the crossover, not at
+zero wind. Independently of this sweep, Phase 3's Success-Criterion-4 convective-seam claim was
+re-verified from this phase's own code path against the committed golden fixture
+(`backend/tests/thermal_model_pre_refactor_golden.npz`), never by invoking the existing equality test
+itself: the live ampacity and the live convective term both match the stored golden arrays by exact
+array equality, the override seam reproduces the default path exactly, and a perturbed override changes
+the result (proving the equality is not the trivial consequence of an ignored parameter). The sub-floor
+routing question D-04 bullet 6 raises was answered by attempting it: a corrected convective term that is
+positive but below the natural-convection floor IS permitted to reach the physics through the
+`q_conv_override` seam, because `predict_cooling_correction`'s own guard rejects only a non-positive
+term (`backend/forecast_correction_models.py:547`) and `ieee738_ampacity`'s override branch bypasses
+`convective_heat_loss`'s floor entirely when an override is supplied
+(`backend/thermal_model.py:236-239`) — a real, measured finding about the seam's exposure, reported here
+for the integration-readiness plan to weigh, not evidence of a defect in the physics itself.
 
 ## Corrected verdict
 
-Placeholder — filled by Plan 04-05 (the audit's own concise corrected verdict on whether
-`ml_cooling_corrected` or `reference_ml_refit_24h` warrants production integration, with confidence
-and caveats).
+**Recommendation: keep both `ml_cooling_corrected` and `reference_ml_refit_24h` live as integration
+candidates, with low-to-moderate confidence, and do not treat either as ready for a production
+integration decision on this phase's own evidence.** This is not a hedge against disagreeing with the
+frozen record — it is this audit's own considered answer, and it would change under two concrete
+conditions: it would strengthen toward preferring `ml_cooling_corrected` if a future FRESH-basis
+confirmation run reproduces AUSTIN_CORPUS_CHRISTI's clean replication at MIDLAND_EL_PASO too (i.e., if
+cooling's margin over the refit model becomes distinguishable from zero on genuinely new rows, not the
+ABLATION basis this phase was limited to); it would weaken toward narrowing to `ml_wind_corrected` or
+dropping `ml_cooling_corrected`'s "primary candidate" status if a future FRESH-basis run instead
+reproduces MIDLAND_EL_PASO's contradiction. Until one of those two things happens, this record treats
+the question as genuinely open at one of the two corridors that matter, not settled.
+
+Grounded in this phase's own measurements, not the frozen record's own framing: the ABLATION-basis
+replication (D-02) reproduces the frozen record's candidate ordering cleanly at AUSTIN_CORPUS_CHRISTI
+(`ml_cooling_corrected` wins, beating the refit model by 21.198 A, 95% CI [15.966, 26.340], excludes
+zero, stable across every block length tried) but does NOT reproduce it at MIDLAND_EL_PASO — a
+different candidate, `ml_wind_corrected`, now has the lowest point MAE, and `ml_cooling_corrected`'s
+margin over the refit model (3.308 A) is not distinguishable from zero there (95% CI [-2.667, 9.055]).
+A related margin at the same corridor (`ml_wind_corrected` vs. `reference_ml_refit_24h`) excludes zero
+at the i.i.d.-equivalent block length but stops excluding zero at longer block lengths that account for
+temporal dependence in the hourly series — this phase's single most load-bearing finding about how
+fragile the frozen record's own confidence intervals are at this corridor. Separately, the conservative-
+rating analysis (D-03) found `ml_cooling_corrected` retains the most usable capacity of any real
+candidate at a matched 5% overrating rate at BOTH corridors (1,064.68 A / 56.0% of static at
+AUSTIN_CORPUS_CHRISTI; 962.50 A / 66.4% of static at MIDLAND_EL_PASO) — a genuinely new axis the frozen
+record never measured, and one that argues FOR keeping `ml_cooling_corrected` live even where its
+pairwise MAE margin is weak, since a risk-adjusted capacity comparison is answering a different and
+arguably more decision-relevant question than a raw MAE margin is. Where this verdict differs from the
+frozen record's own: the frozen record states `ml_cooling_corrected` "wins on the held-out test set at
+both corridors" without qualification; this audit's own real-data replication shows that claim holds
+cleanly at one corridor and does not hold, by the frozen record's own comparison logic (beat the nearest
+real competitor distinguishably), at the other — the reason is Plan 04-03's direct pairwise
+measurement, a comparison the frozen record itself never computed.
+
+**Completed audit findings, by decision.** Every finding this phase produced, one line each, grouped
+by decision, with its disposition:
+
+- **D-01 (Data provenance re-audit):** Phase 3's entire "truth" side is a physics-model reanalysis
+  output (ERA5/ERA5-Land via Open-Meteo's Archive API), never a sensor measurement — confirmed,
+  previously undisclosed in the frozen record. Disposition: confirmed gap, now disclosed.
+- **D-01:** The lead-time calibration gate proves an archive-to-archive value match, not real-time
+  dissemination availability at the claimed decision point — a claim-type limitation distinct from the
+  frozen record's already-disclosed coverage limitation. Disposition: confirmed, narrower claim type.
+- **D-01:** Every column of both assembled frame shapes is exhaustively classified into exactly one time
+  reference; no column references an instant strictly between decision time and valid time today.
+  Disposition: confirmed non-issue for the schema.
+- **D-01:** The leakage probe's frozen-run callable shape (`_corridor_arm_reader`) is powerless by
+  construction — the oracle itself is silent under it; a live-recomputing re-run (Mode B) on real
+  ABLATION rows demonstrates genuine power and finds no leakage in any of the seven real arms.
+  Disposition: confirmed issue with the frozen run's own evidentiary basis, remediated by this phase's
+  own re-run.
+- **D-01:** Arm 5's training labels postdate their own features by exactly 24.0 hours, measured from
+  returned indices; split boundaries share zero timestamps across train/val/test; the six-hourly filter
+  does not corrupt arm 5's hourly lag offsets, and the interior cadence is unbroken. Disposition:
+  confirmed non-issue, all three measured directly.
+- **D-02 (Strengthened comparison):** AUSTIN_CORPUS_CHRISTI's candidate ordering replicates cleanly on
+  real ABLATION-basis out-of-sample rows; MIDLAND_EL_PASO's does not — a different candidate leads, and
+  the frozen record's winning margin over its nearest competitor is not distinguishable from zero.
+  Disposition: confirmed; the phase's single most important finding.
+- **D-02:** Block-bootstrap intervals with block-length sensitivity (1/4/8/28) show every
+  AUSTIN_CORPUS_CHRISTI margin stable; at MIDLAND_EL_PASO, one margin's favourable exclusion flips at
+  longer block lengths, and the frozen harness's own original interval method was already barely
+  excluding zero for that margin before any correction. Disposition: confirmed; frozen intervals
+  optimistic at Midland.
+- **D-02:** Direct pairwise comparisons (never computed in the frozen record) show `ml_cooling_corrected`
+  distinguishable from the other real candidates in only one of eight comparisons across both corridors.
+  Disposition: confirmed; "wins" overstates the pairwise evidence.
+- **D-02:** MAE and RMSE disagree in ranking at MIDLAND_EL_PASO in both the frozen record's own numbers
+  and this replication — `reference_ml_refit_24h` has the better RMSE where `ml_cooling_corrected` has
+  the (thin, now-replicated-as-fragile) MAE edge. Disposition: confirmed, consistent with the frozen
+  record's own numbers.
+- **D-02:** A fresh chronological period (starting 2026-09-30, 56-row/14-day minimum) is formally
+  reserved for any future confirmation claim; zero rows are available as of this audit's run date.
+  Disposition: confirmed limitation, reservation made.
+- **D-03 (Conservative-rating analysis):** Overrating frequency, magnitude, and duration measured per
+  candidate at both corridors; overrating concentrates sharply below the measured convection crossover
+  (100% vs. 80.2%/78.9% just above it) — the low-wind finding D-04 bullet 6 above explains. Disposition:
+  confirmed, genuinely new analysis axis.
+- **D-03:** Calibrated lower quantiles (alpha 0.05/0.10) fit, calibrated, and checked on three
+  chronologically disjoint periods; calibration improves the evaluate-period exceedance rate for all but
+  one (candidate, alpha) pair, named rather than hidden. Disposition: confirmed.
+- **D-03:** At a matched 5% overrating rate, `ml_cooling_corrected` retains the most usable capacity of
+  any real candidate at both corridors, ahead of persistence and the static rating. Disposition:
+  confirmed; this phase's headline new metric.
+- **D-03:** Every reliability claim in this section is explicitly scoped to self-consistency against a
+  reanalysis-derived truth series, never conductor-level field-validated safety. Disposition: confirmed,
+  stated before the section's first number and repeated throughout.
+- **D-04 (Corrected language):** All six items corrected or confirmed via the append-only, byte-identity-
+  gated amendment to the frozen record (table above). Disposition: confirmed, all six closed.
+- **D-05 (Integration readiness plan):** Deferred to Plan 04-06 — not produced by this plan. This
+  record's own recommendation above (keep both candidates live) is the input Plan 04-06's
+  integration-readiness plan should carry forward, not a substitute for it.
+
+**Confidence statement.** Every load-bearing claim in this document rests on exactly one of three named bases
+(`## Audit bases` above): **SYNTHETIC** basis supports only that the harness's own code (the block
+bootstrap's reduction to i.i.d., the quantile pipeline's disjointness assertions, the leakage probe's
+sabotage test) is implemented correctly — it proves nothing about this project's real corridors.
+**ABLATION** basis — every number in the D-02 strengthened comparison and the D-03 conservative-rating
+analysis, including the replication/contradiction finding above and the matched-rate retained-capacity
+table — supports replication of the frozen record's own candidate ordering and relative-ordering
+findings between candidates; it does **not** support a confirmation claim, because this exact calendar
+range was already assembled and read during Phase 3's own development and validation-split runs.
+**FRESH** basis is the only basis on which this audit may make a confirmation claim, and it is measured,
+not assumed, at **0 rows for both corridors** as of this audit's run date (2026-09-30) — "yesterday UTC"
+resolves to exactly the frozen window's own last day, leaving zero calendar time from which to draw a
+genuinely fresh row today. Stated plainly so no later reader upgrades a replication to a confirmation by
+omission: **not a confirmation — no claim in this record is a confirmation on a genuinely fresh
+chronological period** —
+every comparative, calibration, and retained-capacity number above is an ABLATION-basis replication or
+ablation-study finding, bounded by the same already-seen calendar range Phase 3's own development used.
+An audit that quietly treated an ABLATION-basis replication as a confirmation would have repeated
+exactly the error it was convened to find.
 
 ## Limitations
 
-Placeholder — filled by Plan 04-05, alongside the corrected verdict.
+What this audit could not establish, and why — each marked **permanent** (a limitation of the data
+available that no amount of calendar time alone would remove) or **removable** (by calendar time
+accruing a FRESH basis, or by Plan 04-06's minimum data contract):
+
+- **The fresh-basis row count is zero.** As of this audit's run date, the FRESH basis (rows strictly
+  after `FROZEN_WINDOW_END`) is measured at 0 rows for both corridors — "yesterday UTC" resolves to the
+  frozen window's own last day. No comparative, calibration, or retained-capacity number in this record
+  is a confirmation on genuinely fresh data; every one is an ABLATION-basis replication. **Removable**
+  by calendar time: the basis accrues 4 corridor rows per calendar day at this lead's exact-lead filter,
+  and reaches the reserved 56-row/14-day minimum roughly two weeks after this audit's run date.
+- **Every "truth" value this audit's numbers are checked against is itself a physics-model reanalysis
+  output (ERA5/ERA5-Land), never a sensor measurement** — carried forward from the D-01 finding this
+  audit's own code-level re-read confirmed, previously undisclosed in the frozen record. Agreement
+  between a candidate and this truth series is agreement between two model outputs, not field-validated
+  accuracy. **Permanent** for this project's current data sources; **removable** only by Plan 04-06's
+  minimum data contract, which names sensor-measured conductor temperature or line-side current
+  observations as the prerequisite for closing this gap.
+- **The ABLATION basis was already seen during Phase 3's own development.** Every number this audit
+  computed on it (the replication/contradiction finding, the block-bootstrap sensitivity sweep, the
+  overrating and retained-capacity tables) is a relative-ordering or ablation-study finding, not new
+  evidence in the sense a genuinely unseen holdout would provide. **Permanent** for this calendar range;
+  **removable** going forward only via the reserved FRESH period above.
+- **The single pinned weather model, the single conductor configuration, and the two-endpoint
+  weakest-link proxy** — all three carried forward unchanged from the frozen record's own Limitations
+  section. This audit neither strengthened nor narrowed any of the three: every number in this document,
+  like every number in the frozen record, rests on exactly one pinned NWP model (`gfs_seamless`), one
+  shared `ConductorConfig` (795 kcmil Drake ACSR) across both corridors, and the weakest-link minimum of
+  two endpoint cities as the corridor-level proxy. **Permanent** without a second NWP source, a richer
+  corridor-discretization dataset, or a different conductor configuration to test against.
+- **The fitted arms this audit scored are not the same fitted objects Phase 3's frozen run scored.**
+  `ml_wind_corrected`, `ml_cooling_corrected`, and `reference_ml_refit_24h` were refit on ABLATION TRAIN
+  rows alone for this audit's own replication (a genuinely held-out re-run for this phase's purposes),
+  never on the frozen harness's own train+val convention. No number in this record is row-for-row
+  comparable to a frozen one — only the qualitative ordering and the direction of disagreement are
+  comparable. **Permanent**, by design: a row-for-row comparable re-run would require re-scoring the
+  frozen test set itself, which `04-CONTEXT.md`'s Phase Boundary forbids outright.
+- **The leakage probe's demonstrated power (Mode B) was never actually exercised against the frozen
+  run's own callable shape (Mode A).** This audit's own re-run closes the evidentiary gap for the seven
+  real arms on real ABLATION rows, but it does not retroactively re-run the probe against the frozen
+  test-set run itself — that run is not re-executable without re-scoring the frozen test set, which this
+  phase does not do. **Permanent** for the frozen run specifically; **removable** in spirit only by a
+  future phase building the probe into the scoring path itself before any future frozen run.
+- **This audit's own statistical machinery (block bootstrap, pairwise comparisons, quantile
+  calibration) has not itself been re-examined under the SAME multiple-comparisons discipline D-02
+  flags for the frozen record.** Six candidates were compared pairwise in this audit's own D-02 work
+  without a formal multiple-comparisons correction, mirroring the exact scrutiny this record directs at
+  the frozen record's own single-read discovery-and-confirmation conflation. **Permanent** for this
+  phase's own ABLATION-basis work; worth a dedicated correction (e.g., Holm-Bonferroni across the
+  pairwise table) if a future phase treats any single pairwise margin in this record as decisive on its
+  own.
+- **The low-wind sensitivity sweep and the sub-floor routing finding (D-04 bullet 6) are measured at one
+  representative ambient temperature (35.0°C) and one representative solar irradiance, not across the
+  full observed range of either.** The crossover wind speed moves with ambient temperature (it scales
+  with `(T_max - T_amb)^1.25`), so the measured 0.1428 m/s crossover is representative, not universal.
+  **Removable** by re-running the same sweep across the full observed ambient-temperature range, a
+  bounded extension this phase's own code already supports via the `air_temp_c` keyword.
 
 ## Integration readiness plan (D-05)
 
