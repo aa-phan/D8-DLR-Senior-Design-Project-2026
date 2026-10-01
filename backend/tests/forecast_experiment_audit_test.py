@@ -1679,3 +1679,132 @@ def test_overrating_basis_report_runs_and_returns_documented_shape(monkeypatch, 
         on_disk = json.load(fh)
     assert on_disk["corridor"] == _LEAKAGE_TEST_CORRIDOR
     assert "reanalys" in json.dumps(on_disk).lower()
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 04-05 Task 1: low-wind sensitivity vs. numerical instability (D-04
+# bullet 6), and the independent convective-seam bit-identity re-verification.
+# Network-free throughout -- every function under test here is a pure
+# transform over the thermal module's own public functions, or a load of
+# the already-committed golden fixture.
+# ──────────────────────────────────────────────────────────────────────────
+
+def test_low_wind_sensitivity_sweep_finite_and_monotone_both_corridors():
+    for corridor in sorted(config.CORRIDOR_ENDPOINTS):
+        s = fea.low_wind_sensitivity_sweep(corridor)
+        amps = np.asarray(s["ampacity_amps"], dtype=float)
+        grid = np.asarray(s["wind_perp_ms"], dtype=float)
+        assert grid.min() == 0.0
+        assert np.all(np.isfinite(amps)), (corridor, amps)
+        assert np.all(amps >= 0.0), (corridor, amps.min())
+        d = np.diff(amps)
+        assert np.all(d >= -1e-9), (corridor, d.min())
+        assert s["finite_ok"] is True
+        assert s["nonnegative_ok"] is True
+        assert s["monotone_ok"] is True
+        assert s["continuous_ok"] is True
+
+
+def test_low_wind_sensitivity_sweep_below_crossover_flat_above_crossover_rises():
+    for corridor in sorted(config.CORRIDOR_ENDPOINTS):
+        s = fea.low_wind_sensitivity_sweep(corridor)
+        amps = np.asarray(s["ampacity_amps"], dtype=float)
+        i = s["crossover_index"]
+        d = np.diff(amps)
+        below = d[:max(i - 1, 1)]
+        above = d[i:]
+        assert np.all(np.abs(below) < 1e-6), (corridor, below)
+        assert above.max() > 1e-3, (corridor, above)
+        assert s["below_crossover_flat_ok"] is True
+        assert s["above_crossover_rises_ok"] is True
+        assert s["max_first_difference_amps"] is not None
+        assert s["max_first_difference_wind_speed_ms"] > s["crossover_wind_perp_ms"]
+
+
+def test_low_wind_sensitivity_sweep_unknown_corridor_raises():
+    with pytest.raises(ValueError):
+        fea.low_wind_sensitivity_sweep("NOT_A_CORRIDOR")
+
+
+def test_low_wind_sensitivity_sweep_zero_wind_ampacity_matches_crossover_region_flat_value():
+    corridor = next(iter(config.CORRIDOR_ENDPOINTS))
+    s = fea.low_wind_sensitivity_sweep(corridor)
+    amps = np.asarray(s["ampacity_amps"], dtype=float)
+    i = s["crossover_index"]
+    # Every point strictly below the crossover (including zero wind) shares
+    # the SAME convective term (the natural-convection floor), so their
+    # ampacities should be bit-identical -- not merely close.
+    assert amps[0] == pytest.approx(amps[i - 1], abs=1e-9)
+
+
+def test_sensitivity_vs_instability_finding_states_physics_with_three_citations():
+    for corridor in sorted(config.CORRIDOR_ENDPOINTS):
+        f = fea.sensitivity_vs_instability_finding(corridor)
+        blob = repr(f)
+        assert f["verdict"] == "physics"
+        assert "finite" in blob.lower()
+        assert "monoton" in blob.lower()
+        assert "continu" in blob.lower()
+        import re as _re
+        assert len(_re.findall(r"[A-Za-z_./-]+\.py:\d+", blob)) >= 3, blob[:400]
+        for prop in ("finiteness", "monotonicity", "continuity"):
+            assert f["properties_checked"][prop]["passed"] is True
+            assert len(f["properties_checked"][prop]["evidence"]) > 0
+        assert f["peak_sensitivity"]["located_above_crossover"] is True
+
+
+def test_sensitivity_vs_instability_finding_unknown_corridor_raises():
+    with pytest.raises(ValueError):
+        fea.sensitivity_vs_instability_finding("NOT_A_CORRIDOR")
+
+
+def test_reverify_convective_seam_bit_identity_three_equalities_hold():
+    r = fea.reverify_convective_seam_bit_identity()
+    assert r["ampacity_matches_golden"] is True
+    assert r["convective_term_matches_golden"] is True
+    assert r["explicit_override_matches_default"] is True
+    assert r["golden_fixture_path"].endswith(".npz")
+
+
+def test_reverify_convective_seam_bit_identity_perturbed_override_is_non_trivial():
+    r = fea.reverify_convective_seam_bit_identity()
+    assert r["perturbed_override_changes_result"] is True
+
+
+def test_reverify_convective_seam_bit_identity_sub_floor_attempt_is_permitted_with_citation():
+    """
+    Documents the ACTUAL measured behaviour of the seam, not a hoped-for
+    one: `predict_cooling_correction`'s own guard only rejects a
+    non-positive corrected term (`backend/forecast_correction_models.py:
+    547`), so a positive sub-floor term reaches `ieee738_ampacity`'s
+    `q_conv_override` seam unobstructed, which bypasses
+    `convective_heat_loss`'s own natural-convection floor entirely when an
+    override is supplied (`backend/thermal_model.py:236-239`). This test
+    asserts the measured outcome (`permitted`) rather than merely checking
+    the outcome is one of the two allowed strings, so a future change to
+    the guard that starts rejecting sub-floor terms would be caught here as
+    a behaviour change, not silently pass either way.
+    """
+    r = fea.reverify_convective_seam_bit_identity()
+    sf = r["sub_floor_attempt"]
+    assert sf["outcome"] == "permitted"
+    assert sf["predicted_below_floor"] is True
+    assert sf["attempted_q_conv_wm"] < sf["natural_convection_floor_wm"]
+    assert sf["attempted_q_conv_wm"] > 0.0
+    import re as _re
+    assert _re.search(r"[A-Za-z_./-]+\.py:\d+", repr(sf)), sf
+    # The sub-floor ampacity must be lower than the default (floored) path's
+    # own ampacity at the same inputs -- otherwise the override would not
+    # actually have reached the physics.
+    assert max(sf["resulting_ampacity_amps"]) < min(sf["default_path_ampacity_amps"])
+
+
+def test_low_wind_sensitivity_sweep_custom_wind_grid_still_locates_crossover():
+    corridor = next(iter(config.CORRIDOR_ENDPOINTS))
+    crossover = fea.convection_crossover_wind_speed(corridor)["crossover_wind_perp_ms"]
+    custom_grid = [0.01, crossover * 0.5, crossover * 4.0, crossover * 8.0]
+    s = fea.low_wind_sensitivity_sweep(corridor, wind_grid=custom_grid)
+    assert 0.0 in s["wind_perp_ms"]
+    assert crossover in s["wind_perp_ms"]
+    grid = np.asarray(s["wind_perp_ms"], dtype=float)
+    assert abs(grid[s["crossover_index"]] - crossover) < 1e-9
