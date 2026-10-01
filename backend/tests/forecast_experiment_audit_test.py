@@ -789,3 +789,222 @@ def test_d01_findings_table_has_five_rows_one_per_bullet():
     bullets_text = " ".join(row["bullet"] for row in table)
     for n in ("1", "2", "3", "4", "5"):
         assert f"bullet {n}" in bullets_text.lower(), bullets_text
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 04-03 Task 1: paired_block_bootstrap_margin, iid_percentile_margin,
+# block_length_sensitivity.
+#
+# NOTE on the dependent-series construction used below (deviation, see
+# SUMMARY.md): the plan's OWN <verify><automated> script for this task
+# builds its "strongly autocorrelated" series as
+# `dep_base = np.abs(150.0 + ar)`, `dep_arm = np.abs(120.0 + ar)` for an
+# AR(1) `ar` with std ~34 that never approaches -120. Both `abs()` calls
+# are then no-ops for every row, so `dep_base - dep_arm` is EXACTLY the
+# constant 30.0 for every single row regardless of the AR(1) noise or
+# seed -- confirmed empirically (`np.ptp(diff)` is ~2.8e-14, i.e. zero
+# within float tolerance). A perfectly constant difference series hits
+# this function's OWN REQUIRED zero-variance degenerate short-circuit
+# (mirroring the i.i.d. version's identical guard) regardless of
+# implementation, so the plan's literal script can never observe
+# widening under dependence -- this is a verify-script construction
+# defect, not a defect in this module. The tests below instead build the
+# difference series DIRECTLY as `diff = ar` (shifting by a large constant
+# so `abs()` stays a no-op), which varies genuinely row-to-row and
+# carries real AR(1) dependence -- independently confirmed via
+# `np.allclose(dep_base - dep_arm, ar)` during this task's own
+# development. A module-level seeded generator (seed 20260929, this
+# project's one fixed seed, reused per `_synthetic_anchored_pair_frame`'s
+# own convention above) keeps every test deterministic.
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def _dependent_diff_series(n=800, *, seed=20260929, phi=0.95, noise_std=10.0, shift=1000.0):
+    """
+    A genuinely autocorrelated difference series: `errors_baseline =
+    |shift + ar|`, `errors_arm = shift` (constant), so
+    `errors_baseline - errors_arm == ar` exactly whenever `shift` is large
+    enough that `abs()` never flips sign (`shift=1000.0` against an AR(1)
+    series whose stationary std is ~34 at `phi=0.95`/`noise_std=10.0`
+    leaves a wide margin). Returns `(errors_arm, errors_baseline, ar)`.
+    """
+    rng = np.random.default_rng(seed)
+    noise = rng.normal(0.0, noise_std, n)
+    ar = np.zeros(n)
+    for i in range(1, n):
+        ar[i] = phi * ar[i - 1] + noise[i]
+    errors_baseline = np.abs(shift + ar)
+    errors_arm = np.full(n, shift)
+    assert np.allclose(errors_baseline - errors_arm, ar)
+    return errors_arm, errors_baseline, ar
+
+
+def _independent_diff_series(n=800, *, seed=20260930, std=34.0, shift=1000.0):
+    """The no-dependence control: `errors_baseline - errors_arm` is i.i.d. noise with roughly the dependent series' own stationary std, no autocorrelation."""
+    rng = np.random.default_rng(seed)
+    iid_noise = rng.normal(0.0, std, n)
+    errors_baseline = np.abs(shift + iid_noise)
+    errors_arm = np.full(n, shift)
+    assert np.allclose(errors_baseline - errors_arm, iid_noise)
+    return errors_arm, errors_baseline, iid_noise
+
+
+def test_paired_block_bootstrap_margin_at_block_length_one_matches_iid_percentile():
+    rng = np.random.default_rng(20260929)
+    n = 800
+    base = np.abs(rng.normal(120.0, 30.0, n))
+    arm = np.abs(base - rng.normal(20.0, 25.0, n))
+    b1 = fea.paired_block_bootstrap_margin(arm, base, block_length=1)
+    iid = fea.iid_percentile_margin(arm, base)
+    for key in ("point", "ci_low", "ci_high", "excludes_zero_favorably", "block_length", "n_resamples", "method"):
+        assert key in b1, sorted(b1)
+    # Resampling-noise tolerance: both intervals resample the SAME 800-row
+    # series at the SAME n_resamples=10000/95% confidence from this
+    # project's one fixed seed, via two different (but equally valid)
+    # percentile-method implementations -- any residual disagreement is
+    # pure resampling noise, not a systematic difference, and should be a
+    # small fraction of the margin's own scale (tens of amps).
+    assert abs(b1["ci_low"] - iid["ci_low"]) < 1.0, (b1, iid)
+    assert abs(b1["ci_high"] - iid["ci_high"]) < 1.0, (b1, iid)
+    assert b1["ci_low"] <= b1["point"] <= b1["ci_high"], b1
+
+
+def test_paired_block_bootstrap_margin_widens_under_dependence():
+    errors_arm, errors_baseline, _ = _dependent_diff_series()
+    w1 = fea.paired_block_bootstrap_margin(errors_arm, errors_baseline, block_length=1)
+    w48 = fea.paired_block_bootstrap_margin(errors_arm, errors_baseline, block_length=48)
+    assert (w48["ci_high"] - w48["ci_low"]) > (w1["ci_high"] - w1["ci_low"]), (w1, w48)
+
+
+def test_paired_block_bootstrap_margin_no_widening_under_independence():
+    errors_arm, errors_baseline, _ = _independent_diff_series()
+    w1 = fea.paired_block_bootstrap_margin(errors_arm, errors_baseline, block_length=1)
+    w48 = fea.paired_block_bootstrap_margin(errors_arm, errors_baseline, block_length=48)
+    width1 = w1["ci_high"] - w1["ci_low"]
+    width48 = w48["ci_high"] - w48["ci_low"]
+    # "Agree within tolerance" -- not EXACT equality, since block resampling
+    # of an independent series still differs slightly in effective sample
+    # size from pure i.i.d. resampling. 25% of the narrower width is a
+    # generous band for resampling noise at this sample size/resample
+    # count, while still being far tighter than the ~5x widening the
+    # dependent series above shows.
+    assert abs(width48 - width1) < 0.25 * width1, (w1, w48)
+
+
+def test_paired_block_bootstrap_margin_bounds_bracket_point_and_exclusion_matches_sign():
+    rng = np.random.default_rng(20260929)
+    errors_baseline = rng.normal(0.0, 10.0, size=300)
+    errors_arm = errors_baseline * 0.5  # systematically smaller |error| -> favors the arm
+    result = fea.paired_block_bootstrap_margin(errors_arm, errors_baseline, block_length=6)
+    assert result["ci_low"] <= result["point"] <= result["ci_high"]
+    assert result["point"] > 0.0
+    assert result["excludes_zero_favorably"] is True
+
+
+def test_paired_block_bootstrap_margin_reports_non_exclusion_for_difference_centered_on_zero():
+    rng = np.random.default_rng(20260929)
+    errors_baseline = rng.normal(0.0, 10.0, size=300)
+    errors_arm = rng.normal(0.0, 10.0, size=300)
+    result = fea.paired_block_bootstrap_margin(errors_arm, errors_baseline, block_length=6)
+    assert result["ci_low"] <= result["point"] <= result["ci_high"]
+    assert result["excludes_zero_favorably"] is False
+
+
+def test_paired_block_bootstrap_margin_degenerate_self_comparison_is_zero_width_at_zero():
+    rng = np.random.default_rng(1)
+    errors = rng.normal(0.0, 5.0, size=50)
+    result = fea.paired_block_bootstrap_margin(errors, errors, block_length=4)
+    assert result["point"] == 0.0 and result["ci_low"] == 0.0 and result["ci_high"] == 0.0
+    assert result["excludes_zero_favorably"] is False
+    assert result["n_resamples"] == 0  # degenerate short-circuit never resamples
+
+
+def test_paired_block_bootstrap_margin_raises_on_shape_mismatch():
+    with pytest.raises(ValueError):
+        fea.paired_block_bootstrap_margin(np.zeros(5), np.zeros(6), block_length=2)
+
+
+def test_paired_block_bootstrap_margin_is_deterministic():
+    errors_arm, errors_baseline, _ = _dependent_diff_series()
+    first = fea.paired_block_bootstrap_margin(errors_arm, errors_baseline, block_length=12)
+    second = fea.paired_block_bootstrap_margin(errors_arm, errors_baseline, block_length=12)
+    assert first == second
+
+
+def test_paired_block_bootstrap_margin_raises_on_invalid_block_length():
+    with pytest.raises(ValueError) as exc_info:
+        fea.paired_block_bootstrap_margin(np.zeros(5), np.ones(5), block_length=0)
+    assert "0" in str(exc_info.value)
+
+    with pytest.raises(ValueError) as exc_info:
+        fea.paired_block_bootstrap_margin(np.zeros(5), np.ones(5), block_length=6)
+    assert "6" in str(exc_info.value) and "5" in str(exc_info.value)
+
+
+def test_paired_block_bootstrap_margin_raises_on_invalid_method():
+    with pytest.raises(ValueError):
+        fea.paired_block_bootstrap_margin(np.zeros(5), np.ones(5), block_length=2, method="bogus")
+
+
+def test_paired_block_bootstrap_margin_circular_method_is_recorded_and_valid():
+    errors_arm, errors_baseline, _ = _dependent_diff_series()
+    result = fea.paired_block_bootstrap_margin(errors_arm, errors_baseline, block_length=24, method="circular")
+    assert result["method"] == "circular"
+    assert result["ci_low"] <= result["point"] <= result["ci_high"]
+
+
+def test_iid_percentile_margin_degenerate_self_comparison_is_zero_width_at_zero():
+    rng = np.random.default_rng(1)
+    errors = rng.normal(0.0, 5.0, size=50)
+    result = fea.iid_percentile_margin(errors, errors)
+    assert result == {"point": 0.0, "ci_low": 0.0, "ci_high": 0.0, "excludes_zero_favorably": False}
+
+
+def test_iid_percentile_margin_raises_on_shape_mismatch():
+    with pytest.raises(ValueError):
+        fea.iid_percentile_margin(np.zeros(5), np.zeros(6))
+
+
+def test_block_length_sensitivity_sweeps_at_least_four_lengths_including_one():
+    errors_arm, errors_baseline, _ = _dependent_diff_series()
+    sweep = fea.block_length_sensitivity(errors_arm, errors_baseline)
+    assert len(sweep["by_block_length"]) >= 4, sorted(sweep["by_block_length"])
+    assert 1 in sweep["block_lengths_used"], sweep["block_lengths_used"]
+    assert "iid_percentile" in sweep
+    assert isinstance(sweep["conclusion_stable"], bool)
+    assert isinstance(sweep["disagreeing_block_lengths"], list)
+    for key in ("min_width", "max_width"):
+        assert "block_length" in sweep[key] and "width" in sweep[key], sweep[key]
+
+
+def test_block_length_sensitivity_reports_disagreeing_lengths_when_unstable():
+    # A difference series (`diff = errors_baseline's abs - errors_arm's
+    # abs`, built via the same shift trick `_dependent_diff_series` uses so
+    # the pattern's own sign survives both abs() calls) that is mostly a
+    # small positive constant (1.0) with one 20-row CONTIGUOUS negative
+    # cluster (-5.0). Point margin is positive (0.5), and at block_length=1
+    # i.i.d. resampling blends the cluster's rows individually into a
+    # narrow, favourably-excluding interval -- but at block lengths at or
+    # beyond the cluster's own width (20), a resampled block can capture
+    # the WHOLE cluster intact, pulling the interval down to include zero.
+    # Independently confirmed to flip exactly at block lengths 24/48 while
+    # 1/4 stay excluding, which is what this test asserts.
+    n = 240
+    shift = 1000.0
+    pattern = np.full(n, 1.0)
+    pattern[100:120] = -5.0
+    errors_baseline = np.abs(shift + pattern)
+    errors_arm = np.full(n, shift)
+    assert np.allclose(errors_baseline - errors_arm, pattern)
+
+    sweep = fea.block_length_sensitivity(errors_arm, errors_baseline, block_lengths=(1, 4, 24, 48))
+    assert isinstance(sweep["conclusion_stable"], bool)
+    assert sweep["conclusion_stable"] is False, sweep
+    assert sorted(sweep["disagreeing_block_lengths"]) == [24, 48], sweep
+
+
+def test_block_length_sensitivity_custom_block_lengths_are_recorded():
+    errors_arm, errors_baseline, _ = _dependent_diff_series()
+    sweep = fea.block_length_sensitivity(errors_arm, errors_baseline, block_lengths=(1, 4, 8, 28))
+    assert sweep["block_lengths_used"] == [1, 4, 8, 28]
+    assert sorted(int(k) for k in sweep["by_block_length"]) == [1, 4, 8, 28]

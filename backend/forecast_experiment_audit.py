@@ -40,6 +40,7 @@ import re
 
 import numpy as np
 import pandas as pd
+import scipy.stats
 
 import config
 import corridor_discretization
@@ -1627,3 +1628,313 @@ def d01_findings_table() -> list:
             "citation": "backend/forecast_experiment_audit.py arm5_lag_offset_finding",
         },
     ]
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 04-03 Task 1: a paired block bootstrap that reduces to the i.i.d.
+# case at block length one, a method-matched i.i.d. percentile comparator,
+# and a block-length sensitivity sweep with a stability verdict (D-02
+# bullet 1 -- "hourly ampacity residuals are temporally dependent, so
+# resampling individual rows understates the interval").
+#
+# Both new bootstrap functions mirror `forecast_experiment.
+# paired_bootstrap_margin` in contract and discipline (same four-key
+# return shape, same ValueError shape-mismatch guard naming both shapes,
+# same zero-variance degenerate short-circuit, same three reused config
+# constants) and are new, additive siblings -- `paired_bootstrap_margin`
+# itself carries zero diff from this plan (`FROZEN_SOURCES_UNTOUCHED_OK`).
+# ──────────────────────────────────────────────────────────────────────────
+
+# The default block-length sweep: 1 (the i.i.d.-equivalent correctness
+# gate), 6 (a quarter of an hourly day), 24 (one full day at hourly
+# cadence), 48 (two days -- longer than a diurnal cycle at hourly
+# cadence, the length D-02 bullet 1 asks for so a reader can see whether
+# dependence beyond a single day still widens the interval). Callers
+# scoring a DIFFERENT cadence (e.g. this phase's own six-hourly
+# exact-lead-filtered series, four rows per day) pass their own
+# `block_lengths` -- see `ablation_basis_report`'s own default.
+_DEFAULT_BLOCK_LENGTHS: tuple = (1, 6, 24, 48)
+
+
+def _validate_paired_shapes(fn_name: str, errors_arm, errors_baseline):
+    abs_arm = np.abs(np.asarray(errors_arm, dtype=float))
+    abs_baseline = np.abs(np.asarray(errors_baseline, dtype=float))
+    if abs_arm.shape != abs_baseline.shape:
+        raise ValueError(
+            f"{fn_name}: errors_arm has shape {abs_arm.shape} but "
+            f"errors_baseline has shape {abs_baseline.shape} -- both must "
+            f"be scored on the identical row index"
+        )
+    return abs_arm, abs_baseline
+
+
+def paired_block_bootstrap_margin(
+    errors_arm, errors_baseline, *, block_length: int, method: str = "moving",
+    n_resamples: int = None, confidence_level: float = None, random_state: int = None,
+) -> dict:
+    """
+    A paired MOVING or CIRCULAR block bootstrap confidence interval on an
+    arm's margin against a baseline, over the per-row ABSOLUTE-error
+    difference series -- the sibling of `forecast_experiment.
+    paired_bootstrap_margin` that resamples CONTIGUOUS BLOCKS of
+    `block_length` consecutive rows (with replacement) instead of
+    individual rows, so whatever temporal autocorrelation is present in
+    hourly ampacity residuals survives the resample instead of being
+    averaged away by i.i.d. resampling.
+
+    Mirrors the i.i.d. version's contract exactly where it can: raw
+    residuals are absoluted internally so no caller has to remember to;
+    the point margin is `mean(|errors_baseline|) - mean(|errors_arm|)`; a
+    zero-variance difference series short-circuits to a point-mass
+    interval at the point value for the SAME reason the i.i.d. version
+    does (`scipy.stats.bootstrap`'s BCa method returns NaN on constant
+    data -- the degenerate case here never reaches that code path at
+    all, since this function builds its own percentile interval rather
+    than calling `scipy.stats.bootstrap`); the three resample count/
+    confidence level/seed defaults are the SAME `config.
+    FORECAST_EXPERIMENT_BOOTSTRAP_RESAMPLES`/`FORECAST_EXPERIMENT_
+    BOOTSTRAP_CONFIDENCE`/`FORECAST_EXPERIMENT_CORRECTION_RANDOM_STATE`
+    constants the i.i.d. version reuses -- this phase has exactly one
+    fixed seed and introduces no second one.
+
+    Where it deliberately differs: the interval is built by the
+    PERCENTILE method, never BCa. BCa's acceleration term is estimated
+    from a jackknife over INDEPENDENT observations (leave-one-row-out);
+    block resampling has no well-defined per-row jackknife (removing one
+    row from a block changes which blocks are even valid), so the
+    acceleration term is not well defined here. Reporting a percentile
+    interval and naming the reason is more honest than forcing BCa onto
+    data it was not designed for.
+
+    Resampling mechanics: with `method="moving"`, each resample's block
+    start is drawn (with replacement) from `[0, n - block_length]`,
+    keeping every block entirely inside the series (no wraparound) --
+    this is what "moving block bootstrap" means. With `method="circular"`,
+    block starts are drawn from the WHOLE series `[0, n)` with wraparound
+    (`(start + offset) % n`), the "circular block bootstrap" variant.
+    Enough blocks are concatenated to reach at least the original series
+    length `n`, and the result is truncated to exactly `n` -- the SAME
+    "concatenate then truncate the last block" discipline named in this
+    task's own `<action>` text, implemented here via a fully vectorized
+    `(resamples, n_blocks, block_length)` index array rather than a
+    per-resample Python loop, both for speed at `n_resamples=10000` and so
+    there is exactly one index-construction code path to get right rather
+    than two (a loop version and a vectorized one that could silently
+    diverge from each other).
+
+    Every random draw for a given call comes from ONE `numpy.random.
+    Generator` seeded with the resolved seed (`np.random.default_rng
+    (random_state)`), so two calls with identical arguments return
+    byte-identical bounds -- proven by
+    `test_paired_block_bootstrap_margin_is_deterministic`.
+
+    Returns:
+        `{"point": float, "ci_low": float, "ci_high": float,
+        "excludes_zero_favorably": bool, "block_length": int,
+        "n_resamples": int, "method": str}` -- the last three keys are
+        this function's deliberate ADDITION to the i.i.d. version's
+        four-key contract, so a caller inspecting a stored result always
+        knows which block length and method produced it, while still
+        being able to treat the first four keys interchangeably with
+        `paired_bootstrap_margin`'s own return value.
+
+    Raises:
+        ValueError: naming both shapes, if `errors_arm` and
+            `errors_baseline` are not the same length (mirrors the i.i.d.
+            version exactly).
+        ValueError: naming the block length and the series length, if
+            `block_length` is not a positive integer no larger than the
+            series length.
+        ValueError: naming `method`, if it is neither `"moving"` nor
+            `"circular"`.
+    """
+    abs_arm, abs_baseline = _validate_paired_shapes("paired_block_bootstrap_margin", errors_arm, errors_baseline)
+    diff = abs_baseline - abs_arm
+    n = diff.size
+
+    if method not in ("moving", "circular"):
+        raise ValueError(
+            f"paired_block_bootstrap_margin: method must be 'moving' or "
+            f"'circular', got {method!r}"
+        )
+    if not isinstance(block_length, (int, np.integer)) or isinstance(block_length, bool) or block_length < 1 or block_length > max(n, 1):
+        raise ValueError(
+            f"paired_block_bootstrap_margin: block_length must be a "
+            f"positive integer no larger than the series length ({n}), "
+            f"got {block_length!r}"
+        )
+
+    point = float(np.mean(diff)) if n else 0.0
+
+    if n == 0 or np.ptp(diff) == 0.0:
+        # Degenerate: every row's difference is identical (typically all
+        # zero, the baseline scored against itself). Matches the i.i.d.
+        # version's own degenerate guard and its stated reason -- no
+        # resampling can produce a different number from constant data.
+        return {
+            "point": point,
+            "ci_low": point,
+            "ci_high": point,
+            "excludes_zero_favorably": bool(point > 0.0),
+            "block_length": int(block_length),
+            "n_resamples": 0,
+            "method": method,
+        }
+
+    resamples = n_resamples if n_resamples is not None else config.FORECAST_EXPERIMENT_BOOTSTRAP_RESAMPLES
+    confidence = confidence_level if confidence_level is not None else config.FORECAST_EXPERIMENT_BOOTSTRAP_CONFIDENCE
+    seed = random_state if random_state is not None else config.FORECAST_EXPERIMENT_CORRECTION_RANDOM_STATE
+    rng = np.random.default_rng(seed)
+
+    n_blocks_needed = int(np.ceil(n / block_length))
+    offsets = np.arange(block_length)
+    if method == "moving":
+        starts_pool_size = n - block_length + 1
+        starts = rng.integers(0, starts_pool_size, size=(resamples, n_blocks_needed))
+        idx = starts[:, :, None] + offsets[None, None, :]
+    else:  # circular
+        starts = rng.integers(0, n, size=(resamples, n_blocks_needed))
+        idx = (starts[:, :, None] + offsets[None, None, :]) % n
+
+    idx = idx.reshape(resamples, n_blocks_needed * block_length)[:, :n]
+    means = diff[idx].mean(axis=1)
+
+    alpha = 1.0 - confidence
+    ci_low = float(np.percentile(means, 100.0 * (alpha / 2.0)))
+    ci_high = float(np.percentile(means, 100.0 * (1.0 - alpha / 2.0)))
+
+    return {
+        "point": point,
+        "ci_low": ci_low,
+        "ci_high": ci_high,
+        "excludes_zero_favorably": bool(ci_low > 0.0),
+        "block_length": int(block_length),
+        "n_resamples": int(resamples),
+        "method": method,
+    }
+
+
+def iid_percentile_margin(
+    errors_arm, errors_baseline, *, n_resamples: int = None, confidence_level: float = None,
+    random_state: int = None,
+) -> dict:
+    """
+    The method-matched comparator `paired_block_bootstrap_margin` is
+    compared against: the SAME per-row absolute-error difference series,
+    the SAME resample count/confidence level/seed, but resampling
+    INDIVIDUAL rows i.i.d. (never blocks), with the interval built by the
+    PERCENTILE method -- the same interval method `paired_block_
+    bootstrap_margin` uses, so that a width difference between the two is
+    attributable to block resampling alone, not to the interval method
+    changing at the same time.
+
+    This is deliberately NOT the harness's own `paired_bootstrap_margin`
+    (which uses the BCa method): comparing a block PERCENTILE interval
+    against an i.i.d. BCa interval would change two things at once (the
+    resampling scheme AND the interval method) and attribute the whole
+    width difference to block resampling incorrectly. The harness's own
+    BCa interval is still reported separately, as the frozen record's own
+    method -- never as this comparator.
+
+    Returns:
+        `{"point": float, "ci_low": float, "ci_high": float,
+        "excludes_zero_favorably": bool}` -- the SAME four-key contract
+        `paired_bootstrap_margin` and `paired_block_bootstrap_margin`
+        share.
+
+    Raises:
+        ValueError: naming both shapes, if `errors_arm` and
+            `errors_baseline` are not the same length.
+    """
+    abs_arm, abs_baseline = _validate_paired_shapes("iid_percentile_margin", errors_arm, errors_baseline)
+    diff = abs_baseline - abs_arm
+    point = float(np.mean(diff)) if diff.size else 0.0
+
+    if diff.size == 0 or np.ptp(diff) == 0.0:
+        return {
+            "point": point,
+            "ci_low": point,
+            "ci_high": point,
+            "excludes_zero_favorably": bool(point > 0.0),
+        }
+
+    resamples = n_resamples if n_resamples is not None else config.FORECAST_EXPERIMENT_BOOTSTRAP_RESAMPLES
+    confidence = confidence_level if confidence_level is not None else config.FORECAST_EXPERIMENT_BOOTSTRAP_CONFIDENCE
+    seed = random_state if random_state is not None else config.FORECAST_EXPERIMENT_CORRECTION_RANDOM_STATE
+
+    result = scipy.stats.bootstrap(
+        (diff,), np.mean,
+        n_resamples=resamples,
+        confidence_level=confidence,
+        random_state=seed,
+        method="percentile",
+    )
+    ci_low = float(result.confidence_interval.low)
+    ci_high = float(result.confidence_interval.high)
+    return {
+        "point": point,
+        "ci_low": ci_low,
+        "ci_high": ci_high,
+        "excludes_zero_favorably": bool(ci_low > 0.0),
+    }
+
+
+def block_length_sensitivity(
+    errors_arm, errors_baseline, *, block_lengths=None, method: str = "moving",
+) -> dict:
+    """
+    Sweep `paired_block_bootstrap_margin` across `block_lengths` (default
+    `_DEFAULT_BLOCK_LENGTHS`, which always includes 1 and a length longer
+    than a diurnal cycle at hourly cadence -- 04-RESEARCH.md flags the
+    web-sourced block-length heuristics it cites as un-reverified, which
+    is exactly why D-02 asks for a sweep across more than one length and
+    a reported stability verdict, rather than trusting one heuristic's
+    recommended length), plus the method-matched `iid_percentile_margin`
+    comparator computed once on the same series.
+
+    `conclusion_stable` is computed against the SMALLEST tested block
+    length (always 1, or the smallest of whatever `block_lengths` the
+    caller passed) as the reference flag -- the i.i.d.-equivalent case is
+    the natural baseline a wider interval is judged against.
+    `disagreeing_block_lengths` names every length whose
+    `excludes_zero_favorably` flag differs from that reference, so a
+    caller never has to recompute which lengths disagree from the raw
+    `by_block_length` mapping itself.
+
+    Returns:
+        `{"by_block_length": {str(length): paired_block_bootstrap_margin's
+        return value}, "block_lengths_used": [int, ...], "iid_percentile":
+        iid_percentile_margin's return value, "conclusion_stable": bool,
+        "disagreeing_block_lengths": [int, ...], "min_width": {"block_
+        length": int, "width": float}, "max_width": {"block_length": int,
+        "width": float}}`.
+    """
+    if block_lengths is None:
+        block_lengths = _DEFAULT_BLOCK_LENGTHS
+    block_lengths = tuple(sorted(set(int(b) for b in block_lengths)))
+
+    by_block_length = {
+        str(bl): paired_block_bootstrap_margin(errors_arm, errors_baseline, block_length=bl, method=method)
+        for bl in block_lengths
+    }
+    iid_entry = iid_percentile_margin(errors_arm, errors_baseline)
+
+    reference_flag = by_block_length[str(block_lengths[0])]["excludes_zero_favorably"]
+    disagreeing_block_lengths = [
+        bl for bl in block_lengths if by_block_length[str(bl)]["excludes_zero_favorably"] != reference_flag
+    ]
+    conclusion_stable = len(disagreeing_block_lengths) == 0
+
+    widths = {bl: by_block_length[str(bl)]["ci_high"] - by_block_length[str(bl)]["ci_low"] for bl in block_lengths}
+    min_bl = min(widths, key=widths.get)
+    max_bl = max(widths, key=widths.get)
+
+    return {
+        "by_block_length": by_block_length,
+        "block_lengths_used": list(block_lengths),
+        "iid_percentile": iid_entry,
+        "conclusion_stable": bool(conclusion_stable),
+        "disagreeing_block_lengths": disagreeing_block_lengths,
+        "min_width": {"block_length": int(min_bl), "width": float(widths[min_bl])},
+        "max_width": {"block_length": int(max_bl), "width": float(widths[max_bl])},
+    }
