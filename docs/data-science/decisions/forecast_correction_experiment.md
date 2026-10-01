@@ -275,6 +275,11 @@ invoked.
 
 ## Verdict
 
+> **Phase 4 follow-up note.** Every claim in this section is qualified by the appended
+> "Follow-up Audit Amendment (Phase 4, D-04)" section near the end of this document, and by the
+> corrected verdict in `docs/data-science/decisions/forecast_correction_followup_audit.md`
+> (Plan 04-05) — read both before treating any sentence below as the final word.
+
 **`ml_cooling_corrected` wins on the held-out test set at both corridors** — it carries the largest
 statistically-distinguishable margin over `persistence_24h` of any candidate, at AUSTIN_CORPUS_CHRISTI
 (+24.862 A, 95% CI [18.771, 30.776]) and at MIDLAND_EL_PASO (+30.671 A, 95% CI [22.347, 39.107]).
@@ -474,6 +479,247 @@ which, per `03-CONTEXT.md`'s own resolution, may not exist.
   window to see whether the added statistical power changes any of this record's borderline calls
   (`ml_wind_corrected`'s and `reference_ml_refit_24h`'s margins at AUSTIN_CORPUS_CHRISTI, both
   currently below the practical threshold).
+
+## Follow-up Audit Amendment (Phase 4, D-04) — Additive, Six Corrections
+
+This section is a Phase 4 follow-up amendment: it is purely additive, and every sentence above it
+in this document is unedited. The `## Expectation` and `## Measured results` sections remain
+byte-identical to their committed versions, proven by `EXPECTATION_AND_MEASURED_BYTE_IDENTICAL_OK`
+(extracting both sections from the committed file and comparing them byte-for-byte), and every line
+of the committed file still appears, in order, below — proven by `FROZEN_RECORD_APPEND_ONLY_OK`. The
+six subsections below correct or qualify the Verdict's own language, one per D-04 item
+(`04-CONTEXT.md`), each quoting the sentence it qualifies before stating the correction.
+
+### 1. Lowest observed MAE, not an established winner
+
+**Original wording, quoted from the Verdict above:** "**`ml_cooling_corrected` wins on the
+held-out test set at both corridors** — it carries the largest statistically-distinguishable margin
+over `persistence_24h` of any candidate, at AUSTIN_CORPUS_CHRISTI (+24.862 A, 95% CI
+[18.771, 30.776]) and at MIDLAND_EL_PASO (+30.671 A, 95% CI [22.347, 39.107])."
+
+**What is wrong with it.** "Wins" and a bare statement of the largest margin over persistence reads
+as an established, unique statistical victory. It is not: six candidates were scored once on one
+held-out chronological split, at one verified 24-hour lead, under one pinned weather model
+(`gfs_seamless`), and a winner was picked by largest point margin over persistence — a single read
+used for both discovery and confirmation, the exact conflation Plan 04-03's `## Strengthened
+comparison (D-02)` section names as a multiple-comparisons problem. Beating persistence is also not
+the same claim as beating the other real candidates: the frozen record above never computes a
+direct pairwise margin between `ml_cooling_corrected` and `reference_ml_refit_24h` — only each
+candidate's own margin over persistence (24.862 vs. 30.010 at the two corridors). Plan 04-05's own
+D-02 replication computed that pairwise margin directly, on a real (ABLATION-basis) out-of-sample
+split: at MIDLAND_EL_PASO, cooling's margin over the refit model is 3.308 A, 95% CI
+[-2.667, 9.055] — not distinguishable from zero. A candidate whose margin over its closest real
+competitor is statistically indistinguishable from zero at one of two corridors is not an
+established winner over that competitor, whatever its margin over persistence says.
+
+**Corrected wording.** `ml_cooling_corrected` had the lowest-observed-24-hour-MAE candidate among
+the six scored in this one test, on one held-out chronological split, at one verified lead, under
+one pinned weather model, selected by largest point margin over persistence from six candidates
+scored once. It is not an established, unique, or proven statistical winner over the other real
+candidates: its own margin over `reference_ml_refit_24h` — never computed directly in this record's
+own Measured results above — was found, in Plan 04-05's direct pairwise replication, to be
+statistically indistinguishable from zero at MIDLAND_EL_PASO (3.308 A, 95% CI [-2.667, 9.055]), the
+corridor where this record's practical-significance claim for cooling is also weakest (see item 2
+below).
+
+### 2. The practical threshold is a claim about the interval's lower bound
+
+**Original wording, quoted from the Verdict above:** "Measured against that threshold:
+`ml_cooling_corrected`'s margin clears it at MIDLAND_EL_PASO (30.671 A, at the bottom edge of the
+stated range) but falls short at AUSTIN_CORPUS_CHRISTI (24.862 A, below the 30 A floor).
+`reference_ml_refit_24h` clears it at MIDLAND_EL_PASO (30.010 A) but not at AUSTIN_CORPUS_CHRISTI
+(17.818 A)."
+
+**What is wrong with it.** "Clears it" states a point estimate crossing 30 A as though that settled
+the practical-significance question the Expectation committed to before the test split was read.
+It did not: at MIDLAND_EL_PASO, `ml_cooling_corrected`'s own 95% CI is [22.347, 39.107] and
+`reference_ml_refit_24h`'s own 95% CI is [22.343, 37.984] — both intervals' lower bounds (22.347 and
+22.343) sit well below the 30 A threshold, roughly 8 amperes short of it. The point estimate
+clearing the threshold proves only that the point estimate clears it; the interval's lower bound is
+the claim that would matter if this number were ever used to justify a production change, and
+neither candidate's lower bound clears 30 A at this corridor.
+
+Plan 04-05's own block-length-sensitivity sweep (D-02) measured what this frozen record could not:
+whether a block bootstrap, which accounts for the temporal dependence the original i.i.d. paired
+bootstrap assumes away, is wider, and whether any margin's favourable exclusion flips under it. One
+does: the MIDLAND_EL_PASO `ml_wind_corrected`-vs-`reference_ml_refit_24h` margin excludes zero at
+block length 1 (95% CI [0.254, 16.641], the length at which this audit's block bootstrap reduces
+exactly to the i.i.d. method) but stops excluding zero at block lengths 4, 8, and 28 (e.g., block
+length 28: [-0.675, 18.007]) — and the frozen harness's own original BCa method, applied to this
+same margin on the same real data, was already only barely excluding zero before any
+autocorrelation correction (CI lower bound 0.036). **This is the strongest sentence in this
+amendment:** a margin that would read as a confident, distinguishable win under this record's own
+original interval method does not survive a block-length sweep that accounts for serial correlation
+in the hourly series it was measured on — the frozen record's intervals are optimistic at
+MIDLAND_EL_PASO, not merely imprecise.
+
+**Corrected wording.** Both `ml_cooling_corrected` and `reference_ml_refit_24h`'s point margins sit
+at or just above the 30 A practical-significance threshold at MIDLAND_EL_PASO, while both
+candidates' 95% confidence intervals' lower bounds (22.347 A and 22.343 A respectively) sit well
+below it. Neither result establishes that the true improvement exceeds the threshold — only that
+the point estimate does. A related margin at the same corridor (`ml_wind_corrected` vs.
+`reference_ml_refit_24h`) that excludes zero under the i.i.d.-equivalent block length no longer
+excludes zero once temporal dependence is accounted for at longer block lengths — a caution that
+applies with at least equal force to every interval reported in this record's own Measured results
+above, none of which has been re-examined under a block bootstrap.
+
+### 3. The oracle is a diagnostic, not a ceiling
+
+**Original wording, quoted from the Verdict above:** "`ml_cooling_corrected`, the winning real
+candidate, recovered only about 26.8% of that headroom at AUSTIN_CORPUS_CHRISTI (24.862 / 92.630)
+and about 21.0% at MIDLAND_EL_PASO (30.671 / 145.835). The gap between what a real,
+forecast-input-only correction achieved and what a perfect wind correction could achieve is large at
+both corridors — this is a modelling gap, not evidence that the ceiling itself is too small to
+matter. Substantial room remains for a better wind (or joint wind-plus-thermal) correction to close,
+and nothing in this measurement suggests that room is unreachable in principle."
+
+**What is wrong with it.** The "recovered-fraction" framing — a candidate recovering 26.8% or 21.0%
+of the oracle's margin — invites a reader to treat the oracle's 92.630 A (AUSTIN_CORPUS_CHRISTI) and
+145.835 A (MIDLAND_EL_PASO) margins over persistence as a universal performance ceiling that a
+sufficiently good model could eventually close in full, and the unrecovered 73–79% as "headroom"
+waiting to be claimed by any real model. It is not a ceiling in that sense: the oracle substitutes
+OBSERVED FUTURE wind directly into the forecast's thermal inputs, an input no real forecast can ever
+supply at decision time. It is a diagnostic that bounds the maximum benefit one specific
+intervention — wind correction — could achieve under an unrealizable input; it says nothing about
+whether any of that bound is reachable by a real model working only from the same imperfect forecast
+inputs every real candidate in this record actually has.
+
+**Corrected wording.** The oracle is a diagnostic, not a universal performance ceiling: it bounds
+the maximum benefit any wind correction could ever achieve under an input (observed future wind)
+that no real forecast can supply, and it should never be read as proof that the measured headroom —
+73.2% at AUSTIN_CORPUS_CHRISTI, 79.0% at MIDLAND_EL_PASO, by the recovered-fraction framing above —
+is actually learnable by any real model working from real forecast inputs. The gap between what
+`ml_cooling_corrected` achieved (24.862 A / 30.671 A) and what the oracle bounds (92.630 A /
+145.835 A) measures the size of one unrealized intervention's theoretical ceiling, not a quantity of
+unclaimed, achievable performance.
+
+### 4. Correction headroom is measured against the raw forecast
+
+**Original wording, quoted from the Verdict above:** "Both fitted correction arms beat
+`raw_forecast`'s own margin by a wide amount instead of landing close to it: `ml_wind_corrected`
+added roughly 5–21 amps of margin beyond `raw_forecast`'s own edge over persistence at the two
+corridors, and `ml_cooling_corrected` added roughly 15–30 amps beyond it."
+
+**What is wrong with it.** Every margin this record's Verdict reports (+24.862 A, +30.671 A, and
+every other arm's own figure) is measured against `persistence_24h` — temporal extrapolation, the
+ampacity 24 hours ago. Persistence is a different comparison axis from `raw_forecast`: persistence
+extrapolates the past, while `raw_forecast` and the two correction arms are all members of the same
+forecast-plus-physics family, differing only in whether and how the forecast's own weather inputs
+are corrected before the physics runs. Measuring correction headroom against persistence (as every
+figure in this record's Measured results above does) does not isolate what correction itself
+contributed on top of the uncorrected forecast already in hand.
+
+The headroom attributable to correction specifically is the margin against `raw_forecast`, not
+against persistence. Computed directly from this record's own Measured results table:
+`ml_cooling_corrected`'s margin over `raw_forecast` is 98.856 − 83.803 = 15.053 A at
+AUSTIN_CORPUS_CHRISTI and 163.125 − 132.865 = 30.260 A at MIDLAND_EL_PASO — both smaller than the
+corresponding persistence-relative margins (24.862 A and 30.671 A). The two axes are not only
+conceptually different but numerically different: at MIDLAND_EL_PASO, `raw_forecast`'s own margin
+over persistence was itself statistically indistinguishable from zero (+0.410 A, 95% CI
+[-11.058, 11.834]), so a reader comparing cooling's persistence-relative margin to raw_forecast's
+near-zero persistence-relative margin and inferring "correction added roughly 30 A over the raw
+forecast" at that corridor would be wrong by more than double — the correction-relative margin there
+is 30.260 A, close by coincidence to the persistence-relative figure of 30.671 A only because
+`raw_forecast` itself barely beat persistence at that corridor.
+
+**Corrected wording.** The margin attributable to forecast correction specifically is
+`ml_cooling_corrected`'s advantage over `raw_forecast` (the uncorrected member of the same
+forecast-plus-physics family), not its advantage over `persistence_24h` (a different comparison
+axis — temporal extrapolation, not a physics-informed forecast). Side by side at both corridors:
+AUSTIN_CORPUS_CHRISTI — margin vs. persistence +24.862 A, margin vs. raw_forecast +15.053 A;
+MIDLAND_EL_PASO — margin vs. persistence +30.671 A, margin vs. raw_forecast +30.260 A. These two
+axes are numerically distinct, not merely conceptually distinct: at MIDLAND_EL_PASO,
+`raw_forecast`'s own margin over persistence was not statistically distinguishable from zero
+(+0.410 A, 95% CI [-11.058, 11.834]), so any gain attributed to "forecast correction" at that
+corridor must be read against `raw_forecast`, never against persistence.
+
+### 5. The legacy arm stays excluded, and a 24-hour result is not a sixty-minute replacement
+
+**Original wording, quoted from the "Legacy 1-Hour Arm" section above:** "It is excluded from this
+record's primary verdict for exactly the reason stated above, and it must remain excluded from any
+future comparison unless a genuinely independent forecast/truth pair can be established at a 1-hour
+lead for this data source — which, per `03-CONTEXT.md`'s own resolution, may not exist." And, from
+"What was built": "The legacy 1-hour arm is retained in the codebase as a documented, labelled,
+non-primary curiosity — its raw-forecast score is an artifact of the bit-identical data source,
+never a competing candidate against this record's primary verdict."
+
+**What is wrong with it.** Nothing in the legacy-arm disposition itself is incorrect — it is
+reaffirmed, not corrected, below. What this record does not currently say plainly is the converse
+claim a reader might otherwise infer: that because the 24-hour correction arms carry a real,
+distinguishable (if modest) margin while the legacy 1-hour arm's near-zero MAE is a known artifact
+of a bit-identical data source, a 24-hour-lead result somehow supersedes or replaces the production
+60-minute method (`ampacity_forecast.py`'s `"ml"` method). It does not: a 24-hour lead and a
+60-minute lead are different horizons that may serve different product needs, and this record never
+measured the 60-minute horizon with this phase's candidates or data source at all.
+
+**Corrected wording.** The legacy one-hour arm's near-zero score remains excluded from this record's
+primary verdict: it is an artifact of a forecast/truth pair that was found empirically bit-identical
+for the necessarily-recent window its own calibration gate required, never a competing candidate,
+and it must stay excluded from any future comparison unless a genuinely independent 1-hour-lead
+forecast/truth pair is established for this data source. Separately and additionally: a 24-hour-lead
+result does not, by itself, establish a replacement for the production 60-minute method. These are
+different horizons that may serve different product needs, and the question of which horizon (or
+both) the product actually requires is named as unresolved in the audit record's own integration
+plan (`docs/data-science/decisions/forecast_correction_followup_audit.md`, Plan 04-06).
+
+### 6. Low-wind sensitivity is physics, not numerical instability
+
+**Original wording, quoted from the "What was built" section above (Arm 4's description):** "A
+`scikit-learn` estimator that corrects the physics' convective heat-loss term directly, substituted
+back through `thermal_model.ieee738_ampacity`'s `q_conv_override` seam."
+
+**What is wrong with it.** Nothing in this sentence is factually incorrect — this item is not a
+language overstatement to correct, unlike items 1 through 5 above. This record is simply SILENT on
+two questions Plan 04-04's own measurement later raised: whether the sharp concentration of
+overrating in the lowest-wind regime (100% of rows below the measured natural-vs-forced convection
+crossover, both corridors, per the audit record's `## Conservative-rating analysis (D-03)` section)
+is a real physical property of the model or a numerical defect, and whether the `q_conv_override`
+seam this sentence names could ever push a corrected convective term below the physical
+natural-convection floor. Plan 04-05's Task 1 closes both silences by measurement, from an
+independent code path — never by citing this record's or Phase 3's own equality-gate claim for the
+seam's bit-identity.
+
+**Measured, corrected wording (an addition, not a correction of overstated prose).** The low-wind
+behaviour both corridors' overrating analysis surfaced is a measured property of the physics, not a
+numerical instability. The natural-vs-forced convection crossover for both corridors' shared
+conductor configuration, at a representative 35.0°C ambient temperature, is 0.1428 m/s. Sweeping
+perpendicular wind across a grid bracketing this crossover (`low_wind_sensitivity_sweep`), the
+ampacity response is finite and non-negative everywhere on the grid, including at exactly zero wind;
+monotone non-decreasing across the whole grid; and continuous across the crossover (a vanishing step
+on either side of the crossover produces a vanishing ampacity gap, not a fixed-size jump — exactly
+what an elementwise maximum of two continuous expressions produces). Below the crossover, the
+response is measured EXACTLY FLAT, not merely small: `convective_heat_loss` returns
+`natural_convection`'s own expression unchanged there, and that expression does not contain the wind
+variable at all, so the convective term — and therefore the ampacity — cannot respond to wind in
+that regime by construction, not by coincidence. The peak sensitivity to wind is located
+above the crossover (at roughly ten times the crossover speed in this sweep, not at zero wind),
+confirming that the genuinely wind-sensitive regime is the opposite of where a "numerical
+instability near zero wind" intuition would place it.
+
+Independently of this sweep, Phase 3's Success-Criterion-4 convective-seam bit-identity claim was
+re-verified from this phase's own code path against the committed golden fixture
+(`backend/tests/thermal_model_pre_refactor_golden.npz`), never by invoking the existing equality
+test itself: the live ampacity and the live convective term both match the stored golden arrays
+exactly, the override seam reproduces the default path exactly when passed the unmodified convective
+term, and a perturbed override changes the result — proving the equality above is not the trivial
+consequence of an ignored parameter. Finally, the sub-floor routing question Plan 04-04's analysis
+raised is answered by attempting it rather than by reading the guard code alone: a corrected
+convective term that is positive but below the natural-convection floor IS permitted to reach the
+physics through the `q_conv_override` seam. `forecast_correction_models.py`'s own
+`predict_cooling_correction` guard rejects only a non-positive corrected term
+(`backend/forecast_correction_models.py:547`); a positive sub-floor term is not caught by it, and
+`ieee738_ampacity`'s override branch substitutes the override directly for the convective term,
+bypassing `convective_heat_loss`'s own natural-convection floor entirely when an override is given
+(`backend/thermal_model.py:236-239`). This is a real, measured finding about the seam's exposure,
+not a theoretical one — it is reported here as a finding for Plan 04-06's integration-readiness plan
+to weigh, not as evidence of any defect in the physics itself, which this sweep's own measurements
+show is finite, monotone, and continuous throughout.
+
+---
+
+For the full measured tables, the block-length sensitivity sweep, the overrating and retained-capacity
+analysis, and the integration-readiness plan this amendment's six items feed into, see
+`docs/data-science/decisions/forecast_correction_followup_audit.md`.
 
 ## References
 
