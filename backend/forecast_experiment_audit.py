@@ -3693,3 +3693,449 @@ def overrating_basis_report(
     os.replace(tmp_path, report_path)
 
     return report
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 04-05 Task 1: is the low-wind behaviour physics or a defect? (D-04
+# bullet 6, the one D-04 item that is a measurement question, not a
+# language correction.)
+#
+# Below the measured natural-vs-forced convection crossover,
+# `convective_heat_loss` returns `natural_convection(T_amb_c, conductor)`
+# unchanged (`backend/thermal_model.py:189`, the elementwise maximum) --
+# and `natural_convection`'s own expression (`backend/thermal_model.py:124`)
+# does not contain the wind variable AT ALL. So the PREDICTION, worked out
+# from the code before any measurement below confirms it: the ampacity
+# response to perpendicular wind must be EXACTLY FLAT (not merely small)
+# everywhere below the crossover, because the convective term the ampacity
+# is computed from literally does not change with wind there -- there is no
+# "small sensitivity" to measure below the crossover, only none. Above the
+# crossover, the forced-convection term (`backend/thermal_model.py:181-185`)
+# is a strictly increasing function of the Reynolds number, itself a
+# strictly increasing function of wind speed, so the response becomes
+# strictly increasing in wind. This is the textbook signature of a FLOOR
+# (a physical regime boundary), not of a numerical instability: an unstable
+# region would show erratic, non-monotone, or non-finite behaviour, not a
+# clean floor that releases into a smooth rise. `low_wind_sensitivity_sweep`
+# below measures this prediction directly, rather than asserting it from
+# the code reading alone.
+#
+# `reverify_convective_seam_bit_identity` below re-establishes Phase 3's
+# Success-Criterion-4 bit-identity claim independently of
+# `thermal_model_test.py` -- loading the SAME committed golden fixture that
+# test already uses, but never invoking that test itself, so this audit's
+# claim does not rest on the test suite it is auditing. It also answers the
+# sub-floor routing question directly: `predict_cooling_correction`'s own
+# guard (`backend/forecast_correction_models.py:547`,
+# `bad = corrected_q_conv <= 0`) rejects only a NON-POSITIVE corrected
+# convective term; a corrected term that is POSITIVE but still below the
+# natural-convection floor is not caught by that guard, and
+# `apply_cooling_correction` routes it straight through
+# `ieee738_ampacity`'s `q_conv_override` seam (`backend/thermal_model.py:
+# 236-239`), which substitutes the override DIRECTLY for `Q_conv`, bypassing
+# `convective_heat_loss`'s own `np.maximum(Q_cf, Q_cn)` floor
+# (`backend/thermal_model.py:189`) entirely. A deliberately-constructed
+# sub-floor correction is attempted below (never asserted from reading
+# alone) to confirm this is a real, reachable code path, not a theoretical
+# one -- the measured outcome is reported as `"permitted"` or
+# `"prevented"`, whichever the code actually does.
+# ──────────────────────────────────────────────────────────────────────────
+
+# Representative solar irradiance for the low-wind sweep (Claude's
+# discretion, per 04-RESEARCH.md, matching this project's own existing test
+# fixtures' use of 800.0 W/m^2 as a representative daytime value) -- held
+# fixed across the whole wind grid so wind is the only input that varies.
+_DEFAULT_SENSITIVITY_GHI_WM2: float = 800.0
+
+
+def low_wind_sensitivity_sweep(
+    corridor: str, *, air_temp_c: float = None, wind_grid=None, ghi_wm2: float = None,
+) -> dict:
+    """
+    Sweep `corridor`'s own ampacity response to perpendicular wind across a
+    grid bracketing the measured natural-vs-forced convection crossover
+    (`convection_crossover_wind_speed`), holding ambient temperature and
+    solar irradiance fixed at stated representative values, and measure
+    three properties that together distinguish a physically sensitive
+    model from an unstable one: finiteness (including exactly zero wind),
+    monotonicity (no jump down anywhere on the grid), and continuity across
+    the crossover (no fixed-size jump as wind approaches it from either
+    side -- only what the elementwise maximum of two continuous expressions
+    produces).
+
+    `wind_grid`, if given, is a caller-supplied set of wind speeds; this
+    function always additionally includes exactly zero wind and the
+    corridor's own measured crossover, so `crossover_index` is always
+    meaningful. The default grid (used when `wind_grid` is `None`) brackets
+    the crossover with four points below it, the crossover itself, and five
+    points well above it.
+
+    Returns the grid, the ampacities, the first differences, the
+    crossover's own index in the grid, the three property checks with their
+    measured evidence, the maximum first difference and the wind speed
+    where it occurs, and a continuity measurement (the ampacity gap across
+    a vanishing step on either side of the crossover).
+
+    Raises:
+        ValueError: naming the valid corridors, for an unknown one.
+    """
+    valid_corridors = sorted(config.CORRIDOR_ENDPOINTS)
+    if corridor not in config.CORRIDOR_ENDPOINTS:
+        raise ValueError(
+            f"low_wind_sensitivity_sweep: unknown corridor {corridor!r} -- "
+            f"valid corridors: {valid_corridors}"
+        )
+    if air_temp_c is None:
+        air_temp_c = _DEFAULT_CROSSOVER_AIR_TEMP_C
+    if ghi_wm2 is None:
+        ghi_wm2 = _DEFAULT_SENSITIVITY_GHI_WM2
+
+    geometry = corridor_discretization.corridor_geometry(corridor)
+    conductor = geometry.conductor
+
+    crossover_result = convection_crossover_wind_speed(corridor, air_temp_c=air_temp_c)
+    crossover_v = crossover_result["crossover_wind_perp_ms"]
+
+    if wind_grid is None:
+        below = [crossover_v * f for f in (0.10, 0.30, 0.60, 0.85)]
+        above = [crossover_v * f for f in (1.50, 2.00, 3.00, 5.00, 10.00)]
+        grid_values = [0.0] + below + [crossover_v] + above
+    else:
+        grid_values = [0.0, float(crossover_v)] + [float(v) for v in wind_grid]
+
+    grid = np.asarray(sorted(set(grid_values)), dtype=float)
+    crossover_index = int(np.argmin(np.abs(grid - crossover_v)))
+
+    ampacity = np.asarray(
+        thermal_model.ieee738_ampacity(air_temp_c, grid, ghi_wm2, conductor), dtype=float,
+    )
+    first_differences = np.diff(ampacity)
+
+    finite_ok = bool(np.all(np.isfinite(ampacity)))
+    nonnegative_ok = bool(np.all(ampacity >= 0.0))
+    monotone_ok = bool(np.all(first_differences >= -1e-9)) if len(first_differences) else True
+
+    below_slice = first_differences[:max(crossover_index - 1, 1)]
+    above_slice = first_differences[crossover_index:]
+    below_crossover_flat_ok = bool(np.all(np.abs(below_slice) < 1e-6)) if len(below_slice) else True
+    above_crossover_rises_ok = bool(above_slice.max() > 1e-3) if len(above_slice) else False
+    max_abs_below_crossover_diff = float(np.max(np.abs(below_slice))) if len(below_slice) else 0.0
+
+    if len(first_differences):
+        max_diff_pos = int(np.argmax(first_differences))
+        max_first_difference_amps = float(first_differences[max_diff_pos])
+        max_first_difference_wind_speed_ms = float(grid[max_diff_pos + 1])
+    else:
+        max_first_difference_amps = None
+        max_first_difference_wind_speed_ms = None
+
+    # Continuity: evaluate a vanishing step on either side of the crossover
+    # and measure the ampacity gap -- a continuous function's gap shrinks
+    # with the step; a genuine discontinuity would not.
+    continuity_epsilon_ms = max(crossover_v * 1e-4, 1e-6)
+    below_eps = max(crossover_v - continuity_epsilon_ms, 0.0)
+    above_eps = crossover_v + continuity_epsilon_ms
+    amp_below_eps = float(np.asarray(thermal_model.ieee738_ampacity(air_temp_c, below_eps, ghi_wm2, conductor)))
+    amp_at_crossover = float(np.asarray(thermal_model.ieee738_ampacity(air_temp_c, crossover_v, ghi_wm2, conductor)))
+    amp_above_eps = float(np.asarray(thermal_model.ieee738_ampacity(air_temp_c, above_eps, ghi_wm2, conductor)))
+    continuity_gap_amps = max(abs(amp_at_crossover - amp_below_eps), abs(amp_above_eps - amp_at_crossover))
+    # A step of continuity_epsilon_ms m/s on a forced-convection term that
+    # varies smoothly over a range of tens of amps per m/s should move the
+    # ampacity by a correspondingly vanishing amount; 0.1 A is a generous
+    # bound for a step this small, chosen to catch an actual discontinuity
+    # (which would show a gap orders of magnitude larger, not a few mA).
+    continuous_ok = bool(continuity_gap_amps < 0.1)
+
+    return {
+        "corridor": corridor,
+        "air_temp_c": air_temp_c,
+        "ghi_wm2": ghi_wm2,
+        "wind_perp_ms": grid.tolist(),
+        "ampacity_amps": ampacity.tolist(),
+        "first_differences_amps": first_differences.tolist(),
+        "crossover_index": crossover_index,
+        "crossover_wind_perp_ms": crossover_v,
+        "finite_ok": finite_ok,
+        "nonnegative_ok": nonnegative_ok,
+        "monotone_ok": monotone_ok,
+        "below_crossover_flat_ok": below_crossover_flat_ok,
+        "above_crossover_rises_ok": above_crossover_rises_ok,
+        "max_abs_below_crossover_diff_amps": max_abs_below_crossover_diff,
+        "max_first_difference_amps": max_first_difference_amps,
+        "max_first_difference_wind_speed_ms": max_first_difference_wind_speed_ms,
+        "continuity_epsilon_ms": continuity_epsilon_ms,
+        "continuity_gap_amps": continuity_gap_amps,
+        "continuous_ok": continuous_ok,
+    }
+
+
+def sensitivity_vs_instability_finding(corridor: str) -> dict:
+    """
+    Turn `low_wind_sensitivity_sweep`'s measurement into a publishable
+    finding: which of "physics" or "numerical instability" the low-wind
+    behaviour is, the three checked properties (finiteness, monotonicity,
+    continuity) with their measured evidence, the location and size of the
+    peak sensitivity, a one-sentence consequence for a reader, and
+    `file:line` citations for the floor, the ampacity function, and the
+    override seam.
+
+    Raises:
+        ValueError: naming the valid corridors, for an unknown one (via
+            `low_wind_sensitivity_sweep`).
+    """
+    sweep = low_wind_sensitivity_sweep(corridor)
+
+    all_passed = (
+        sweep["finite_ok"] and sweep["nonnegative_ok"] and sweep["monotone_ok"]
+        and sweep["below_crossover_flat_ok"] and sweep["above_crossover_rises_ok"]
+        and sweep["continuous_ok"]
+    )
+    verdict = "physics" if all_passed else "DEFECT -- one or more checks below failed"
+
+    peak_above_crossover = (
+        sweep["max_first_difference_wind_speed_ms"] is not None
+        and sweep["max_first_difference_wind_speed_ms"] > sweep["crossover_wind_perp_ms"]
+    )
+
+    return {
+        "corridor": corridor,
+        "verdict": verdict,
+        "verdict_statement": (
+            f"The low-wind ampacity response at {corridor} is a measured property of the "
+            f"physics (a natural-convection FLOOR), not a numerical instability."
+            if all_passed else
+            f"The low-wind ampacity response at {corridor} FAILED one or more of the "
+            f"finiteness/monotonicity/continuity checks below -- this is a genuine defect "
+            f"finding, not a physics explanation."
+        ),
+        "properties_checked": {
+            "finiteness": {
+                "passed": bool(sweep["finite_ok"] and sweep["nonnegative_ok"]),
+                "evidence": (
+                    f"every one of {len(sweep['wind_perp_ms'])} grid points, including "
+                    f"exactly zero wind, produced a finite, non-negative ampacity "
+                    f"(min {min(sweep['ampacity_amps']):.3f} A, "
+                    f"max {max(sweep['ampacity_amps']):.3f} A)"
+                ),
+            },
+            "monotonicity": {
+                "passed": bool(sweep["monotone_ok"]),
+                "evidence": (
+                    f"the first difference between every consecutive pair of grid points "
+                    f"is non-negative (minimum observed first difference "
+                    f"{min(sweep['first_differences_amps']):.6f} A)"
+                    if sweep["first_differences_amps"] else
+                    "fewer than two grid points -- monotonicity vacuously holds"
+                ),
+            },
+            "continuity": {
+                "passed": bool(sweep["continuous_ok"]),
+                "evidence": (
+                    f"evaluating the ampacity {sweep['continuity_epsilon_ms']:.2e} m/s on "
+                    f"either side of the measured crossover "
+                    f"({sweep['crossover_wind_perp_ms']:.4f} m/s) produces a gap of "
+                    f"{sweep['continuity_gap_amps']:.6f} A -- a vanishing step producing a "
+                    f"vanishing gap, not a fixed-size jump, is exactly what the elementwise "
+                    f"maximum of two continuous expressions (backend/thermal_model.py:189) "
+                    f"produces"
+                ),
+            },
+        },
+        "below_crossover_behavior": (
+            f"Below the measured crossover, `convective_heat_loss` returns "
+            f"`natural_convection`'s own expression unchanged "
+            f"(backend/thermal_model.py:187-189), which does not contain the wind "
+            f"variable at all (backend/thermal_model.py:104-125) -- so the ampacity "
+            f"response to wind is measured EXACTLY FLAT below the crossover, not merely "
+            f"small: the maximum magnitude first difference below the crossover is "
+            f"{sweep['max_abs_below_crossover_diff_amps']:.6f} A."
+        ),
+        "peak_sensitivity": {
+            "max_first_difference_amps": sweep["max_first_difference_amps"],
+            "wind_speed_at_max_ms": sweep["max_first_difference_wind_speed_ms"],
+            "located_above_crossover": peak_above_crossover,
+        },
+        "consequence_for_reader": (
+            "A rating decision made in the lowest-wind regime, below the measured "
+            "crossover, should not expect the model's ampacity output to track small "
+            "forecast wind errors at all -- the floor makes the model's wind sensitivity "
+            "ZERO there, not merely small, while the TRUE ampacity at very low wind is "
+            "itself at its most conservative; the regime where a forecast wind error "
+            "actually moves the predicted rating is just above the crossover, not at "
+            "zero wind, and the measurement above locates that peak explicitly rather "
+            "than assuming it sits at zero wind."
+        ),
+        "citations": [
+            "backend/thermal_model.py:104-125 (natural_convection's own expression, "
+            "independent of wind)",
+            "backend/thermal_model.py:189 (convective_heat_loss's elementwise maximum of "
+            "forced and natural convection -- the floor itself)",
+            "backend/thermal_model.py:193-259 (ieee738_ampacity's heat-balance solve, "
+            "consuming the convective term this sweep varies)",
+        ],
+        "sweep": sweep,
+    }
+
+
+def _attempt_sub_floor_cooling_correction() -> dict:
+    """
+    Deliberately construct a corrected convective term that is POSITIVE but
+    below the natural-convection floor, route it through
+    `forecast_correction_models.predict_cooling_correction` and
+    `apply_cooling_correction` exactly as arm 4's live prediction path does
+    (`backend/forecast_experiment.py`'s `_cooling_corrected_ampacity`), and
+    report whether the physics actually accepted it -- measured by
+    attempting it, never asserted from reading the guard alone.
+
+    Uses the default `thermal_model.ConductorConfig()` (the same conductor
+    the golden-fixture bit-identity checks use) and a trivial constant
+    estimator standing in for a real fitted model, since the question is
+    about the SEAM's own behaviour, not about any particular fitted model.
+    """
+    conductor = thermal_model.ConductorConfig()
+    air_temp_c = _DEFAULT_CROSSOVER_AIR_TEMP_C
+    # Comfortably above the crossover, so the DEFAULT (uncorrected) path's
+    # own convective term is already the forced-convection branch, not the
+    # floor -- isolating that the sub-floor result below comes from the
+    # override, not from the default path also being floored.
+    wind_perp_ms = 5.0
+    natural_floor_wm = float(np.asarray(thermal_model.natural_convection(air_temp_c, conductor)))
+    # Positive (not zero, not negative -- the only case `predict_cooling_
+    # correction`'s own guard rejects) and deliberately below the floor.
+    attempted_q_conv_wm = natural_floor_wm * 0.3
+
+    n = 3
+    frame = pd.DataFrame({
+        "datetime_utc": pd.date_range("2024-01-01", periods=n, freq="h", tz="UTC"),
+        "fcst_air_temp": np.full(n, air_temp_c),
+        "fcst_perp_wind_ms": np.full(n, wind_perp_ms),
+        "fcst_solar_radiation": np.full(n, _DEFAULT_SENSITIVITY_GHI_WM2),
+        "anchor_air_temp": np.full(n, air_temp_c),
+        "anchor_perp_wind_ms": np.full(n, wind_perp_ms),
+    })
+
+    class _ConstantSubFloorEstimator:
+        def predict(self, X):
+            return np.full(len(X), attempted_q_conv_wm)
+
+    model = forecast_correction_models.CoolingCorrectionModel(
+        target="level",
+        feature_names=["fcst_q_conv", "fcst_air_temp", "fcst_perp_wind_ms", "anchor_q_conv", "hour_sin", "hour_cos"],
+        estimator=_ConstantSubFloorEstimator(),
+        conductor=conductor,
+        n_rows_fit=0,
+    )
+
+    class _MinimalGeometry:
+        pass
+
+    geometry = _MinimalGeometry()
+    geometry.conductor = conductor
+
+    prediction = forecast_correction_models.predict_cooling_correction(model, frame)
+    resulting_ampacity = np.asarray(
+        forecast_correction_models.apply_cooling_correction(frame, prediction.q_conv, geometry),
+        dtype=float,
+    )
+    default_path_ampacity = np.asarray(
+        thermal_model.ieee738_ampacity(
+            frame["fcst_air_temp"].to_numpy(dtype=float),
+            frame["fcst_perp_wind_ms"].to_numpy(dtype=float),
+            frame["fcst_solar_radiation"].to_numpy(dtype=float),
+            conductor,
+        ),
+        dtype=float,
+    )
+
+    predicted_below_floor = bool(np.all(prediction.q_conv > 0.0) and np.all(prediction.q_conv < natural_floor_wm))
+    outcome = "permitted" if predicted_below_floor else "prevented"
+
+    return {
+        "natural_convection_floor_wm": natural_floor_wm,
+        "attempted_q_conv_wm": float(attempted_q_conv_wm),
+        "predicted_q_conv_wm": prediction.q_conv.tolist(),
+        "predicted_below_floor": predicted_below_floor,
+        "outcome": outcome,
+        "resulting_ampacity_amps": resulting_ampacity.tolist(),
+        "default_path_ampacity_amps": default_path_ampacity.tolist(),
+        "citation": (
+            "backend/forecast_correction_models.py:547 (predict_cooling_correction's own "
+            "guard, `bad = corrected_q_conv <= 0`, rejects only a non-positive term -- a "
+            "positive term below the natural-convection floor is not caught by it) and "
+            "backend/thermal_model.py:236-239 (ieee738_ampacity's q_conv_override branch "
+            "substitutes the override directly for Q_conv, bypassing convective_heat_loss's "
+            "own np.maximum(Q_cf, Q_cn) floor at backend/thermal_model.py:189 entirely when "
+            "an override is given)"
+        ),
+    }
+
+
+def reverify_convective_seam_bit_identity() -> dict:
+    """
+    Re-establish Phase 3's Success-Criterion-4 convective-seam bit-identity
+    claim from an INDEPENDENT code path: loads the committed golden arrays
+    directly from `backend/tests/thermal_model_pre_refactor_golden.npz`
+    (never regenerated, never invoking `thermal_model_test.py` itself), and
+    asserts exact array equality for three things -- the live ampacity
+    against the stored ampacity golden, the live convective term against
+    the stored convective golden, and the ampacity computed with the
+    convective term passed explicitly through the override seam against the
+    ampacity computed with the seam left at its default.
+
+    Then proves the seam is not simply ignored (which would make the three
+    equalities above trivially true): perturbs the convective term and
+    asserts the resulting ampacity differs.
+
+    Finally answers D-04 bullet 6's sub-floor routing question by attempting
+    it (`_attempt_sub_floor_cooling_correction`), not by reading the guard
+    code alone.
+
+    Raises:
+        FileNotFoundError: if the golden fixture is missing (should not
+            occur in a checked-out repository).
+    """
+    golden_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "tests", "thermal_model_pre_refactor_golden.npz",
+    )
+    g = np.load(golden_path)
+    conductor = thermal_model.ConductorConfig()
+
+    live_ampacity = np.asarray(
+        thermal_model.ieee738_ampacity(g["T_amb_c"], g["wind_perp_ms"], g["ghi_wm2"], conductor), dtype=float,
+    )
+    ampacity_matches_golden = bool(np.array_equal(live_ampacity, g["ampacity"]))
+
+    live_q_conv = np.asarray(
+        thermal_model.convective_heat_loss(g["T_amb_c"], g["wind_perp_ms"], conductor), dtype=float,
+    )
+    convective_term_matches_golden = bool(np.array_equal(live_q_conv, g["q_conv"]))
+
+    default_path = np.asarray(
+        thermal_model.ieee738_ampacity(g["T_amb_c"], g["wind_perp_ms"], g["ghi_wm2"], conductor), dtype=float,
+    )
+    explicit_override = np.asarray(
+        thermal_model.ieee738_ampacity(
+            g["T_amb_c"], g["wind_perp_ms"], g["ghi_wm2"], conductor, q_conv_override=live_q_conv,
+        ),
+        dtype=float,
+    )
+    explicit_override_matches_default = bool(np.array_equal(explicit_override, default_path))
+
+    perturbed = np.asarray(
+        thermal_model.ieee738_ampacity(
+            g["T_amb_c"], g["wind_perp_ms"], g["ghi_wm2"], conductor, q_conv_override=live_q_conv * 1.5,
+        ),
+        dtype=float,
+    )
+    perturbed_override_changes_result = bool(not np.array_equal(perturbed, default_path))
+
+    sub_floor_attempt = _attempt_sub_floor_cooling_correction()
+
+    return {
+        "golden_fixture_path": golden_path,
+        "ampacity_matches_golden": ampacity_matches_golden,
+        "convective_term_matches_golden": convective_term_matches_golden,
+        "explicit_override_matches_default": explicit_override_matches_default,
+        "perturbed_override_changes_result": perturbed_override_changes_result,
+        "sub_floor_attempt": sub_floor_attempt,
+    }
