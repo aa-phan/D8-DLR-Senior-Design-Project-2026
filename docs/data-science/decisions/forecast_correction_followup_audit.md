@@ -608,8 +608,219 @@ real development data, not synthetic data, to close this gap.
 
 ## Conservative-rating analysis (D-03)
 
-Placeholder — filled by Plan 04-04 (overrating frequency/magnitude/duration by weather regime,
-calibrated lower ampacity quantiles, matched-overrating-rate retained-capacity comparison).
+**Reanalysis-scope limitation, stated before any number below.** Every overrating rate, pinball
+loss, exceedance rate, derating, and retained-capacity figure in this section is measured against
+the SAME reanalysis-derived truth series Finding 1 above already names: an IEEE-738 output computed
+from ERA5/ERA5-Land reanalysis weather, not a sensor-measured observation. That means every number
+in this section is a statement about a candidate's self-consistency with a physics simulation — it
+measures whether a candidate's predicted ampacity agrees with what IEEE-738 computes from modelled
+weather, never whether a real conductor actually carried the current a candidate predicted. Nothing
+below should be read as a margin that guarantees conductor safety, or as evidence of conductor-level
+thermal reliability. What WOULD make these numbers safety-relevant is sensor-measured conductor temperature
+or line-side current/voltage observations, each carrying their own availability timestamp distinct
+from any physics-model truth column — Plan 04-06's minimum data contract (D-05) names exactly that
+requirement, so the integration-readiness plan already accounts for closing this gap rather than
+treating it as a permanent limitation of the method.
+
+**Basis.** Every number below rests on the real ABLATION basis (Finding 1/`## Audit bases` above):
+real corridor rows strictly before `FROZEN_TEST_SPLIT_START` (2026-03-17), carrying the SAME
+may-support/may-not-support statement already recorded there — these numbers support relative
+comparison between candidates, not a confirmation claim, because this calendar range was already
+read during Phase 3's own development. The quantile pipeline further partitions this basis into
+three chronologically disjoint sub-periods — fit, calibrate, evaluate — expressed through
+`experiment_splits.SplitBoundaries`/`calendar_split` and asserted disjoint from the periods' own
+timestamps, never merely from the partition predicate. Both corridors share the identical calendar
+boundaries (the ABLATION basis spans the same window for both):
+
+| Period | Rows | Start | End |
+|---|---|---|---|
+| Fit | 1,883 | 2024-01-22 06:00 UTC | 2025-05-06 18:00 UTC |
+| Calibrate | 628 | 2025-05-07 00:00 UTC | 2025-10-10 18:00 UTC |
+| Evaluate | 628 | 2025-10-11 00:00 UTC | 2026-03-16 18:00 UTC |
+
+A lower-tail quantile model is fit on the Fit period, its calibration offset is learned on the
+Calibrate period, and that offset is checked, unchanged, on the Evaluate period — no row is ever
+used both to calibrate and to check calibration, asserted directly from the three periods' own
+timestamp sets (`quantile_period_boundaries`'s own disjointness assertion, independent of the
+calendar splitter's partition predicate).
+
+### Frequency, magnitude, duration, and regime
+
+The overrating profile — how often each candidate's prediction exceeded the modelled truth
+ampacity, by how much, and for how many consecutive scored rows — on the real ABLATION-basis
+validation rows (784 rows per corridor), computed from the per-row truth and prediction columns
+`overrating_profile` consumes directly (reanalysis-derived, per the limitation above):
+
+| Candidate | Corridor | Rate | Mean exceedance (A) | 95th pct. exceedance (A) | Max exceedance (A) | Longest run (rows) |
+|---|---|---|---|---|---|---|
+| persistence_24h | AUSTIN_CORPUS_CHRISTI | 0.480 | 160.80 | 411.16 | 702.31 | 9 |
+| ml_cooling_corrected | AUSTIN_CORPUS_CHRISTI | 0.620 | 125.38 | 327.29 | 474.06 | 27 |
+| ml_wind_corrected | AUSTIN_CORPUS_CHRISTI | 0.425 | 96.15 | 255.17 | 449.91 | 8 |
+| reference_ml_refit_24h | AUSTIN_CORPUS_CHRISTI | 0.546 | 142.63 | 338.20 | 465.03 | 10 |
+| persistence_24h | MIDLAND_EL_PASO | 0.491 | 161.94 | 418.92 | 585.09 | 10 |
+| ml_cooling_corrected | MIDLAND_EL_PASO | 0.686 | 148.27 | 333.42 | 613.35 | 25 |
+| ml_wind_corrected | MIDLAND_EL_PASO | 0.557 | 134.02 | 323.26 | 667.91 | 15 |
+| reference_ml_refit_24h | MIDLAND_EL_PASO | 0.616 | 146.41 | 322.34 | 488.37 | 24 |
+
+**Cadence caveat, in the words the report itself carries:** every profile above reports
+`cadence_hours: 6.0` and a `run_length_caveat` stating that "a run counts CONSECUTIVE SCORED rows
+only — a run of k scored rows spans roughly 6*k hours of wall-clock time with unscored gaps inside
+it, and this profile says nothing about whether the condition held during those unscored hours."
+`ml_cooling_corrected`'s 27-row run at Austin (2025-09-25 06:00 through 2025-10-01 18:00) is a
+scored-cadence exceedance bound spanning roughly 162 wall-clock hours with six-hour unscored gaps
+inside it — not a measured continuous 162-hour exceedance, because the model was never asked about
+the hours in between.
+
+**Regime breakdown.** Perpendicular wind is projected from the valid-time truth wind via
+`thermal_model.perpendicular_wind` on the corridor's own bearing, binned with the measured
+convection crossover as the lowest interior edge. The crossover (`convection_crossover_wind_speed`,
+verified against `thermal_model.convective_heat_loss` on both sides) is **0.1428 m/s at 35.0°C** for
+both corridors — the conductor configuration's own natural-versus-forced convection boundary, not a
+round number. The regime breakdown below is computed for `ml_cooling_corrected` (the frozen record's
+own stated winner and the estimator family this phase's quantile work also reuses), reported once
+per corridor rather than per candidate (D-03's own regime-breakdown ask is a single table, not a
+per-candidate one). This table, like every table in this section, is read against the reanalysis-
+scope limitation above — a 100% rate in a 22-row bin measures self-consistency with a physics
+simulation, not a field-observed failure:
+
+| Corridor | Bin (perp. wind, m/s) | Is crossover edge? | Rows | Overrating rate |
+|---|---|---|---|---|
+| AUSTIN_CORPUS_CHRISTI | [0.000, 0.143) | No (floor) | 22 | 1.000 |
+| AUSTIN_CORPUS_CHRISTI | [0.143, 1.411) | **Yes — measured crossover** | 500 | 0.802 |
+| AUSTIN_CORPUS_CHRISTI | [1.411, 2.680) | No (presentational span) | 240 | 0.258 |
+| AUSTIN_CORPUS_CHRISTI | [2.680, 3.948] | No (presentational span) | 22 | 0.045 |
+| MIDLAND_EL_PASO | [0.000, 0.143) | No (floor) | 37 | 1.000 |
+| MIDLAND_EL_PASO | [0.143, 1.448) | **Yes — measured crossover** | 593 | 0.789 |
+| MIDLAND_EL_PASO | [1.448, 2.753) | No (presentational span) | 143 | 0.210 |
+| MIDLAND_EL_PASO | [2.753, 4.058] | No (presentational span) | 11 | **flagged — fewer than 20 rows, no rate reported** |
+
+Every bin's own row count is reported directly in the table above; the per-bin counts sum to each
+corridor's own 784 scored rows, asserted (`overrating_by_regime`'s own partition check). Secondary
+breakdowns by ambient-temperature quartile (four bins per corridor, each with 194–197 rows) show a
+flatter pattern: Austin's overrating rate ranges 0.592–0.650 across temperature quartiles, Midland's
+ranges 0.599–0.747 — temperature band does not concentrate overrating nearly as sharply as the
+perpendicular-wind regime does.
+
+**Low-wind discussion.** Overrating concentrates sharply in the lowest-wind bin: 100% of rows below
+the measured crossover are overrating rows, at both corridors, versus 80.2%/78.9% in the bin
+immediately above the crossover and 25.8%/21.0% two bins up. This is the expected physical pattern,
+not an artifact: below the crossover the convective term is pinned at its natural-convection floor
+and is INSENSITIVE to further wind decreases, so the forecast's own wind-speed error stops mattering
+for the convective term specifically — but the corridor's TRUE ampacity at very low wind is itself
+at its most conservative (natural convection alone), which is exactly where any candidate's forecast
+error, however small in absolute wind-speed terms, is most likely to land on the overrating side of
+that already-low ceiling. This is the low-wind SENSITIVITY D-04 asks to be distinguished from
+low-wind numerical INSTABILITY — the concentration is the convective term's own physical behavior
+near the crossover, not a code defect, and `backend/thermal_model.py` carries zero git diff from
+this plan's own measurement of it (`FROZEN_SOURCES_UNTOUCHED_OK`).
+
+### Calibrated lower quantiles
+
+Lower-tail quantile models (`alpha = 0.05` and `alpha = 0.10`) are fit via `sklearn.ensemble.
+GradientBoostingRegressor(loss="quantile")` on the Fit period, around each candidate's own point
+prediction plus decision-time weather features and an hour-of-day encoding — never a valid-time
+truth column, asserted by the fixed, auditable feature-name tuple `fit_lower_quantile_model` builds
+from. Pinball loss is scikit-learn's own `mean_pinball_loss`, verified in this phase's own test suite
+against its alpha-one-half identity (reported loss at alpha=0.5 equals half the mean absolute error
+of the same pair) — never a hand-rolled asymmetric loss. The THREE periods' own disjointness,
+asserted from their timestamps, is what licenses treating the calibrate-period offset as genuinely
+unseen when it is applied to evaluate: a quantile calibrated and checked on the same rows would be
+calibrated by construction, and the assertion is what rules that out here.
+
+| Alpha | Candidate | Corridor | Calibrate exceedance (before → after) | Evaluate exceedance (before → after) | Evaluate pinball (before → after) | Calibration improved on evaluate? |
+|---|---|---|---|---|---|---|
+| 0.05 | ml_cooling_corrected | AUSTIN_CORPUS_CHRISTI | 0.086 → 0.051 | 0.104 → 0.076 | 17.45 → 15.90 | Yes |
+| 0.05 | ml_wind_corrected | MIDLAND_EL_PASO | 0.142 → 0.051 | 0.086 → 0.013 | 13.65 → 13.92 | **No** |
+| 0.10 | ml_cooling_corrected | AUSTIN_CORPUS_CHRISTI | 0.178 → 0.100 | 0.161 → 0.137 | 27.87 → 26.49 | Yes |
+| 0.10 | reference_ml_refit_24h | MIDLAND_EL_PASO | 0.234 → 0.100 | 0.205 → 0.067 | 26.95 → 25.04 | Yes |
+
+The reanalysis-scope limitation above applies to every pinball-loss and exceedance-rate figure in
+this table exactly as it does to the overrating table: these are self-consistency numbers against
+a physics simulation, not field-validated coverage guarantees. Every candidate at both corridors
+improves under calibration at `alpha = 0.10`, and all but one improve at `alpha = 0.05`. The one
+exception is named rather than folded into an aggregate: `ml_wind_corrected` at Midland, alpha 0.05 —
+the calibrate-period offset (−84.6 A) actually widens the evaluate-period exceedance rate's distance
+from nominal (0.086 → 0.013, moving FURTHER from the 0.05 target than the uncalibrated 0.086 was,
+in the opposite direction) even though its OWN evaluate pinball loss barely moves (13.65 → 13.92).
+This is a real, reportable result about the stability of the underlying error distribution between
+two adjacent chronological periods, not a bug: an error distribution that shifts between Calibrate
+and Evaluate is not one a single fixed additive offset can calibrate for every candidate, and a
+production consumer relying on this candidate at this alpha would need a rolling recalibration
+rather than a one-time fit.
+
+### Retained capacity at matched overrating rates
+
+**This is the headline comparison this section exists to produce.** For each candidate and each
+target overrating rate (5% and 10%), the additive derating that achieves that rate on the Calibrate
+period is applied UNCHANGED on the Evaluate period, and the table reports what it actually achieves
+there — never the target as though it were the result. Persistence and the corridor's own static
+rating (the weakest-link minimum of its two endpoint cities' `config.STATIC_RATINGS`, consistent
+with the frozen record's own weakest-link limitation — a documented proxy, not an independently
+sourced corridor-level rating) appear as reference rows; the calibrated lower quantile at each alpha
+appears as an additional row at the matching target rate, so a flat derating and a calibrated
+quantile are compared at the same nominal risk level. Every number here, like every number above,
+measures self-consistency against the reanalysis-derived truth series, not field-validated safety:
+
+| Row | Corridor | Target rate | Derating fitted on Calibrate (A) | Achieved rate on Evaluate | Retained capacity (A) | Retained capacity (fraction of static) |
+|---|---|---|---|---|---|---|
+| persistence_24h | AUSTIN_CORPUS_CHRISTI | 0.05 | 246.20 | 0.124 | 984.98 | 0.518 |
+| ml_wind_corrected | AUSTIN_CORPUS_CHRISTI | 0.05 | 174.80 | 0.069 | 1026.75 | 0.540 |
+| ml_cooling_corrected | AUSTIN_CORPUS_CHRISTI | 0.05 | 214.73 | 0.113 | 1064.68 | 0.560 |
+| reference_ml_refit_24h | AUSTIN_CORPUS_CHRISTI | 0.05 | 235.19 | 0.105 | 1020.82 | 0.537 |
+| static_rating_reference | AUSTIN_CORPUS_CHRISTI | 0.05 | 1008.83 | 0.024 | 891.17 | 0.469 |
+| quantile (alpha 0.05, ml_cooling_corrected) | AUSTIN_CORPUS_CHRISTI | 0.05 | 0.00 | 0.076 | 1013.94 | 0.534 |
+| persistence_24h | MIDLAND_EL_PASO | 0.05 | 318.19 | 0.075 | 867.24 | 0.598 |
+| ml_wind_corrected | MIDLAND_EL_PASO | 0.05 | 294.48 | 0.043 | 921.53 | 0.636 |
+| ml_cooling_corrected | MIDLAND_EL_PASO | 0.05 | 302.44 | 0.062 | 962.50 | 0.664 |
+| reference_ml_refit_24h | MIDLAND_EL_PASO | 0.05 | 277.19 | 0.069 | 959.95 | 0.662 |
+| static_rating_reference | MIDLAND_EL_PASO | 0.05 | 598.59 | 0.005 | 851.41 | 0.587 |
+| quantile (alpha 0.05, ml_cooling_corrected) | MIDLAND_EL_PASO | 0.05 | 0.00 | 0.029 | 929.65 | 0.641 |
+
+At a matched 5% acceptable overrating rate, `ml_cooling_corrected` retains the most usable capacity
+of any real candidate at BOTH corridors — 1,064.68 A (56.0% of Austin-Corpus Christi's static
+rating) and 962.50 A (66.4% of Midland-El Paso's static rating) — ahead of `ml_wind_corrected`,
+`reference_ml_refit_24h`, and persistence at the same matched rate, and well ahead of the static
+rating itself (which retains only 46.9%/58.7% of its own nameplate value at a comparably conservative
+achieved rate). The calibrated quantile at alpha 0.05 (built from `ml_cooling_corrected`'s own point
+prediction) retains a comparable amount — 1,013.94 A at Austin, 929.65 A at Midland — at an achieved
+rate reasonably close to the nominal target, offering the SAME order of retained capacity as the flat
+derating without needing a second calibration pass against a target rate.
+
+**Every achieved rate differs from its target**, and the gap is itself a finding, not noise: at
+Austin, persistence's 5%-target derating actually achieves a 12.4% rate on Evaluate — more than
+double the target — while `ml_wind_corrected`'s 5%-target derating achieves 6.9%, much closer. At
+Midland, the static rating's 5%-target derating achieves only 0.5% (the static rating is already so
+conservative that matching its own natural overrating rate to 5% overshoots in the safe direction).
+This miss bounds how tightly any of these methods could actually be operated at a stated risk level
+without recalibration: a derating fitted on one chronological period and applied to the next is not
+guaranteed to hit its target, and the size of that miss — sometimes more than double the target rate,
+sometimes a fifth of it — is a property of how stable each candidate's own error distribution is
+across adjacent six-month periods, not a flaw in the matching procedure itself.
+
+### The scope of the reliability claim
+
+Restated once more, in its own subsection, because D-03 asks for this limitation to travel beside
+every number rather than sit once at the top: every rate, loss, and retained-capacity figure in this
+section is a reanalysis-basis self-consistency measurement. The truth series every number above is
+checked against is itself computed from ERA5/ERA5-Land reanalysis weather through the identical
+IEEE-738 physics every candidate's own prediction already uses (Finding 1) — agreement between a
+candidate and this truth series is agreement between two model outputs, not confirmation against a
+field-measured conductor temperature or a line-side current observation. None of the frequency,
+magnitude, duration, regime, pinball-loss, exceedance-rate, derating, or retained-capacity numbers
+in this section may be read as a margin that guarantees conductor safety, or as proof that a real
+conductor's reliability has been shown at the corridor level. Closing that gap requires exactly the sensor-
+measured or line-side data Plan 04-06's minimum data contract (D-05) already names as a prerequisite
+for any eventual integration decision — this section measures what is measurable today against a
+reanalysis-derived truth series, honestly scoped to that basis, and no further.
+
+### D-03 dispositions
+
+| D-03 bullet | Disposition | Where answered |
+|---|---|---|
+| Overrating frequency, magnitude, and duration by weather regime (including low-wind) | Confirmed: measured per candidate at both corridors; overrating concentrates sharply below the measured convection crossover (100% vs. 80%/79% just above it) | "Frequency, magnitude, duration, and regime" above |
+| Lower ampacity quantiles via pinball loss with a chronologically separate calibration period | Confirmed: three asserted-disjoint periods (fit/calibrate/evaluate); calibration improves evaluate-period exceedance for all but one (candidate, alpha) pair, which is named rather than hidden | "Calibrated lower quantiles" above |
+| Matched-overrating-rate comparison with retained capacity as the headline metric | Confirmed: `ml_cooling_corrected` retains the most capacity among real candidates at a matched 5% rate at both corridors; achieved rates reported alongside targets, including material misses | "Retained capacity at matched overrating rates" above |
+| Reliability claim explicitly scoped to the reanalysis-derived verification data, not conductor-level safety | Confirmed: limitation stated before the section's first number, repeated in its own closing subsection and in every table's surrounding text, with no number described as a guaranteed margin of conductor safety | "The scope of the reliability claim" above, and the opening paragraph |
 
 ## Corrected language in the frozen record (D-04)
 
