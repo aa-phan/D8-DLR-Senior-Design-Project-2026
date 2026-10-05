@@ -1739,6 +1739,77 @@ inspected — unchanged from the original protocol.
 used only ABLATION-basis and SYNTHETIC fixtures; the FRESH basis's row count (16/corridor as of
 2026-10-05) was not re-checked in this specific pass beyond what the prior pass already recorded.
 
+### 5. Basis-selection gate, and a statistical reconciliation of "wind at Austin, cooling at Midland"
+
+A continuation pass, same day, closing part of the readiness protocol's own remaining checklist.
+**Built** (code, not analysis): `basis_evaluation_report`, the gated ABLATION/FRESH evaluation entry
+point item 1 of the prior readiness pass deliberately deferred rather than rush. `basis="FRESH"` now
+raises before touching any data unless `confirm_fresh_run=True` is passed explicitly, and even then
+refuses to score below `CONFIRMATION_MINIMUM_ROWS=590`. Tested exclusively on synthetic fixtures
+dated after `FROZEN_WINDOW_END` — see `ACKNOWLEDGEMENTS.md`'s entry for this session for the full
+list of what the gate does and does not yet cover (the quantile pipeline's own internal leakage
+probe extension and the threshold sweep's block-bootstrap CIs remain open, not built this pass).
+
+**The "wind at Austin, cooling at Midland" headline, checked against actual CIs.** Pulled directly
+from the persisted ABLATION-basis residuals (`data/experiment/audit_ablation_report_*.json`) via
+`block_length_sensitivity` (block length 1, same machinery as D-02):
+
+| Corridor | Point margin (wind MAE − cooling MAE) | 95% CI (block length 1) | Distinguishable from zero? |
+|---|---|---|---|
+| AUSTIN_CORPUS_CHRISTI | +5.53 A (cooling numerically ahead) | [−1.60, 12.60] | **No** |
+| MIDLAND_EL_PASO | −5.72 A (wind numerically ahead) | [−12.76, 1.31] | **No** |
+
+**Neither corridor's wind-vs-cooling MAE difference is statistically distinguishable from zero on
+the current ABLATION sample.** "Wind at Austin, cooling at Midland" accurately describes which
+candidate has the lower point estimate at each corridor; it should NOT be read as "wind is better
+at Austin" or "cooling is better at Midland" in a statistically supported sense — both are observed
+point differences inside a wide, zero-crossing interval. This is consistent with, and sharpens,
+D-02's own published pairwise table.
+
+**The Austin overrating-rate "tie" (5.1%/5.1% at the 5% nominal target), checked for what a tie
+even means here.** A normal-approximation 95% CI for a proportion at n=157 evaluation rows
+(`±1.96·√(p(1−p)/n)`) gives roughly **±3.4 percentage points** around either candidate's 5.1% point
+estimate. This is a simpler method than the block-bootstrap the protocol calls for (not built this
+pass — a real gap, not a substitute), but it already makes the point precisely: a ±3.4pp band around
+an exact point tie means the true underlying rates could differ by several points in either
+direction without it being visible in 157 rows. **Equal observed rates here do not establish equal
+underlying risk** — they establish that 157 rows is not enough to tell the difference either way.
+
+**Sample size, separated into the two distinct questions the prior pass left conflated:**
+
+- **(a) Tail-rate precision — unchanged at ~590 rows / ~150 days.** This is the binomial-proportion
+  calculation for estimating the ~5% achieved-overrating-rate tail to ±2 percentage points at 95%
+  confidence, inflated by this phase's own measured block-length width factor (1.3×). Nothing in
+  this pass's work changes it.
+- **(b) Minimum-detectable-difference — a separate, larger figure, derived here for the first time.**
+  Using the measured wind-vs-cooling MAE margin CI half-width at n=781 (≈7.1 A at Austin, ≈7.0 A at
+  Midland, block length 1) and the standard bootstrap-CI width scaling (half-width ∝ 1/√n), reaching
+  a half-width of **5 A** — treated here as the minimum ampacity margin a project owner would
+  plausibly consider decision-relevant, an assumption stated explicitly rather than left implicit —
+  requires **n ≈ 781 × (7.1/5)² ≈ 1,575 rows (≈ 394 days, ≈ 1.1 years)** at Austin and essentially
+  the same at Midland. **This is roughly 2.7× the tail-rate figure.** The ~590-row target is adequate
+  for checking compliance against an overrating-rate requirement; it is NOT adequate for reliably
+  detecting a 5 A (or smaller) margin between two near-tied candidates like wind and cooling at
+  either corridor. Whichever figure governs the actual confirmation run's stopping point is itself a
+  project-owner choice depending on which question matters more — this pass computes both, decides
+  neither.
+
+**Protocol versioning.** The frozen protocol (section 3, above) is **not re-frozen this pass** —
+nothing in items 1–4 above changed its candidate set, clipping decision, calibration method, or
+evaluation endpoint; the gate (item 1) is new *infrastructure* for executing the existing protocol,
+not a change to what the protocol says. The one number this pass adds alongside the protocol's
+existing ~590-row figure is the ~1,575-row minimum-detectable-difference figure above — stated here
+as a documented gap, not inserted into section 3's own frozen text, since which figure should
+actually govern the confirmation run's stopping point is the unresolved project-owner decision named
+throughout this document, not something this pass is entitled to decide by silently editing the
+protocol it does not own. The **operational risk threshold remains explicitly UNRESOLVED** — nothing
+in this pass selects or implies one; the threshold sweep (section 4, above) stands as the menu, not
+a recommendation.
+
+**Confirmation: no FRESH-basis outcome was inspected during this pass.** All new code in this
+session was exercised only against synthetic fixtures dated in the FRESH calendar range, never real
+FRESH data. The real FRESH row count was not re-checked beyond what the prior pass already recorded.
+
 ## References
 
 **The record under audit, and its appended amendment.**
