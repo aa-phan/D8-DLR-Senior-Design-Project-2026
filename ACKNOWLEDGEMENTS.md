@@ -999,6 +999,55 @@ time available risked touching FRESH-basis construction incorrectly, which was j
 than leaving it for a dedicated change. No bootstrap uncertainty interval was built for the
 achieved-overrating-rate statistic in the threshold sweep. No FRESH-basis outcome was inspected.
 
+### Session: 2026-10-05 (continued), conducted by Aaron Phan — building the deferred ABLATION/FRESH basis-selection gate (direct working-tree task, no worktree isolation)
+
+The prior pass deliberately deferred the ABLATION/FRESH basis-selection parameter rather than build
+it under time pressure. This session built it, carefully, in `backend/forecast_experiment_audit.py`:
+
+1. `basis_evaluation_report(corridor, *, basis="ABLATION", confirm_fresh_run=False, ...)` — the one
+   shared evaluation entry point. `basis="ABLATION"` is an unconditional pass-through to the
+   existing, already-audited `ablation_basis_report` (zero behavior change). `basis="FRESH"` raises
+   immediately, before touching any FRESH-basis data or even the manifest file, unless the caller
+   passes `confirm_fresh_run=True` explicitly — proven by a test that monkeypatches
+   `build_basis_manifest` to assert it is never called on the unflagged path.
+2. `_fresh_confirmation_report` — only reachable through the gate above. Refits wind/cooling/arm-5
+   on ABLATION-TRAIN alone (the frozen protocol's own rule: FRESH is confirmation-only, never a
+   training source), then scores against the real FRESH-basis frame. Enforces, in order: the
+   frozen-window guard under `basis="FRESH"`, a decision-time boundary assertion, a minimum-sample
+   gate (`CONFIRMATION_MINIMUM_ROWS = 590`, the protocol's own derived target) that refuses to score
+   an under-powered sample even with `confirm_fresh_run=True` — that flag grants permission to
+   attempt a read, not permission to skip the sample-size requirement — and the same Mode-B leakage
+   probe (with its own positive controls) `ablation_basis_report` already uses, re-verified against
+   this run's own fitted objects and FRESH-dated frame.
+3. Closed a pre-existing, previously-unflagged gap in `fresh_basis_attempt` itself: before this
+   session, any ordinary call to `ablation_basis_report` (which calls `fresh_basis_attempt`
+   internally just to attach row-count metadata) would have started silently scoring real FRESH
+   outcomes the moment the FRESH row count crossed that function's own 56-row smoke-test floor —
+   with no flag at all. Added the same `confirm_fresh_run` gate there; without it, reaching the
+   smoke-test floor now returns a `"confirmation_capable_unconfirmed"` branch with no scoring,
+   rather than proceeding.
+4. Six new tests, all on SYNTHETIC fixtures dated after `FROZEN_WINDOW_END` (never real FRESH data):
+   the gate rejecting an unknown basis, rejecting `confirm_fresh_run=True` paired with
+   `basis="ABLATION"` (a likely caller mistake), the unflagged-FRESH-raises-before-touching-data
+   proof, the minimum-row refusal, the ABLATION pass-through's shape parity, and one full
+   end-to-end positive-path run through the gated FRESH pipeline (required a date-range-aware
+   fake for `anchored_pair_frame` and a feature-frame fix so arm 5's lag features can see FRESH-
+   dated history; a handful of leading synthetic rows are dropped for lag warm-up and the count is
+   reported in the output, consistent with this phase's existing "honest absence" discipline rather
+   than imputing or raising).
+5. Did NOT complete, left open per this pass's own time allocation: extending the leakage probe
+   into the quantile pipeline's own internal stages (item 2 of the prior pass's directive); bootstrap
+   uncertainty intervals on the threshold sweep and the exact wind-vs-cooling capacity/risk numbers
+   with CIs (item 3); the two separately-derived sample-size figures, tail-rate vs.
+   minimum-detectable-difference (item 4); and re-freezing the protocol version (item 5) to reflect
+   this session's own changes. No FRESH-basis outcome was inspected — all new code was exercised only
+   against synthetic fixtures dated in the FRESH calendar range, never real FRESH data; the real
+   FRESH row count remains below `CONFIRMATION_MINIMUM_ROWS` regardless.
+
+**Verified, not merely trusted:** ran the full `backend/tests/forecast_experiment_audit_test.py`
+suite (116/116 pass, up from 110) and the full `backend/tests/` suite (757 passed, the same
+pre-existing 23 `corridor_discretization_test.py` failures as every prior pass, no new failures).
+
 ## Keeping This Updated
 
 This file should be reviewed and updated to reflect new AI-assisted work **before any significant commit** — i.e., before committing new features, substantial documentation, or non-trivial refactors produced with AI assistance. A commit is "significant" for this purpose if it would need describing in a standup/status update; trivial fixes (typos, formatting) don't require an update here.
