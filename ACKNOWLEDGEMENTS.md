@@ -1036,17 +1036,29 @@ it under time pressure. This session built it, carefully, in `backend/forecast_e
    reported in the output, consistent with this phase's existing "honest absence" discipline rather
    than imputing or raising).
 5. Did NOT complete, left open per this pass's own time allocation: extending the leakage probe
-   into the quantile pipeline's own internal stages (item 2 of the prior pass's directive); bootstrap
-   uncertainty intervals on the threshold sweep and the exact wind-vs-cooling capacity/risk numbers
-   with CIs (item 3); the two separately-derived sample-size figures, tail-rate vs.
-   minimum-detectable-difference (item 4); and re-freezing the protocol version (item 5) to reflect
-   this session's own changes. No FRESH-basis outcome was inspected — all new code was exercised only
-   against synthetic fixtures dated in the FRESH calendar range, never real FRESH data; the real
-   FRESH row count remains below `CONFIRMATION_MINIMUM_ROWS` regardless.
+   into the quantile pipeline's own internal stages (item 2 of the prior pass's directive); a full
+   block-bootstrap CI for the threshold sweep's achieved-overrating-RATE statistic specifically
+   (item 3, partial -- see next entry for what WAS done on item 3's "exact numbers" ask).
+
+Immediately following, same session: pulled the wind-vs-cooling MAE margin directly from the
+persisted ABLATION residuals via the existing `block_length_sensitivity` machinery (no new
+production code, pure analysis) and found neither corridor's difference is statistically
+distinguishable from zero -- "wind at Austin, cooling at Midland" from two passes ago is an accurate
+description of point estimates, not a statistically supported superiority claim at either corridor.
+Checked what the Austin 5.1%/5.1% overrating-rate "tie" means via a normal-approximation CI (a
+simpler method than the block-bootstrap the protocol calls for -- stated as a real gap, not
+substituted silently): roughly ±3.4 percentage points at n=157, meaning the tie reflects the sample
+size's own limits, not demonstrated equal risk. Derived, for the first time, item 4's second
+sample-size figure (minimum-detectable-difference, ~1,575 rows/~394 days for a stated 5A margin) as
+distinct from the tail-rate figure (~590 rows, unchanged) -- roughly 2.7x larger, a real and
+previously-unquantified gap. Documented why the protocol is NOT re-frozen this pass (nothing in
+items 1-4 changed what it says) and kept the operational risk threshold explicitly unresolved.
 
 **Verified, not merely trusted:** ran the full `backend/tests/forecast_experiment_audit_test.py`
 suite (116/116 pass, up from 110) and the full `backend/tests/` suite (757 passed, the same
 pre-existing 23 `corridor_discretization_test.py` failures as every prior pass, no new failures).
+The CI/tie/sample-size numbers above were computed directly from the persisted JSON reports and
+re-run through `block_length_sensitivity`, never hand-estimated.
 
 ## Keeping This Updated
 
