@@ -927,6 +927,38 @@ Claude Code was used to:
 `genuine_candidates_unchanged` is `True` before trusting the wiring. Ran the full audit test suite
 after the change.
 
+2. Close a decision-time leak independently found by computing, from first principles, where the
+   quantile pipeline's "calibrate" period (`overrating_basis_report`) actually fell relative to the
+   original ABLATION train/val boundary -- discovering that 75% of calibrate-period rows were scored
+   using point-model predictions from models already fit on those exact rows. Fixed by carving all
+   three quantile periods from `val_filtered` alone.
+3. Measure (not assume) the cooling-correction's "upward-clip safety gap": added
+   `cooling_correction_ceiling_finding`, which answers whether the correction represents physical
+   convection or a statistical residual adjustment (the latter, confirmed from its own feature set),
+   and quantifies on real data what a ceiling clip would change in ampacity, MAE/RMSE, and overrating
+   rate at both corridors -- deliberately without touching `forecast_correction_models.py` (frozen
+   production), since the measured effect size needs explicit human sign-off.
+4. Write a frozen confirmation protocol (new section in `forecast_correction_followup_audit.md`) for
+   the FRESH-basis experiment this entire phase has been building toward: reconciled the FRESH-period
+   start date, checked (row-count only, never outcome) that no FRESH result has been inspected,
+   derived a sample-size target from this phase's own measured block-bootstrap interval-width
+   inflation rather than asserting one, and proposed a primary selection rule explicitly flagged as
+   requiring project-owner sign-off.
+
+**Verified, not merely trusted (continued):** independently recomputed the quantile-pipeline boundary
+overlap by direct timestamp arithmetic before writing any code change, confirmed the fix on real data
+(all three periods now start at or after the original out-of-sample boundary), and confirmed the
+cooling-ceiling measurement through the real production function (`predict_cooling_correction`/
+`apply_cooling_correction`), not a reimplementation. Ran the full audit test suite
+(`backend/tests/forecast_experiment_audit_test.py`) after every change in this session; see each
+commit's own message for the exact pass count at that point.
+
+**What was explicitly left alone, per the task's own scope:** `forecast_correction_models.py` was read
+but never modified; no FRESH-basis data file was read for its outcome (only `fresh_basis_attempt`'s
+row count, to write the protocol); the D-02/D-03 numeric tables in the audit document were not
+regenerated to reflect the decision-time fix (flagged explicitly in the new document section as the
+one remaining blocker from this pass); and the next experiment this pass specifies was not started.
+
 ## Keeping This Updated
 
 This file should be reviewed and updated to reflect new AI-assisted work **before any significant commit** — i.e., before committing new features, substantial documentation, or non-trivial refactors produced with AI assistance. A commit is "significant" for this purpose if it would need describing in a standup/status update; trivial fixes (typos, formatting) don't require an update here.

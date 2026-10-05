@@ -1434,6 +1434,153 @@ short-horizon dispatch decision versus a day-ahead planning decision) rather tha
 superseding the other. Until that scoping decision is made, both horizons' own existing production
 and experimental paths should be left as they are.
 
+## Pre-confirmation readiness pass (2026-10-05)
+
+A follow-up to this document's own fact-check pass (above): not another audit, but implementation
+work closing specific gaps that pass left open, plus a frozen protocol for the one experiment this
+entire phase has been building toward. Three candidates (`ml_wind_corrected`, `ml_cooling_corrected`,
+`reference_ml_refit_24h`) remain live throughout — nothing here narrows to one winner. All numeric
+tables in `## Strengthened comparison (D-02)` and `## Conservative-rating analysis (D-03)` above
+**predate this pass's decision-time fix** (next subsection) and have not been regenerated — treat
+every pairwise margin and overrating-rate figure in those two sections as provisional until a future
+plan re-runs `ablation_basis_report`/`overrating_basis_report` and republishes them. This is the one
+concrete remaining blocker from this pass: the fix is real and tested, but its own corrected numbers
+have not yet replaced the stale ones above.
+
+### 1. Leakage closure
+
+**Wired the Mode-B leakage probe directly into `ablation_basis_report`'s own scoring path**
+(`backend/forecast_experiment_audit.py`). Previously the only leakage-probe run
+(`leakage_probe_coverage_report`, Plan 04-02) verified a *separately constructed* frame and fitted
+objects — never the exact `fitted["wind_model"]`/`["cooling_model"]`/`["arm5_estimator"]` and
+`city_a_frame`/`city_b_frame` that actually produce every number in D-02/D-03. The function now runs
+the probe on its own objects every call, with two positive controls (a deliberately sabotaged arm
+reading `truth_wind_speed` directly, and the oracle) that must both fire before a "no leak" verdict is
+trusted — and raises if a genuine candidate's prediction changes under truth-column sabotage. A new
+test (`test_ablation_basis_report_leakage_probe_catches_a_real_injected_leak`) proves this by
+monkeypatching `ml_wind_corrected` to read truth directly and asserting the integrated probe refuses
+to produce a report.
+
+**Found and closed a real decision-time leak in the quantile pipeline's calibration stage.** The
+three-period fit/calibrate/evaluate split (`overrating_basis_report`) previously carved its periods
+from the *combined* ABLATION train+val frame via a fresh 60/20/20 split. The original train/val
+boundary (where the point models wind/cooling/arm5 stop having seen a label) sits at
+**2025-09-01T18:36** — inside the resulting "calibrate" period's own span (2025-05-07 to
+2025-10-10). Measured directly: **472 of 628 calibrate-period rows (75%) were scored using
+point-model predictions from models that had already seen those exact rows' own labels during
+fitting** — not out-of-sample for the calibration stage despite being labeled so. (This is very
+likely the exact discrepancy behind the "September 1, 18:00 vs. decision time" question that
+prompted this pass — the two September 1 timestamps are the original train/val boundary and the
+re-split calibrate period's start, five days apart, not a single mislabeled value.) The "fit" period
+was 100% in-sample (expected there). **Fix:** all three periods now carve from `val_filtered` alone —
+the one range genuinely out-of-sample for every fitted point model. Verified directly: all three
+periods now start at or after the original out-of-sample boundary. Smaller basis (~784 rows instead
+of ~3,139) but zero in-sample contamination.
+
+**Decision-time vs. valid-time boundary check (the other half of this category):** the three-way
+train/val/test split is computed on `datetime_utc` (valid time); `anchor_datetime_utc` (decision
+time) is valid time minus a constant lead (24h), so strict disjointness on valid time implies strict
+disjointness on decision time by the same constant shift — already covered by Plan 04-02's
+`split_boundary_audit` (measured zero shared timestamps). No separate gap found here.
+
+**Not closed in this pass:** the two-stage quantile pipeline's own internal leakage probe (i.e.,
+running the Mode-B probe *inside* `overrating_basis_report`/`quantile_calibration_report` the same
+way it is now run inside `ablation_basis_report`) was not added — the decision-time fix above closes
+the more serious of the two gaps in that pipeline, but the probe itself is not yet wired into it.
+
+### 2. The cooling-correction ceiling
+
+Added `cooling_correction_ceiling_finding` (`backend/forecast_experiment_audit.py`), which answers
+both halves of the open question precisely, with measurement rather than assumption:
+
+**What the correction represents:** an **effective statistical residual adjustment**, not physical
+convection. `predict_cooling_correction`'s feature set (`_cooling_feature_frame`) is the forecast's
+own `q_conv`, forecast weather, the anchor observation's own `q_conv`, and an hour-of-day encoding —
+it learns a correction pattern to the physics model's own output and never recomputes convective heat
+transfer independently.
+
+**What the gap actually is:** `predict_cooling_correction` (`backend/forecast_correction_models.py:
+535-553`) rejects only a non-positive corrected term — there is no ceiling, and the override is never
+re-floored against `convective_heat_loss`'s own natural-convection floor before reaching
+`ieee738_ampacity` (`:567-573`). This is the complementary, *upward* direction to Plan 04-05's
+already-documented sub-floor (downward) finding.
+
+**Measured, on real ABLATION validation rows, what a `min(corrected, forecast)` ceiling clip would
+change:**
+
+| Corridor | Rows affected | Mean/max excess (W/m) | Overrating rate: unclipped → clipped | MAE: unclipped → clipped | RMSE: unclipped → clipped |
+|---|---|---|---|---|---|
+| AUSTIN_CORPUS_CHRISTI | 51.3% (804/1,568) | 15.3 / 89.6 | 53.3% → 42.0% | 107.0 → 114.4 | 141.4 → 151.1 |
+| MIDLAND_EL_PASO | 42.7% (670/1,568) | 12.9 / 69.4 | 48.5% → 42.2% | 143.6 → 146.9 | 182.4 → 189.2 |
+
+A ceiling clip meaningfully reduces the overrating rate at both corridors — but **it is not
+automatically conservative**: MAE and RMSE both get *worse* under the clip at both corridors. Clipping
+trades point accuracy for tail safety. This function deliberately does **not** modify
+`forecast_correction_models.py` (frozen production) or apply the clip anywhere in the real scoring
+path — the effect size is large enough (ampacity delta up to several hundred amps on individual rows)
+that applying it to production code needs explicit project-owner sign-off, not an audit-side patch.
+
+### 3. Frozen confirmation protocol
+
+**Date reconciliation.** `FROZEN_WINDOW_END` is `2026-09-29`; the FRESH basis is real rows strictly
+after that date, so the reserved period's correct start is **2026-09-30**, not 2026-10-01 (an earlier
+report's informal rounding). As of this pass (2026-10-05, UTC), the FRESH basis has **16 rows per
+corridor** — row *count* only, checked to write this protocol; **no FRESH-basis outcome (any
+candidate's score, margin, or ordering) has been inspected at any point in this audit's history.**
+Row-count-only checks are not outcome-peeking and carry no risk of biasing the eventual read.
+
+**Protocol.**
+
+- **Training/calibration cutoffs:** unchanged from this phase's own ABLATION-basis convention —
+  wind/cooling/arm5 fit on ABLATION-TRAIN rows alone (through 2025-09-01T18:36); the quantile models'
+  fit/calibrate periods carve from ABLATION-VAL alone (2025-09-02 onward), per the fix above. **Not**
+  re-fit on FRESH-inclusive data — the FRESH period is confirmation-only, never a training source,
+  so the fitted objects under test are frozen before this protocol begins.
+- **Candidates:** `ml_wind_corrected`, `ml_cooling_corrected`, `reference_ml_refit_24h`, scored against
+  `raw_forecast` and `persistence_24h` baselines — same hyperparameters as `WIND_CONFIGURATION`/
+  `COOLING_CONFIGURATION`, unchanged.
+- **Forecast availability rule:** unchanged from the existing harness — `_resolve_window_end`'s own
+  "yesterday UTC" resolution and the six-hourly exact-lead filter, run live at confirmation time, never
+  backfilled against a different weather-model run than what was actually available at each row's own
+  decision time.
+- **Missing-data handling:** a corridor-day with fewer than the exact-lead filter's expected 4
+  rows/day is reported as a partial day, never interpolated or imputed — consistent with this phase's
+  existing "honest absence" discipline (Plan 04-01).
+- **Evaluation window:** every FRESH-basis row from 2026-09-30 through the day the minimum sample
+  (below) is reached, inclusive.
+
+**Primary selection rule (requires project-owner sign-off — this is a risk-tolerance choice, not an
+audit-resolved one):** a candidate is eligible only if its achieved overrating rate at the nominal 5%
+calibration target does not exceed **8%** on the FRESH evaluation sample. Among eligible candidates,
+the primary ranking criterion is retained capacity (mean derated ampacity); MAE/RMSE are secondary,
+reported but not decisive. **The 8% ceiling is this pass's own proposed number, not a settled one** —
+D-03's own measurement already found cooling's ABLATION-basis achieved rate (11.3%/6.2%) exceeding a
+plausible 8% bar at one corridor, so the project owner may reasonably choose a different number; what
+must not happen is choosing it after seeing the FRESH result.
+
+**Comparison method:** direct paired comparisons between every candidate pair (not only each vs.
+baseline), via the existing `paired_block_bootstrap_margin`/`block_length_sensitivity` machinery
+(already temporal-dependence-aware). With 3 real candidates compared pairwise (3 pairs) at 2
+corridors (6 tests), apply a Bonferroni correction: significance threshold α = 0.05/6 ≈ 0.0083 per
+test, not the uncorrected 0.05 this phase's own D-02 section used.
+
+**Sample size — treat 56 rows/14 days as a checkpoint, not the stopping point.** A standard
+binomial-proportion sample-size calculation for estimating a rate near 5% to within ±2 percentage
+points at 95% confidence gives n ≈ 1.96² × 0.05 × 0.95 / 0.02² ≈ **456 rows** under i.i.d. sampling.
+This phase's own block-length sensitivity work (D-02) measured interval-width inflation factors of
+1.03×–1.57× (Austin) and 0.98×–1.31× (Midland) from temporal dependence at block lengths up to 28.
+Applying the conservative end of that inflation (×1.3) to the i.i.d. figure gives a target of
+**~590 rows**, i.e. **~148 days** at 4 scored rows/day — call it **150 days** (reaching
+approximately **2027-02-27** from the 2026-09-30 start). 56 rows/14 days remains useful as an early
+smoke test (confirms the pipeline runs end to end on real fresh data) but is roughly **8× too short**
+to resolve the overrating-rate tail with reasonable precision.
+
+**The protocol explicitly permits "no clear winner" and "no candidate meets the 8% requirement" as
+valid outcomes** — the comparison is not run again, re-scoped, or re-parameterized if the first full
+read is unfavorable. **Anti-peeking discipline:** no interim look at the FRESH-basis *outcome* (as
+opposed to its row count) before the full ~590-row sample is reached; no early stop triggered by a
+favorable interim read.
+
 ## References
 
 **The record under audit, and its appended amendment.**
