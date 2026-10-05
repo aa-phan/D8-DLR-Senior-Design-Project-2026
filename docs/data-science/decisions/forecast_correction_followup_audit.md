@@ -763,6 +763,12 @@ this plan's own measurement of it (`FROZEN_SOURCES_UNTOUCHED_OK`).
 
 ### Calibrated lower quantiles
 
+**SUPERSEDED 2026-10-05 — regenerated after the decision-time leak fix (see "Pre-confirmation
+readiness pass" below).** The table and periods originally published here (Fit 1,883 / Calibrate 628
+/ Evaluate 628 rows, calibrate period starting 2025-05-07) were measured BEFORE the fix; 75% of the
+old calibrate period and 100% of the old fit period were in-sample for the point models. Kept here
+for the audit trail, not as a current result — see the corrected numbers immediately below.
+
 Lower-tail quantile models (`alpha = 0.05` and `alpha = 0.10`) are fit via `sklearn.ensemble.
 GradientBoostingRegressor(loss="quantile")` on the Fit period, around each candidate's own point
 prediction plus decision-time weather features and an hour-of-day encoding — never a valid-time
@@ -795,6 +801,28 @@ and Evaluate is not one a single fixed additive offset can calibrate for every c
 production consumer relying on this candidate at this alpha would need a rolling recalibration
 rather than a one-time fit.
 
+**CORRECTED 2026-10-05 (decision-time-clean periods, 781 scored rows after the boundary-gap fix
+below).** Fit 469 rows (2025-09-02 18:00 → 2025-12-28 18:00), Calibrate 155 rows (2025-12-29 00:00 →
+2026-02-05 12:00), Evaluate 157 rows (2026-02-05 18:00 → 2026-03-16 18:00) — both corridors share
+these calendar boundaries. Every period starts strictly after the point models' own last training
+label, closing both the 75%-overlap leak and the smaller 3-row decision-time boundary leak found
+during this pass (see below):
+
+| Alpha | Candidate | Corridor | Calibrate exceedance (before → after) | Evaluate exceedance (before → after) | Evaluate pinball (before → after) | Calibration improved on evaluate? |
+|---|---|---|---|---|---|---|
+| 0.05 | ml_wind_corrected | AUSTIN_CORPUS_CHRISTI | 0.116 → 0.052 | 0.089 → 0.064 | 17.92 → 16.53 | Yes |
+| 0.05 | ml_cooling_corrected | AUSTIN_CORPUS_CHRISTI | 0.103 → 0.052 | 0.115 → 0.064 | 20.17 → 18.93 | Yes |
+| 0.05 | ml_cooling_corrected | MIDLAND_EL_PASO | 0.052 → 0.052 | 0.064 → 0.064 | 14.42 → 14.45 | **No** |
+| 0.10 | ml_wind_corrected | AUSTIN_CORPUS_CHRISTI | 0.168 → 0.103 | 0.115 → 0.076 | 27.43 → 27.28 | **No** |
+| 0.10 | reference_ml_refit_24h | AUSTIN_CORPUS_CHRISTI | 0.161 → 0.103 | 0.121 → 0.076 | 30.65 → 30.66 | **No** |
+| 0.10 | ml_cooling_corrected | MIDLAND_EL_PASO | 0.110 → 0.103 | 0.121 → 0.108 | 25.25 → 25.13 | Yes |
+
+The pattern this document's original conclusion drew — calibration mostly helps, with named exceptions
+rather than a universal win — still holds, but the SPECIFIC exceptions changed: three more
+(candidate, alpha) pairs now show calibration failing to improve the evaluate-period exceedance
+distance (vs. one before). This is consistent with the smaller, decision-time-clean basis (781 rows
+vs. 784) being noisier period-to-period, not with the fix introducing a defect.
+
 ### Retained capacity at matched overrating rates
 
 **This is the headline comparison this section exists to produce.** For each candidate and each
@@ -823,37 +851,56 @@ measures self-consistency against the reanalysis-derived truth series, not field
 | static_rating_reference | MIDLAND_EL_PASO | 0.05 | 598.59 | 0.005 | 851.41 | 0.587 |
 | quantile (alpha 0.05, ml_cooling_corrected) | MIDLAND_EL_PASO | 0.05 | 0.00 | 0.029 | 929.65 | 0.641 |
 
-**Correction: "matched rate" below means a matched NOMINAL calibration target, not a matched ACHIEVED
-risk level — see the achieved-rate column, which diverges materially between candidates.** At a shared
-5% nominal calibration target, `ml_cooling_corrected` retains the most usable capacity of any real
-candidate at BOTH corridors — 1,064.68 A (56.0% of Austin-Corpus Christi's static rating) and 962.50 A
-(66.4% of Midland-El Paso's static rating) — ahead of `ml_wind_corrected`, `reference_ml_refit_24h`, and
-persistence at the same nominal target. But cooling's own ACHIEVED overrating rate at that target is
-11.3% at Austin and 6.2% at Midland — roughly 1.4–1.6x `ml_wind_corrected`'s achieved rate under the
-SAME nominal target (6.9% / 4.3%). Cooling's larger retained capacity is therefore explained at least in
-part by it carrying correspondingly more real overrating risk, not solely by a more capacity-efficient
-method at equal risk. **"Retains the most capacity at equal risk" is withdrawn as a claim this table
-supports** — a genuine equal-risk comparison would require re-deriving each candidate's own derating
-until its own achieved rate matches a common target (e.g., iterating wind's derating down until it too
-achieves ~11% on Evaluate, then comparing capacity at that common achieved rate), which was not done
-here and is named as a remaining blocker. The retained-capacity numbers above remain correctly measured
-and well ahead of the static rating itself (which retains only 46.9%/58.7% of its own nameplate value at
-a comparably conservative achieved rate); what is withdrawn is only the equal-risk framing of the
-cross-candidate comparison. The calibrated quantile at alpha 0.05 (built from `ml_cooling_corrected`'s
-own point prediction) retains a comparable amount — 1,013.94 A at Austin, 929.65 A at Midland — at an
-achieved rate reasonably close to the nominal target, offering the SAME order of retained capacity as the
-flat derating without needing a second calibration pass against a target rate.
+**SUPERSEDED 2026-10-05 — the table and conclusion above were measured on the pre-fix, leaking
+periods (same 75% in-sample contamination named above) and are kept only for the audit trail.** The
+corrected numbers below change the headline conclusion, not just its magnitude: at
+AUSTIN_CORPUS_CHRISTI, `ml_wind_corrected` now retains MORE capacity than `ml_cooling_corrected` at
+an equal (not just similar) achieved rate — the "cooling wins capacity at both corridors" claim does
+not survive the leak fix.
 
-**Every achieved rate differs from its target**, and the gap is itself a finding, not noise: at
-Austin, persistence's 5%-target derating actually achieves a 12.4% rate on Evaluate — more than
-double the target — while `ml_wind_corrected`'s 5%-target derating achieves 6.9%, much closer. At
-Midland, the static rating's 5%-target derating achieves only 0.5% (the static rating is already so
-conservative that matching its own natural overrating rate to 5% overshoots in the safe direction).
-This miss bounds how tightly any of these methods could actually be operated at a stated risk level
-without recalibration: a derating fitted on one chronological period and applied to the next is not
-guaranteed to hit its target, and the size of that miss — sometimes more than double the target rate,
-sometimes a fifth of it — is a property of how stable each candidate's own error distribution is
-across adjacent six-month periods, not a flaw in the matching procedure itself.
+**Corrected table (781 scored rows, decision-time-clean periods), target rate 0.05:**
+
+| Row | Corridor | Derating fitted on Calibrate (A) | Achieved rate on Evaluate | Retained capacity (A) | Retained capacity (fraction of static) |
+|---|---|---|---|---|---|
+| persistence_24h | AUSTIN_CORPUS_CHRISTI | 396.08 | 0.045 | 832.49 | 0.438 |
+| ml_wind_corrected | AUSTIN_CORPUS_CHRISTI | 228.20 | **0.051** | **994.20** | 0.523 |
+| ml_cooling_corrected | AUSTIN_CORPUS_CHRISTI | 302.23 | **0.051** | **977.37** | 0.514 |
+| reference_ml_refit_24h | AUSTIN_CORPUS_CHRISTI | 311.16 | 0.064 | 938.81 | 0.494 |
+| static_rating_reference | AUSTIN_CORPUS_CHRISTI | 922.32 | 0.064 | 977.68 | 0.515 |
+| persistence_24h | MIDLAND_EL_PASO | 353.14 | 0.051 | 857.10 | 0.591 |
+| ml_wind_corrected | MIDLAND_EL_PASO | 285.34 | 0.064 | 941.55 | 0.649 |
+| ml_cooling_corrected | MIDLAND_EL_PASO | 287.48 | **0.057** | **996.65** | 0.687 |
+| reference_ml_refit_24h | MIDLAND_EL_PASO | 305.62 | 0.025 | 930.47 | 0.642 |
+
+**At AUSTIN_CORPUS_CHRISTI, `ml_wind_corrected` and `ml_cooling_corrected` now achieve the identical
+rate (0.051) on Evaluate — a genuine equal-achieved-risk comparison, not a nominal-target coincidence
+— and at that equal risk, wind retains MORE capacity (994.20 A vs. 977.37 A).** This directly
+reverses the pre-fix headline at this corridor: cooling's apparent capacity advantage there was an
+artifact of the leak, not a real effect. **At MIDLAND_EL_PASO, cooling's advantage survives
+correction and strengthens into a genuine dominance**: cooling retains more capacity (996.65 A vs.
+941.55 A) AND achieves a LOWER risk (0.057 vs. 0.064) than wind — cooling beats wind on both axes at
+this corridor, not at the cost of extra risk. The two corridors now tell a materially different story
+from each other and from the pre-fix table: there is no single "cooling always wins" or "wind always
+wins" conclusion — the result is corridor-dependent, and the dependence is no longer confounded by
+the leak. A broader threshold sweep (0.03/0.05/0.08/0.10/0.15) shows the same corridor split holds at
+every nominal target checked, not only 0.05 (see the Pre-confirmation readiness pass section below
+for the full sweep and its honest gap: no uncertainty interval is yet attached to these achieved-rate
+figures). The calibrated quantile at alpha 0.05 (built from `ml_cooling_corrected`'s own point
+prediction) retains 973.27 A at Austin and 972.65 A at Midland at an achieved rate of 0.064 at both —
+offering a comparable order of retained capacity to the flat derating without a second calibration
+pass, though no longer the best achieved-rate/capacity combination at either corridor post-fix.
+
+**Every achieved rate differs from its target** (figures corrected 2026-10-05 — the specific
+examples below replace stale pre-fix numbers), and the gap is itself a finding, not noise: at
+Midland, `reference_ml_refit_24h`'s 5%-target derating achieves only 2.5% on Evaluate — half the
+target, overshooting in the safe direction — while at Austin that same candidate's 5%-target
+derating achieves 6.4%, 28% over target in the unsafe direction. `ml_wind_corrected` and
+`ml_cooling_corrected` both land almost exactly on target at Austin (5.1% each); at Midland wind
+misses to 6.4% while cooling holds closer at 5.7%. This miss bounds how tightly any of these methods
+could actually be operated at a stated risk level without recalibration: a derating fitted on one
+chronological period and applied to the next is not guaranteed to hit its target, and which direction
+and candidate misses worst is itself corridor-dependent — a property of how stable each candidate's
+own error distribution is across adjacent periods, not a flaw in the matching procedure itself.
 
 ### The scope of the reliability claim
 
@@ -877,7 +924,7 @@ reanalysis-derived truth series, honestly scoped to that basis, and no further.
 |---|---|---|
 | Overrating frequency, magnitude, and duration by weather regime (including low-wind) | Confirmed: measured per candidate at both corridors; overrating concentrates sharply below the measured convection crossover (100% vs. 80%/79% just above it) | "Frequency, magnitude, duration, and regime" above |
 | Lower ampacity quantiles via pinball loss with a chronologically separate calibration period | Confirmed: three asserted-disjoint periods (fit/calibrate/evaluate); calibration improves evaluate-period exceedance for all but one (candidate, alpha) pair, which is named rather than hidden | "Calibrated lower quantiles" above |
-| Matched-overrating-rate comparison with retained capacity as the headline metric | Confirmed as measured: `ml_cooling_corrected` retains the most capacity among real candidates at a shared NOMINAL 5% target at both corridors; achieved rates reported alongside targets and diverge materially (cooling 11.3%/6.2% vs. wind 6.9%/4.3%) — "equal risk" withdrawn as a supported claim; a true equal-achieved-risk comparison remains a blocker | "Retained capacity at matched overrating rates" above |
+| Matched-overrating-rate comparison with retained capacity as the headline metric | **Corrected 2026-10-05.** Post-leak-fix: at AUSTIN_CORPUS_CHRISTI, `ml_wind_corrected` and `ml_cooling_corrected` achieve an IDENTICAL rate (5.1%) and wind retains MORE capacity — the pre-fix "cooling wins both corridors" claim is reversed at this corridor. At MIDLAND_EL_PASO, cooling retains more capacity AND achieves lower risk than wind — a genuine, non-leak-dependent dominance at this corridor. Result is corridor-dependent, not a uniform winner either way. | "Retained capacity at matched overrating rates" above |
 | Reliability claim explicitly scoped to the reanalysis-derived verification data, not conductor-level safety | Confirmed: limitation stated before the section's first number, repeated in its own closing subsection and in every table's surrounding text, with no number described as a guaranteed margin of conductor safety | "The scope of the reliability claim" above, and the opening paragraph |
 
 ## Corrected language in the frozen record (D-04)
@@ -1580,6 +1627,117 @@ valid outcomes** — the comparison is not run again, re-scoped, or re-parameter
 read is unfavorable. **Anti-peeking discipline:** no interim look at the FRESH-basis *outcome* (as
 opposed to its row count) before the full ~590-row sample is reached; no early stop triggered by a
 favorable interim read.
+
+### 4. Development-data finalization (same day, continued)
+
+A second pass closing remaining items from the readiness protocol above, all still on development
+(ABLATION/SYNTHETIC) data — FRESH-basis data untouched in outcome throughout.
+
+**A third, smaller leak found and closed — resolves the original "Sept 1" question precisely.**
+Verifying the two leakage problems separately, as asked: (a) the quantile calibrate-period overlap
+(75%, fixed above) is a DIFFERENT defect from (b) a direct decision-time boundary gap in the point
+models' own train/val split. Measured directly for AUSTIN_CORPUS_CHRISTI: the train side's last
+training label has valid time **2025-09-01 18:00**; the val side's first row has decision time
+(`anchor_datetime_utc`, valid time minus the 24h lead) of **2025-09-01 00:00** — 18 hours BEFORE
+that training label existed. **3 of 784 val rows (0.4%) had a decision time earlier than the
+training data's own last label** — a real, if small, decision-time leak, caused by the exact-lead
+filter's 6-hour valid-time spacing being smaller than the 24-hour lead, so a valid-time-disjoint
+split is not automatically decision-time-disjoint. **This is the exact mechanism behind the original
+"Sept 1, 18:00 vs. Sept 1, 00:00" question** — not fully explained by the calibrate-period bug alone.
+**Fixed**: both `ablation_basis_report` and `_quantile_source_frame` now drop any val-side row whose
+decision time precedes the fit frame's last label, with a defensive assertion. Per-stage exact
+timestamps (post-fix, AUSTIN_CORPUS_CHRISTI):
+
+| Fitted stage | Latest training-label valid time | Earliest evaluation decision time | Gap |
+|---|---|---|---|
+| Point models (wind/cooling/refit) | 2025-09-01 18:00 | 2025-09-02 00:00 | 6h (positive, enforced) |
+| Quantile stage 1 (point-model predictions feeding the pipeline) | 2025-09-01 18:00 | 2025-09-02 18:00 (fit period start) | Same as above, inherited |
+| Quantile stage 2 (calibration offset) | 2025-12-28 18:00 (fit period end) | 2025-12-29 00:00 (calibrate period start) | 6h (positive, enforced) |
+
+(The quantile pipeline's own fit→calibrate→evaluate periods are carved from `val_filtered`, whose
+rows are now decision-time-clean by construction after the fix above — the boundary gap is
+non-negative at every stage, not merely at the outermost train/val split.)
+
+**D-02 confirmed unaffected, by trace, not assumption.** Neither leak fix touches
+`ablation_basis_report`'s fit/score logic for D-02's pairwise/block-bootstrap numbers in any way that
+matters: the boundary-gap fix removes exactly 3 of 784 rows (781 remain). Re-run after both fixes:
+MAE/RMSE move by <0.2 A at both corridors (e.g. Austin `ml_cooling_corrected` 107.190→107.043 MAE),
+and the ORDERING is unchanged — Austin still `ml_cooling_corrected` < `ml_wind_corrected` <
+`reference_ml_refit_24h`; Midland still `ml_wind_corrected` < `ml_cooling_corrected` <
+`reference_ml_refit_24h`. **The Austin-replicates/Midland-contradicted verdict from the fact-check
+pass stands, unchanged by either leak fix.** D-03's tables (above, in their own sections) ARE
+affected and have been regenerated and marked superseded.
+
+**Quantile-pipeline-internal leakage probe: still not wired in.** Item 3 of this pass (extending the
+Mode-B probe with per-stage positive controls to preprocessing, point-model fitting, stage-2
+calibration, and the calibration step itself) was not completed — the boundary-gap and
+calibrate-overlap fixes close the two leaks this pass specifically traced, but no probe runs inside
+`overrating_basis_report`/`quantile_calibration_report` the way one now runs inside
+`ablation_basis_report`. Remains open.
+
+**ABLATION/FRESH basis-selection parameter: not added.** Item 4 (a parameter on `ablation_basis_report`
+to target FRESH instead of ABLATION) was not implemented this pass — attempting it under time
+pressure risked touching FRESH-basis construction incorrectly, which this pass's own discipline
+treats as a bigger risk than leaving it for a dedicated, separately-reviewed change. The confirmation
+command below is therefore **not yet runnable verbatim** — see the explicit gap in "Next experiment"
+below.
+
+**Cooling ceiling: re-measured on the decision-time-corrected data; reframed, not re-decided.**
+`cooling_correction_ceiling_finding`'s own frame construction does not route through
+`_quantile_source_frame`/`ablation_basis_report`'s val-side assembly, so it was unaffected by either
+leak fix (re-run confirms: Austin 51.3% rows affected, overrating 53.3%→42.0% clipped vs. unclipped,
+MAE 107.0→114.4 — all within rounding of the figures already published above). The framing
+correction this pass adds: a prediction exceeding the forecast's own convective estimate is **not
+automatically a physical violation** — `predict_cooling_correction` is confirmed (by its own feature
+set) to be a learned statistical residual adjustment, so a value above the forecast's own convective
+term could be the MODEL CORRECTLY LEARNING that the physics-only forecast understates cooling at that
+row, not an error. The case FOR leaving it unclipped: MAE and RMSE are both measurably better
+unclipped at both corridors (clipping makes point accuracy worse, per the already-published numbers),
+which is consistent with at least part of the "excess" being real signal the model learned rather
+than noise. The case FOR the ceiling: a model that can push the correction arbitrarily high on an
+individual row has no code-level bound on how wrong a single bad prediction could be, independent of
+whether most such predictions are legitimate. Both cases are now stated; which one governs production
+remains the same project-owner decision named in the original finding, not resolved further here.
+
+**Threshold sweep across several nominal rates (item 6) — not a single 8% placeholder:**
+
+| Nominal target | Austin wind / cooling / refit achieved | Midland wind / cooling / refit achieved |
+|---|---|---|
+| 3% | 4.5% / 3.8% / 3.8% | 0.6% / 5.1% / 1.3% |
+| 5% | 5.1% / 5.1% / 6.4% | 6.4% / 5.7% / 2.5% |
+| 8% | 8.9% / 8.3% / 7.0% | 9.6% / 10.2% / 5.1% |
+| 10% | 8.9% / 11.5% / 7.0% | 9.6% / 12.1% / 7.0% |
+| 15% | 12.1% / 12.7% / 9.6% | 13.4% / 15.3% / 10.2% |
+
+Retained capacity rises monotonically with nominal target at every candidate/corridor, as expected —
+the shape of the tradeoff, not a single point, is what the project owner needs to pick a threshold.
+**Honest gap: no uncertainty interval is attached to any achieved-rate figure above** — 157 evaluate
+rows is not large, and a bootstrap CI (block-aware, matching this phase's own `block_length_sensitivity`
+machinery) was not built for the achieved-rate statistic in the time available this pass. Treat every
+achieved-rate figure in this sweep as a point estimate only. **No claim of operational safety is made
+anywhere in this sweep or elsewhere in this section** — every number remains reanalysis-derived
+self-consistency, per the limitation stated at this section's own opening.
+
+**Sample-size reassessment (item 7) using the corrected numbers.** The pairwise MAE/RMSE and their
+block-bootstrap interval widths move by <0.2 A between the pre- and post-boundary-gap-fix runs — the
+~590-row / ~150-day target derived in the protocol above (from this phase's own measured interval-width
+inflation, 1.03×–1.57× Austin / 0.98×–1.31× Midland) is **unchanged by this pass's fixes** and still
+stands as the tail-risk (5%-ish exceedance rate) sample size target. **What that number does NOT yet
+cover, stated explicitly:** it is a binomial-proportion calculation for the ACHIEVED-RATE endpoint
+specifically, at ±2 percentage points, 95% confidence. It was never derived for, and should not be
+assumed to cover, the separate question of how many rows are needed to resolve a pairwise MARGIN
+comparison (e.g., distinguishing wind's MAE from cooling's MAE) to a similar relative precision — that
+is a different endpoint with its own sample-size calculation, not performed in either pass. Given the
+current 781-row ABLATION-basis margins already show CIs comparable in width to what ~590 FRESH rows
+would produce, ~590 rows may be ADEQUATE for the rate endpoint while still being on the thin side for
+a decisive margin comparison between near-tied candidates (e.g., Austin's wind-vs-cooling margins,
+which are themselves close). This is named as a remaining gap, not resolved by asserting a number.
+The fixed schedule (whatever final number is adopted) must still be set before any FRESH outcome is
+inspected — unchanged from the original protocol.
+
+**Confirmation: no FRESH-basis outcome was inspected during this pass** — all data-science work above
+used only ABLATION-basis and SYNTHETIC fixtures; the FRESH basis's row count (16/corridor as of
+2026-10-05) was not re-checked in this specific pass beyond what the prior pass already recorded.
 
 ## References
 
