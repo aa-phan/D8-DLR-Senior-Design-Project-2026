@@ -1126,6 +1126,34 @@ def test_ablation_basis_report_runs_and_returns_documented_shape(monkeypatch, tm
         assert city_result[r["oracle_arm_name"]]["changed"] is True
 
 
+def test_ablation_basis_report_scored_rows_are_decision_time_clean(monkeypatch, tmp_path):
+    # Pre-confirmation finalization pass: a valid-time-disjoint train/val
+    # split does not guarantee a decision-time-disjoint one when the
+    # valid-time gap (6h, the exact-lead filter's own spacing) is smaller
+    # than lead_hours (24h) -- exactly the gap that let 3 of 784 real val
+    # rows have a decision time before the fit frame's own last label.
+    # This asserts the boundary-gap filter closes that for every scored
+    # row, on the mocked assembly this test module already uses.
+    monkeypatch.setattr(config, "FORECAST_EXPERIMENT_CACHE_DIR", str(tmp_path))
+    _patch_leakage_test_assembly(monkeypatch)
+    manifest_path = _write_zero_fresh_manifest(tmp_path)
+    report_path = str(tmp_path / "ablation_report.json")
+
+    r = fea.ablation_basis_report(
+        _LEAKAGE_TEST_CORRIDOR, report_path=report_path, fresh_manifest_path=manifest_path,
+    )
+
+    max_fit_timestamp = pd.Timestamp(r["max_fit_timestamp"])
+    min_scored_timestamp = pd.Timestamp(r["min_scored_timestamp"])
+    lead_hours = r["lead_hours"]
+    min_scored_decision_time = min_scored_timestamp - pd.Timedelta(hours=lead_hours)
+    assert min_scored_decision_time >= max_fit_timestamp, (
+        f"scored frame's earliest decision time {min_scored_decision_time} precedes "
+        f"the fit frame's own last label {max_fit_timestamp} -- the boundary-gap "
+        f"filter should make this impossible"
+    )
+
+
 def test_ablation_basis_report_leakage_probe_catches_a_real_injected_leak(monkeypatch, tmp_path):
     """
     A probe that only ever reports "no leak" without ever being shown to

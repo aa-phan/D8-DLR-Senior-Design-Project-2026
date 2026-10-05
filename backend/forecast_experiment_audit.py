@@ -2081,6 +2081,25 @@ def ablation_basis_report(
     train_filtered = train_filtered[train_filtered["datetime_utc"] < pinned_boundary].reset_index(drop=True)
     val_filtered = val_filtered[val_filtered["datetime_utc"] < pinned_boundary].reset_index(drop=True)
 
+    # DECISION-TIME BOUNDARY GAP (pre-confirmation readiness pass, item 2):
+    # a valid-time-disjoint train/val split is NOT the same guarantee as a
+    # decision-time-disjoint one. `val_filtered`'s own DECISION time
+    # (`anchor_datetime_utc` = valid time minus `lead_hours`) can precede
+    # `train_filtered`'s own max VALID-time label whenever the valid-time
+    # gap between the two sides (here: 6h, the exact-lead filter's own
+    # spacing) is smaller than `lead_hours` (24h) -- exactly the
+    # "Sept 1 18:00 training label vs. Sept 1 00:00 decision time" gap
+    # this pass was asked to trace. Measured directly for
+    # AUSTIN_CORPUS_CHRISTI before this fix: 3 of 784 val rows (0.4%) had a
+    # decision time strictly before train's own max valid-time label --
+    # a real, separate, and much smaller leak than the quantile pipeline's
+    # 75% calibrate-period overlap (fixed above this function). Dropped
+    # here rather than silently scored: every val row kept must have its
+    # own decision time at or after train's last label.
+    val_filtered = val_filtered[
+        pd.to_datetime(val_filtered["anchor_datetime_utc"], utc=True) >= train_filtered["datetime_utc"].max()
+    ].reset_index(drop=True)
+
     # The frozen-window guard runs on BOTH the fit frame and the scored
     # frame BEFORE anything else touches either -- before fitting, before
     # augmenting, before scoring.
@@ -2095,6 +2114,14 @@ def ablation_basis_report(
             f"{max_fit_timestamp} is not strictly before the scored "
             f"frame's own min timestamp {min_scored_timestamp} -- the "
             f"measurement is not out-of-sample for the fitted arms"
+        )
+    min_scored_decision_time = pd.to_datetime(val_filtered["anchor_datetime_utc"], utc=True).min()
+    if not (min_scored_decision_time >= max_fit_timestamp):
+        raise ValueError(
+            f"ablation_basis_report: scored frame's own min DECISION time "
+            f"{min_scored_decision_time} is before the fit frame's own max "
+            f"label timestamp {max_fit_timestamp} -- the boundary-gap "
+            f"filter above should make this impossible; defensive assertion"
         )
 
     # ---- The stacked, per-city, ABLATION-only (train+val) frame. The
@@ -3102,6 +3129,18 @@ def _quantile_source_frame(corridor: str, *, lead_hours: int = None) -> dict:
     pinned_boundary = pd.Timestamp(FROZEN_TEST_SPLIT_START, tz="UTC")
     train_filtered = train_filtered[train_filtered["datetime_utc"] < pinned_boundary].reset_index(drop=True)
     val_filtered = val_filtered[val_filtered["datetime_utc"] < pinned_boundary].reset_index(drop=True)
+
+    # DECISION-TIME BOUNDARY GAP (pre-confirmation readiness pass, item 2) --
+    # same fix as `ablation_basis_report`'s own, applied here for the SAME
+    # reason: a valid-time-disjoint split does not guarantee a
+    # decision-time-disjoint one when the valid-time gap (6h) is smaller
+    # than `lead_hours` (24h). Dropped here before any prediction is
+    # computed for the val side, so every downstream quantile-pipeline
+    # period (fit/calibrate/evaluate, all carved from val_filtered per the
+    # earlier decision-time fix above) inherits a decision-time-clean base.
+    val_filtered = val_filtered[
+        pd.to_datetime(val_filtered["anchor_datetime_utc"], utc=True) >= train_filtered["datetime_utc"].max()
+    ].reset_index(drop=True)
 
     fit_guard = assert_basis_excludes_frozen_test_rows(train_filtered, basis="ABLATION")
     scored_guard = assert_basis_excludes_frozen_test_rows(val_filtered, basis="ABLATION")
