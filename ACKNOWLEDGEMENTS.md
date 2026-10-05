@@ -959,6 +959,46 @@ row count, to write the protocol); the D-02/D-03 numeric tables in the audit doc
 regenerated to reflect the decision-time fix (flagged explicitly in the new document section as the
 one remaining blocker from this pass); and the next experiment this pass specifies was not started.
 
+### Development-data finalization pass (same day, continued)
+
+A follow-up closing remaining items the prior pass left open, per a direct user instruction to finish
+development-data work before waiting on FRESH confirmation.
+
+1. Regenerate the D-03 tables the prior pass left stale, after tracing exactly which published
+   numbers the leak fixes actually touch (D-03's quantile/retained-capacity tables: yes; D-02's
+   pairwise/block-bootstrap tables: no, confirmed by re-running and checking the numbers move by
+   <0.2 A with unchanged candidate ordering). Old tables marked superseded in place, not deleted.
+2. Find and close a THIRD, smaller leak: verifying the quantile-calibrate-period overlap and the
+   decision-time boundary gap as two SEPARATE claims (per explicit instruction not to assume one
+   resolves the other) surfaced a real, independent 3-row (0.4%) decision-time leak at the point
+   models' own train/val boundary -- the actual mechanism behind the original "Sept 1, 18:00 vs.
+   Sept 1, 00:00" question. Fixed with a boundary-gap filter in both `ablation_basis_report` and
+   `_quantile_source_frame`, with a new regression test and a defensive runtime assertion.
+3. Re-measure the cooling-correction ceiling finding on the corrected data (numbers unchanged, since
+   that function's own frame construction was never affected by the leak fixes) and add the
+   explicitly requested balanced framing: an above-forecast correction may be the model legitimately
+   learning real signal, not automatically a physical violation -- stated alongside, not instead of,
+   the existing case for a ceiling.
+4. Sweep the overrating-rate/retained-capacity tradeoff across five nominal thresholds (3/5/8/10/15%)
+   instead of publishing one placeholder number, and reassess the ~590-row sample-size target against
+   the corrected interval widths (found materially unchanged, with an explicit new caveat that it
+   covers the tail-rate endpoint only, not a separately-sized margin-comparison requirement).
+
+**Verified, not merely trusted (continued):** independently computed the 3-row decision-time leak by
+direct timestamp arithmetic (`anchor_datetime_utc` vs. the fit frame's own max label) before writing
+the fix, then re-ran both affected report functions on real ABLATION data for both corridors to
+confirm the fix and extract every corrected number published in the document -- never hand-derived or
+estimated. Re-ran the leakage probe (already wired into `ablation_basis_report`'s own scoring path by
+the prior pass) after the fix and confirmed it still passes on real data.
+
+**What was not completed this pass, stated plainly rather than implied done:** the Mode-B leakage
+probe was not extended into the quantile pipeline's own internal stages (preprocessing, point-model
+fit, stage-2 calibration) -- still only wired into `ablation_basis_report`. The ABLATION/FRESH
+basis-selection parameter was not added to the evaluation entry point -- attempting it under the
+time available risked touching FRESH-basis construction incorrectly, which was judged a bigger risk
+than leaving it for a dedicated change. No bootstrap uncertainty interval was built for the
+achieved-overrating-rate statistic in the threshold sweep. No FRESH-basis outcome was inspected.
+
 ## Keeping This Updated
 
 This file should be reviewed and updated to reflect new AI-assisted work **before any significant commit** — i.e., before committing new features, substantial documentation, or non-trivial refactors produced with AI assistance. A commit is "significant" for this purpose if it would need describing in a standup/status update; trivial fixes (typos, formatting) don't require an update here.
