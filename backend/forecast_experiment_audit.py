@@ -2168,6 +2168,96 @@ def ablation_basis_report(
         )
     arm5_pred = np.asarray(fitted["arm5_estimator"].predict(x5_scored.to_numpy(dtype=float)), dtype=float)
 
+    # ---- Leakage probe wired directly into THIS report's own scoring path
+    # (closes the gap `leakage_probe_coverage_report` left open: that
+    # function's Mode B "no leak" result was produced on its OWN frame
+    # construction and its OWN fitted objects, never re-verified against
+    # the fitted["wind_model"]/["cooling_model"]/["arm5_estimator"] and
+    # city_a_frame/city_b_frame this report actually scores). Live-
+    # recomputing callables bound to THIS run's own fitted objects, probed
+    # per endpoint city, plus one deliberately sabotaged arm as a positive
+    # control -- a probe that only ever reports "no leak" without ever
+    # being shown to catch a real one proves nothing. Both the sabotaged
+    # arm and the oracle must demonstrably change under truth-column
+    # sabotage before this report trusts a "no leak" verdict for every
+    # genuine candidate; if either positive control fails to fire, or if
+    # a genuine candidate changes, this function raises rather than
+    # silently reporting an unverified or a leaking result.
+    def _live_arm5_for_leakage_probe(frame: pd.DataFrame) -> np.ndarray:
+        idx = pd.DatetimeIndex(pd.to_datetime(frame["anchor_datetime_utc"], utc=True))
+        features = x5_all.reindex(idx)
+        missing_mask = features.isna().any(axis=1)
+        if missing_mask.any():
+            missing = idx[missing_mask]
+            raise ValueError(
+                f"ablation_basis_report: leakage probe's arm 5 feature "
+                f"table is missing {int(missing_mask.sum())} anchor "
+                f"timestamp(s), e.g. {list(missing[:3])}"
+            )
+        return np.asarray(fitted["arm5_estimator"].predict(features.to_numpy(dtype=float)), dtype=float)
+
+    probe_arms = _mode_b_arm_mapping(geometry=geometry, fitted=fitted, live_arm5=_live_arm5_for_leakage_probe)
+    leakage_by_city = {}
+    for city, city_frame_for_probe in ((city_a, city_a_frame), (city_b, city_b_frame)):
+        serviceable = pd.DatetimeIndex(
+            pd.to_datetime(city_frame_for_probe["anchor_datetime_utc"], utc=True)
+        ).isin(x5_all.index)
+        probe_frame = city_frame_for_probe[serviceable].reset_index(drop=True)
+        if len(probe_frame) == 0:
+            raise ValueError(
+                f"ablation_basis_report: {city}'s leakage-probe frame has "
+                f"zero rows after restricting to arm 5's serviceable "
+                f"feature rows -- cannot probe an empty frame"
+            )
+        leakage_by_city[city] = forecast_experiment.leakage_probe(probe_frame, probe_arms)
+
+    real_arm_names_for_probe = [n for n in forecast_experiment.ALL_ARMS if n != forecast_experiment.ORACLE_ARM_NAME]
+    sabotaged_detected = any(
+        leakage_by_city[c].get("sabotaged_reads_truth_wind_directly", {}).get("changed", False)
+        for c in (city_a, city_b)
+    )
+    oracle_detected = any(
+        leakage_by_city[c][forecast_experiment.ORACLE_ARM_NAME]["changed"] for c in (city_a, city_b)
+    )
+    genuine_candidates_unchanged = all(
+        not leakage_by_city[c][name]["changed"]
+        for c in (city_a, city_b)
+        for name in real_arm_names_for_probe
+    )
+    if not (sabotaged_detected and oracle_detected):
+        raise ValueError(
+            "ablation_basis_report: leakage probe's positive controls did "
+            "not fire on this run -- the sabotaged arm and/or the oracle "
+            "failed to change under truth-column sabotage, which means "
+            "this run's probe has no demonstrated power and any 'no leak' "
+            "verdict from it cannot be trusted"
+        )
+    if not genuine_candidates_unchanged:
+        raise ValueError(
+            "ablation_basis_report: leakage probe detected a genuine "
+            "candidate's prediction changing under truth-column sabotage "
+            "on THIS run's own fitted objects -- a real leak, not a false "
+            "positive (the positive controls above confirm the probe has "
+            "power on this exact frame construction), so this report "
+            "refuses to produce numbers until the leak is fixed"
+        )
+    leakage_probe_result = {
+        "by_city": leakage_by_city,
+        "positive_controls_passed": True,
+        "sabotaged_arm_detected": sabotaged_detected,
+        "oracle_detected": oracle_detected,
+        "genuine_candidates_unchanged": genuine_candidates_unchanged,
+        "note": (
+            "Run against THIS report's own fitted wind/cooling/arm5 "
+            "objects and THIS report's own city_a_frame/city_b_frame -- "
+            "not a standalone diagnostic on a separately-constructed "
+            "frame. Closes the gap left by leakage_probe_coverage_report, "
+            "whose Mode B result was never previously re-verified against "
+            "the exact objects that produce ablation_basis_report's own "
+            "candidates/pairwise/residuals numbers."
+        ),
+    }
+
     augmented_val = val_filtered.copy()
     augmented_val["pred_ml_wind_corrected"] = wind_reduced
     augmented_val["bottleneck_index_ml_wind_corrected"] = wind_bottleneck
@@ -2293,6 +2383,7 @@ def ablation_basis_report(
             "validation score for exactly the three candidates this audit "
             "most needs to re-examine."
         ),
+        "leakage_probe": leakage_probe_result,
     }
 
     manifest_dir = os.path.dirname(report_path)

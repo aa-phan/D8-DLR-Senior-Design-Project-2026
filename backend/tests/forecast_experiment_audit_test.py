@@ -1110,6 +1110,52 @@ def test_ablation_basis_report_runs_and_returns_documented_shape(monkeypatch, tm
         on_disk = json.load(fh)
     assert on_disk["corridor"] == _LEAKAGE_TEST_CORRIDOR
 
+    # The leakage probe is wired into this report's own scoring path (not
+    # a separate standalone diagnostic) and its positive controls must
+    # have fired: the sabotaged arm and the oracle both demonstrably
+    # changed under truth-column sabotage, and every genuine candidate
+    # did not.
+    lp = r["leakage_probe"]
+    assert lp["positive_controls_passed"] is True
+    assert lp["sabotaged_arm_detected"] is True
+    assert lp["oracle_detected"] is True
+    assert lp["genuine_candidates_unchanged"] is True
+    assert len(lp["by_city"]) == 2, sorted(lp["by_city"])
+    for city_result in lp["by_city"].values():
+        assert "sabotaged_reads_truth_wind_directly" in city_result
+        assert city_result[r["oracle_arm_name"]]["changed"] is True
+
+
+def test_ablation_basis_report_leakage_probe_catches_a_real_injected_leak(monkeypatch, tmp_path):
+    """
+    A probe that only ever reports "no leak" without ever being shown to
+    catch a REAL leak in a GENUINE candidate (not just the always-sabotaged
+    dummy arm) proves nothing. This deliberately makes `ml_wind_corrected`
+    read `truth_wind_speed` directly instead of its usual forecast column,
+    and asserts the now-integrated probe inside `ablation_basis_report`
+    detects it and refuses to produce numbers.
+    """
+    monkeypatch.setattr(config, "FORECAST_EXPERIMENT_CACHE_DIR", str(tmp_path))
+    _patch_leakage_test_assembly(monkeypatch)
+    manifest_path = _write_zero_fresh_manifest(tmp_path)
+
+    real_wind_corrected = fea.forecast_experiment._wind_corrected_ampacity
+
+    def _leaking_wind_corrected(model, frame, geometry):
+        # Ignore the model and forecast columns entirely; read the valid
+        # -time truth column directly -- the exact failure mode the probe
+        # exists to catch.
+        return frame["truth_wind_speed"].to_numpy(dtype=float)
+
+    monkeypatch.setattr(fea.forecast_experiment, "_wind_corrected_ampacity", _leaking_wind_corrected)
+
+    with pytest.raises(ValueError, match="leakage probe detected a genuine"):
+        fea.ablation_basis_report(
+            _LEAKAGE_TEST_CORRIDOR,
+            report_path=str(tmp_path / "report.json"),
+            fresh_manifest_path=manifest_path,
+        )
+
 
 def test_ablation_basis_report_raises_on_overlapping_fit_and_score_frames(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "FORECAST_EXPERIMENT_CACHE_DIR", str(tmp_path))

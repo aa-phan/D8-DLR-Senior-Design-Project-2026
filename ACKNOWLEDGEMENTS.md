@@ -904,6 +904,29 @@ touched and no new data collection was run, and the next experiment this correct
 this session's own closing report, delivered as conversation output rather than a new planning document)
 was not started.
 
+### Session: 2026-10-05 (continued), conducted by Aaron Phan — pre-confirmation readiness pass on the Phase 4 audit: closing the Mode A/Mode B leakage gap, resolving the cooling-correction clip question, freezing a confirmation protocol, and repairing the risk/capacity comparison (direct working-tree task, no worktree isolation)
+
+Claude Code was used to:
+
+1. Wire the live-recomputation ("Mode B") leakage probe directly into `ablation_basis_report`'s own
+   scoring path in `backend/forecast_experiment_audit.py` — previously, the only leakage-probe run
+   (`leakage_probe_coverage_report`) verified a *separately constructed* frame and fitted objects,
+   never the exact `fitted["wind_model"]`/`["cooling_model"]`/`["arm5_estimator"]` and
+   `city_a_frame`/`city_b_frame` that actually produce every D-02/D-03 number. The function now runs
+   the probe on its own objects every time it executes, with two positive controls (a deliberately
+   sabotaged arm and the oracle) that must both fire before a "no leak" verdict is trusted, and raises
+   `ValueError` if a genuine candidate's prediction changes under truth-column sabotage. Verified this
+   actually catches a real leak — not just the dummy sabotaged arm — by adding
+   `test_ablation_basis_report_leakage_probe_catches_a_real_injected_leak`
+   (`backend/tests/forecast_experiment_audit_test.py`), which monkeypatches `ml_wind_corrected` to read
+   the valid-time truth column directly and asserts the integrated probe refuses to produce a report.
+
+**Verified, not merely trusted:** ran the real `ablation_basis_report` against live data for
+`AUSTIN_CORPUS_CHRISTI` (not only the synthetic test fixture) and confirmed
+`positive_controls_passed`, `sabotaged_arm_detected`, and `oracle_detected` are all `True` and
+`genuine_candidates_unchanged` is `True` before trusting the wiring. Ran the full audit test suite
+after the change.
+
 ## Keeping This Updated
 
 This file should be reviewed and updated to reflect new AI-assisted work **before any significant commit** — i.e., before committing new features, substantial documentation, or non-trivial refactors produced with AI assistance. A commit is "significant" for this purpose if it would need describing in a standup/status update; trivial fixes (typos, formatting) don't require an update here.
