@@ -783,6 +783,127 @@ Claude Code was used, via the GSD (`/gsd-execute-phase` and `/gsd-plan-phase`) t
 
 **Commits, branches, and what was left to the orchestrator.** Each of the six plans executed on its own assigned isolated worktree branch (`worktree-agent-<id>`), closing with per-task `feat`/`docs`/`fix` commits followed by a `docs` commit for that plan's own `SUMMARY.md`. Per this phase's worktree-executor convention, `.planning/workstreams/ml-modeling/STATE.md` was left untouched throughout and is owned by the orchestrator; `ROADMAP.md` was likewise left untouched by Plans 04-01 through 04-05 and closed by this plan (04-06) alone, per this plan's own explicit file-scope exception to that convention, with every other phase's ROADMAP entry and the Overview/Backlog/Execution-Order sections verified byte-identical to their committed versions before this entry's own commit.
 
+### Session: 2026-10-05, conducted by Aaron Phan — `ml-modeling` workstream Phase 4 fact-check and correction pass on `forecast_correction_followup_audit.md` (direct working-tree task, no worktree isolation)
+
+Claude Code was used, working directly on `main` (no isolated worktree — this was a single focused
+correction pass over documents already on `main`), to independently re-verify a set of user-flagged
+claims against the actual code and regenerated real-data results, and to correct the ones that did not
+hold up. The `data/experiment/` git-ignored evidence cache had been emptied (each prior plan's evidence
+lived only in its now-removed isolated worktree); `build_basis_manifest()` and
+`ablation_basis_report(corridor)` were re-run live for both corridors to regenerate it before any claim
+could be checked against real numbers.
+
+**Confirmed and corrected, each independently re-derived from code or regenerated JSON before being
+fixed — none taken on the reporting user's word alone:**
+
+1. A reversed RMSE claim in the "Both error metrics" subsection: the document said RMSE "still favors
+   refit" (163.957 vs. 165.596) at MIDLAND_EL_PASO — but 163.957 is `ml_cooling_corrected`'s own RMSE,
+   lower than refit's 165.596, so RMSE actually favors cooling there, reversing (not reproducing) the
+   frozen record's own MAE/RMSE split for this pair. Cross-checked directly against
+   `ablation_basis_report`'s own `mae_rmse_ordering_disagreements` field, which names the real
+   disagreeing pair as `persistence_24h` vs. `raw_forecast`, not cooling vs. refit. The stronger, actually
+   correct finding — `ml_wind_corrected` beats BOTH cooling and refit on BOTH metrics simultaneously at
+   this corridor — was substituted throughout (main prose, both disposition tables, the Corrected
+   verdict's headline recommendation and its findings-by-decision list).
+2. An undercounted pairwise claim: "cooling's margin excludes zero only once" (vs. refit at Austin) —
+   the document's own table already showed a second exclusion (vs. `raw_forecast` at MIDLAND_EL_PASO,
+   27.748 A, [20.961, 34.655]) that the prose simply failed to count. Fixed to state both exclusions.
+3. An overclaim that the block-length-sensitivity finding (on the `ml_wind_corrected` vs.
+   `reference_ml_refit_24h` margin) proves the frozen record's own published margins were "optimistic" —
+   softened throughout: that margin is one the frozen record never computed, on a different sample than
+   its own test rows, so the finding is a methodological caution about the frozen record's own interval
+   method's sensitivity to serial correlation, not a direct re-test of any margin the frozen record
+   actually reported. A direct re-test of the frozen record's own margins through the same block
+   bootstrap, on the original frozen test rows, was named as a remaining blocker rather than silently
+   assumed to be equivalent to what was actually done.
+4. A risk/capacity overclaim: the "matched 5% overrating rate" retained-capacity comparison was framed
+   as "at equal risk," but checked against the actual table, cooling's own ACHIEVED overrating rate under
+   that shared NOMINAL target (11.3%/6.2%) is substantially higher than `ml_wind_corrected`'s (6.9%/4.3%)
+   — the rates were never actually matched, only the nominal target was. "Retains the most capacity at
+   equal risk" was withdrawn as a supported claim throughout (the subsection's own prose, the D-03
+   disposition table, and the Corrected verdict), replaced with the correct framing (matched nominal
+   target, materially divergent achieved risk) and a named remaining blocker (re-deriving each candidate's
+   derating to a common ACHIEVED rate before comparing capacity).
+5. A verdict-recommendation gap: the Corrected verdict recommended keeping only `ml_cooling_corrected`
+   and `reference_ml_refit_24h` live, omitting `ml_wind_corrected` — inconsistent with fix #1 above, since
+   wind is the strongest measured candidate at MIDLAND_EL_PASO on this basis. Updated to recommend all
+   three real correction candidates stay live.
+6. A provenance-disclosure imprecision in the Corrected verdict's findings-by-decision list: "previously
+   undisclosed in the frozen record" overstated Finding 1's own, more careful claim (re-verified directly
+   against the frozen record's text: its `## Data provenance` section does say the truth source is "the
+   same reanalysis source" other components use — the provenance itself is disclosed; what is not
+   disclosed is the validation-limitation implication). Corrected the compressed bullet to match Finding
+   1's own already-accurate framing.
+7. A self-contradicting claim inside the FROZEN record's own already-committed Amendment § 4: "wrong by
+   more than double" describing a comparison (30.260 A vs. 30.671 A, which differ by ~1.3%) that the very
+   next clause in the same sentence already calls "close... by coincidence." Confirmed by direct
+   arithmetic. Per `forecast_correction_experiment.md`'s own append-only discipline (established by
+   Plan 04-05, verified structurally before and after this session's edit — see below), this was corrected
+   by APPENDING a new, dated § 7 "Correction" subsection rather than editing or deleting § 4's existing
+   text — the original wording stands, visibly superseded in a way a future reader cannot miss.
+8. A leakage-remediation completeness gap in the Corrected verdict and the D-01 findings list: Plan 04-02's
+   Mode B (live-recomputing) leakage-probe re-run was described as closing the leakage question, but
+   checked directly against the code, `ablation_basis_report` — the function that produces every D-02/D-03
+   number in this record — still scores through the same Mode-A-style `_corridor_arm_reader` column reads
+   Finding 6 itself names as structurally powerless to detect a leak. Mode B's "no leak" result is strong
+   indirect evidence (same arm functions, same real basis), but was never literally run inside
+   `ablation_basis_report`'s own evaluation call. Corrected the findings-by-decision bullet to state this
+   residual gap explicitly and named it as a remaining blocker rather than letting the stronger claim stand.
+9. A data-contract overreach: `observed_dlr_amps` (a literal line-current sensor) was marked `Required`,
+   contradicting the actual achievable path — `observed_air_temp` and `observed_wind_speed` (already
+   `Required`) already support an independent IEEE-738-based ampacity recomputation without needing a
+   literal sensor-measured ampacity at all. Changed to `Desirable (optional)` with an explanatory note.
+
+**Checked and found NOT to be bugs, with the reasoning made explicit in the document rather than left
+implicit** (no code or document correction made beyond adding the reasoning itself):
+- The apparent "Sep 1 18:00 training endpoint later than a Sep 1 00:00 decision time" inconsistency:
+  traced against the actual measured timestamps and the standard static-fit-then-score evaluation
+  protocol this project already uses elsewhere — not a leak, because the correct and already-checked
+  guard (train's max VALID time precedes every scored row's own VALID time) is sufficient for a model
+  that is frozen at its training cutoff and never refit per row; the training cutoff postdating one
+  row's own decision time (a quantity 24 hours earlier than that row's valid time) does not by itself
+  constitute a leak under that protocol. Added an explicit paragraph to Finding 7 making this reasoning
+  visible rather than leaving the apparent inconsistency unaddressed.
+- The two-stage quantile pipeline's leakage discipline (`fit_lower_quantile_model` / 
+  `quantile_calibration_report`): read directly — stage 1 asserts, by name and by construction, that no
+  `truth_*` column enters its own feature set; the stage-2 calibration offset is learned on the Calibrate
+  period only and applied unchanged on Evaluate. No leak found; no document change needed here.
+- Boundary-gap (pin-safety clip) consistency across all fitted models: grepped every fit/score call site
+  across the module (`build_basis_manifest`, `ablation_basis_report`, the quantile pipeline's own
+  three-period split) and confirmed the same `< pinned_boundary` clip is applied at every one, not
+  selectively.
+- 60-minute vs. 24-hour claim separation: grepped the full document for every mention of either lead;
+  all are already kept explicitly distinct, with no summary table or verdict sentence conflating them.
+
+**A new safety-relevant finding added, not requested verbatim but directly responsive to the
+integration-assumptions question about upward clipping:** read `predict_cooling_correction`
+(`backend/forecast_correction_models.py:505-521`, read-only) and `ieee738_ampacity`'s heat-balance line
+(`backend/thermal_model.py:255-257`, read-only) directly. Confirmed: the correction model's own guard
+rejects only a non-positive corrected convective term; nothing clamps the term on the HIGH side before it
+enters the heat balance, which itself only ever floors at zero. An overcorrection that predicts too high a
+term would inflate reported ampacity with no code-level ceiling to catch it — added as an explicit
+safety-relevant finding to the document's D-04/D-05 discussion, since the cooling correction is a fitted
+statistical residual adjustment, not a physically-derived constraint, and nothing guarantees its output
+stays within a physically defensible range. No production code was touched; this is a documented finding
+for a future integration phase to weigh, not a fix made here.
+
+**Verified, not merely trusted, before any edit was made:** independently re-ran both of
+`forecast_correction_experiment.md`'s own structural gates against the real pre-Phase-4 base commit
+(`04a679b`, not just the convenience of comparing against the working tree's own current `HEAD`) — the
+`## Expectation` and `## Measured results` sections remain byte-identical, and the amended file remains
+append-only (269 lines added relative to that base, zero deleted or reworded) — both confirmed again
+after this session's own § 7 addition, not only before it. Ran the full audit test suite
+(`backend/tests/forecast_experiment_audit_test.py`, 105 passed) and the full repository suite (746
+passed, 23 failed — the unchanged, pre-existing `corridor_discretization_test.py` baseline) after all doc
+edits; no backend code was modified in this session, so no new test failure was possible, and none
+occurred.
+
+**What was explicitly left alone, per the task's own scope:** no production model was replaced, no new
+code was wired into `dlr_pipeline.py` or any other production file, the FRESH-basis data files were not
+touched and no new data collection was run, and the next experiment this correction pass implies (see
+this session's own closing report, delivered as conversation output rather than a new planning document)
+was not started.
+
 ## Keeping This Updated
 
 This file should be reviewed and updated to reflect new AI-assisted work **before any significant commit** — i.e., before committing new features, substantial documentation, or non-trivial refactors produced with AI assistance. A commit is "significant" for this purpose if it would need describing in a standup/status update; trivial fixes (typos, formatting) don't require an update here.
