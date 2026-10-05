@@ -2424,10 +2424,428 @@ def ablation_basis_report(
     return report
 
 
-def fresh_basis_attempt(
-    corridor: str, *, minimum_rows: int = None, lead_hours: int = None, manifest_path: str = None,
+# ──────────────────────────────────────────────────────────────────────────
+# Pre-confirmation readiness, item 1: a GATED, explicit ABLATION/FRESH basis
+# selector through a shared evaluation entry point. The absolute hard rule
+# this section exists to enforce: no FRESH-basis OUTCOME is ever scored
+# without an explicit `confirm_fresh_run=True` from the caller. Row-COUNT
+# checks (`fresh_basis_attempt`'s `rows`/`branch` fields, read with no flag
+# anywhere else in this module) are never outcome inspection and remain
+# ungated. Ordinary development commands and the full pytest suite call
+# `basis_evaluation_report` (or `ablation_basis_report` directly) with the
+# default `basis="ABLATION"` and never need, and must never need, this flag.
+#
+# `CONFIRMATION_MINIMUM_ROWS` is the Protocol's own derived target (section
+# "Freeze a concrete confirmation protocol" in the audit record): the
+# binomial-proportion calculation for the ~5% achieved-overrating-rate tail
+# at +/-2 percentage points / 95% confidence (n=456 i.i.d.), inflated by this
+# phase's own measured block-length width inflation (up to 1.57x at Austin)
+# at a conservative 1.3x factor -> ~590 rows. This is the TAIL-RATE
+# endpoint's sample size, not a margin-comparison sample size (see the
+# audit record's "Sample-size reassessment" section for the explicit
+# statement that a pairwise-margin-detection sample size is a different,
+# separately-derived question).
+# ──────────────────────────────────────────────────────────────────────────
+CONFIRMATION_MINIMUM_ROWS: int = 590
+
+
+def basis_evaluation_report(
+    corridor: str, *, basis: str = "ABLATION", confirm_fresh_run: bool = False,
+    lead_hours: int = None, block_lengths=None, report_path: str = None,
+    fresh_manifest_path: str = None, minimum_fresh_rows: int = None,
 ) -> dict:
     """
+    The shared evaluation entry point both ordinary development work and
+    the eventual gated confirmation run go through. `basis="ABLATION"`
+    (the default) is a thin, unconditional pass-through to
+    `ablation_basis_report` -- exactly today's behavior, no flag, no new
+    risk. `basis="FRESH"` requires `confirm_fresh_run=True` or raises
+    immediately, before touching any FRESH-basis data at all; this is the
+    one piece of code in this module where accidentally running the real
+    confirmation read is made structurally hard rather than merely
+    discouraged by convention.
+
+    Raises `ValueError` for any `basis` other than `"ABLATION"`/`"FRESH"`,
+    for `confirm_fresh_run=True` paired with `basis="ABLATION"` (almost
+    certainly a caller mistake -- the flag has no effect there and a
+    caller setting it probably believes it is scoring FRESH), and for
+    `basis="FRESH"` with `confirm_fresh_run=False`.
+    """
+    if basis not in ("ABLATION", "FRESH"):
+        raise ValueError(
+            f"basis_evaluation_report: unknown basis {basis!r} -- valid "
+            f"values are 'ABLATION' and 'FRESH'"
+        )
+    if basis == "ABLATION":
+        if confirm_fresh_run:
+            raise ValueError(
+                "basis_evaluation_report: confirm_fresh_run=True has no "
+                "effect with basis='ABLATION' and signals a likely "
+                "caller mistake -- if you intend to score FRESH, pass "
+                "basis='FRESH' as well"
+            )
+        return ablation_basis_report(
+            corridor, lead_hours=lead_hours, block_lengths=block_lengths,
+            report_path=report_path, fresh_manifest_path=fresh_manifest_path,
+        )
+    if not confirm_fresh_run:
+        raise ValueError(
+            "basis_evaluation_report: basis='FRESH' requires explicit "
+            "confirm_fresh_run=True. This gate exists because scoring "
+            "against FRESH-basis data is a one-time outcome inspection "
+            "with no undo -- do not pass True until the confirmation "
+            "protocol's frozen sample size has genuinely been reached "
+            "and this call is intended to be the one real read, not a "
+            "rehearsal."
+        )
+    return _fresh_confirmation_report(
+        corridor, lead_hours=lead_hours, block_lengths=block_lengths,
+        report_path=report_path, fresh_manifest_path=fresh_manifest_path,
+        minimum_fresh_rows=minimum_fresh_rows,
+    )
+
+
+def _fresh_confirmation_report(
+    corridor: str, *, lead_hours: int = None, block_lengths=None, report_path: str = None,
+    fresh_manifest_path: str = None, minimum_fresh_rows: int = None,
+) -> dict:
+    """
+    Only ever reached through `basis_evaluation_report(basis='FRESH',
+    confirm_fresh_run=True)` -- never call this directly. Mirrors
+    `ablation_basis_report`'s own fit-on-ABLATION-TRAIN discipline (the
+    frozen protocol's own stated rule: FRESH is confirmation-only, never a
+    training source, so the fitted objects under test are the SAME ones
+    `ablation_basis_report` fits) but scores against the real FRESH-basis
+    frame instead of the ABLATION validation frame.
+
+    Enforces, in order, before any candidate is scored: (1) the frozen-
+    window guard under `basis="FRESH"` (rejects any row at or before
+    `FROZEN_WINDOW_END`, the same guard discipline as everywhere else in
+    this module); (2) the decision-time boundary gap against the fit
+    frame's own last training label (defensive here -- a FRESH row's
+    decision time is always far past the fit frame's label by
+    construction, but the assertion costs nothing and matches
+    `ablation_basis_report`'s own discipline); (3) the minimum-sample gate
+    (`CONFIRMATION_MINIMUM_ROWS` by default) -- raises rather than scoring
+    an under-powered sample, even though the caller already passed
+    `confirm_fresh_run=True`: that flag grants permission to attempt a
+    confirmation read, not permission to skip the sample-size requirement
+    the protocol itself sets.
+    """
+    valid_corridors = sorted(config.CORRIDOR_ENDPOINTS)
+    if corridor not in config.CORRIDOR_ENDPOINTS:
+        raise ValueError(
+            f"_fresh_confirmation_report: unknown corridor {corridor!r} -- "
+            f"valid corridors: {valid_corridors}"
+        )
+    if lead_hours is None:
+        lead_hours = config.FORECAST_EXPERIMENT_PRIMARY_LEAD_HOURS
+    if block_lengths is None:
+        block_lengths = _DEFAULT_ABLATION_BLOCK_LENGTHS
+    if minimum_fresh_rows is None:
+        minimum_fresh_rows = CONFIRMATION_MINIMUM_ROWS
+    if report_path is None:
+        report_path = os.path.join(
+            config.FORECAST_EXPERIMENT_CACHE_DIR, f"fresh_confirmation_report_{corridor}.json",
+        )
+    if fresh_manifest_path is None:
+        fresh_manifest_path = DEFAULT_MANIFEST_PATH
+
+    city_a, city_b = config.CORRIDOR_ENDPOINTS[corridor]
+    geometry = corridor_discretization.corridor_geometry(corridor)
+
+    # ---- Row-count check FIRST, before any frame is even assembled --
+    # refuses an under-powered sample without ever touching a FRESH-basis
+    # outcome. ----
+    if not os.path.exists(fresh_manifest_path):
+        build_basis_manifest(corridors=[corridor], lead_hours=lead_hours, manifest_path=fresh_manifest_path)
+    with open(fresh_manifest_path, "r", encoding="utf-8") as fh:
+        manifest = json.load(fh)
+    if corridor not in manifest.get("corridors", {}):
+        build_basis_manifest(corridors=[corridor], lead_hours=lead_hours, manifest_path=fresh_manifest_path)
+        with open(fresh_manifest_path, "r", encoding="utf-8") as fh:
+            manifest = json.load(fh)
+    fresh_entry = manifest["corridors"][corridor]["fresh"]
+    available_rows = int(fresh_entry["rows"])
+    if available_rows < minimum_fresh_rows:
+        raise ValueError(
+            f"_fresh_confirmation_report: {available_rows} FRESH row(s) "
+            f"measured for {corridor}, below the protocol's own minimum "
+            f"of {minimum_fresh_rows} -- refusing to score an "
+            f"under-powered sample even with confirm_fresh_run=True. "
+            f"This is a row-COUNT check only; no outcome was inspected "
+            f"to produce this error."
+        )
+
+    # ---- Refit on ABLATION-TRAIN alone, exactly as ablation_basis_report
+    # does -- the frozen protocol's own rule that FRESH is confirmation-
+    # only, never a training source. Not a reuse-by-import of that
+    # function's internals (it has none to reuse; its fit logic is
+    # inline), so this duplicates that fit sequence deliberately, rather
+    # than refactoring the already-audited ABLATION path under time
+    # pressure -- see this pass's own report for why that tradeoff was
+    # made. ----
+    stacked_full = forecast_experiment._stacked_pair_frame(
+        corridor, FROZEN_WINDOW_START, FROZEN_WINDOW_END, lead_hours=lead_hours,
+    )
+    boundaries = forecast_experiment._default_split_boundaries(stacked_full)
+    stacked_train, stacked_val, stacked_test = experiment_splits.calendar_split(stacked_full, boundaries)
+    del stacked_test
+    train_val_stacked = (
+        pd.concat([stacked_train, stacked_val], ignore_index=True)
+        .sort_values("datetime_utc").reset_index(drop=True)
+    )
+    fitted = forecast_experiment.fit_fitted_arms(
+        stacked_train, geometry,
+        wind_configuration=forecast_experiment.WIND_CONFIGURATION,
+        cooling_configuration=forecast_experiment.COOLING_CONFIGURATION,
+    )
+    max_fit_timestamp = stacked_train["datetime_utc"].max()
+
+    # ---- The real FRESH-basis frame -- built the SAME way
+    # `fresh_basis_attempt` builds it, per corridor and per city. ----
+    fresh_start = fresh_entry["resolved_window_start"]
+    fresh_end = fresh_entry["resolved_window_end"]
+    corridor_fresh = forecast_experiment.corridor_anchored_pair_frame(
+        corridor, fresh_start, fresh_end, lead_hours=lead_hours,
+    )
+    corridor_fresh = forecast_experiment.filter_to_exact_lead(corridor_fresh, lead_hours=lead_hours)
+    scored_guard = assert_basis_excludes_frozen_test_rows(corridor_fresh, basis="FRESH")
+    min_scored_decision_time = pd.to_datetime(corridor_fresh["anchor_datetime_utc"], utc=True).min()
+    if not (min_scored_decision_time >= max_fit_timestamp):
+        raise ValueError(
+            f"_fresh_confirmation_report: FRESH frame's own min decision "
+            f"time {min_scored_decision_time} is before the fit frame's "
+            f"own max label timestamp {max_fit_timestamp} -- the "
+            f"decision-time boundary gap this phase's leak fixes require "
+            f"is violated; this should be structurally impossible for a "
+            f"genuinely FRESH (post-FROZEN_WINDOW_END) frame, so this "
+            f"is a defensive assertion, not an expected branch"
+        )
+
+    def _fresh_city_frame(city: str) -> pd.DataFrame:
+        city_frame = forecast_experiment.anchored_pair_frame(
+            city, fresh_start, fresh_end, lead_hours=lead_hours,
+        ).copy()
+        city_frame["endpoint_city"] = city
+        city_frame = forecast_experiment.filter_to_exact_lead(city_frame, lead_hours=lead_hours)
+        return forecast_experiment._add_correction_columns(city_frame, geometry)
+
+    city_a_frame = _fresh_city_frame(city_a)
+    city_b_frame = _fresh_city_frame(city_b)
+
+    # Arm 5's lag features for a FRESH-dated anchor need truth history
+    # running right up to just before that anchor -- `train_val_stacked`
+    # alone (which ends at the ABLATION window's own boundary) cannot
+    # supply that. Stack the FRESH-dated per-city frames (already tagged
+    # `endpoint_city` above) onto `train_val_stacked` for FEATURE
+    # construction only; the fitted `arm5_estimator` itself is untouched
+    # and was never re-fit on this combined frame. A handful of the
+    # earliest FRESH anchors can still be missing lag features (the lag
+    # window reaches back further than any history this report has
+    # available at the FRESH basis's own start) -- those rows are
+    # dropped, consistent with Plan 04-01's own "honest absence" (never
+    # interpolated/imputed) discipline, rather than raised as an error;
+    # `fresh_rows_dropped_for_lag_warmup` records exactly how many.
+    fresh_stacked_for_features = (
+        pd.concat([city_a_frame, city_b_frame], ignore_index=True)
+        .sort_values("datetime_utc").reset_index(drop=True)
+    )
+    combined_for_features = (
+        pd.concat([train_val_stacked, fresh_stacked_for_features], ignore_index=True)
+        .sort_values("datetime_utc").reset_index(drop=True)
+    )
+    arm5_truth_frame = forecast_experiment._arm5_truth_frame(combined_for_features, city_a, city_b)
+    x5_all, _ = forecast_training.build_training_matrix(arm5_truth_frame, horizon_minutes=lead_hours * 60)
+    anchor_index = pd.DatetimeIndex(pd.to_datetime(corridor_fresh["anchor_datetime_utc"], utc=True))
+    x5_scored_all = x5_all.reindex(anchor_index)
+    missing_mask = x5_scored_all.isna().any(axis=1).to_numpy()
+    fresh_rows_dropped_for_lag_warmup = int(missing_mask.sum())
+    if missing_mask.all():
+        raise ValueError(
+            "_fresh_confirmation_report: every FRESH-basis row is missing "
+            "arm 5's lag features -- this is not a warm-up edge effect, "
+            "something is wrong with the combined feature frame"
+        )
+    if fresh_rows_dropped_for_lag_warmup:
+        corridor_fresh = corridor_fresh[~missing_mask].reset_index(drop=True)
+        anchor_index = pd.DatetimeIndex(pd.to_datetime(corridor_fresh["anchor_datetime_utc"], utc=True))
+    x5_scored = x5_all.reindex(anchor_index)
+    assert not x5_scored.isna().any(axis=1).any(), "post-drop, no scored anchor should still be missing features"
+    arm5_pred = np.asarray(fitted["arm5_estimator"].predict(x5_scored.to_numpy(dtype=float)), dtype=float)
+
+    wind_pred_a = forecast_experiment._wind_corrected_ampacity(fitted["wind_model"], city_a_frame, geometry)
+    wind_pred_b = forecast_experiment._wind_corrected_ampacity(fitted["wind_model"], city_b_frame, geometry)
+    wind_reduced, wind_bottleneck = forecast_experiment._merge_prediction_to_scored_index(
+        corridor_fresh, city_a_frame["datetime_utc"], wind_pred_a, city_b_frame["datetime_utc"], wind_pred_b,
+    )
+    cooling_pred_a = forecast_experiment._cooling_corrected_ampacity(fitted["cooling_model"], city_a_frame, geometry)
+    cooling_pred_b = forecast_experiment._cooling_corrected_ampacity(fitted["cooling_model"], city_b_frame, geometry)
+    cooling_reduced, cooling_bottleneck = forecast_experiment._merge_prediction_to_scored_index(
+        corridor_fresh, city_a_frame["datetime_utc"], cooling_pred_a, city_b_frame["datetime_utc"], cooling_pred_b,
+    )
+
+    def _live_arm5(frame: pd.DataFrame) -> np.ndarray:
+        idx = pd.DatetimeIndex(pd.to_datetime(frame["anchor_datetime_utc"], utc=True))
+        features = x5_all.reindex(idx)
+        return np.asarray(fitted["arm5_estimator"].predict(features.to_numpy(dtype=float)), dtype=float)
+
+    probe_arms = _mode_b_arm_mapping(geometry=geometry, fitted=fitted, live_arm5=_live_arm5)
+    leakage_by_city = {}
+    for city, city_frame_for_probe in ((city_a, city_a_frame), (city_b, city_b_frame)):
+        serviceable = pd.DatetimeIndex(
+            pd.to_datetime(city_frame_for_probe["anchor_datetime_utc"], utc=True)
+        ).isin(x5_all.index)
+        probe_frame = city_frame_for_probe[serviceable].reset_index(drop=True)
+        if len(probe_frame) == 0:
+            raise ValueError(
+                f"_fresh_confirmation_report: {city}'s leakage-probe frame "
+                f"has zero rows after restricting to arm 5's serviceable "
+                f"feature rows"
+            )
+        leakage_by_city[city] = forecast_experiment.leakage_probe(probe_frame, probe_arms)
+
+    real_arm_names_for_probe = [n for n in forecast_experiment.ALL_ARMS if n != forecast_experiment.ORACLE_ARM_NAME]
+    sabotaged_detected = any(
+        leakage_by_city[c].get("sabotaged_reads_truth_wind_directly", {}).get("changed", False)
+        for c in (city_a, city_b)
+    )
+    oracle_detected = any(leakage_by_city[c][forecast_experiment.ORACLE_ARM_NAME]["changed"] for c in (city_a, city_b))
+    genuine_candidates_unchanged = all(
+        not leakage_by_city[c][name]["changed"] for c in (city_a, city_b) for name in real_arm_names_for_probe
+    )
+    if not (sabotaged_detected and oracle_detected):
+        raise ValueError(
+            "_fresh_confirmation_report: leakage probe's positive "
+            "controls did not fire on this run -- refusing to trust any "
+            "'no leak' verdict without demonstrated probe power"
+        )
+    if not genuine_candidates_unchanged:
+        raise ValueError(
+            "_fresh_confirmation_report: leakage probe detected a "
+            "genuine candidate's prediction changing under truth-column "
+            "sabotage on THIS run's own fitted objects -- refusing to "
+            "produce FRESH-basis confirmation numbers until fixed"
+        )
+
+    augmented = corridor_fresh.copy()
+    augmented["pred_ml_wind_corrected"] = wind_reduced
+    augmented["pred_ml_cooling_corrected"] = cooling_reduced
+    augmented["pred_reference_ml_refit_24h"] = arm5_pred
+
+    actual = augmented["truth_dlr_amps"].to_numpy(dtype=float)
+    n = len(augmented)
+    residuals = {}
+    candidates = {}
+    non_fitted_readers = {
+        name: forecast_experiment._corridor_arm_reader(name)
+        for name in forecast_experiment.NON_FITTED_ARMS
+    }
+    for name in forecast_experiment.ALL_ARMS:
+        if name in non_fitted_readers:
+            pred = np.asarray(non_fitted_readers[name](augmented), dtype=float)
+            augmented[f"pred_{name}"] = pred
+        else:
+            pred = augmented[f"pred_{name}"].to_numpy(dtype=float)
+        residual = actual - pred
+        residuals[name] = residual
+        candidates[name] = {
+            "mae": float(np.mean(np.abs(residual))),
+            "rmse": float(np.sqrt(np.mean(residual ** 2))),
+            "rows": int(n),
+        }
+    candidates[forecast_experiment.ORACLE_ARM_NAME]["is_oracle_diagnostic"] = True
+
+    real_candidate_names = [n for n in forecast_experiment.ALL_ARMS if n != forecast_experiment.ORACLE_ARM_NAME]
+    pairwise = {}
+    for baseline in _PAIRWISE_BASELINE_NAMES:
+        baseline_residual = residuals[baseline]
+        entry = {}
+        for name in real_candidate_names:
+            if name == baseline:
+                continue
+            sensitivity = block_length_sensitivity(residuals[name], baseline_residual, block_lengths=block_lengths)
+            entry[name] = {
+                "iid_percentile": sensitivity["iid_percentile"],
+                "block": sensitivity["by_block_length"],
+                "block_lengths_used": sensitivity["block_lengths_used"],
+                "conclusion_stable": sensitivity["conclusion_stable"],
+                "disagreeing_block_lengths": sensitivity["disagreeing_block_lengths"],
+            }
+        pairwise[baseline] = entry
+
+    report = {
+        "corridor": corridor,
+        "lead_hours": lead_hours,
+        "basis": "FRESH",
+        "rows": n,
+        "fresh_rows_dropped_for_lag_warmup": fresh_rows_dropped_for_lag_warmup,
+        "minimum_fresh_rows": minimum_fresh_rows,
+        "confirmation_claim_permitted": True,
+        "scored_guard": scored_guard,
+        "max_fit_timestamp": str(max_fit_timestamp),
+        "min_scored_decision_time": str(min_scored_decision_time),
+        "candidates": candidates,
+        "oracle_arm_name": forecast_experiment.ORACLE_ARM_NAME,
+        "pairwise": pairwise,
+        "residuals": {name: [float(x) for x in arr] for name, arr in residuals.items()},
+        "leakage_probe": {
+            "by_city": leakage_by_city,
+            "positive_controls_passed": True,
+            "sabotaged_arm_detected": sabotaged_detected,
+            "oracle_detected": oracle_detected,
+            "genuine_candidates_unchanged": genuine_candidates_unchanged,
+        },
+        "basis_caveat": (
+            "FRESH basis: real rows strictly after FROZEN_WINDOW_END, "
+            "never read or trained on during Phase 3 or this audit's "
+            "development. This is this phase's only basis on which a "
+            "confirmation claim may be made. Reanalysis-derived truth "
+            "(Plan 04-01's own provenance finding) -- no claim of "
+            "operational safety is made anywhere by this report."
+        ),
+        "note": (
+            "This is the ONE real confirmation read this protocol "
+            "permits. Re-running this function again on the same or a "
+            "larger FRESH sample after seeing this result is an "
+            "additional look the protocol's anti-peeking discipline "
+            "exists to prevent -- do not treat an unfavorable result as "
+            "a reason to collect more data and try again."
+        ),
+    }
+
+    manifest_dir = os.path.dirname(report_path)
+    if manifest_dir:
+        os.makedirs(manifest_dir, exist_ok=True)
+    tmp_path = report_path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as fh:
+        json.dump(report, fh, indent=2, default=str)
+    os.replace(tmp_path, report_path)
+    return report
+
+
+def fresh_basis_attempt(
+    corridor: str, *, minimum_rows: int = None, lead_hours: int = None, manifest_path: str = None,
+    confirm_fresh_run: bool = False,
+) -> dict:
+    """
+    GATE (pre-confirmation readiness, item 1): reaching `rows >=
+    minimum_rows` alone no longer scores anything. Before this fix, any
+    ordinary caller of `ablation_basis_report` (which calls this function
+    internally to attach a `fresh_basis` field) would have started
+    silently scoring real FRESH-basis outcomes the moment the FRESH row
+    count crossed this function's own 56-row smoke-test floor -- with no
+    flag, no warning, and a floor far below the ~590-row
+    `CONFIRMATION_MINIMUM_ROWS` the protocol actually requires. Without
+    `confirm_fresh_run=True`, a row count at or above `minimum_rows` now
+    returns `"confirmation_capable_unconfirmed"` (no scoring, no FRESH
+    frame even assembled) rather than silently proceeding. This function's
+    `minimum_rows` (56, a smoke-test floor only) is intentionally smaller
+    than `CONFIRMATION_MINIMUM_ROWS` (590, the actual protocol target) --
+    `basis_evaluation_report`/`_fresh_confirmation_report` enforce the
+    larger number separately; this function's own gate only concerns
+    whether to score at all, never how large a sample counts as adequate.
+
     Reads the measured FRESH row count from `data/experiment/audit_basis_
     manifest.json` (Plan 04-01's manifest, built by `build_basis_manifest`)
     rather than re-resolving "yesterday" here -- the manifest's own
@@ -2516,11 +2934,30 @@ def fresh_basis_attempt(
             ),
         }
 
-    # At or above the minimum: genuinely confirmation-capable. Score the
-    # four non-fitted arms (persistence/nwp_wind_delta/raw_forecast/
-    # oracle) -- the fitted arms would need a fresh fit on FRESH-basis
-    # data, which no plan in this phase performs (deferred; scoring what
-    # IS scoreable here rather than silently omitting this branch).
+    # At or above the minimum: smoke-test-capable. Without the explicit
+    # flag, refuse to score -- return the row count and nothing else.
+    if not confirm_fresh_run:
+        return {
+            "corridor": corridor,
+            "branch": "confirmation_capable_unconfirmed",
+            "rows": rows,
+            "minimum_rows": minimum_rows,
+            "minimum_days": minimum_days,
+            "confirmation_claim_permitted": False,
+            "note": (
+                f"{rows} FRESH row(s) measured, at or above this "
+                f"function's {minimum_rows}-row smoke-test floor -- but "
+                f"not scored. Pass confirm_fresh_run=True to score. This "
+                f"is a row-COUNT check only; no FRESH-basis outcome was "
+                f"read to produce this result."
+            ),
+        }
+
+    # Confirmed: score the four non-fitted arms (persistence/nwp_wind_
+    # delta/raw_forecast/oracle) -- the fitted arms would need a fresh fit
+    # on FRESH-basis data, which no plan in this phase performs (deferred;
+    # scoring what IS scoreable here rather than silently omitting this
+    # branch).
     fresh_start = fresh_entry["resolved_window_start"]
     fresh_end = fresh_entry["resolved_window_end"]
     fresh_frame = forecast_experiment.corridor_anchored_pair_frame(

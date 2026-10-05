@@ -1306,10 +1306,44 @@ def test_fresh_basis_attempt_confirmation_capable_branch_scores_fresh_rows(monke
         json.dump(manifest, fh)
 
     result = fea.fresh_basis_attempt(_LEAKAGE_TEST_CORRIDOR, minimum_rows=56, manifest_path=manifest_path)
-    assert result["branch"] == "confirmation_capable"
-    assert result["confirmation_claim_permitted"] is True
-    assert result["frozen_window_guard"]["rows"] > 0
-    assert "scored" in result and "candidates" in result["scored"]
+    assert "scored" not in result
+    assert "branch" in result
+
+    confirmed = fea.fresh_basis_attempt(
+        _LEAKAGE_TEST_CORRIDOR, minimum_rows=56, manifest_path=manifest_path, confirm_fresh_run=True,
+    )
+    assert confirmed["branch"] == "confirmation_capable"
+    assert confirmed["confirmation_claim_permitted"] is True
+    assert confirmed["frozen_window_guard"]["rows"] > 0
+    assert "scored" in confirmed and "candidates" in confirmed["scored"]
+
+
+def test_fresh_basis_attempt_refuses_to_score_without_confirm_flag(tmp_path):
+    """
+    Pre-confirmation readiness, item 1's gate, isolated: a row count at or
+    above `minimum_rows` must NEVER score a FRESH outcome unless
+    `confirm_fresh_run=True` is passed explicitly. No frame is assembled,
+    no anchored_pair_frame monkeypatch is even installed here, proving the
+    unconfirmed path never reaches the point of needing one.
+    """
+    manifest_path = str(tmp_path / "manifest.json")
+    manifest = {
+        "generated_at": "test-fixture", "resolved_window_end": "2026-10-19",
+        "lead_hours": _LEAKAGE_TEST_LEAD_HOURS,
+        "corridors": {
+            _LEAKAGE_TEST_CORRIDOR: {
+                "fresh": {"rows": 60, "resolved_window_start": "2026-09-30", "resolved_window_end": "2026-10-19"},
+            },
+        },
+    }
+    with open(manifest_path, "w", encoding="utf-8") as fh:
+        json.dump(manifest, fh)
+
+    result = fea.fresh_basis_attempt(_LEAKAGE_TEST_CORRIDOR, minimum_rows=56, manifest_path=manifest_path)
+    assert result["branch"] == "confirmation_capable_unconfirmed"
+    assert result["confirmation_claim_permitted"] is False
+    assert "scored" not in result
+    assert "frozen_window_guard" not in result
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -2148,3 +2182,149 @@ def test_cooling_rediscovery_hypothesis_matches_lag_vs_covariate_ablation_embedd
     standalone = fea.cooling_rediscovery_hypothesis(_LEAKAGE_TEST_CORRIDOR, report_path=report_path)
 
     assert standalone == full_report["cooling_rediscovery"]
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Pre-confirmation readiness, item 1: basis_evaluation_report's gate.
+# ──────────────────────────────────────────────────────────────────────────
+
+def test_basis_evaluation_report_rejects_unknown_basis():
+    with pytest.raises(ValueError, match="unknown basis"):
+        fea.basis_evaluation_report(_LEAKAGE_TEST_CORRIDOR, basis="SYNTHETIC")
+
+
+def test_basis_evaluation_report_rejects_confirm_flag_with_ablation_basis():
+    with pytest.raises(ValueError, match="confirm_fresh_run=True has no effect"):
+        fea.basis_evaluation_report(_LEAKAGE_TEST_CORRIDOR, basis="ABLATION", confirm_fresh_run=True)
+
+
+def test_basis_evaluation_report_fresh_without_confirm_flag_raises_before_touching_any_data(monkeypatch):
+    # No monkeypatch of any assembly function, no manifest file written --
+    # proving the gate check happens before any FRESH-basis data, or even
+    # the manifest, is ever touched.
+    def _must_not_be_called(*a, **k):
+        raise AssertionError("build_basis_manifest must not be called before the confirm_fresh_run gate")
+
+    monkeypatch.setattr(fea, "build_basis_manifest", _must_not_be_called)
+    with pytest.raises(ValueError, match="requires explicit confirm_fresh_run=True"):
+        fea.basis_evaluation_report(_LEAKAGE_TEST_CORRIDOR, basis="FRESH")
+
+
+def test_basis_evaluation_report_fresh_confirmed_but_underpowered_refuses(tmp_path):
+    manifest_path = str(tmp_path / "manifest.json")
+    manifest = {
+        "generated_at": "test-fixture", "resolved_window_end": "2026-10-19",
+        "lead_hours": _LEAKAGE_TEST_LEAD_HOURS,
+        "corridors": {
+            _LEAKAGE_TEST_CORRIDOR: {
+                "fresh": {"rows": 60, "resolved_window_start": "2026-09-30", "resolved_window_end": "2026-10-19"},
+            },
+        },
+    }
+    with open(manifest_path, "w", encoding="utf-8") as fh:
+        json.dump(manifest, fh)
+
+    with pytest.raises(ValueError, match="below the protocol's own minimum"):
+        fea.basis_evaluation_report(
+            _LEAKAGE_TEST_CORRIDOR, basis="FRESH", confirm_fresh_run=True, fresh_manifest_path=manifest_path,
+        )
+
+
+def test_basis_evaluation_report_ablation_default_unchanged(monkeypatch, tmp_path):
+    """basis='ABLATION' (the default) is an unconditional pass-through to
+    ablation_basis_report -- same report, same shape, no new risk."""
+    monkeypatch.setattr(config, "FORECAST_EXPERIMENT_CACHE_DIR", str(tmp_path))
+    _patch_leakage_test_assembly(monkeypatch)
+    manifest_path = _write_zero_fresh_manifest(tmp_path)
+    report_path = str(tmp_path / "ablation_report.json")
+
+    direct = fea.ablation_basis_report(
+        _LEAKAGE_TEST_CORRIDOR, report_path=report_path, fresh_manifest_path=manifest_path,
+    )
+    via_entry_point = fea.basis_evaluation_report(
+        _LEAKAGE_TEST_CORRIDOR, basis="ABLATION", report_path=report_path, fresh_manifest_path=manifest_path,
+    )
+    assert direct["candidates"].keys() == via_entry_point["candidates"].keys()
+    assert direct["basis_caveat"] == via_entry_point["basis_caveat"]
+
+
+def _patch_dual_window_assembly(monkeypatch, *, ablation_periods=24 * 220, fresh_periods=24 * 90):
+    """
+    A date-range-AWARE fake for `anchored_pair_frame`, needed because
+    `_fresh_confirmation_report` requests TWO different calendar windows
+    through the same function: the ABLATION/FROZEN window for fitting
+    (`_stacked_pair_frame`, internally), and the FRESH window for scoring
+    (`anchored_pair_frame`/`corridor_anchored_pair_frame` directly). A
+    single fixed-window fake (like `_patch_leakage_test_assembly`, which
+    ignores `start`/`end` entirely) cannot serve both calls correctly --
+    the FRESH-dated rows would fail `assert_basis_excludes_frozen_test_
+    rows(basis='FRESH')` if the fake quietly reused ABLATION-window dates.
+    """
+    city_a, city_b = config.CORRIDOR_ENDPOINTS[_LEAKAGE_TEST_CORRIDOR]
+    fresh_start = (pd.Timestamp(fea.FROZEN_WINDOW_END, tz="UTC") + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    ablation_frames = {
+        city_a: _synthetic_anchored_pair_frame(city_a, periods=ablation_periods, seed=20260930),
+        city_b: _synthetic_anchored_pair_frame(city_b, periods=ablation_periods, seed=20260931),
+    }
+    fresh_frames = {
+        city_a: _synthetic_anchored_pair_frame(city_a, periods=fresh_periods, start=fresh_start, seed=20270101),
+        city_b: _synthetic_anchored_pair_frame(city_b, periods=fresh_periods, start=fresh_start, seed=20270102),
+    }
+
+    def fake_anchored_pair_frame(city, start=None, end=None, *, lead_hours):
+        requested_start = pd.Timestamp(start, tz="UTC") if start else None
+        if requested_start is not None and requested_start >= pd.Timestamp(fea.FROZEN_WINDOW_END, tz="UTC"):
+            return fresh_frames[city].copy()
+        return ablation_frames[city].copy()
+
+    monkeypatch.setattr(fea.forecast_experiment, "anchored_pair_frame", fake_anchored_pair_frame)
+    return fresh_start
+
+
+def test_fresh_confirmation_report_end_to_end_on_synthetic_fresh_window(monkeypatch, tmp_path):
+    """
+    The one positive-path test for the gated FRESH-basis pipeline, entirely
+    on SYNTHETIC data dated after FROZEN_WINDOW_END -- never real FRESH
+    data. Proves the full chain (fit on ABLATION-TRAIN, score on a
+    FRESH-dated frame, frozen-window guard under basis='FRESH', the
+    decision-time boundary assertion, the leakage probe's positive
+    controls) actually executes once confirm_fresh_run=True and the
+    minimum-row gate are both satisfied.
+    """
+    monkeypatch.setattr(config, "FORECAST_EXPERIMENT_CACHE_DIR", str(tmp_path))
+    fresh_start = _patch_dual_window_assembly(monkeypatch)
+
+    manifest_path = str(tmp_path / "manifest.json")
+    manifest = {
+        "generated_at": "test-fixture", "resolved_window_end": "2027-04-01",
+        "lead_hours": _LEAKAGE_TEST_LEAD_HOURS,
+        "corridors": {
+            _LEAKAGE_TEST_CORRIDOR: {
+                "fresh": {"rows": 600, "resolved_window_start": fresh_start, "resolved_window_end": "2027-04-01"},
+            },
+        },
+    }
+    with open(manifest_path, "w", encoding="utf-8") as fh:
+        json.dump(manifest, fh)
+
+    report_path = str(tmp_path / "fresh_confirmation_report.json")
+    report = fea.basis_evaluation_report(
+        _LEAKAGE_TEST_CORRIDOR, basis="FRESH", confirm_fresh_run=True,
+        fresh_manifest_path=manifest_path, report_path=report_path, minimum_fresh_rows=56,
+    )
+
+    assert report["basis"] == "FRESH"
+    assert report["confirmation_claim_permitted"] is True
+    cand = report["candidates"]
+    for name in ("ml_wind_corrected", "ml_cooling_corrected", "reference_ml_refit_24h", "persistence_24h"):
+        assert name in cand and cand[name]["mae"] > 0, (name, cand.get(name))
+    lp = report["leakage_probe"]
+    assert lp["positive_controls_passed"] is True
+    assert lp["sabotaged_arm_detected"] is True
+    assert lp["oracle_detected"] is True
+    assert lp["genuine_candidates_unchanged"] is True
+    assert "Reanalysis-derived" in report["basis_caveat"] or "reanalysis" in report["basis_caveat"].lower()
+
+    with open(report_path, "r", encoding="utf-8") as fh:
+        on_disk = json.load(fh)
+    assert on_disk["basis"] == "FRESH"
