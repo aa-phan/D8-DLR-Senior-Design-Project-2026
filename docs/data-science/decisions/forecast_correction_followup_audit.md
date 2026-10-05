@@ -380,6 +380,23 @@ anchor time exactly `lead_hours` (24) before its own valid time — `anchored_pa
 construction (`backend/forecast_experiment.py:606-620`) guarantees this for every row in the frame, not
 only the ones this finding happened to sample.
 
+**Addressing a specific apparent inconsistency, raised and checked directly against these same
+numbers during this correction pass.** The train side's maximum timestamp, `2025-09-01 18:00:00+00:00`,
+is LATER in wall-clock terms than `2025-09-01 00:00:00+00:00` — the DECISION time (valid time minus the
+24-hour lead) of the first scored validation row, whose own valid time is `2025-09-02 00:00:00+00:00`.
+This is not a leak. The relevant, sufficient guard for a statically-fit-then-scored model (fit once on
+train, scored on every row of a later validation window, never refit per row) is that the model's own
+training labels all precede every validation row's own VALID time — exactly what
+`train_labels_precede_scored_validation` checks (`2025-09-01T18:00 < 2025-09-02T00:00`, measured above).
+It is not required, and would be an unusually strict standard applied to no other static-split
+evaluation in this codebase, that the model's training cutoff also precede every individual validation
+row's own decision time — that standard would forbid reusing any fitted model across more than one
+scored row, since each row's decision time is earlier than the row after it. The model here is deployed
+(frozen) at its training cutoff, `2025-09-01T18:00`, and every row it scores has its own valid time
+strictly after that cutoff (`2025-09-02T00:00` onward) — nothing the model was fit on postdates the
+point at which it is considered "in service," and no validation label ever entered the fit. No
+remediation needed.
+
 ### Finding 8 — the split boundaries are measured disjoint by set intersection and exact-instant placement, not inferred from the predicates (D-01 bullet 4, boundaries)
 
 **Verdict: on the real re-derived boundaries, the filtered train/val/test sides share zero timestamps,
@@ -484,17 +501,25 @@ beating persistence by 49.121 A (95% CI [40.746, 57.623], excludes zero) and bea
 by 21.198 A (95% CI [15.966, 26.340], excludes zero) — the same winner the frozen record reports.
 
 **MIDLAND_EL_PASO does NOT replicate — this is the phase's single most important finding.**
-`ml_wind_corrected` now leads by MAE (127.129), ahead of `ml_cooling_corrected` (132.239) and
-`reference_ml_refit_24h` (135.547). Cooling's margin over the refit model is 3.308 A, 95% CI
-[-2.667, 9.055] — **statistically indistinguishable from zero** — where the frozen record reported a
-distinguishable edge at this exact pair (132.865 vs. 133.525 MAE; see below). The frozen record's
-candidate ordering is **contradicted** at this corridor on this real-data basis: the method that was
-reported as the winner no longer carries a distinguishable advantage over the runner-up it was
-declared to beat, and a different candidate (`ml_wind_corrected`) now has the lowest point MAE.
-Neither ordering is comparable row-for-row to the frozen numbers — a smaller fit sample was used,
-scored on a different held-out period — but the direction of this disagreement, not its exact
-magnitude, is the finding: a decision this audit exists to check for would have shipped the wrong
-answer on evidence this fragile.
+`ml_wind_corrected` now leads on BOTH error metrics (MAE 127.129, RMSE 163.348), ahead of
+`ml_cooling_corrected` (MAE 132.239, RMSE 163.957) and `reference_ml_refit_24h` (MAE 135.547, RMSE
+165.596) — a cleaner result than "leads by MAE" alone states, since wind is also the lower-RMSE
+candidate here, unlike the frozen record's own MAE/RMSE split at this corridor (see "Both error
+metrics" below). Cooling's margin over the refit model is 3.308 A, 95% CI [-2.667, 9.055] —
+**statistically indistinguishable from zero** — where the frozen record reported a distinguishable
+edge at this exact pair (132.865 vs. 133.525 MAE; see below). The frozen record's candidate ordering
+is **contradicted** at this corridor on this real-data basis: the method that was reported as the
+winner no longer carries a distinguishable advantage over the runner-up it was declared to beat, and
+a different candidate (`ml_wind_corrected`) now has the lowest point error on both metrics.
+
+**This replication disagreement is evidence the frozen conclusion does not reproduce here — it is not,
+by itself, proof that the frozen record's own statistical methodology or interval was wrong.** Phase 3's
+test-split margins were computed on the actual frozen test rows, which this ABLATION-basis replication
+never touches; this task fit different models (train-only, not train+val) on a different, non-overlapping
+sample and scored them on a different held-out period. Neither ordering is comparable row-for-row to the
+frozen numbers. What the disagreement licenses is a robustness finding — the frozen record's conclusion
+does not generalize to this replication sample at this corridor — not a methodological indictment of the
+original confidence interval's construction, which this task did not re-compute on the original rows.
 
 ### Block-bootstrap intervals with block-length sensitivity
 
@@ -515,10 +540,19 @@ on average (0.98x–1.31x, mean 1.11x) but one margin **flips**: `ml_wind_correc
 zero at block lengths 4, 8, and 28 (e.g. block 28: [-0.675, 18.007]). The harness's own accelerated
 i.i.d. (BCa) interval for this same margin was already barely excluding zero (CI low = 0.036) before
 any autocorrelation structure was accounted for — the block interval shows this apparent "win" is
-fragile at the frozen record's own interval method, not only at this audit's stricter one. **This
-means the frozen record's intervals are optimistic at Midland**: a margin reported there as
-distinguishable would not survive a block-length sweep accounting for serial correlation in the
-hourly series, and the corrected language in Plan 04-05 must say so.
+fragile under the frozen record's own interval method, not only under this audit's stricter one.
+
+**What this licenses, precisely.** This margin (`ml_wind_corrected` vs. `reference_ml_refit_24h`) is
+one the frozen record never computed — it only ever reported each candidate's margin against
+`persistence_24h`. So this finding is NOT a direct re-test of any interval the frozen record actually
+published; it does not by itself prove any of the frozen record's own reported margins are optimistic.
+What it does show is that the frozen record's own interval method (BCa, accelerated i.i.d.) is capable,
+on this same real dataset, of reporting a fragile, block-sensitive exclusion as a clean one — a
+methodological caution about that method's sensitivity to the hourly series' serial correlation,
+which extends naturally to the frozen record's own margins by the same mechanism, but was not directly
+confirmed against them here. Closing that gap would require re-running the frozen record's own
+persistence-relative margins through this same block-bootstrap sweep on the original frozen test
+rows — not done in this task, and named as a remaining blocker below.
 
 ### Direct pairwise comparison
 
@@ -537,9 +571,12 @@ hourly series, and the corrected language in Plan 04-05 must say so.
 but beating persistence is a **different comparison axis**: persistence is temporal extrapolation
 (the ampacity 24 hours ago), not a physics-informed forecast, and establishes nothing about
 superiority over `raw_forecast`, `ml_wind_corrected`, or `reference_ml_refit_24h`. Against those
-three real candidates, cooling's margin excludes zero only once (vs. refit at Austin); every other
-real-candidate comparison at both corridors is statistically indistinguishable from zero, including
-the margin against the current real winner's own closest competitor. `oracle_observed_future_wind`
+three real candidates, cooling's margin excludes zero **twice**, not once — vs. `refit` at Austin
+(21.198 A, [15.966, 26.340]) AND vs. `raw_forecast` at Midland (27.748 A, [20.961, 34.655], read directly
+from the table above) — cooling significantly beats the raw forecast at Midland. Every other
+real-candidate comparison at both corridors (cooling vs. raw_forecast and vs. wind_corrected at Austin;
+cooling vs. wind_corrected and vs. refit at Midland) is statistically indistinguishable from zero,
+including the margin against the current real winner's own closest competitor. `oracle_observed_future_wind`
 appears nowhere in this table — it is a labelled diagnostic (MAE 12.873/12.254, an unrealizable
 upper bound using observed future wind), never a comparison reference.
 
@@ -555,17 +592,27 @@ upper bound using observed future wind), never a comparison reference.
 
 The frozen record's own Midland numbers for the cooling-versus-refit pair were MAE 132.865 vs.
 133.525 (a 0.66 A MAE advantage for cooling) against RMSE 170.869 vs. 166.668 (a 4.2 A RMSE
-*disadvantage* for cooling) — a MAE/RMSE ordering disagreement the frozen record already carried.
-This replication's own measurement reproduces the same qualitative pattern on different rows: MAE
-favors cooling by a similarly thin margin (132.239 vs. 135.547, now not even distinguishable from
-zero per the pairwise table above) while RMSE still favors refit (163.957 vs. 165.596, though here
-the gap narrows to near-parity). A candidate that wins on mean absolute error while losing on
-root-mean-square error has a lighter typical error and a heavier tail — and for a rating decision the
-tail is the part that matters, because it is the large errors that would have overstated capacity.
-If the frozen record's verdict text had led with RMSE instead of MAE at Midland, it would have read
-differently: `reference_ml_refit_24h`, not `ml_cooling_corrected`, has the better (lower) RMSE at
-this corridor in the frozen numbers (166.668 vs. 170.869), the opposite of what the MAE-led verdict
-states.
+*disadvantage* for cooling) — a genuine MAE/RMSE ordering disagreement the frozen record already
+carried for this specific pair.
+
+**This replication's own measurement does NOT reproduce that disagreement — correcting an earlier
+draft of this section, which stated the opposite.** In this replication, cooling's MAE (132.239) and
+RMSE (163.957) are BOTH lower than (better than) refit's MAE (135.547) and RMSE (165.596) — cooling
+leads refit on both metrics here, the reverse of the frozen record's own MAE/RMSE split for this pair.
+Checked directly against `ablation_basis_report`'s own `mae_rmse_ordering_disagreements` field for
+MIDLAND_EL_PASO: the one disagreeing pair this replication actually flags is `persistence_24h` vs.
+`raw_forecast` (MAE favors `raw_forecast` by 0.994 A while RMSE favors `persistence_24h` by 7.530 A),
+not cooling vs. refit. The real, stronger finding at this corridor is a different one: `ml_wind_corrected`
+leads ALL other real candidates — including both cooling and refit — on both MAE (127.129) and RMSE
+(163.348) simultaneously, with no ordering disagreement of its own. A candidate that wins on mean
+absolute error while losing on root-mean-square error (as cooling does against refit in the FROZEN
+record only, not in this replication) has a lighter typical error and a heavier tail — and for a rating
+decision the tail is the part that matters, because it is the large errors that would have overstated
+capacity. If the frozen record's verdict text had led with RMSE instead of MAE at Midland, it would
+have read differently there: `reference_ml_refit_24h`, not `ml_cooling_corrected`, has the better
+(lower) RMSE in the frozen numbers (166.668 vs. 170.869) — but this replication's own data does not
+carry that same tension for the cooling/refit pair; it instead shows `ml_wind_corrected` beating both
+of them outright.
 
 ### Multiple comparisons and the reserved period
 
@@ -600,9 +647,9 @@ real development data, not synthetic data, to close this gap.
 
 | Bullet | Disposition | Where answered |
 |---|---|---|
-| Block-bootstrap intervals + block-length sensitivity | Confirmed issue at Midland (one margin's exclusion flips at longer block lengths; frozen intervals are optimistic there) | "Block-bootstrap intervals with block-length sensitivity" above |
-| Direct pairwise comparison | Confirmed: cooling distinguishable from persistence only; indistinguishable from raw_forecast/wind_corrected at Austin and from refit at Midland | "Direct pairwise comparison" above |
-| MAE + RMSE reporting, including the Midland divergence | Confirmed: MAE/RMSE ordering disagreement reproduces at Midland; RMSE favors refit, not cooling | "Both error metrics, and the disagreements" above |
+| Block-bootstrap intervals + block-length sensitivity | Confirmed issue at Midland (one margin's exclusion flips at longer block lengths, showing the frozen record's own interval method CAN be fragile on this data — not a direct re-test of the frozen record's own published margins, which used a different margin and the original test rows) | "Block-bootstrap intervals with block-length sensitivity" above |
+| Direct pairwise comparison | Confirmed: cooling distinguishable from persistence at both corridors, from refit at Austin, and from raw_forecast at Midland (twice, not once); indistinguishable from raw_forecast/wind_corrected at Austin and from wind_corrected/refit at Midland | "Direct pairwise comparison" above |
+| MAE + RMSE reporting, including the Midland divergence | Confirmed: the frozen record's own MAE/RMSE ordering disagreement (cooling vs. refit) does NOT reproduce in this replication — both metrics now favor cooling over refit there. The stronger finding: `ml_wind_corrected` leads both other real candidates on both metrics simultaneously | "Both error metrics, and the disagreements" above |
 | Multiple-comparisons / fresh-holdout reservation | Confirmed issue (single-read discovery+confirmation conflation); fresh period reserved from 2026-09-30, 56-row/14-day minimum, currently zero rows available | "Multiple comparisons and the reserved period" above |
 | Synthetic-data configuration selection | Confirmed limitation, both halves stated; real-data re-tuning recommended for future work | "The synthetic configuration selection" above |
 
@@ -776,15 +823,26 @@ measures self-consistency against the reanalysis-derived truth series, not field
 | static_rating_reference | MIDLAND_EL_PASO | 0.05 | 598.59 | 0.005 | 851.41 | 0.587 |
 | quantile (alpha 0.05, ml_cooling_corrected) | MIDLAND_EL_PASO | 0.05 | 0.00 | 0.029 | 929.65 | 0.641 |
 
-At a matched 5% acceptable overrating rate, `ml_cooling_corrected` retains the most usable capacity
-of any real candidate at BOTH corridors — 1,064.68 A (56.0% of Austin-Corpus Christi's static
-rating) and 962.50 A (66.4% of Midland-El Paso's static rating) — ahead of `ml_wind_corrected`,
-`reference_ml_refit_24h`, and persistence at the same matched rate, and well ahead of the static
-rating itself (which retains only 46.9%/58.7% of its own nameplate value at a comparably conservative
-achieved rate). The calibrated quantile at alpha 0.05 (built from `ml_cooling_corrected`'s own point
-prediction) retains a comparable amount — 1,013.94 A at Austin, 929.65 A at Midland — at an achieved
-rate reasonably close to the nominal target, offering the SAME order of retained capacity as the flat
-derating without needing a second calibration pass against a target rate.
+**Correction: "matched rate" below means a matched NOMINAL calibration target, not a matched ACHIEVED
+risk level — see the achieved-rate column, which diverges materially between candidates.** At a shared
+5% nominal calibration target, `ml_cooling_corrected` retains the most usable capacity of any real
+candidate at BOTH corridors — 1,064.68 A (56.0% of Austin-Corpus Christi's static rating) and 962.50 A
+(66.4% of Midland-El Paso's static rating) — ahead of `ml_wind_corrected`, `reference_ml_refit_24h`, and
+persistence at the same nominal target. But cooling's own ACHIEVED overrating rate at that target is
+11.3% at Austin and 6.2% at Midland — roughly 1.4–1.6x `ml_wind_corrected`'s achieved rate under the
+SAME nominal target (6.9% / 4.3%). Cooling's larger retained capacity is therefore explained at least in
+part by it carrying correspondingly more real overrating risk, not solely by a more capacity-efficient
+method at equal risk. **"Retains the most capacity at equal risk" is withdrawn as a claim this table
+supports** — a genuine equal-risk comparison would require re-deriving each candidate's own derating
+until its own achieved rate matches a common target (e.g., iterating wind's derating down until it too
+achieves ~11% on Evaluate, then comparing capacity at that common achieved rate), which was not done
+here and is named as a remaining blocker. The retained-capacity numbers above remain correctly measured
+and well ahead of the static rating itself (which retains only 46.9%/58.7% of its own nameplate value at
+a comparably conservative achieved rate); what is withdrawn is only the equal-risk framing of the
+cross-candidate comparison. The calibrated quantile at alpha 0.05 (built from `ml_cooling_corrected`'s
+own point prediction) retains a comparable amount — 1,013.94 A at Austin, 929.65 A at Midland — at an
+achieved rate reasonably close to the nominal target, offering the SAME order of retained capacity as the
+flat derating without needing a second calibration pass against a target rate.
 
 **Every achieved rate differs from its target**, and the gap is itself a finding, not noise: at
 Austin, persistence's 5%-target derating actually achieves a 12.4% rate on Evaluate — more than
@@ -819,7 +877,7 @@ reanalysis-derived truth series, honestly scoped to that basis, and no further.
 |---|---|---|
 | Overrating frequency, magnitude, and duration by weather regime (including low-wind) | Confirmed: measured per candidate at both corridors; overrating concentrates sharply below the measured convection crossover (100% vs. 80%/79% just above it) | "Frequency, magnitude, duration, and regime" above |
 | Lower ampacity quantiles via pinball loss with a chronologically separate calibration period | Confirmed: three asserted-disjoint periods (fit/calibrate/evaluate); calibration improves evaluate-period exceedance for all but one (candidate, alpha) pair, which is named rather than hidden | "Calibrated lower quantiles" above |
-| Matched-overrating-rate comparison with retained capacity as the headline metric | Confirmed: `ml_cooling_corrected` retains the most capacity among real candidates at a matched 5% rate at both corridors; achieved rates reported alongside targets, including material misses | "Retained capacity at matched overrating rates" above |
+| Matched-overrating-rate comparison with retained capacity as the headline metric | Confirmed as measured: `ml_cooling_corrected` retains the most capacity among real candidates at a shared NOMINAL 5% target at both corridors; achieved rates reported alongside targets and diverge materially (cooling 11.3%/6.2% vs. wind 6.9%/4.3%) — "equal risk" withdrawn as a supported claim; a true equal-achieved-risk comparison remains a blocker | "Retained capacity at matched overrating rates" above |
 | Reliability claim explicitly scoped to the reanalysis-derived verification data, not conductor-level safety | Confirmed: limitation stated before the section's first number, repeated in its own closing subsection and in every table's surrounding text, with no number described as a guaranteed margin of conductor safety | "The scope of the reliability claim" above, and the opening paragraph |
 
 ## Corrected language in the frozen record (D-04)
@@ -833,7 +891,7 @@ correction lives (quoted original, what is wrong with it, and the revised wordin
 | 1 | `ml_cooling_corrected` "wins on the held-out test set at both corridors" | Lowest-observed-24-hour-MAE candidate only; its margin over `reference_ml_refit_24h` is not distinguishable from zero at MIDLAND_EL_PASO (3.308 A, 95% CI [-2.667, 9.055]) | Amendment § 1 |
 | 2 | Point margins "clear" the 30A practical-significance threshold at MIDLAND_EL_PASO | Interval lower bounds (22.347 A / 22.343 A) sit well below the threshold; a related margin (wind vs. refit) flips from excluding zero to not excluding zero across block lengths | Amendment § 2 |
 | 3 | Oracle's margin framed by "recovered fraction" (26.8% / 21.0%) | The oracle is a diagnostic bound on one unrealizable intervention, not an achievable performance ceiling | Amendment § 3 |
-| 4 | Headroom measured against `persistence_24h` | The headroom attributable to correction is the raw_forecast-relative margin (15.053 A / 30.260 A), numerically distinct from the persistence-relative one | Amendment § 4 |
+| 4 | Headroom measured against `persistence_24h` | The headroom attributable to correction is the raw_forecast-relative margin (15.053 A / 30.260 A), numerically distinct from the persistence-relative one. **Correction (2026-10-05):** § 4's own "wrong by more than double" example was itself inaccurate (30.260 A vs. 30.671 A differ by ~1.3%, not 2x) — see Amendment § 7, appended during this fact-check pass. | Amendment § 4, corrected by § 7 |
 | 5 | Legacy 1-hour arm excluded (reaffirmed, not revised) | Adds: a 24-hour-lead result does not, by itself, establish a replacement for the 60-minute production method | Amendment § 5 |
 | 6 | Frozen record never states a position on low-wind sensitivity vs. numerical instability | Measured, not asserted: the response is physics (a floor), not a defect | Amendment § 6 |
 
@@ -869,19 +927,41 @@ term (`backend/forecast_correction_models.py:547`) and `ieee738_ampacity`'s over
 (`backend/thermal_model.py:236-239`) — a real, measured finding about the seam's exposure, reported here
 for the integration-readiness plan to weigh, not evidence of a defect in the physics itself.
 
+**Additional safety-relevant finding, added in this correction pass: the same seam has no symmetric
+ceiling on the HIGH side.** `predict_cooling_correction` (`backend/forecast_correction_models.py:515-521`)
+rejects a non-positive corrected term (its own docstring names this as "the failure direction that can
+get someone hurt") but imposes no corresponding upper bound. `ieee738_ampacity`'s heat-balance line
+(`backend/thermal_model.py:255-257`) only ever clamps the combined heat balance at zero on the LOW side
+(`np.maximum(heat_balance, 0)`); nothing clamps `Q_conv` itself on the high side before it enters that
+sum. So whether `ml_cooling_corrected` represents actual physical convection or an effective statistical
+residual adjustment matters for exactly this reason: it is fit as a statistical residual correction
+(`CoolingCorrectionModel`, trained by `sklearn` regression against the harness's own truth series — see
+`backend/forecast_correction_models.py`'s module structure), not derived from a physical constraint, so
+nothing in the code guarantees its prediction stays within a physically defensible range. An
+overcorrection that predicts too HIGH a convective term passes straight into the heat balance and
+inflates reported ampacity with no ceiling to catch it — the same overrating risk this phase's D-03
+section measures empirically, but here identified as a structural absence of an upper bound in the
+code itself, not only a measured rate. This is a finding for the integration-readiness plan to weigh,
+not a code fix made in this pass (no production code was touched here) — named as a remaining blocker
+below.
+
 ## Corrected verdict
 
-**Recommendation: keep both `ml_cooling_corrected` and `reference_ml_refit_24h` live as integration
-candidates, with low-to-moderate confidence, and do not treat either as ready for a production
-integration decision on this phase's own evidence.** This is not a hedge against disagreeing with the
-frozen record — it is this audit's own considered answer, and it would change under two concrete
+**Recommendation: keep `ml_wind_corrected`, `ml_cooling_corrected`, AND `reference_ml_refit_24h` all
+live as integration candidates, with low-to-moderate confidence, and do not treat any one of them as
+settled or ready for a production integration decision on this phase's own evidence.** An earlier
+draft of this section named only cooling and refit — that undercounted the evidence: `ml_wind_corrected`
+is the strongest real candidate measured at MIDLAND_EL_PASO on this basis (lowest MAE AND lowest RMSE
+among all three correction arms, beating both cooling and refit on both metrics simultaneously), and
+excluding it from the live set was not supported. This is not a hedge against disagreeing with the
+frozen record — it is this audit's own considered answer, and it would shift under two concrete
 conditions: it would strengthen toward preferring `ml_cooling_corrected` if a future FRESH-basis
 confirmation run reproduces AUSTIN_CORPUS_CHRISTI's clean replication at MIDLAND_EL_PASO too (i.e., if
 cooling's margin over the refit model becomes distinguishable from zero on genuinely new rows, not the
-ABLATION basis this phase was limited to); it would weaken toward narrowing to `ml_wind_corrected` or
-dropping `ml_cooling_corrected`'s "primary candidate" status if a future FRESH-basis run instead
-reproduces MIDLAND_EL_PASO's contradiction. Until one of those two things happens, this record treats
-the question as genuinely open at one of the two corridors that matter, not settled.
+ABLATION basis this phase was limited to); it would strengthen toward preferring `ml_wind_corrected`
+instead if a future FRESH-basis run reproduces this replication's MIDLAND_EL_PASO result (wind leading
+both other candidates on both metrics). Until a FRESH-basis run settles it, this record treats the
+question as genuinely open at one of the two corridors that matter, not settled.
 
 Grounded in this phase's own measurements, not the frozen record's own framing: the ABLATION-basis
 replication (D-02) reproduces the frozen record's candidate ordering cleanly at AUSTIN_CORPUS_CHRISTI
@@ -891,14 +971,24 @@ different candidate, `ml_wind_corrected`, now has the lowest point MAE, and `ml_
 margin over the refit model (3.308 A) is not distinguishable from zero there (95% CI [-2.667, 9.055]).
 A related margin at the same corridor (`ml_wind_corrected` vs. `reference_ml_refit_24h`) excludes zero
 at the i.i.d.-equivalent block length but stops excluding zero at longer block lengths that account for
-temporal dependence in the hourly series — this phase's single most load-bearing finding about how
-fragile the frozen record's own confidence intervals are at this corridor. Separately, the conservative-
-rating analysis (D-03) found `ml_cooling_corrected` retains the most usable capacity of any real
-candidate at a matched 5% overrating rate at BOTH corridors (1,064.68 A / 56.0% of static at
-AUSTIN_CORPUS_CHRISTI; 962.50 A / 66.4% of static at MIDLAND_EL_PASO) — a genuinely new axis the frozen
-record never measured, and one that argues FOR keeping `ml_cooling_corrected` live even where its
-pairwise MAE margin is weak, since a risk-adjusted capacity comparison is answering a different and
-arguably more decision-relevant question than a raw MAE margin is. Where this verdict differs from the
+temporal dependence in the hourly series — a finding about how fragile THIS margin, measured under the
+frozen record's own interval method, is at this corridor; it demonstrates that method's sensitivity to
+serial correlation on this dataset, not a direct re-test of any margin the frozen record itself
+published. Separately, the conservative-rating analysis (D-03) found `ml_cooling_corrected` retains the
+most usable capacity of any real candidate at a shared NOMINAL 5% calibration target at BOTH corridors
+(1,064.68 A / 56.0% of static at AUSTIN_CORPUS_CHRISTI; 962.50 A / 66.4% of static at MIDLAND_EL_PASO) —
+but this is NOT a comparison at equal realized risk: cooling's own ACHIEVED overrating rate on the
+Evaluate period (11.3% / 6.2%) is substantially higher than `ml_wind_corrected`'s achieved rate under
+the same nominal target (6.9% / 4.3%, roughly 1.4–1.6x lower). Cooling retains more capacity partly
+because it is carrying correspondingly more real risk, not purely because it is more capacity-efficient
+at a matched risk level — "equal risk" was never actually achieved by calibrating to a shared nominal
+target, only a shared TARGET was. A genuine equal-risk comparison would require re-deriving each
+candidate's own derating until each one's own ACHIEVED rate matches the others', then comparing retained
+capacity at that common achieved rate — not done in this phase, named as a remaining blocker below. This
+retained-capacity finding is a genuinely new axis the frozen record never measured, but its current
+framing overstates what it shows; it does not by itself argue for keeping `ml_cooling_corrected` live
+over `ml_wind_corrected`, since wind was never given the chance to be compared at cooling's own achieved
+risk level. Where this verdict differs from the
 frozen record's own: the frozen record states `ml_cooling_corrected` "wins on the held-out test set at
 both corridors" without qualification; this audit's own real-data replication shows that claim holds
 cleanly at one corridor and does not hold, by the frozen record's own comparison logic (beat the nearest
@@ -909,8 +999,12 @@ measurement, a comparison the frozen record itself never computed.
 by decision, with its disposition:
 
 - **D-01 (Data provenance re-audit):** Phase 3's entire "truth" side is a physics-model reanalysis
-  output (ERA5/ERA5-Land via Open-Meteo's Archive API), never a sensor measurement — confirmed,
-  previously undisclosed in the frozen record. Disposition: confirmed gap, now disclosed.
+  output (ERA5/ERA5-Land via Open-Meteo's Archive API), never a sensor measurement. The frozen record
+  DOES disclose the provenance itself (its own `## Data provenance` section names "the same reanalysis
+  source every other component... already uses") — what it never discloses is the VALIDATION
+  implication: that the truth side itself therefore has no independent, sensor-measured confirmation
+  anywhere in the comparison. Disposition: confirmed gap in the validation-limitation disclosure, now
+  stated explicitly.
 - **D-01:** The lead-time calibration gate proves an archive-to-archive value match, not real-time
   dissemination availability at the claimed decision point — a claim-type limitation distinct from the
   frozen record's already-disclosed coverage limitation. Disposition: confirmed, narrower claim type.
@@ -920,28 +1014,41 @@ by decision, with its disposition:
 - **D-01:** The leakage probe's frozen-run callable shape (`_corridor_arm_reader`) is powerless by
   construction — the oracle itself is silent under it; a live-recomputing re-run (Mode B) on real
   ABLATION rows demonstrates genuine power and finds no leakage in any of the seven real arms.
-  Disposition: confirmed issue with the frozen run's own evidentiary basis, remediated by this phase's
-  own re-run.
+  **Residual gap, not fully closed:** `ablation_basis_report` — the function producing every D-02/D-03
+  number in this record — itself still scores through the same Mode-A-style `_corridor_arm_reader`
+  column reads, not the live-recomputing Mode B shape. Mode B's "no leakage" finding is strong indirect
+  evidence (it tests the same arm-computation functions on the same real basis), but it was not run
+  literally inside `ablation_basis_report`'s own evaluation call — named as a remaining blocker below.
+  Disposition: confirmed issue with the frozen run's own evidentiary basis, partially remediated by this
+  phase's own re-run; full remediation (wiring Mode B into `ablation_basis_report` itself) not done.
 - **D-01:** Arm 5's training labels postdate their own features by exactly 24.0 hours, measured from
   returned indices; split boundaries share zero timestamps across train/val/test; the six-hourly filter
   does not corrupt arm 5's hourly lag offsets, and the interior cadence is unbroken. Disposition:
   confirmed non-issue, all three measured directly.
 - **D-02 (Strengthened comparison):** AUSTIN_CORPUS_CHRISTI's candidate ordering replicates cleanly on
-  real ABLATION-basis out-of-sample rows; MIDLAND_EL_PASO's does not — a different candidate leads, and
-  the frozen record's winning margin over its nearest competitor is not distinguishable from zero.
+  real ABLATION-basis out-of-sample rows; MIDLAND_EL_PASO's does not — `ml_wind_corrected` leads on both
+  MAE and RMSE there, ahead of both cooling and refit, and the frozen record's winning margin over its
+  nearest competitor is not distinguishable from zero. This is a robustness/replication finding, not a
+  proof that the frozen record's own original interval or point estimate was computed incorrectly.
   Disposition: confirmed; the phase's single most important finding.
 - **D-02:** Block-bootstrap intervals with block-length sensitivity (1/4/8/28) show every
-  AUSTIN_CORPUS_CHRISTI margin stable; at MIDLAND_EL_PASO, one margin's favourable exclusion flips at
-  longer block lengths, and the frozen harness's own original interval method was already barely
-  excluding zero for that margin before any correction. Disposition: confirmed; frozen intervals
-  optimistic at Midland.
+  AUSTIN_CORPUS_CHRISTI margin stable; at MIDLAND_EL_PASO, one margin (`ml_wind_corrected` vs.
+  `reference_ml_refit_24h`, a pair the frozen record never itself computed) has its favourable exclusion
+  flip at longer block lengths, under the frozen record's own accelerated interval method. This shows
+  that method's sensitivity to serial correlation on real data; the frozen record's own PUBLISHED
+  margins (all against persistence) were not directly re-tested through this sweep. Disposition:
+  confirmed methodological caution; direct re-test of the frozen record's own margins remains a
+  blocker.
 - **D-02:** Direct pairwise comparisons (never computed in the frozen record) show `ml_cooling_corrected`
   distinguishable from the other real candidates in only one of eight comparisons across both corridors.
   Disposition: confirmed; "wins" overstates the pairwise evidence.
-- **D-02:** MAE and RMSE disagree in ranking at MIDLAND_EL_PASO in both the frozen record's own numbers
-  and this replication — `reference_ml_refit_24h` has the better RMSE where `ml_cooling_corrected` has
-  the (thin, now-replicated-as-fragile) MAE edge. Disposition: confirmed, consistent with the frozen
-  record's own numbers.
+- **D-02:** MAE and RMSE disagree in ranking at MIDLAND_EL_PASO in the frozen record's own numbers
+  (`reference_ml_refit_24h` has the better RMSE where `ml_cooling_corrected` has the MAE edge) — but this
+  disagreement does NOT reproduce in this replication for the cooling/refit pair (both metrics favor
+  cooling there). The stronger, actually-reproduced finding: `ml_wind_corrected` leads both other real
+  candidates on both metrics simultaneously, with no internal disagreement of its own. Disposition:
+  confirmed for the frozen record's own pair; corrected here (did not reproduce, and a different,
+  cleaner finding replaces it) for this replication.
 - **D-02:** A fresh chronological period (starting 2026-09-30, 56-row/14-day minimum) is formally
   reserved for any future confirmation claim; zero rows are available as of this audit's run date.
   Disposition: confirmed limitation, reservation made.
@@ -952,9 +1059,12 @@ by decision, with its disposition:
 - **D-03:** Calibrated lower quantiles (alpha 0.05/0.10) fit, calibrated, and checked on three
   chronologically disjoint periods; calibration improves the evaluate-period exceedance rate for all but
   one (candidate, alpha) pair, named rather than hidden. Disposition: confirmed.
-- **D-03:** At a matched 5% overrating rate, `ml_cooling_corrected` retains the most usable capacity of
-  any real candidate at both corridors, ahead of persistence and the static rating. Disposition:
-  confirmed; this phase's headline new metric.
+- **D-03:** At a shared NOMINAL 5% calibration target, `ml_cooling_corrected` retains the most usable
+  capacity of any real candidate at both corridors, ahead of persistence and the static rating — but its
+  own ACHIEVED overrating rate (11.3%/6.2%) is substantially higher than `ml_wind_corrected`'s (6.9%/4.3%)
+  under the same nominal target, so this is not a comparison at equal realized risk. Disposition:
+  confirmed as measured, but the "at equal risk" framing is withdrawn — a true equal-achieved-risk
+  comparison was not performed, named as a remaining blocker.
 - **D-03:** Every reliability claim in this section is explicitly scoped to self-consistency against a
   reanalysis-derived truth series, never conductor-level field-validated safety. Disposition: confirmed,
   stated before the section's first number and repeated throughout.
@@ -1133,8 +1243,8 @@ it and names a real field, never a stand-in to be named later.
 | `initialization_timestamp` | datetime (UTC, ISO-8601) | n/a | per-run | Required | Pipeline/data team | D-01 Finding 4 — the model-run issuance instant, the first of the three distinct timestamps this contract requires. |
 | `availability_timestamp` | datetime (UTC, ISO-8601), recorded at ingestion | n/a | per-run | Required | Ingestion team | D-01 Finding 4 — the audit's central finding: two retrospective archives can prove a value MATCHES a run issued `lead_hours` earlier, but cannot evidence that the value was actually available to a consumer at that wall-clock instant. Nothing except a timestamp recorded live, at ingestion, closes this gap. |
 | `valid_timestamp` | datetime (UTC, ISO-8601) | n/a | per-row | Required | Pipeline/data team | D-01 Finding 5 — the exhaustive time-reference partition found exactly two clock instants per row (decision time, valid time) in every column this audit's assembled frames carry; a contract must keep that partition explicit rather than collapsing it. |
-| `observed_dlr_amps` | float | amps | hourly or finer | Required | Field/instrumentation team | D-01 Finding 1 — the entire "truth" side of this project's experiments is itself a physics-model reanalysis output, never a sensor measurement; D-03's reanalysis-scope limitation says plainly that no claim in this record establishes conductor-level safety without one. |
-| `observed_air_temp` | float | degC | hourly | Required | Field/instrumentation team | Same as `observed_dlr_amps` — a sensor-measured input is needed for an independent ampacity computation, not only a sensor-measured output. |
+| `observed_dlr_amps` | float | amps | hourly or finer | **Desirable (optional)** — corrected: a literal line-current/ampacity sensor is rare and expensive, and the contract must not require it. If present, it is the strongest available validation and should be used. | Field/instrumentation team | D-01 Finding 1 — the entire "truth" side of this project's experiments is itself a physics-model reanalysis output, never a sensor measurement. A direct ampacity sensor closes this gap most strongly, but `observed_air_temp` + `observed_wind_speed` alone (both Required below) already support an independent conductor-thermal VALIDATION — recomputing ampacity from locally observed weather through the same IEEE-738 physics and comparing to the reanalysis-driven prediction — without needing a literal sensor-measured ampacity at all. |
+| `observed_air_temp` | float | degC | hourly | Required | Field/instrumentation team | Supports an independent ampacity recomputation (via IEEE-738) from locally observed weather, checked against the reanalysis-driven prediction — the near-term achievable validation path even where `observed_dlr_amps` is unavailable. |
 | `observed_wind_speed` | float | m/s | hourly | Required | Field/instrumentation team | Same. |
 | `observed_wind_direction` | float | degrees | hourly | Desirable | Field/instrumentation team | Improves the perpendicular-wind projection D-03's regime analysis already depends on (`thermal_model.perpendicular_wind`). |
 | `observation_quality_flag` | categorical (`ok`/`suspect`/`missing`/`out_of_range`) | n/a | per-observation | Required | Field/instrumentation team | D-03's reanalysis-scope limitation, read forward: without a quality flag, a single bad sensor reading could silently become a false field-validated safety claim rather than a flagged, excluded one. |
