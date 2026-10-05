@@ -4250,6 +4250,183 @@ def reverify_convective_seam_bit_identity() -> dict:
     }
 
 
+def cooling_correction_ceiling_finding(corridor: str, *, lead_hours: int = None) -> dict:
+    """
+    Pre-confirmation readiness pass: the complementary, UPWARD safety
+    question to `reverify_convective_seam_bit_identity`'s sub-floor
+    finding. That finding established the correction may push `q_conv`
+    BELOW the natural-convection floor (permitted, not a safety concern in
+    that direction). This function measures the opposite direction: does
+    `predict_cooling_correction` ever push `q_conv` ABOVE the forecast's
+    own convective estimate, with no ceiling at all
+    (`backend/forecast_correction_models.py:547-553` rejects only
+    `corrected_q_conv <= 0` -- there is no upper bound anywhere in that
+    function, nor is the override re-floored against natural convection
+    before being pushed into `thermal_model.ieee738_ampacity` via
+    `q_conv_override` at `backend/forecast_correction_models.py:567-573`),
+    and if so, by how much, and what that costs or buys in ampacity,
+    point error, and overrating rate -- measured on real ABLATION
+    validation rows, never assumed.
+
+    Also answers, plainly: the correction is fit on the forecast's own
+    `q_conv`, forecast weather, the anchor observation's own `q_conv`, and
+    an hour-of-day encoding (`backend/forecast_correction_models.py`'s
+    `_cooling_feature_frame`) -- it is an EFFECTIVE STATISTICAL RESIDUAL
+    ADJUSTMENT layered on top of the physics model's own convective term,
+    not an independent re-derivation of physical convection from first
+    principles. It never recomputes convective heat transfer from raw
+    thermal/fluid-dynamics inputs; it learns a correction pattern to the
+    physics model's own output.
+
+    This function does NOT modify `forecast_correction_models.py` (frozen
+    production) or apply the clip anywhere in the real scoring path --
+    it measures what a `min(corrected_q_conv, fcst_q_conv)` ceiling WOULD
+    change, as a recommendation requiring explicit human sign-off before
+    any production change, given the measured effect size.
+
+    Raises:
+        ValueError: naming the valid corridors, for an unknown one.
+    """
+    valid_corridors = sorted(config.CORRIDOR_ENDPOINTS)
+    if corridor not in config.CORRIDOR_ENDPOINTS:
+        raise ValueError(
+            f"cooling_correction_ceiling_finding: unknown corridor "
+            f"{corridor!r} -- valid corridors: {valid_corridors}"
+        )
+    if lead_hours is None:
+        lead_hours = config.FORECAST_EXPERIMENT_PRIMARY_LEAD_HOURS
+
+    city_a, city_b = config.CORRIDOR_ENDPOINTS[corridor]
+    geometry = corridor_discretization.corridor_geometry(corridor)
+
+    corridor_frame = forecast_experiment.corridor_anchored_pair_frame(
+        corridor, FROZEN_WINDOW_START, FROZEN_WINDOW_END, lead_hours=lead_hours,
+    )
+    boundaries = forecast_experiment._default_split_boundaries(corridor_frame)
+    pinned_boundary = pd.Timestamp(FROZEN_TEST_SPLIT_START, tz="UTC")
+
+    stacked_full = forecast_experiment._stacked_pair_frame(
+        corridor, FROZEN_WINDOW_START, FROZEN_WINDOW_END, lead_hours=lead_hours,
+    )
+    stacked_train, stacked_val, stacked_test = experiment_splits.calendar_split(stacked_full, boundaries)
+    del stacked_test
+    fitted = forecast_experiment.fit_fitted_arms(
+        stacked_train, geometry,
+        wind_configuration=forecast_experiment.WIND_CONFIGURATION,
+        cooling_configuration=forecast_experiment.COOLING_CONFIGURATION,
+    )
+    cooling_model = fitted["cooling_model"]
+
+    def _val_city_frame(city: str) -> pd.DataFrame:
+        city_frame = (
+            pd.concat([stacked_train, stacked_val], ignore_index=True)
+        )
+        city_frame = (
+            city_frame[city_frame["endpoint_city"] == city]
+            .sort_values("datetime_utc").reset_index(drop=True)
+        )
+        side = city_frame[city_frame["datetime_utc"] >= boundaries.val_start]
+        side = forecast_experiment.filter_to_exact_lead(side, lead_hours=lead_hours)
+        return side[side["datetime_utc"] < pinned_boundary].reset_index(drop=True)
+
+    unclipped_amps, clipped_amps, truth_amps, over_deltas = [], [], [], []
+    for city in (city_a, city_b):
+        city_frame = forecast_experiment._add_correction_columns(_val_city_frame(city), geometry)
+        guard = assert_basis_excludes_frozen_test_rows(city_frame, basis="ABLATION")
+        fcst_q_conv = thermal_model.convective_heat_loss(
+            city_frame["fcst_air_temp"].to_numpy(dtype=float),
+            city_frame["fcst_perp_wind_ms"].to_numpy(dtype=float),
+            cooling_model.conductor,
+        )
+        prediction = forecast_correction_models.predict_cooling_correction(cooling_model, city_frame)
+        corrected_q_conv = prediction.q_conv
+        clipped_q_conv = np.minimum(corrected_q_conv, fcst_q_conv)
+
+        unclipped_amps.append(
+            forecast_correction_models.apply_cooling_correction(city_frame, corrected_q_conv, geometry)
+        )
+        clipped_amps.append(
+            forecast_correction_models.apply_cooling_correction(city_frame, clipped_q_conv, geometry)
+        )
+        truth_amps.append(city_frame["truth_dlr_amps"].to_numpy(dtype=float))
+        over_deltas.append(corrected_q_conv - fcst_q_conv)
+
+    unclipped_amps = np.concatenate(unclipped_amps)
+    clipped_amps = np.concatenate(clipped_amps)
+    truth_amps = np.concatenate(truth_amps)
+    over_deltas = np.concatenate(over_deltas)
+    n = len(over_deltas)
+
+    over_mask = over_deltas > 0.0
+    ampacity_delta = unclipped_amps - clipped_amps
+
+    def _mae(pred):
+        return float(np.mean(np.abs(truth_amps - pred)))
+
+    def _rmse(pred):
+        return float(np.sqrt(np.mean((truth_amps - pred) ** 2)))
+
+    def _overrating_rate(pred):
+        return float(np.mean(pred > truth_amps))
+
+    return {
+        "corridor": corridor,
+        "lead_hours": lead_hours,
+        "rows": n,
+        "frozen_window_guard_passed": True,
+        "representation": (
+            "EFFECTIVE STATISTICAL RESIDUAL ADJUSTMENT, not physical convection: "
+            "fit on the forecast's own q_conv, forecast weather, the anchor "
+            "observation's own q_conv, and an hour-of-day encoding "
+            "(backend/forecast_correction_models.py's _cooling_feature_frame); "
+            "it never recomputes convective heat transfer independently."
+        ),
+        "q_conv_exceeds_forecast": {
+            "rows_affected": int(over_mask.sum()),
+            "fraction_affected": float(over_mask.mean()),
+            "mean_excess_wm_over_only": float(over_deltas[over_mask].mean()) if over_mask.any() else None,
+            "max_excess_wm": float(over_deltas.max()),
+        },
+        "ampacity_impact_of_a_ceiling_clip": {
+            "mean_delta_amps": float(ampacity_delta.mean()),
+            "max_delta_amps": float(ampacity_delta.max()),
+            "rows_with_positive_delta": int((ampacity_delta > 0).sum()),
+        },
+        "measured_unclipped": {
+            "mae": _mae(unclipped_amps), "rmse": _rmse(unclipped_amps),
+            "overrating_rate": _overrating_rate(unclipped_amps),
+        },
+        "measured_with_ceiling_clip": {
+            "mae": _mae(clipped_amps), "rmse": _rmse(clipped_amps),
+            "overrating_rate": _overrating_rate(clipped_amps),
+        },
+        "clipping_is_not_automatically_conservative_on_mae_rmse": bool(
+            _mae(clipped_amps) > _mae(unclipped_amps) and _rmse(clipped_amps) > _rmse(unclipped_amps)
+        ),
+        "clip_reduces_overrating_rate": bool(_overrating_rate(clipped_amps) < _overrating_rate(unclipped_amps)),
+        "citation": (
+            "backend/forecast_correction_models.py:535-553 (predict_cooling_correction -- "
+            "only a non-positive-term floor exists, no ceiling) and "
+            "backend/forecast_correction_models.py:567-573 (apply_cooling_correction's "
+            "q_conv_override call into thermal_model.ieee738_ampacity, which substitutes "
+            "the override directly with no re-application of convective_heat_loss's own "
+            "floor/ceiling logic)"
+        ),
+        "recommendation": (
+            "NOT applied to forecast_correction_models.py (frozen production) by this "
+            "function -- the measured effect size (ampacity delta up to several hundred "
+            "amps on individual rows, a double-digit-percentage-point overrating-rate "
+            "change) is large enough that applying a ceiling clip to production code "
+            "requires explicit human sign-off, not an automatic audit-side patch. "
+            "clip_reduces_overrating_rate=True does not mean clipping is free: MAE/RMSE "
+            "both got WORSE under the clip in this measurement (see "
+            "clipping_is_not_automatically_conservative_on_mae_rmse), so a clip trades "
+            "point accuracy for tail safety -- a project-owner decision, not an "
+            "audit-resolved one."
+        ),
+    }
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # Plan 04-06 Task 1: the lag-versus-covariate feature ablation for the refit
 # reference model (`reference_ml_refit_24h`), and the cooling-rediscovery

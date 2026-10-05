@@ -1852,6 +1852,50 @@ def test_reverify_convective_seam_bit_identity_sub_floor_attempt_is_permitted_wi
     assert max(sf["resulting_ampacity_amps"]) < min(sf["default_path_ampacity_amps"])
 
 
+def test_cooling_correction_ceiling_finding_refuses_unknown_corridor():
+    with pytest.raises(ValueError) as exc_info:
+        fea.cooling_correction_ceiling_finding("NOT_A_REAL_CORRIDOR")
+    message = str(exc_info.value)
+    for name in config.CORRIDOR_ENDPOINTS:
+        assert name in message, message
+
+
+def test_cooling_correction_ceiling_finding_measures_the_upward_gap(monkeypatch):
+    """
+    predict_cooling_correction has no ceiling (only a non-positive-term
+    floor), so the correction can push q_conv above the forecast's own
+    convective estimate with nothing to stop it. This test proves the
+    finding function actually measures that -- not just that it runs --
+    on the deterministic synthetic fixture already used throughout this
+    file for leakage-probe tests.
+    """
+    _patch_leakage_test_assembly(monkeypatch)
+
+    r = fea.cooling_correction_ceiling_finding(_LEAKAGE_TEST_CORRIDOR)
+
+    assert r["rows"] > 0
+    assert "EFFECTIVE STATISTICAL RESIDUAL ADJUSTMENT" in r["representation"]
+
+    gap = r["q_conv_exceeds_forecast"]
+    assert 0.0 <= gap["fraction_affected"] <= 1.0
+    assert gap["max_excess_wm"] >= 0.0
+    if gap["rows_affected"] > 0:
+        assert gap["mean_excess_wm_over_only"] is not None
+        assert gap["mean_excess_wm_over_only"] > 0.0
+
+    # The comparison is internally consistent: a ceiling clip can only ever
+    # reduce (never increase) reported ampacity relative to the unclipped
+    # path, since it clips corrected_q_conv downward only.
+    impact = r["ampacity_impact_of_a_ceiling_clip"]
+    assert impact["mean_delta_amps"] >= 0.0
+    assert impact["max_delta_amps"] >= 0.0
+
+    assert isinstance(r["clip_reduces_overrating_rate"], bool)
+    assert isinstance(r["clipping_is_not_automatically_conservative_on_mae_rmse"], bool)
+    assert "forecast_correction_models.py" in r["citation"]
+    assert "NOT applied to forecast_correction_models.py" in r["recommendation"]
+
+
 def test_low_wind_sensitivity_sweep_custom_wind_grid_still_locates_crossover():
     corridor = next(iter(config.CORRIDOR_ENDPOINTS))
     crossover = fea.convection_crossover_wind_speed(corridor)["crossover_wind_perp_ms"]
