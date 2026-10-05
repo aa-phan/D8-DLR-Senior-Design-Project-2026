@@ -3701,7 +3701,6 @@ def overrating_basis_report(
         target_rates = _DEFAULT_MATCHED_OVERRATING_TARGET_RATES
 
     source = _quantile_source_frame(corridor, lead_hours=lead_hours)
-    combined = source["combined"]
     val_filtered = source["val_filtered"]
 
     real_candidate_names = [n for n in forecast_experiment.ALL_ARMS if n != forecast_experiment.ORACLE_ARM_NAME]
@@ -3718,10 +3717,28 @@ def overrating_basis_report(
         corridor=corridor, minimum_bin_rows=minimum_bin_rows,
     )
 
-    periods = quantile_period_boundaries(combined["datetime_utc"], minimum_rows_per_period=minimum_rows_per_period)
+    # ---- DECISION-TIME FIX (pre-confirmation readiness pass): the quantile
+    # pipeline's fit/calibrate/evaluate periods are carved from `val_filtered`
+    # alone, never `combined` (train+val). `combined` includes the original
+    # ABLATION-TRAIN rows the point models (wind/cooling/arm5) were fit on --
+    # re-splitting it 60/20/20 put ~75% of the "calibrate" period's own rows
+    # (and 100% of "fit") inside that original train range, so most of the
+    # point-model predictions those periods call "out-of-sample" were
+    # actually produced by models that had already seen those exact rows'
+    # own labels during fitting. Verified directly for AUSTIN_CORPUS_CHRISTI
+    # before this fix: calibrate period 628 rows, 472 (75%) in-sample for the
+    # point models (original val_start ~2025-09-01T18:36, calibrate period
+    # start ~2025-05-07) -- a real, previously undetected decision-time leak
+    # into the calibration stage, not a labeling artifact. `val_filtered` is
+    # the one range genuinely out-of-sample for all three fitted point
+    # models (it was never part of `stacked_train`), so restricting the
+    # three-way split to it closes the gap at the cost of a smaller basis
+    # (~784 rows instead of ~3139) -- all three periods remain comfortably
+    # above `minimum_rows_per_period` (default 50).
+    periods = quantile_period_boundaries(val_filtered["datetime_utc"], minimum_rows_per_period=minimum_rows_per_period)
     split_boundaries = experiment_splits.SplitBoundaries(val_start=periods["val_start"], test_start=periods["test_start"])
     fit_frame, calibrate_frame, evaluate_frame = experiment_splits.calendar_split(
-        combined, split_boundaries, min_rows_per_side=1,
+        val_filtered, split_boundaries, min_rows_per_side=1,
     )
 
     calibration = quantile_calibration_report(

@@ -1677,7 +1677,14 @@ def test_overrating_basis_report_runs_and_returns_documented_shape(monkeypatch, 
     _patch_leakage_test_assembly(monkeypatch, periods=24 * 220)
 
     report_path = str(tmp_path / "overrating_report.json")
-    r = fea.overrating_basis_report(_LEAKAGE_TEST_CORRIDOR, report_path=report_path)
+    # minimum_rows_per_period lowered for this synthetic fixture only: the
+    # quantile pipeline's fit/calibrate/evaluate split now runs over
+    # val_filtered alone (the decision-time fix below), which is ~1/4 the
+    # row count `combined` (train+val) was -- a real corridor's ~784 real
+    # ABLATION-val rows clear the real default (50) easily, but this
+    # fixture's synthetic window does not need to be inflated 4x just to
+    # exercise this report's shape.
+    r = fea.overrating_basis_report(_LEAKAGE_TEST_CORRIDOR, report_path=report_path, minimum_rows_per_period=10)
 
     assert "reanalys" in r["limitation"].lower()
     assert r["scored_rows"] > 0
