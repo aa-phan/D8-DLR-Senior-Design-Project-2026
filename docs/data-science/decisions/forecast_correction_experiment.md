@@ -715,6 +715,29 @@ not a theoretical one — it is reported here as a finding for Plan 04-06's inte
 to weigh, not as evidence of any defect in the physics itself, which this sweep's own measurements
 show is finite, monotone, and continuous throughout.
 
+### 7. Correction to this amendment's own § 4 (append-only — § 4's text above is unedited)
+
+**Dated 2026-10-05, added during a focused fact-check pass on this amendment and on
+`forecast_correction_followup_audit.md`.** § 4 above states that a reader inferring "correction added
+roughly 30 A over the raw forecast" at MIDLAND_EL_PASO "would be wrong by more than double." That
+sentence is itself incorrect, and is corrected here rather than edited in place, per this document's own
+append-only discipline.
+
+The two numbers § 4 is comparing are 30.260 A (the correction-relative margin, `raw_forecast` →
+`ml_cooling_corrected`) and 30.671 A (the persistence-relative margin for the same arm). These two
+numbers differ by 0.411 A — about 1.3% of either value — not by a factor of two. § 4's own very next
+clause already says as much: "close by coincidence to the persistence-relative figure of 30.671 A."
+A reader who used the persistence-relative figure (30.671 A) as a stand-in for the correction-relative
+one (30.260 A) at THIS corridor would be off by under half a percent, not "wrong by more than double."
+
+The "more than double" distortion § 4 is reaching for does occur, but at the OTHER corridor:
+AUSTIN_CORPUS_CHRISTI's persistence-relative margin is 24.862 A against a correction-relative margin of
+15.053 A — the persistence-relative figure overstates the correction-relative one by a factor of 1.65,
+not quite double either, but a much larger distortion than the near-zero one at MIDLAND_EL_PASO. §4's
+own general point — that the two axes are numerically distinct, not merely conceptually distinct, and
+that a reader must not substitute one for the other — is correct and stands; only the specific "wrong by
+more than double" example, and its attachment to MIDLAND_EL_PASO specifically, is withdrawn.
+
 ---
 
 For the full measured tables, the block-length sensitivity sweep, the overrating and retained-capacity
