@@ -2042,6 +2042,21 @@ v2 itself, not a new v3, because nothing about the two fixed dates or the core d
   states plainly that the tail-rate-precision target was not met and the result's precision is
   correspondingly wider — an honest "ran out of calendar time" caveat, not a claim of adequate
   statistical power.
+- **Reproducibility requirement for the Nov 24 run itself (added 2026-10-06, forward-looking —
+  nothing here was exercised against real FRESH data to write this).** `_fresh_confirmation_report`
+  already persists its full result to `report_path` as JSON, including `corridor`, `lead_hours`,
+  `basis`, `rows`, the frozen-window/decision-time guard results, and every candidate's measured
+  statistics — that existing mechanism already satisfies "configuration used." Two things it does
+  **not** yet persist, named here as a requirement on whoever runs the Nov 24 evaluation rather than
+  something this pass could safely add: (1) the RAW verification-data API response(s) for the rows
+  actually scored (so a later audit can re-derive the exact ground-truth values used, not just the
+  residuals computed from them), and (2) an explicit retrieval timestamp for when that verification
+  data was fetched (distinct from `valid_time` — this is "when did we go get the answer," needed to
+  reconstruct whether a since-revised value was used). Whoever runs the fixed 2026-11-24 evaluation
+  must capture both alongside the existing report before treating the run as archived — this is not
+  optional polish, it is what makes the one-shot result checkable after the fact. Not implemented
+  in code this pass because doing so safely requires exercising the FRESH-basis code path, which
+  this pass's hard rule (no inspection of reserved outcomes) correctly forbids touching before Nov 24.
 
 ## Shadow prototype — experimental path, not a production change (2026-10-05)
 
