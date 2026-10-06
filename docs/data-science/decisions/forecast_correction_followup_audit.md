@@ -1927,23 +1927,62 @@ below, replaces that waiting condition with a fixed calendar date, per the proje
 instruction that the sample-size figures describe desired precision, not a shipping prerequisite.
 v1's content is kept above, unedited, for the audit trail — this is a supersession, not a deletion.
 
-- **Fixed final-evaluation date: 2026-11-24** (one week before the "early December" ship target,
-  leaving time to write up results and integrate the frozen Nov 1 configuration regardless of
-  outcome; chosen to fall after the Nov 1 model-freeze point by three weeks, giving FRESH data a
-  real chance to accrue beyond this phase's ~16 rows/corridor as of 2026-10-05 without threatening
-  the ship date).
-- **The evaluation runs exactly once, on that date, using whatever FRESH row count has accrued by
-  then** — even if that count is well short of the ~590-row tail-rate-precision target. The result
-  is reported WITH full uncertainty (block-bootstrap CIs, same machinery as every comparison above)
-  regardless of what it shows.
+**v2 wording correction (2026-10-05, same day, "move from auditing to operating" pass) — this
+revises v2's own anti-peeking wording and adds the precise mechanics below; it is a correction to
+v2 itself, not a new v3, because nothing about the two fixed dates or the core discipline changes.**
+
+- **Fixed model-freeze date: 2026-11-01. Fixed final-evaluation date: 2026-11-24.** Unchanged from
+  v2's original statement (one week before the "early December" ship target; three weeks after the
+  freeze point, giving FRESH data a real chance to accrue beyond this phase's ~16 rows/corridor as
+  of 2026-10-05 without threatening the ship date).
+- **Exact evaluation instant: 2026-11-24T00:00:00 UTC.** Chosen as the start of the day rather than
+  its end so the evaluation can actually run and be written up within the 24th itself, with the rest
+  of that day and the following week before "early December" available for integration regardless
+  of outcome.
+- **Valid-time cutoff: every FRESH-basis row whose `valid_time` is strictly before
+  2026-11-24T00:00:00 UTC is in scope; nothing at or after it is.** This is the same strict
+  before/after convention `assert_basis_excludes_frozen_test_rows` already uses for the FROZEN
+  window boundary — a consistent, previously-audited convention, not a new one invented for this
+  protocol.
+- **Verification-data availability delay: 1 day.** The reanalysis truth series this phase's own
+  `FROZEN_WINDOW_END`/FRESH-basis boundary already depends on only resolves a calendar day as
+  available once that day is "fully past" — `forecast_experiment._resolve_window_end`'s own
+  docstring states this explicitly ("the archive needs the day to be fully past"), and resolves
+  `None` end-dates to "yesterday UTC" for exactly this reason. Concretely: a FRESH row with
+  `valid_time` on 2026-11-23 is not guaranteed to have its truth-side reanalysis value available
+  for scoring until 2026-11-24 itself — which is why the evaluation instant above is set to the
+  START of 2026-11-24 rather than, say, 2026-11-23, giving every in-scope row's truth value a full
+  day to actually become available before the evaluation runs.
+- **Missing-data policy: score what is actually available at the evaluation instant; do not wait
+  for it and do not impute it.** If a FRESH row's truth value is not yet resolvable at
+  2026-11-24T00:00:00 UTC (the 1-day availability delay above not yet having elapsed for that row,
+  or any other data gap), that row is excluded from the evaluation's own reported sample size and
+  the exclusion is stated plainly in the write-up — it is never retried after the fact and never
+  silently backfilled, since either would reopen the "evaluate exactly once, on the fixed date"
+  discipline this whole section exists to protect.
 - **"Inconclusive" and "no candidate meets the requirement" are explicitly valid, reportable
-  outcomes** — not failures of the protocol, and not a reason to extend the window.
-- **Anti-peeking discipline, stated in deadline terms:** no outcome from the FRESH basis is
-  inspected before 2026-11-24. No retuning the method, preprocessing, or calibration between Nov 1
-  (the freeze point) and Nov 24 (the evaluation point) on the basis of anything observed in FRESH
-  data — the Nov 1 freeze is a freeze. If a preferred result happens to look significant on an
-  informal peek before Nov 24, the window is not extended or shortened to lock in that result; the
-  pre-committed Nov 24 date is run and reported regardless.
+  outcomes** — not failures of the protocol, and not a reason to extend the window. The result is
+  reported WITH full uncertainty (block-bootstrap CIs, same machinery as every comparison above)
+  regardless of what it shows.
+- **Anti-peeking discipline (corrected wording): no inspection of reserved evaluation OUTCOMES
+  before 2026-11-24T00:00:00 UTC.** This replaces v2's original "no retuning... regardless of
+  informal peeks" framing with a sharper, more defensible statement of what is actually forbidden:
+  looking at any outcome-based performance figure — accuracy, achieved overrating rate, retained
+  capacity, or anything else derived from comparing a FRESH prediction to its ground truth — for any
+  FRESH row, at any time before the fixed evaluation instant. No retuning the method, preprocessing,
+  or calibration between Nov 1 (the freeze point) and Nov 24 (the evaluation point) on the basis of
+  anything observed in FRESH data follows directly from this: the Nov 1 freeze is a freeze. If a
+  preferred result happens to look significant on an informal peek before Nov 24, the window is not
+  extended or shortened to lock in that result; the pre-committed Nov 24 instant is run and reported
+  regardless.
+- **Explicit carve-out — mechanical health checks are NOT outcome inspection and remain permitted at
+  any time:** confirming the shadow pipeline's own logs exist, that its four timestamps
+  (initialization/availability/decision/valid) are populated and sane, that FRESH-basis row counts
+  are accruing, and that `data/shadow/predictions/*.jsonl` is being written to without errors — none
+  of this touches any ground-truth comparison and none of it is reserved. This is the same
+  distinction the "Verify live recording actually works end to end" work above exercises: checking
+  the collector is alive is not the same act as reading its results, and nobody should mistake one
+  for the other under this protocol.
 - **The two sample-size figures are reported alongside the result, not substituted for it:** if the
   Nov 24 FRESH count is below ~590 rows (very likely, at current ~16/corridor accrual), the report
   states plainly that the tail-rate-precision target was not met and the result's precision is

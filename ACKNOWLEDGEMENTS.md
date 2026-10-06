@@ -1095,6 +1095,16 @@ Claude Code was used to:
 
 **Verified, not merely trusted:** ran `backend/tests/forecast_experiment_audit_test.py` and `backend/tests/forecast_shadow_pipeline_test.py` together (138/138 pass, unchanged), confirmed by direct `grep` that every remaining occurrence of the stale 11.3%/6.2%/6.9%/4.3% figures in the document is now inside text explicitly marked historical/superseded, not stated as current.
 
+### Session: 2026-10-05 (continued), conducted by Aaron Phan — protocol v2 wording correction (item 7 of the "move from auditing to operating" directive); documentation-only, direct working-tree task
+
+Claude Code was used to revise the versioned confirmation protocol's (v2) anti-peeking wording in `docs/data-science/decisions/forecast_correction_followup_audit.md`, as a dated correction to v2 itself (not a new v3, since neither fixed date changes):
+
+1. Replaced "no retuning the method... regardless of informal peeks" with the sharper, more precise "no inspection of reserved evaluation OUTCOMES before 2026-11-24T00:00:00 UTC" — naming exactly what's forbidden (reading any outcome-based performance figure for any FRESH row) rather than only its downstream consequence (retuning).
+2. Added an explicit carve-out distinguishing mechanical health checks (log files exist, timestamps are sane, row counts are accruing) — permitted at any time — from outcome inspection (comparing a prediction to its ground truth) — reserved until the fixed instant.
+3. Specified, for the first time, the exact evaluation instant (2026-11-24T00:00:00 UTC, chosen as day-start so the evaluation and write-up both fit inside the 24th), the valid-time cutoff (strictly before that instant, the same boundary convention `assert_basis_excludes_frozen_test_rows` already uses), the verification-data availability delay (1 day — traced to `forecast_experiment._resolve_window_end`'s own documented "archive needs the day to be fully past" behavior, not invented), and the missing-data policy (score what's available at the instant, exclude and state what isn't, never retry or backfill after the fact).
+
+**Verified, not merely trusted:** re-ran `backend/tests/forecast_experiment_audit_test.py` + `backend/tests/forecast_shadow_pipeline_test.py` after the edit (138/138, unaffected — documentation-only change) and confirmed the 1-day availability-delay figure against `forecast_experiment.py`'s actual source rather than asserting a number.
+
 ## Keeping This Updated
 
 This file should be reviewed and updated to reflect new AI-assisted work **before any significant commit** — i.e., before committing new features, substantial documentation, or non-trivial refactors produced with AI assistance. A commit is "significant" for this purpose if it would need describing in a standup/status update; trivial fixes (typos, formatting) don't require an update here.
