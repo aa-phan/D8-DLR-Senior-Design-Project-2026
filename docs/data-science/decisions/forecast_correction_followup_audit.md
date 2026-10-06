@@ -2081,6 +2081,112 @@ parameter everywhere, never defaulted) specifically so this open question is nev
 by implementation default. **This remains an open decision for the project owner or team**, not
 closed by this pass.
 
+### Complete input trace (2026-10-06, "finish the operational integration")
+
+Every input `backend/forecast_correction_models.py::predict_wind_correction` and
+`backend/thermal_model.py::ieee738_ampacity` actually require, traced to the real feature code
+(`_wind_feature_frame`) rather than assumed:
+
+| Variable | Flow | Live source today | Status |
+|---|---|---|---|
+| `fcst_wind_speed`/`fcst_wind_direction` | Forecast (valid-time) | Open-Meteo forecast API, `fetch_live_forecast_for_valid_time` → `open_meteo_forecast_provider.fetch_single_run` | Already wired (04-05-dated pass) |
+| `fcst_air_temp` | Forecast (valid-time) | Same forecast call | Already wired |
+| `fcst_solar_radiation` | Forecast (valid-time) | Same forecast call | Already wired |
+| `anchor_wind_speed`/`anchor_wind_direction` | Observation (now) | TCEQ CAMS primary → explicit Synoptic retry on an unusable TCEQ row | Fixed in the immediately prior pass (`42ee22e`) |
+| `hour_sin`/`hour_cos`, `endpoint_indicator` | Derived | Computed from timestamps/config, no external source needed | N/A |
+
+**No anchor temperature or anchor solar input exists anywhere in the model's real feature set** —
+confirmed by reading `_wind_feature_frame` directly, not assumed from the variable names' surface
+similarity to the forecast-side columns. IEEE 738's own `T_amb_c`/`ghi_wm2` parameters are satisfied
+by the SAME forecast-side `fcst_air_temp`/`fcst_solar_radiation` values the model itself consumes —
+there is no second, separate "live anchor solar" or "live anchor temperature" path to build, and
+this pass's trace closes that open question rather than leaving it assumed. This means NSRDB's own
+near-real-time latency (checked: it is a historical/archive-style product, not verified here to
+answer a "most recent observation" query the way the anchor-wind path does) is **not actually load-
+bearing for this model** — solar comes from the forecast API, never from NSRDB, in this pipeline.
+
+Both endpoint cities already receive every one of these inputs independently (`CorridorWindCorrectionMethod.predict`
+loops per city before reducing), and the per-city ampacity → corridor-weakest-link order was already
+correct from the prior pass — re-confirmed, not re-built, this pass.
+
+**Failure-reason precision (item 3).** `fetch_live_anchor_observation`'s combined failure message
+previously read "both either raised, returned nothing, or had a null wind field" — an ambiguous
+disjunction that could describe any of several real failure combinations. It now names each
+provider's own specific failure shape (e.g. `TCEQ CAMS '1095': latest row at <ts> has a null wind
+field; Synoptic 'KMAF': fetch raised (<exception>)`), via `_latest_usable_row` returning
+`(row_or_None, reason)` instead of a bare optional. No second near-duplicate retry chain exists
+elsewhere in this module to consolidate against — the anchor-wind path is the only place a
+provider-level "mechanically successful but unusable" check is needed today, since temperature and
+solar both come from the forecast path's own existing null-check (`row.isnull().any()` in
+`fetch_live_forecast_for_valid_time`), which is a different, already-correct mechanism (a single
+NWP provider, not a two-provider composition).
+
+**Live-run evidence, both corridors, same session:** both corridors completed with
+`fallback_used=False` (a genuine `ml_wind_corrected` prediction, not a prediction-method fallback)
+— even though EVERY one of the four endpoint cities hit TCEQ's trailing-null-hour gap and had to
+fall back to Synoptic at the PROVIDER level. This is the precise distinction the user asked to keep
+unambiguous: a provider fallback (TCEQ → Synoptic) that still yields a successful corrected
+prediction is reported in `input_provenance.anchor_provenance` as `anchor_source: "synoptic"` per
+city, fully separate from the top-level `fallback_used`/`fallback_reason` fields, which are reserved
+for a PREDICTION-METHOD fallback (no provider anywhere supplied a usable value, so the whole
+prediction degrades to `raw_forecast`). The two fields were already structurally distinct before
+this pass; this pass's live run is the first time both corridors demonstrated the provider-fallback
+case succeeding end to end on the same invocation.
+
+### Persistent-collection deployment package (team-controlled host)
+
+**Scheduler: cron**, chosen over launchd for portability across whatever OS a team member's host
+actually runs (launchd is macOS-only; cron exists on any Linux host the team is more likely to
+actually deploy a long-running collector on). A twice-daily cadence matches this phase's own
+roughly-every-12-hours station-refresh assumption without over-polling a free-tier API:
+
+```cron
+# forecast_shadow_collect.py -- runs at 06:00 and 18:00 UTC daily.
+# Adjust SENIOR_DESIGN_HOME to the actual deployment path.
+0 6,18 * * * cd SENIOR_DESIGN_HOME && PYTHONPATH=backend SENIOR_DESIGN_HOME/.venv/bin/python3.12 backend/forecast_shadow_collect.py >> data/shadow/collect.cron.log 2>&1
+```
+
+**Environment setup:**
+1. Clone the repo, create/activate the existing `.venv` per `requirements.txt` (now includes
+   `python-dotenv`, added this session).
+2. Set `SYNOPTIC_TOKEN` — either a real shell export (`export SYNOPTIC_TOKEN=...`, the convention
+   every other credential read in this repo already uses) or a `.env` file in the repo root; both
+   work as of this session's `load_dotenv()` wiring in `forecast_shadow_pipeline.py`, and a real
+   shell export always takes precedence if both are present.
+3. No separate TCEQ credential is required — `tceq_provider.py`'s `daily_summary.pl` endpoint is
+   unauthenticated.
+
+**Durable logs:** already true, unchanged — `data/shadow/predictions/<corridor>.jsonl`, append-only,
+git-ignored (same convention as every other generated report in this phase).
+
+**Duplicate prevention:** already true, re-confirmed this pass, not re-built — `forecast_shadow_collect.py`'s
+exclusive `flock` on `data/shadow/.collect.lock` causes a second concurrent invocation to skip
+(exit code 2) rather than race the first.
+
+**Per-corridor isolation against a station gap stopping collection entirely:** confirmed, not
+rebuilt — a station-level failure (the null-wind/stale cases items 1-3 handle) is already caught
+two layers deep, inside `ShadowPipeline.predict` itself, and never reaches `collect_once`'s own
+per-corridor `try/except` at all; the only way a corridor's attempt can reach that outer `except` is
+a genuine code bug, which is exactly what its exit-code-1 contract is for. An all-stations-down day
+logs an all-fallback run and exits 0, not a crash.
+
+**Health check — new this pass:** `backend/forecast_shadow_healthcheck.py`
+(`backend/tests/forecast_shadow_healthcheck_test.py`, 4 tests) reports each corridor's most recent
+log entry's age and whether it was a corrected prediction or a fallback, exiting 1 if any corridor's
+last entry is older than `--max-age-minutes` (default 24h) or missing entirely. An all-fallback
+recent run is reported healthy (the collector IS running; a station gap is an expected, already-
+logged condition, not a scheduler failure) — this check answers "is the collector still running,"
+never "is every input source currently available right now."
+
+```
+PYTHONPATH=backend .venv/bin/python3.12 backend/forecast_shadow_healthcheck.py
+```
+
+**Status, stated precisely, not blurred: this is fully configured and tested, but NOT installed
+anywhere.** `crontab -l` on this machine returns no crontab at all as of this pass — nothing is
+scheduled. The cron line above is the complete, exact setup a team member would add on their own
+controlled host; no one has done so yet.
+
 ## References
 
 **The record under audit, and its appended amendment.**

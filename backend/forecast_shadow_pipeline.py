@@ -324,40 +324,42 @@ def fetch_live_anchor_observation(
 
     def _latest_usable_row(location, provider, label):
         """
-        One fetch-and-validate attempt. Returns the latest at-or-before-
-        decision_time row if its required wind fields are non-null, else
-        `None` -- a MECHANICALLY SUCCESSFUL but UNUSABLE response (e.g.
-        TCEQ's own trailing not-yet-reported hour, confirmed live this
-        session: `daily_summary.pl` returns a full 24-local-hour skeleton
-        with NaN for hours not yet published) is distinct from a raised
-        exception and is handled by the caller trying the next source, not
-        by raising here.
+        One fetch-and-validate attempt. Returns `(row, None)` if the
+        latest at-or-before-decision_time row has non-null required wind
+        fields, else `(None, reason)` where `reason` names exactly which
+        of the four distinct failure shapes occurred -- a MECHANICALLY
+        SUCCESSFUL but UNUSABLE response (e.g. TCEQ's own trailing
+        not-yet-reported hour, confirmed live this session:
+        `daily_summary.pl` returns a full 24-local-hour skeleton with NaN
+        for hours not yet published) is distinct from a raised exception,
+        an empty response, and a response with no row in the lookback
+        window -- the caller needs to know WHICH shape occurred per
+        attempt to build a precise combined failure message, not just
+        that *an* attempt failed.
         """
         try:
             frame = weather_provider.fetch_weather(location, window_start, window_end, provider=provider)
         except Exception as exc:
-            logger.info("%s: fetch raised (%s) -- trying next source if any", label, exc)
-            return None
+            reason = f"fetch raised ({exc})"
+            logger.info("%s: %s -- trying next source if any", label, reason)
+            return None, reason
         if frame.empty:
-            logger.info("%s: empty response -- trying next source if any", label)
-            return None
+            reason = "empty response"
+            logger.info("%s: %s -- trying next source if any", label, reason)
+            return None, reason
         frame = frame.reset_index()
         frame["datetime_utc"] = pd.to_datetime(frame["datetime_utc"], utc=True)
         frame = frame[frame["datetime_utc"] <= decision_time].sort_values("datetime_utc")
         if frame.empty:
-            logger.info(
-                "%s: no row at/before decision_time %s -- trying next source if any",
-                label, decision_time,
-            )
-            return None
+            reason = f"no row at/before decision_time {decision_time}"
+            logger.info("%s: %s -- trying next source if any", label, reason)
+            return None, reason
         row = frame.iloc[-1]
         if pd.isnull(row.get("wind_speed")) or pd.isnull(row.get("wind_direction")):
-            logger.info(
-                "%s: latest row at %s has a null wind field -- trying next source if any",
-                label, row["datetime_utc"],
-            )
-            return None
-        return row
+            reason = f"latest row at {row['datetime_utc']} has a null wind field"
+            logger.info("%s: %s -- trying next source if any", label, reason)
+            return None, reason
+        return row, None
 
     # Primary: TCEQ. `fetch_weather`'s own `fallback=True` already retries
     # Synoptic automatically on a RAISED exception or an empty response --
@@ -366,27 +368,36 @@ def fetch_live_anchor_observation(
     # provider has no notion of "the one row this caller cares about."
     # That gap is this function's job to close, by explicitly trying the
     # same Synoptic fallback target a second time, at the row level.
-    latest = _latest_usable_row([cams_id], "tceq", f"fetch_live_anchor_observation({city!r}, tceq CAMS {cams_id!r})")
+    latest, tceq_reason = _latest_usable_row(
+        [cams_id], "tceq", f"fetch_live_anchor_observation({city!r}, tceq CAMS {cams_id!r})"
+    )
     actual_source = "tceq"
     actual_station = cams_id
+    synoptic_station = config.SYNOPTIC_FALLBACK_STATIONS.get(city)
+    synoptic_reason = None
 
     if latest is None:
-        synoptic_station = config.SYNOPTIC_FALLBACK_STATIONS.get(city)
         if synoptic_station is not None:
-            latest = _latest_usable_row(
+            latest, synoptic_reason = _latest_usable_row(
                 [synoptic_station], "synoptic",
                 f"fetch_live_anchor_observation({city!r}, explicit Synoptic retry, station {synoptic_station!r})",
             )
             actual_source = "synoptic"
             actual_station = synoptic_station
+        else:
+            synoptic_reason = "no Synoptic fallback station configured for this city"
 
     if latest is None:
+        # Precise, per-provider attribution -- not a single message that
+        # could describe any of several different failure combinations
+        # ambiguously. Each half names its own provider and its own one
+        # of the four distinct failure shapes `_latest_usable_row` can
+        # report (raised, empty, no row in window, null wind field).
         raise StaleOrMissingDataError(
             f"fetch_live_anchor_observation: no usable wind observation for {city!r} "
             f"at/before decision_time {decision_time} within the {lookback_hours}h lookback "
-            f"window -- tried TCEQ CAMS {cams_id!r} and the explicit Synoptic retry "
-            f"(station {config.SYNOPTIC_FALLBACK_STATIONS.get(city)!r}); both either raised, "
-            "returned nothing, or had a null wind field on their latest row"
+            f"window -- TCEQ CAMS {cams_id!r}: {tceq_reason}; "
+            f"Synoptic {synoptic_station!r}: {synoptic_reason}"
         )
 
     # `wind_source` (units_def.PIPELINE_SCHEMA provenance column, set by

@@ -432,6 +432,34 @@ def test_fetch_live_anchor_observation_falls_back_to_synoptic_on_unusable_tceq_r
     assert anchor["anchor_station"] == synoptic_station
 
 
+def test_fetch_live_anchor_observation_failure_names_each_provider_distinctly(monkeypatch):
+    """The combined failure message must attribute EACH provider's OWN
+    failure shape, not lump both into one ambiguous sentence -- TCEQ's
+    null-wind-field case and Synoptic's raised-exception case are
+    different failure shapes and the message must say so, not just that
+    'both either raised, returned nothing, or had a null wind field'."""
+    cams_id = config.TCEQ_STATIONS["AUSTIN"]
+    synoptic_station = config.SYNOPTIC_FALLBACK_STATIONS["AUSTIN"]
+
+    def _fetch(location, start, end, provider="tceq", **kw):
+        end_ts = pd.Timestamp(end)
+        if provider == "tceq":
+            idx = pd.MultiIndex.from_tuples([(cams_id, end_ts)], names=["stid", "datetime_utc"])
+            return pd.DataFrame(
+                {"wind_speed": [None], "wind_direction": [None], "wind_source": [None]}, index=idx,
+            )
+        raise OSError("Synoptic connection refused")
+
+    monkeypatch.setattr(weather_provider, "fetch_weather", _fetch)
+    with pytest.raises(shadow.StaleOrMissingDataError) as exc_info:
+        shadow.fetch_live_anchor_observation("AUSTIN", pd.Timestamp("2026-10-06T12:00:00Z"))
+    message = str(exc_info.value)
+    assert f"TCEQ CAMS {cams_id!r}" in message
+    assert "null wind field" in message
+    assert f"Synoptic {synoptic_station!r}" in message
+    assert "Synoptic connection refused" in message
+
+
 def test_attach_wind_correction_inputs_populates_every_feature_frame_column(monkeypatch):
     monkeypatch.setattr(weather_provider, "fetch_weather", _fake_tceq_observation(config.TCEQ_STATIONS["AUSTIN"]))
     row = _synthetic_row()

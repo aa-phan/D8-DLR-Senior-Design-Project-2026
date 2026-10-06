@@ -1261,3 +1261,52 @@ response is mechanically successful but unusable.
 `backend/tests/forecast_shadow_pipeline_test.py` + `backend/tests/forecast_shadow_collect_test.py`
 together (152/152 pass, 1 new) both before and after, plus two real live invocations of
 `backend/forecast_shadow_demo.py` against the actual TCEQ and Synoptic APIs for both corridors.
+
+### Session: 2026-10-06 (continued), conducted by Aaron Phan — finish the operational integration
+
+Claude Code was used to trace every remaining input path (not just anchor wind), precisely attribute
+multi-provider failure reasons, run both corridors live, and finish the team-deployable collection
+setup.
+
+**Item 1 (complete input trace):** traced `predict_wind_correction`'s real feature set
+(`_wind_feature_frame`) directly rather than assuming parallel anchor-temperature/anchor-solar paths
+existed. Found there are none — IEEE 738's `T_amb_c`/`ghi_wm2` and the model's own
+`fcst_air_temp`/`fcst_solar_radiation` features are the SAME forecast-API values, already fully
+wired via `fetch_live_forecast_for_valid_time` with its own existing null-check. NSRDB's real-time
+latency question is answered as moot for this model: solar never comes from NSRDB in this pipeline.
+No new gap found here — verified, not reopened.
+
+**Item 2 (per-city, pre-reduction):** re-confirmed `CorridorWindCorrectionMethod` already fetches
+every required input per city independently before the weakest-link reduction — correct from the
+prior pass, no change needed.
+
+**Item 3 (precise per-provider failure attribution):** `_latest_usable_row` in
+`backend/forecast_shadow_pipeline.py` now returns `(row_or_None, reason)` instead of a bare
+optional, and `fetch_live_anchor_observation`'s combined failure message now names each provider's
+own specific failure shape (e.g. "TCEQ CAMS '1095': latest row at <ts> has a null wind field;
+Synoptic 'KMAF': fetch raised (...)") instead of one ambiguous disjunction covering both. Added
+`test_fetch_live_anchor_observation_failure_names_each_provider_distinctly`, a positive control
+proving the message attributes each provider correctly when they fail in DIFFERENT ways. No
+duplicate retry chain existed elsewhere to consolidate against (the forecast path's own null-check
+is a different, single-provider mechanism).
+
+**Item 4 (live run, both corridors):** ran `backend/forecast_shadow_demo.py` against real TCEQ and
+Synoptic APIs for both corridors. Both completed `fallback_used=False` (genuine `ml_wind_corrected`
+predictions) even though all four endpoint cities hit TCEQ's trailing-null-hour gap and fell back to
+Synoptic at the PROVIDER level — the first time both corridors demonstrated a provider-fallback
+succeeding end to end in the same run. Confirmed `fallback_used`/`fallback_reason` (prediction-method
+fallback) and `anchor_provenance[city].anchor_source` (provider-level fallback) were already
+structurally distinct fields, not conflated.
+
+**Item 5 (deployment package):** added `backend/forecast_shadow_healthcheck.py`
+(`backend/tests/forecast_shadow_healthcheck_test.py`, 4 tests) — reports per-corridor log-entry
+freshness, treating a recent all-fallback run as healthy (the collector running is a different
+question from every input source being currently available). Wrote the complete cron deployment
+package (exact crontab line, environment setup, credential convention) in the audit doc. Stated
+plainly, checked via `crontab -l` on this machine: nothing is actually scheduled anywhere right
+now — this is configured and tested, not running.
+
+**Verified, not merely trusted:** ran `backend/tests/forecast_experiment_audit_test.py` +
+`backend/tests/forecast_shadow_pipeline_test.py` + `backend/tests/forecast_shadow_collect_test.py` +
+`backend/tests/forecast_shadow_healthcheck_test.py` together (157/157 pass, 5 new) both before and
+after, plus two real live invocations of `backend/forecast_shadow_demo.py` for both corridors.
