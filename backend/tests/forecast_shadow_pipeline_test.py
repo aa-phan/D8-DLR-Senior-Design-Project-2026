@@ -9,9 +9,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import config
 import corridor_discretization
 import forecast_correction_models
 import forecast_shadow_pipeline as shadow
+import weather_provider
 
 _CORRIDOR = "AUSTIN_CORPUS_CHRISTI"
 
@@ -302,3 +304,165 @@ def test_shadow_pipeline_accepts_the_one_evaluated_horizon():
     )
     prediction = pipeline.predict(frame, ts)
     assert prediction.fallback_used is False
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 2026-10-06 pass: complete the wind-corrected live path (no fallback).
+# These tests close the exact gap a real live run surfaced: the
+# wind-correction model's feature frame needs a live anchor observation
+# that nothing upstream of this pass ever supplied.
+# ──────────────────────────────────────────────────────────────────────
+
+def _synthetic_wind_fit_frame_real_cities(n=80, seed=1):
+    """
+    Same shape as `_synthetic_wind_fit_frame`, but keyed on `_CORRIDOR`'s
+    REAL endpoint city names (`config.CORRIDOR_ENDPOINTS`) rather than
+    `_CORRIDOR + "_A"/"_B"` placeholders -- needed for tests that also
+    call `fetch_live_anchor_observation`, which looks the city up in
+    `config.SYNOPTIC_FALLBACK_STATIONS` and only knows real city names.
+    """
+    rng = np.random.default_rng(seed)
+    cities = list(config.CORRIDOR_ENDPOINTS[_CORRIDOR])
+    ts = pd.date_range("2024-01-01", periods=n, freq="6h", tz="UTC")
+    rows = []
+    for i in range(n):
+        rows.append({
+            "datetime_utc": ts[i],
+            "endpoint_city": cities[i % 2],
+            "fcst_wind_speed": rng.uniform(1.0, 10.0),
+            "fcst_wind_direction": rng.uniform(0.0, 360.0),
+            "fcst_air_temp": rng.uniform(10.0, 35.0),
+            "fcst_solar_radiation": rng.uniform(0.0, 800.0),
+            "anchor_wind_speed": rng.uniform(1.0, 10.0),
+            "anchor_wind_direction": rng.uniform(0.0, 360.0),
+            "truth_wind_speed": rng.uniform(1.0, 10.0),
+            "truth_wind_direction": rng.uniform(0.0, 360.0),
+        })
+    return pd.DataFrame(rows)
+
+
+def _fake_synoptic_observation(station, air_temp=27.5, wind_speed=5.2, wind_direction=135.0):
+    def _fetch(location, start, end, provider="synoptic", **kw):
+        assert location == [station]
+        end_ts = pd.Timestamp(end)
+        idx = pd.MultiIndex.from_tuples([(station, end_ts)], names=["stid", "datetime_utc"])
+        return pd.DataFrame(
+            {
+                "air_temp": [air_temp], "wind_speed": [wind_speed],
+                "wind_direction": [wind_direction], "solar_radiation": [410.0],
+                "relative_humidity": [48.0],
+            },
+            index=idx,
+        )
+    return _fetch
+
+
+def test_fetch_live_anchor_observation_returns_the_latest_row_before_decision_time(monkeypatch):
+    monkeypatch.setattr(weather_provider, "fetch_weather", _fake_synoptic_observation("KAUS"))
+    decision_time = pd.Timestamp("2026-10-06T12:00:00Z")
+    anchor = shadow.fetch_live_anchor_observation("AUSTIN", decision_time)
+    assert anchor["anchor_wind_speed"] == 5.2
+    assert anchor["anchor_wind_direction"] == 135.0
+    assert anchor["anchor_source"] == "synoptic"
+    assert anchor["anchor_station"] == "KAUS"
+
+
+def test_fetch_live_anchor_observation_rejects_unknown_city():
+    with pytest.raises(shadow.StaleOrMissingDataError, match="no known live station"):
+        shadow.fetch_live_anchor_observation("NOT_A_REAL_CITY", pd.Timestamp("2026-10-06T12:00:00Z"))
+
+
+def test_fetch_live_anchor_observation_wraps_a_failed_fetch(monkeypatch):
+    def _raise(*a, **kw):
+        raise OSError("Set SYNOPTIC_TOKEN env var.")
+    monkeypatch.setattr(weather_provider, "fetch_weather", _raise)
+    with pytest.raises(shadow.StaleOrMissingDataError, match="live observation fetch failed"):
+        shadow.fetch_live_anchor_observation("AUSTIN", pd.Timestamp("2026-10-06T12:00:00Z"))
+
+
+def test_fetch_live_anchor_observation_rejects_empty_response(monkeypatch):
+    monkeypatch.setattr(weather_provider, "fetch_weather", lambda *a, **kw: pd.DataFrame())
+    with pytest.raises(shadow.StaleOrMissingDataError, match="no observation rows"):
+        shadow.fetch_live_anchor_observation("AUSTIN", pd.Timestamp("2026-10-06T12:00:00Z"))
+
+
+def test_attach_wind_correction_inputs_populates_every_feature_frame_column(monkeypatch):
+    monkeypatch.setattr(weather_provider, "fetch_weather", _fake_synoptic_observation("KAUS"))
+    row = _synthetic_row()
+    frame = pd.DataFrame([row]).drop(columns=["anchor_wind_speed", "anchor_wind_direction"])
+    enriched = shadow.attach_wind_correction_inputs(
+        frame, endpoint_city="AUSTIN",
+        valid_time=pd.Timestamp("2026-10-07T00:00:00Z"),
+        decision_time=pd.Timestamp("2026-10-06T12:00:00Z"),
+    )
+    assert enriched["anchor_wind_speed"].iloc[0] == 5.2
+    assert enriched["anchor_wind_direction"].iloc[0] == 135.0
+    assert enriched["endpoint_city"].iloc[0] == "AUSTIN"
+    assert enriched["datetime_utc"].iloc[0] == pd.Timestamp("2026-10-07T00:00:00Z")
+    assert enriched.attrs["anchor_source"] == "synoptic"
+    assert enriched.attrs["anchor_station"] == "KAUS"
+    # The real feature builder must accept this frame with no missing column.
+    features = forecast_correction_models._wind_feature_frame(enriched, pooling="per_city")
+    assert not features.isnull().any().any()
+
+
+def test_wind_correction_shadow_method_completes_live_path_with_no_fallback_when_anchor_available(monkeypatch):
+    """
+    Positive control for the exact gap a real live run surfaced: given a
+    working anchor source, the wind-corrected method must complete its
+    real predictive path -- not merely avoid crashing.
+    """
+    monkeypatch.setattr(weather_provider, "fetch_weather", _fake_synoptic_observation("KAUS"))
+    fit_frame = _synthetic_wind_fit_frame_real_cities()
+    model = forecast_correction_models.fit_wind_correction(
+        fit_frame, forecast_correction_models._make_wind_linear_regression, pooling="per_city",
+    )
+    geometry = corridor_discretization.corridor_geometry(_CORRIDOR)
+    endpoint_city = config.CORRIDOR_ENDPOINTS[_CORRIDOR][0]
+    row = _synthetic_row(endpoint_city=endpoint_city)
+    frame = pd.DataFrame([row]).drop(columns=["anchor_wind_speed", "anchor_wind_direction"])
+
+    method = shadow.WindCorrectionShadowMethod(
+        model, model_version="test-version",
+        endpoint_city=endpoint_city,
+        valid_time=pd.Timestamp("2026-10-07T00:00:00Z"),
+        decision_time=pd.Timestamp("2026-10-06T12:00:00Z"),
+    )
+    amps = method.predict(frame, geometry)
+    assert amps > 0.0
+
+
+def test_shadow_pipeline_falls_back_explicitly_when_anchor_source_unavailable(monkeypatch):
+    """
+    Negative control: a missing/failed anchor source (e.g. no
+    SYNOPTIC_TOKEN) must be caught by the pipeline's existing fail-safe
+    fallback machinery -- a named, traceable fallback, never a crash and
+    never a silent success.
+    """
+    def _raise(*a, **kw):
+        raise OSError("Set SYNOPTIC_TOKEN env var.")
+    monkeypatch.setattr(weather_provider, "fetch_weather", _raise)
+
+    fit_frame = _synthetic_wind_fit_frame_real_cities()
+    model = forecast_correction_models.fit_wind_correction(
+        fit_frame, forecast_correction_models._make_wind_linear_regression, pooling="per_city",
+    )
+    endpoint_city = config.CORRIDOR_ENDPOINTS[_CORRIDOR][0]
+    row = _synthetic_row(endpoint_city=endpoint_city)
+    frame = pd.DataFrame([row]).drop(columns=["anchor_wind_speed", "anchor_wind_direction"])
+    ts = shadow.ShadowTimestamps(
+        initialization_time=pd.Timestamp("2026-10-06T00:00:00Z"),
+        availability_time=pd.Timestamp("2026-10-06T06:00:00Z"),
+        decision_time=pd.Timestamp("2026-10-06T12:00:00Z"),
+        valid_time=pd.Timestamp("2026-10-07T00:00:00Z"),
+        horizon_minutes=1440,
+    )
+    method = shadow.WindCorrectionShadowMethod(
+        model, endpoint_city=endpoint_city,
+        valid_time=ts.valid_time, decision_time=ts.decision_time,
+    )
+    pipeline = shadow.ShadowPipeline(_CORRIDOR, method)
+    prediction = pipeline.predict(frame, ts)
+    assert prediction.fallback_used is True
+    assert prediction.method == "raw_forecast"
+    assert "SYNOPTIC_TOKEN" in prediction.fallback_reason

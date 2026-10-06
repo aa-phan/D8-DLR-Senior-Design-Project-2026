@@ -52,6 +52,7 @@ import corridor_discretization
 import forecast_correction_models
 import open_meteo_forecast_provider
 import thermal_model
+import weather_provider
 import wind_vector
 
 logger = logging.getLogger(__name__)
@@ -224,6 +225,142 @@ def fetch_live_forecast_for_valid_time(
     return row, timestamps
 
 
+_ANCHOR_LOOKBACK_HOURS_DEFAULT = 6.0
+
+
+def fetch_live_anchor_observation(
+    city: str, decision_time, *, lookback_hours: float = _ANCHOR_LOOKBACK_HOURS_DEFAULT,
+) -> pd.Series:
+    """
+    Fetch the most recent REAL (near-real-time station) observation for
+    `city` at or before `decision_time`, via `weather_provider.fetch_weather`'s
+    Synoptic station path -- the production multi-provider observation
+    composer, never the Open-Meteo Archive API reanalysis
+    `open_meteo_provider.fetch_open_meteo` training used historically.
+    The archive lags by this phase's own documented ~1-day publication
+    delay (`forecast_experiment._resolve_window_end`) and cannot serve a
+    live "most recent observation" request; a station observation can.
+
+    This is the live equivalent of `forecast_experiment.anchored_pair_
+    frame`'s anchor group (the last real observation a forecaster would
+    have had at the anchor time) -- except that frame's anchor is itself
+    built from the Archive API, because at TRAINING time the anchor
+    moment was already historical and the archive had settled. At LIVE
+    decision time the anchor moment is effectively "now", where only a
+    station observation actually exists yet.
+
+    Returns a one-row Series with `anchor_wind_speed`, `anchor_wind_
+    direction`, `anchor_observation_time` (the observation's own
+    timestamp -- may be up to `lookback_hours` before `decision_time` if
+    the station's most recent report is not instantaneous), `anchor_
+    source` ("synoptic"), and `anchor_station`.
+
+    Raises:
+        StaleOrMissingDataError: no known live station for `city`
+            (`config.SYNOPTIC_FALLBACK_STATIONS`), the fetch itself fails,
+            or no observation row exists at/before `decision_time` within
+            the lookback window.
+    """
+    station = config.SYNOPTIC_FALLBACK_STATIONS.get(city)
+    if station is None:
+        raise StaleOrMissingDataError(
+            f"fetch_live_anchor_observation: no known live station for city {city!r}"
+        )
+    decision_time = pd.Timestamp(decision_time)
+    if decision_time.tzinfo is None:
+        decision_time = decision_time.tz_localize("UTC")
+    window_start = (decision_time - pd.Timedelta(hours=lookback_hours)).isoformat()
+    window_end = decision_time.isoformat()
+
+    try:
+        obs = weather_provider.fetch_weather([station], window_start, window_end, provider="synoptic")
+    except Exception as exc:
+        raise StaleOrMissingDataError(
+            f"fetch_live_anchor_observation: live observation fetch failed for "
+            f"{city!r} (station {station!r}): {exc}"
+        ) from exc
+
+    if obs.empty:
+        raise StaleOrMissingDataError(
+            f"fetch_live_anchor_observation: no observation rows for {city!r} "
+            f"(station {station!r}) in [{window_start}, {window_end}]"
+        )
+
+    obs = obs.reset_index()
+    obs["datetime_utc"] = pd.to_datetime(obs["datetime_utc"], utc=True)
+    obs = obs[obs["datetime_utc"] <= decision_time].sort_values("datetime_utc")
+    if obs.empty:
+        raise StaleOrMissingDataError(
+            f"fetch_live_anchor_observation: no observation at/before decision_time "
+            f"{decision_time} for {city!r} within the {lookback_hours}h lookback window"
+        )
+
+    latest = obs.iloc[-1]
+    if pd.isnull(latest.get("wind_speed")) or pd.isnull(latest.get("wind_direction")):
+        raise StaleOrMissingDataError(
+            f"fetch_live_anchor_observation: latest observation for {city!r} at "
+            f"{latest['datetime_utc']} has a null wind field"
+        )
+
+    return pd.Series({
+        "anchor_wind_speed": float(latest["wind_speed"]),
+        "anchor_wind_direction": float(latest["wind_direction"]),
+        "anchor_observation_time": latest["datetime_utc"],
+        "anchor_source": "synoptic",
+        "anchor_station": station,
+    })
+
+
+def attach_wind_correction_inputs(
+    frame: pd.DataFrame, *, endpoint_city: str, valid_time, decision_time,
+) -> pd.DataFrame:
+    """
+    Enrich a `validate_and_prepare_shadow_row`-prepared frame with the
+    live anchor observation and the remaining columns
+    `forecast_correction_models._wind_feature_frame` requires:
+    `anchor_wind_speed`/`anchor_wind_direction` (from
+    `fetch_live_anchor_observation`), `datetime_utc` (set to `valid_time`,
+    for the hour-of-day encoding -- matches training's convention of
+    `datetime_utc` = the valid time T), and `endpoint_city` (for the
+    pooled model's endpoint indicator / the per_city model's grouping).
+
+    **Named simplification, not a silent approximation.** This attaches
+    ONE city's (`endpoint_city`) live anchor observation -- not the full
+    two-city weakest-link-at-anchor-time reduction
+    `forecast_experiment.corridor_anchored_pair_frame` uses for training
+    (`forecast_training.corridor_weakest_link` over BOTH cities' anchor
+    ampacities, independently of the valid-time bottleneck). That full
+    reduction needs both cities' live weather and both cities' ampacity
+    computed before a bottleneck can be chosen. `forecast_shadow_demo.
+    run_once` consistently uses the corridor's first configured endpoint
+    city for both the forecast fetch and this anchor fetch, so the
+    endpoint-indicator feature and the anchor observation always agree on
+    which city the row represents. Implementing the full two-city
+    reduction live is a concrete, named remaining gap for this prototype.
+
+    Raises:
+        StaleOrMissingDataError: propagated from
+            `fetch_live_anchor_observation` if no live anchor observation
+            can be retrieved.
+    """
+    valid_time = pd.Timestamp(valid_time)
+    if valid_time.tzinfo is None:
+        valid_time = valid_time.tz_localize("UTC")
+
+    anchor = fetch_live_anchor_observation(endpoint_city, decision_time)
+
+    enriched = frame.copy()
+    enriched["anchor_wind_speed"] = anchor["anchor_wind_speed"]
+    enriched["anchor_wind_direction"] = anchor["anchor_wind_direction"]
+    enriched["datetime_utc"] = valid_time
+    enriched["endpoint_city"] = endpoint_city
+    enriched.attrs["geometry"] = frame.attrs.get("geometry")
+    enriched.attrs["anchor_observation_time"] = anchor["anchor_observation_time"].isoformat()
+    enriched.attrs["anchor_source"] = anchor["anchor_source"]
+    enriched.attrs["anchor_station"] = anchor["anchor_station"]
+    return enriched
+
+
 _REQUIRED_SHADOW_COLUMNS = ("fcst_air_temp", "fcst_wind_speed", "fcst_wind_direction", "fcst_solar_radiation")
 
 
@@ -287,6 +424,8 @@ class ShadowPrediction:
     timestamps: ShadowTimestamps
     fallback_used: bool
     fallback_reason: Optional[str] = None
+    model_version: Optional[str] = None
+    input_provenance: Optional[dict] = None
 
 
 class CorrectionMethod(Protocol):
@@ -315,10 +454,43 @@ class WindCorrectionShadowMethod:
 
     name = "ml_wind_corrected"
 
-    def __init__(self, model: "forecast_correction_models.WindCorrectionModel"):
+    def __init__(
+        self, model: "forecast_correction_models.WindCorrectionModel", *,
+        model_version: Optional[str] = None,
+        endpoint_city: Optional[str] = None, valid_time=None, decision_time=None,
+    ):
+        """
+        `endpoint_city`/`valid_time`/`decision_time`, when all three are
+        supplied, make this method fetch its own live anchor observation
+        via `attach_wind_correction_inputs` inside `predict` -- so a
+        missing/failed anchor source (e.g. no `SYNOPTIC_TOKEN`) raises
+        from WITHIN `predict`, where `ShadowPipeline.predict`'s existing
+        try/except routes it to the fallback method with a proper
+        `fallback_reason`, rather than crashing the caller before the
+        pipeline's fail-safe machinery ever runs. When any of the three is
+        omitted, `frame` is used as-is (the pre-existing, synthetic-test
+        contract: the caller already attached everything `_wind_feature_
+        frame` needs).
+        """
         self.model = model
+        self.model_version = model_version
+        self.endpoint_city = endpoint_city
+        self.valid_time = valid_time
+        self.decision_time = decision_time
 
     def predict(self, frame: pd.DataFrame, geometry) -> float:
+        if self.endpoint_city is not None and self.valid_time is not None and self.decision_time is not None:
+            enriched = attach_wind_correction_inputs(
+                frame, endpoint_city=self.endpoint_city,
+                valid_time=self.valid_time, decision_time=self.decision_time,
+            )
+            # Propagate the anchor provenance onto the CALLER's frame
+            # object (attrs is a mutable dict on the DataFrame itself) so
+            # `ShadowPipeline.predict` -- which reads `frame.attrs` from
+            # its own local reference after this call returns -- actually
+            # sees it; `enriched` is a fresh copy, not an alias.
+            frame.attrs.update(enriched.attrs)
+            frame = enriched
         prediction = forecast_correction_models.predict_wind_correction(self.model, frame)
         perp = thermal_model.perpendicular_wind(prediction.speed, prediction.direction, geometry.bearing_deg)
         ampacity = thermal_model.ieee738_ampacity(
@@ -337,8 +509,9 @@ class CoolingCorrectionShadowMethod:
 
     name = "ml_cooling_corrected"
 
-    def __init__(self, model: "forecast_correction_models.CoolingCorrectionModel"):
+    def __init__(self, model: "forecast_correction_models.CoolingCorrectionModel", *, model_version: Optional[str] = None):
         self.model = model
+        self.model_version = model_version
 
     def predict(self, frame: pd.DataFrame, geometry) -> float:
         prediction = forecast_correction_models.predict_cooling_correction(self.model, frame)
@@ -407,6 +580,19 @@ def load_correction_model(corridor: str, method_name: str):
     return joblib.load(path)
 
 
+def model_version_for(corridor: str, method_name: str) -> str:
+    """
+    A version identifier for the persisted model at `_model_path_for`:
+    `<method>_<corridor>@<file mtime ISO-8601>`. Not a content hash --
+    cheap and sufficient to tell two log entries apart if the underlying
+    file is ever retrained and re-saved, which is all this prototype's
+    logging needs it for.
+    """
+    path = _model_path_for(corridor, method_name)
+    mtime = datetime.fromtimestamp(os.path.getmtime(path), tz=timezone.utc)
+    return f"{method_name}_{corridor}@{mtime.isoformat()}"
+
+
 class UnsupportedHorizonError(ValueError):
     """
     Raised by `ShadowPipeline.predict` when `timestamps.horizon_minutes`
@@ -470,9 +656,14 @@ class ShadowPipeline:
             )
         try:
             amps = self.primary_method.predict(frame, self.geometry)
+            provenance = {
+                k: v for k, v in frame.attrs.items() if k != "geometry"
+            } or None
             return ShadowPrediction(
                 corridor=self.corridor, method=self.primary_method.name,
                 ampacity_amps=amps, timestamps=timestamps, fallback_used=False,
+                model_version=getattr(self.primary_method, "model_version", None),
+                input_provenance=provenance,
             )
         except Exception as exc:
             logger.warning(
@@ -501,6 +692,8 @@ class ShadowPipeline:
             "ampacity_amps": prediction.ampacity_amps,
             "fallback_used": prediction.fallback_used,
             "fallback_reason": prediction.fallback_reason,
+            "model_version": prediction.model_version,
+            "input_provenance": prediction.input_provenance,
             "logged_at": datetime.now(timezone.utc).isoformat(),
             **prediction.timestamps.as_dict(),
             "basis_caveat": (
