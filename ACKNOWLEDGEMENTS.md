@@ -1060,6 +1060,16 @@ pre-existing 23 `corridor_discretization_test.py` failures as every prior pass, 
 The CI/tie/sample-size numbers above were computed directly from the persisted JSON reports and
 re-run through `block_length_sensitivity`, never hand-estimated.
 
+### Session: 2026-10-05 (continued), conducted by Aaron Phan — project pivot from open-ended statistical auditing to a deadline-based research prototype (Nov 1 model freeze, early-December ship); development-data work only, direct working-tree task, no worktree isolation
+
+Claude Code was used to:
+
+1. Close the remaining quantile-pipeline leakage gap flagged open by the prior two passes: added `assert_quantile_periods_disjoint` (wired directly into `_fit_calibrate_evaluate_quantile` so the quantile engine itself refuses a contaminated fit/calibrate/evaluate triple regardless of caller) and `quantile_leakage_probe` — a Mode-B-style live-recomputation probe with two independent positive controls proving it can catch (a) a future-input leak (a feature identical at fit and evaluate time to the evaluate period's own truth) and (b) training/calibration row contamination — both on synthetic data only.
+2. Fix three pre-existing test fixtures (`test_fit_calibrate_evaluate_quantile_reports_improvement_when_distributions_match`, `..._reports_no_improvement_when_distributions_diverge`, `test_quantile_calibration_report_shape_and_aggregate_flag`) whose synthetic date ranges silently overlapped (same `n`-period/6h span starting too close together) — a real latent fixture bug the new disjointness guard surfaced, not a defect the guard introduced.
+3. [Placeholder for subsequent items in this session — update before final commit of this session's remaining work.]
+
+**Verified, not merely trusted:** ran `backend/tests/forecast_experiment_audit_test.py` (120/120 pass, up from 116) and the full `backend/tests/` suite (same pre-existing 23 `corridor_discretization_test.py` failures, no new failures).
+
 ## Keeping This Updated
 
 This file should be reviewed and updated to reflect new AI-assisted work **before any significant commit** — i.e., before committing new features, substantial documentation, or non-trivial refactors produced with AI assistance. A commit is "significant" for this purpose if it would need describing in a standup/status update; trivial fixes (typos, formatting) don't require an update here.

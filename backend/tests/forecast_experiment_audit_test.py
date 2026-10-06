@@ -1595,8 +1595,8 @@ def test_fit_calibrate_evaluate_quantile_reports_improvement_when_distributions_
         return _synthetic_quantile_frame(start, truth, pred, seed=seed)
 
     fit_frame = _frame("2020-01-01", noise_std=10.0, seed=3000)
-    calibrate_frame = _frame("2020-03-01", noise_std=40.0, seed=3100)
-    evaluate_frame = _frame("2020-05-01", noise_std=40.0, seed=3200)  # SAME (wide) distribution as calibrate
+    calibrate_frame = _frame("2020-07-01", noise_std=40.0, seed=3100)
+    evaluate_frame = _frame("2021-01-01", noise_std=40.0, seed=3200)  # SAME (wide) distribution as calibrate
 
     result = fea._fit_calibrate_evaluate_quantile(
         fit_frame, calibrate_frame, evaluate_frame, alpha=0.05,
@@ -1618,14 +1618,14 @@ def test_fit_calibrate_evaluate_quantile_reports_no_improvement_when_distributio
 
     truth_cal = 1000.0 + rng.normal(0.0, 30.0, n)
     pred_cal = truth_cal + rng.normal(0.0, 20.0, n)
-    calibrate_frame = _synthetic_quantile_frame("2020-03-01", truth_cal, pred_cal, seed=11)
+    calibrate_frame = _synthetic_quantile_frame("2020-04-01", truth_cal, pred_cal, seed=11)
 
     # Evaluate period's error distribution is a different shape entirely
     # (a large, oppositely-signed shift) -- the offset learned on the
     # calibrate period's own residuals does not generalize here.
     truth_eval = 1000.0 + rng.normal(0.0, 30.0, n)
     pred_eval = truth_eval - 200.0 + rng.normal(0.0, 20.0, n)
-    evaluate_frame = _synthetic_quantile_frame("2020-05-01", truth_eval, pred_eval, seed=12)
+    evaluate_frame = _synthetic_quantile_frame("2020-07-01", truth_eval, pred_eval, seed=12)
 
     result = fea._fit_calibrate_evaluate_quantile(
         fit_frame, calibrate_frame, evaluate_frame, alpha=0.05,
@@ -1658,8 +1658,8 @@ def test_quantile_calibration_report_shape_and_aggregate_flag():
         })
 
     fit_frame = _frame("2020-01-01", 1)
-    calibrate_frame = _frame("2020-03-01", 2)
-    evaluate_frame = _frame("2020-05-01", 3)
+    calibrate_frame = _frame("2020-04-01", 2)
+    evaluate_frame = _frame("2020-07-01", 3)
 
     report = fea.quantile_calibration_report(
         fit_frame, calibrate_frame, evaluate_frame,
@@ -2328,3 +2328,37 @@ def test_fresh_confirmation_report_end_to_end_on_synthetic_fresh_window(monkeypa
     with open(report_path, "r", encoding="utf-8") as fh:
         on_disk = json.load(fh)
     assert on_disk["basis"] == "FRESH"
+
+
+# Pre-confirmation readiness pass (item 1): quantile-pipeline leakage probe,
+# extending Mode-B-style live-recomputation coverage beyond ablation_basis_report.
+
+def test_quantile_leakage_probe_detects_future_input_leakage():
+    result = fea.quantile_leakage_probe()
+    fil = result["future_input_leakage"]
+    assert fil["leak_detected"] is True, fil
+    assert fil["leaky_eval_pinball"] < fil["clean_eval_pinball"], fil
+
+
+def test_quantile_leakage_probe_detects_training_calibration_contamination():
+    result = fea.quantile_leakage_probe()
+    tcc = result["training_calibration_contamination"]
+    assert tcc["leak_detected"] is True, tcc
+    assert "overlap" in tcc["raised"].lower() or "share" in tcc["raised"].lower()
+
+
+def test_assert_quantile_periods_disjoint_raises_on_overlap():
+    ts = pd.date_range("2025-01-01", periods=20, freq="6h", tz="UTC")
+    fit = pd.DataFrame({"datetime_utc": ts[0:12]})
+    calibrate = pd.DataFrame({"datetime_utc": ts[8:16]})
+    evaluate = pd.DataFrame({"datetime_utc": ts[16:20]})
+    with pytest.raises(ValueError, match="share timestamp"):
+        fea.assert_quantile_periods_disjoint(fit, calibrate, evaluate)
+
+
+def test_assert_quantile_periods_disjoint_passes_on_clean_partition():
+    ts = pd.date_range("2025-01-01", periods=20, freq="6h", tz="UTC")
+    fit = pd.DataFrame({"datetime_utc": ts[0:12]})
+    calibrate = pd.DataFrame({"datetime_utc": ts[12:16]})
+    evaluate = pd.DataFrame({"datetime_utc": ts[16:20]})
+    fea.assert_quantile_periods_disjoint(fit, calibrate, evaluate)  # must not raise

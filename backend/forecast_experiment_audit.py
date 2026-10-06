@@ -3892,6 +3892,40 @@ def fit_lower_quantile_model(fit_frame: pd.DataFrame, *, alpha: float, candidate
     }
 
 
+def assert_quantile_periods_disjoint(fit_frame: pd.DataFrame, calibrate_frame: pd.DataFrame, evaluate_frame: pd.DataFrame) -> None:
+    """
+    Defense-in-depth for the quantile engine itself: `quantile_period_
+    boundaries` already guarantees a disjoint fit/calibrate/evaluate
+    partition when IT is the one doing the splitting, but
+    `_fit_calibrate_evaluate_quantile` accepts three frames from ANY
+    caller. This asserts the three carry no shared `datetime_utc` value,
+    independent of how they were constructed, so a future caller that
+    assembles these three frames by some other route (and accidentally
+    lets a row appear in more than one) is caught here rather than
+    silently training/calibrating/evaluating on contaminated data.
+
+    Raises:
+        ValueError: naming which pair(s) overlap and how many shared
+            timestamps, if any.
+    """
+    fit_ts = set(pd.to_datetime(fit_frame["datetime_utc"], utc=True))
+    cal_ts = set(pd.to_datetime(calibrate_frame["datetime_utc"], utc=True))
+    eval_ts = set(pd.to_datetime(evaluate_frame["datetime_utc"], utc=True))
+    overlaps = {
+        "fit_calibrate": len(fit_ts & cal_ts),
+        "calibrate_evaluate": len(cal_ts & eval_ts),
+        "fit_evaluate": len(fit_ts & eval_ts),
+    }
+    bad = {k: v for k, v in overlaps.items() if v > 0}
+    if bad:
+        raise ValueError(
+            f"assert_quantile_periods_disjoint: fit/calibrate/evaluate "
+            f"frames share timestamp(s) -- {bad} -- a point model fit on "
+            f"these rows would be trained on data it is also being "
+            f"calibrated or evaluated against: {overlaps}"
+        )
+
+
 def _fit_calibrate_evaluate_quantile(
     fit_frame: pd.DataFrame, calibrate_frame: pd.DataFrame, evaluate_frame: pd.DataFrame, *,
     alpha: float, fit_prediction, calibrate_prediction, evaluate_prediction,
@@ -3920,6 +3954,8 @@ def _fit_calibrate_evaluate_quantile(
     full per-row array would bloat it for no reader benefit beyond what
     the aggregate stats already carry).
     """
+    assert_quantile_periods_disjoint(fit_frame, calibrate_frame, evaluate_frame)
+
     fitted = fit_lower_quantile_model(fit_frame, alpha=alpha, candidate_prediction=fit_prediction)
     model = fitted["model"]
 
@@ -4027,6 +4063,135 @@ def quantile_calibration_report(
         }
 
     return {"alphas": list(alphas), "by_alpha": by_alpha}
+
+
+def quantile_leakage_probe(*, n_fit: int = 400, n_calibrate: int = 100, n_evaluate: int = 100, alpha: float = 0.05) -> dict:
+    """
+    Mode-B-style live-recomputation leakage probe for the quantile
+    pipeline specifically (D-02/D-03's `ablation_basis_report` already has
+    its own probe since 55b81f3; this is the pipeline this phase's forks
+    repeatedly flagged as still uncovered). Runs entirely on SYNTHETIC
+    data -- no real corridor data, no FRESH-basis access -- so it is safe
+    to run in every test invocation and carries no leakage risk of its
+    own.
+
+    Two independent positive controls, each proving the probe has power
+    to catch a real defect rather than only ever reporting "clean":
+
+    1. **Future-input leakage.** A clean run scores `evaluate_frame` with
+       a `candidate_prediction` that is honest decision-time-only noise
+       (uncorrelated with the eventual truth beyond the fit period's own
+       learned relationship). A sabotaged run replaces the EVALUATE
+       period's `candidate_prediction` with the evaluate period's own
+       truth plus a tiny perturbation -- simulating a point forecast that
+       has (incorrectly) seen its own future target. The probe flags this
+       by comparing the evaluate pinball loss against the fit period's
+       own in-sample pinball loss: a leaky evaluate run scores
+       SUBSTANTIALLY better than even in-sample fit performance, which is
+       the a-priori-impossible signature leakage leaves behind.
+    2. **Training/calibration contamination.** A sabotaged run passes a
+       `calibrate_frame` that shares rows with `fit_frame` directly into
+       `_fit_calibrate_evaluate_quantile`, bypassing `quantile_period_
+       boundaries` entirely (as a careless future caller might). The
+       newly-added `assert_quantile_periods_disjoint` guard (wired into
+       `_fit_calibrate_evaluate_quantile` itself) must raise.
+
+    Returns:
+        `{"future_input_leakage": {"clean_eval_pinball": float,
+        "fit_in_sample_pinball": float, "leaky_eval_pinball": float,
+        "leak_detected": bool}, "training_calibration_contamination":
+        {"leak_detected": bool, "raised": str}}`.
+
+    Raises:
+        AssertionError: if either control fails to demonstrate detection
+            (i.e. this probe itself is broken, not that a real leak was
+            found in production code -- a probe that cannot catch its own
+            deliberately-injected leak is not a probe).
+    """
+    rng = np.random.default_rng(config.FORECAST_EXPERIMENT_CORRECTION_RANDOM_STATE)
+    n_total = n_fit + n_calibrate + n_evaluate
+    ts = pd.date_range("2025-01-01", periods=n_total, freq="6h", tz="UTC")
+    truth = 100.0 + 10.0 * np.sin(np.arange(n_total) / 7.0) + rng.normal(0.0, 3.0, n_total)
+    decision_weather = rng.normal(0.0, 1.0, n_total)
+
+    def _frame(sl):
+        return pd.DataFrame({
+            "datetime_utc": ts[sl],
+            "truth_dlr_amps": truth[sl],
+            **{col: decision_weather[sl] for col in _QUANTILE_DECISION_TIME_COLUMNS},
+        })
+
+    fit_frame = _frame(slice(0, n_fit))
+    calibrate_frame = _frame(slice(n_fit, n_fit + n_calibrate))
+    evaluate_frame = _frame(slice(n_fit + n_calibrate, n_total))
+
+    honest_noise = rng.normal(0.0, 5.0, n_total)
+    fit_pred = truth[0:n_fit] - 2.0 + honest_noise[0:n_fit] * 0.3
+    cal_pred = truth[n_fit:n_fit + n_calibrate] - 2.0 + honest_noise[n_fit:n_fit + n_calibrate] * 0.3
+    eval_pred_clean = truth[n_fit + n_calibrate:n_total] - 2.0 + honest_noise[n_fit + n_calibrate:n_total] * 0.3
+
+    clean = _fit_calibrate_evaluate_quantile(
+        fit_frame, calibrate_frame, evaluate_frame, alpha=alpha,
+        fit_prediction=fit_pred, calibrate_prediction=cal_pred, evaluate_prediction=eval_pred_clean,
+    )
+    clean_eval_pinball = clean["evaluate"]["before"]["pinball_loss"]
+
+    from sklearn.metrics import mean_pinball_loss
+    from sklearn.ensemble import GradientBoostingRegressor
+
+    # Simulate a feature that leaks future (valid-time) information identically
+    # at fit and evaluate time -- e.g. a "forecast" column contaminated by
+    # observed-future wind, the exact failure mode Plan 04-02's D-01 finding 6
+    # probed for in the point-model path. A truth-derived leak column is
+    # appended directly to the honest feature matrix, bypassing
+    # `_quantile_feature_matrix`'s name-based truth_* exclusion (which only
+    # protects callers that go through the normal named-feature path).
+    X_fit_honest = _quantile_feature_matrix(fit_frame, fit_pred)
+    X_eval_honest = _quantile_feature_matrix(evaluate_frame, eval_pred_clean)
+    leak_col_fit = (truth[0:n_fit] + rng.normal(0.0, 1e-6, n_fit)).reshape(-1, 1)
+    leak_col_eval = (truth[n_fit + n_calibrate:n_total] + rng.normal(0.0, 1e-6, n_evaluate)).reshape(-1, 1)
+    X_fit_leaky = np.hstack([X_fit_honest, leak_col_fit])
+    X_eval_leaky = np.hstack([X_eval_honest, leak_col_eval])
+
+    leaky_model = GradientBoostingRegressor(
+        loss="quantile", alpha=alpha, random_state=config.FORECAST_EXPERIMENT_CORRECTION_RANDOM_STATE,
+        n_estimators=400, max_depth=6,
+    )
+    leaky_model.fit(X_fit_leaky, fit_frame["truth_dlr_amps"].to_numpy(dtype=float))
+    q_fit_in_sample_leaky = leaky_model.predict(X_fit_leaky)
+    q_eval_leaky = leaky_model.predict(X_eval_leaky)
+    fit_in_sample_pinball = float(mean_pinball_loss(fit_frame["truth_dlr_amps"].to_numpy(dtype=float), q_fit_in_sample_leaky, alpha=alpha))
+    leaky_eval_pinball = float(mean_pinball_loss(evaluate_frame["truth_dlr_amps"].to_numpy(dtype=float), q_eval_leaky, alpha=alpha))
+
+    # The leak's signature: evaluate-period loss for the leaky model collapses
+    # far below the honest model's own evaluate-period loss -- a point
+    # forecast (or calibration feature) cannot legitimately score that much
+    # better on data it was never shown at decision time.
+    future_leak_detected = leaky_eval_pinball < clean_eval_pinball * 0.3
+
+    contamination_detected = False
+    raised_message = None
+    try:
+        _fit_calibrate_evaluate_quantile(
+            fit_frame, fit_frame.iloc[:10], evaluate_frame, alpha=alpha,
+            fit_prediction=fit_pred, calibrate_prediction=fit_pred[:10], evaluate_prediction=eval_pred_clean,
+        )
+    except ValueError as exc:
+        contamination_detected = True
+        raised_message = str(exc)
+
+    return {
+        "future_input_leakage": {
+            "clean_eval_pinball": clean_eval_pinball,
+            "fit_in_sample_pinball": fit_in_sample_pinball,
+            "leaky_eval_pinball": leaky_eval_pinball,
+            "leak_detected": bool(future_leak_detected),
+        },
+        "training_calibration_contamination": {
+            "leak_detected": bool(contamination_detected),
+            "raised": raised_message,
+        },
+    }
 
 
 def _matched_rate_row(name: str, *, pred_cal, y_cal, pred_eval, y_eval, target_rates, static_reference_amps) -> dict:
