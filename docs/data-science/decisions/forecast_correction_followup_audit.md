@@ -1810,6 +1810,150 @@ a recommendation.
 session was exercised only against synthetic fixtures dated in the FRESH calendar range, never real
 FRESH data. The real FRESH row count was not re-checked beyond what the prior pass already recorded.
 
+## Project pivot — deadline-based research prototype (2026-10-05)
+
+**This section supersedes the sample-size-gated waiting posture of every section above it, by
+explicit project-owner decision, not by new evidence.** The prior passes' ~590-row (tail-rate
+precision) and ~1,575-row (minimum-detectable-difference) figures remain the correct answers to
+the statistical-precision questions they were derived for — they are NOT invalidated — but they are
+no longer treated as prerequisites for shipping a working prototype. The project now has a fixed
+deadline: finalize the model choice by **2026-11-01**, use November for integration and final
+evaluation, ship an end-to-end research prototype by **early December 2026**. Everything in this
+section is engineering-prototype scoping, not a retraction of any statistical finding above.
+
+### Selection rule (written before being applied, per this section's own discipline)
+
+**Provisional engineering choice, locked in by the project owner, not re-derived here:** build the
+prototype around **ML wind correction (u/v) → existing IEEE 738**, with cooling correction kept as
+the main challenger, the refitted MLP as a third candidate, and raw forecast + persistence as
+baselines. This is explicitly an ENGINEERING choice — competitive development-data performance,
+simplicity, and ease of integration — never a claim of statistical superiority. The two prior
+passes already established, and this section does not re-litigate, that neither wind nor cooling is
+statistically distinguishable from the other at either corridor on development data (both
+point-estimate differences carry 95% CIs that cross zero). **Simplicity breaks the tie precisely
+because the comparison is inconclusive, not because wind won on any metric measured in this
+document.** Nominal calibration targets and achieved risk are kept separate everywhere below, as
+elsewhere in this record; no operational risk threshold is invented or implied by this choice.
+
+**Stated retain/switch defaults for the Nov 1 freeze (encoding the project owner's own instruction,
+not an inference):**
+- Retain `ml_wind_corrected` as the working choice if the alternatives (cooling, refit-MLP) show no
+  *consistent* practical benefit across both corridors by Nov 1.
+- Retain `raw_forecast` (i.e., no ML correction at all) instead if ANY correction's benefit over the
+  uncorrected forecast turns out to be negligible by Nov 1.
+These defaults apply to the Nov 1 freeze decision specifically (see the versioned protocol below),
+using development evidence only.
+
+### One bounded development comparison (identical folds, decision-time-clean, all five series)
+
+Measured from the same decision-time-leak-corrected ABLATION basis as every table above (781 scored
+rows/corridor, identical chronological fit/calibrate/evaluate boundaries for every candidate):
+
+| Candidate | Corridor | MAE (A) | RMSE (A) | Achieved rate at nominal 5% target | Retained capacity (A) |
+|---|---|---|---|---|---|
+| persistence_24h | AUSTIN_CORPUS_CHRISTI | 156.34 | 199.82 | 0.045 | 832.49 |
+| raw_forecast | AUSTIN_CORPUS_CHRISTI | 111.44 | 147.52 | — | — |
+| `ml_wind_corrected` | AUSTIN_CORPUS_CHRISTI | 112.57 | 146.96 | **0.051** | **994.20** |
+| `ml_cooling_corrected` | AUSTIN_CORPUS_CHRISTI | 107.04 | 139.99 | **0.051** | 977.37 |
+| reference_ml_refit_24h | AUSTIN_CORPUS_CHRISTI | 128.20 | 161.30 | 0.064 | 938.81 |
+| persistence_24h | MIDLAND_EL_PASO | 161.09 | 199.81 | 0.051 | 857.10 |
+| raw_forecast | MIDLAND_EL_PASO | 152.57 | 197.87 | — | — |
+| `ml_wind_corrected` | MIDLAND_EL_PASO | 126.52 | 162.76 | 0.064 | 941.55 |
+| `ml_cooling_corrected` | MIDLAND_EL_PASO | 132.24 | 163.87 | **0.057** | **996.65** |
+| reference_ml_refit_24h | MIDLAND_EL_PASO | 135.55 | 165.69 | 0.025 | 930.47 |
+
+(MAE/RMSE from `audit_ablation_report_<CORRIDOR>.json`; achieved-rate/retained-capacity from the
+corrected table in "Retained capacity at matched overrating rates" above. The direct paired
+block-bootstrap margins between wind and cooling — the statistical test behind "inconclusive" above
+— are the ones already reported earlier in this document: Austin +5.5 A for cooling [95% CI
+−1.6, 12.6]; Midland +5.7 A for wind [95% CI −12.8, 1.3]; both cross zero.) By MAE/RMSE alone, wind
+leads at Midland on both metrics; cooling leads at Austin on both metrics — consistent with the
+point-estimate-only, not-statistically-significant framing above. raw_forecast is not shown with a
+calibration row because this comparison's purpose is to compare the CORRECTION candidates against
+each other and against persistence; raw_forecast's own point MAE/RMSE are included as the
+uncorrected baseline the correction candidates must beat to be worth deploying at all — at Midland,
+`ml_wind_corrected`'s 126.52 A MAE is a genuine 17% reduction from raw_forecast's 152.57 A; at
+Austin, `ml_cooling_corrected`'s 107.04 A is a smaller, 4% reduction from raw_forecast's 111.44 A.
+This is the evidence behind the retain-raw-forecast default above: the ML correction's benefit over
+raw_forecast is clearly non-negligible at Midland and present but thinner at Austin.
+
+### Data-team handoff — smallest useful spec
+
+Development continues against the current archive data (reanalysis-derived truth, Open-Meteo
+Archive API via `open_meteo_provider.py`) while this handoff is pending. Any validation performed
+against that archive — everything in this document, including every table above — is labeled
+**reanalysis-derived, never sensor-validated**, per D-01's own finding; this label travels with
+every number this phase has produced and must travel with every number the prototype produces too.
+The smallest useful handoff from the data team to unblock an eventual sensor-grounded validation:
+
+1. **Cleaned local weather observations** — station-level wind speed/direction, temperature, and
+   (if available) solar irradiance at each corridor's endpoint cities, post quality-control.
+2. **Timestamps and availability semantics** — observation valid time AND the time the cleaned
+   record actually became queryable (its own decision-time-availability lag), not conflated.
+3. **Units** — SI throughout (m/s, °C, W/m²), explicit per field; no silently-assumed unit.
+4. **Quality flags** — per-field, naming the QC method/source, so a flagged row can be excluded
+   rather than silently trusted.
+5. **Sensor location and height** — exact station coordinates and anemometer/thermometer height
+   above ground, since IEEE 738's convective term is height- and exposure-sensitive.
+6. **Matching archived-forecast fields** — the forecast-archive rows (initialization time,
+   availability time, decision time, valid time — see the shadow prototype below) that pair with
+   each observation at the same valid time, so a forecast error can be computed against a real
+   sensor reading rather than against reanalysis.
+
+### Versioned, deadline-based confirmation protocol (v2 — supersedes the sample-size-gated v1 above)
+
+**v1** (the "Freeze a concrete confirmation protocol" section above, dated 2026-10-05 earlier this
+same day) specified waiting for ~590 rows (~150 days) before any FRESH-basis evaluation. **v2**,
+below, replaces that waiting condition with a fixed calendar date, per the project owner's explicit
+instruction that the sample-size figures describe desired precision, not a shipping prerequisite.
+v1's content is kept above, unedited, for the audit trail — this is a supersession, not a deletion.
+
+- **Fixed final-evaluation date: 2026-11-24** (one week before the "early December" ship target,
+  leaving time to write up results and integrate the frozen Nov 1 configuration regardless of
+  outcome; chosen to fall after the Nov 1 model-freeze point by three weeks, giving FRESH data a
+  real chance to accrue beyond this phase's ~16 rows/corridor as of 2026-10-05 without threatening
+  the ship date).
+- **The evaluation runs exactly once, on that date, using whatever FRESH row count has accrued by
+  then** — even if that count is well short of the ~590-row tail-rate-precision target. The result
+  is reported WITH full uncertainty (block-bootstrap CIs, same machinery as every comparison above)
+  regardless of what it shows.
+- **"Inconclusive" and "no candidate meets the requirement" are explicitly valid, reportable
+  outcomes** — not failures of the protocol, and not a reason to extend the window.
+- **Anti-peeking discipline, stated in deadline terms:** no outcome from the FRESH basis is
+  inspected before 2026-11-24. No retuning the method, preprocessing, or calibration between Nov 1
+  (the freeze point) and Nov 24 (the evaluation point) on the basis of anything observed in FRESH
+  data — the Nov 1 freeze is a freeze. If a preferred result happens to look significant on an
+  informal peek before Nov 24, the window is not extended or shortened to lock in that result; the
+  pre-committed Nov 24 date is run and reported regardless.
+- **The two sample-size figures are reported alongside the result, not substituted for it:** if the
+  Nov 24 FRESH count is below ~590 rows (very likely, at current ~16/corridor accrual), the report
+  states plainly that the tail-rate-precision target was not met and the result's precision is
+  correspondingly wider — an honest "ran out of calendar time" caveat, not a claim of adequate
+  statistical power.
+
+## Shadow prototype — experimental path, not a production change (2026-10-05)
+
+A new, inert, experimental "shadow" pipeline is added under `backend/forecast_shadow_pipeline.py`
+(see that module's own docstring and `backend/tests/forecast_shadow_pipeline_test.py` for the full
+interface). It is built around the provisional wind-correction choice above but exposes a common
+interface so cooling or raw_forecast can be substituted without rebuilding anything. It is NEVER
+invoked from `dlr_pipeline.py` or any other production caller — it runs only when a script or test
+explicitly imports and calls it, same inertness discipline as `confirm_fresh_run` elsewhere in this
+phase. See that module for: live-retrieval timestamp handling (initialization/availability/decision/
+valid, kept distinct, answering 04-01's open question about whether live retrieval actually covers
+the requested valid time), input validation and u/v wind-component conversion, model persistence and
+IEEE 738 wiring, prediction logging under `data/shadow/` (git-ignored, same convention as every
+other generated report in this phase), and explicit stale/missing-data fallback behavior.
+
+**Forecast horizon — left open, not silently assumed.** `.planning/workstreams/ml-modeling/
+REQUIREMENTS.md` (FCST-01/FCST-02) never specifies a required production forecast horizon; neither
+does `docs/Project Definition.md` nor `docs/System Design Report.md`. This phase's entire evidence
+base (every table in this document) concerns the 24-hour horizon exclusively. The shadow prototype's
+interface is built horizon-independent (the `horizon_minutes` field is a required, explicit
+parameter everywhere, never defaulted) specifically so this open question is never silently resolved
+by implementation default. **This remains an open decision for the project owner or team**, not
+closed by this pass.
+
 ## References
 
 **The record under audit, and its appended amendment.**
