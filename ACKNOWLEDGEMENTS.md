@@ -1310,3 +1310,21 @@ now — this is configured and tested, not running.
 `backend/tests/forecast_shadow_pipeline_test.py` + `backend/tests/forecast_shadow_collect_test.py` +
 `backend/tests/forecast_shadow_healthcheck_test.py` together (157/157 pass, 5 new) both before and
 after, plus two real live invocations of `backend/forecast_shadow_demo.py` for both corridors.
+
+### Session: 2026-10-06 (continued), conducted by Aaron Phan — close shadow integration, prepare handoff
+
+Claude Code was used to produce the closing deliverable for shadow integration: one standalone
+runbook (`docs/data-science/decisions/shadow_collection_runbook.md`) consolidating the already-built
+input contract, deployment commands, scheduler config, credential setup, and monitoring guidance
+into a single operational page, separate from the long audit narrative. No new code changes were
+needed — the prior pass's input trace, failure-attribution fix, and deployment package already
+satisfied every item; this pass verified that and wrote it up concisely rather than re-deriving it.
+
+Asked the user directly whether this machine (an interactive personal laptop, not a team-controlled
+server) should be the designated collection host before touching `crontab` at all, since installing
+a recurring scheduled job is a standing change to their actual machine. User confirmed: no — this
+is a handoff-steps case, not an install-here case. Nothing was added to this machine's crontab.
+Consistent with the prior pass's own explicit status line, collection remains configured and tested,
+not active anywhere, and is not described as active per the user's own stated bar (a scheduled
+invocation producing a valid log plus a passing health check) — neither has happened yet on any
+host, because no host has been designated.
