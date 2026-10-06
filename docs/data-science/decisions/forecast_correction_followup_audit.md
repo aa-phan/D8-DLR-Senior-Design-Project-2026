@@ -1953,13 +1953,37 @@ v2 itself, not a new v3, because nothing about the two fixed dates or the core d
   for scoring until 2026-11-24 itself — which is why the evaluation instant above is set to the
   START of 2026-11-24 rather than, say, 2026-11-23, giving every in-scope row's truth value a full
   day to actually become available before the evaluation runs.
+
+  **Correction (2026-10-06) — the 1-day figure above is an internal CODE CONVENTION, not
+  verified provider behavior, and this correction supersedes it.** `_resolve_window_end`'s own
+  docstring states an assumption ("the archive needs the day to be fully past"); it cites no
+  external documentation of Open-Meteo's actual publication delay or revision policy, and this
+  codebase has none to cite — checked directly (`grep` across `open_meteo_provider.py` for any
+  delay/lag/revision/finalization language returns nothing). An empirical availability check run
+  this same day (querying the live Archive API for today, yesterday, and the two days before,
+  never inspecting any reserved FRESH evaluation outcome — only whether rows exist) found **zero
+  rows missing or null at ANY of those offsets, including TODAY itself.** That is the opposite of
+  evidence for a 1-day lag: if the archive already serves complete data for the current day, "the
+  day needs to be fully past" cannot be why data is unavailable sooner, because it already isn't
+  unavailable. The real, unresolved risk is the one this convention never addressed: data
+  returned immediately for a very recent date may be a preliminary estimate Open-Meteo's own
+  backend revises later (true ERA5 reanalysis finalization is commonly several days, not one),
+  and nothing in this codebase or this check can currently detect a silent revision — that would
+  require re-fetching the SAME historical window after enough calendar time has passed and
+  diffing, which this pass had no time window to do. **Revised valid-time cutoff, conservative
+  pending that unresolved revision risk: every FRESH-basis row whose `valid_time` is strictly
+  before 2026-11-17T00:00:00 UTC (one full week before the fixed evaluation instant, not one
+  day) is in scope for the 2026-11-24 evaluation.** This is a precaution against an unverified
+  risk, not a measured number — state it as such in the write-up, and treat a tighter, verified
+  figure (from an actual re-fetch-and-diff check, run between now and Nov 24) as superseding this
+  one if it becomes available before the evaluation runs.
 - **Missing-data policy: score what is actually available at the evaluation instant; do not wait
   for it and do not impute it.** If a FRESH row's truth value is not yet resolvable at
-  2026-11-24T00:00:00 UTC (the 1-day availability delay above not yet having elapsed for that row,
-  or any other data gap), that row is excluded from the evaluation's own reported sample size and
-  the exclusion is stated plainly in the write-up — it is never retried after the fact and never
-  silently backfilled, since either would reopen the "evaluate exactly once, on the fixed date"
-  discipline this whole section exists to protect.
+  2026-11-24T00:00:00 UTC (the revised 1-week availability margin above not yet having elapsed for
+  that row, or any other data gap), that row is excluded from the evaluation's own reported sample
+  size and the exclusion is stated plainly in the write-up — it is never retried after the fact and
+  never silently backfilled, since either would reopen the "evaluate exactly once, on the fixed
+  date" discipline this whole section exists to protect.
 - **"Inconclusive" and "no candidate meets the requirement" are explicitly valid, reportable
   outcomes** — not failures of the protocol, and not a reason to extend the window. The result is
   reported WITH full uncertainty (block-bootstrap CIs, same machinery as every comparison above)
