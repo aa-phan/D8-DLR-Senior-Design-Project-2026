@@ -872,20 +872,31 @@ not survive the leak fix.
 | ml_cooling_corrected | MIDLAND_EL_PASO | 287.48 | **0.057** | **996.65** | 0.687 |
 | reference_ml_refit_24h | MIDLAND_EL_PASO | 305.62 | 0.025 | 930.47 | 0.642 |
 
-**At AUSTIN_CORPUS_CHRISTI, `ml_wind_corrected` and `ml_cooling_corrected` now achieve the identical
-rate (0.051) on Evaluate — a genuine equal-achieved-risk comparison, not a nominal-target coincidence
-— and at that equal risk, wind retains MORE capacity (994.20 A vs. 977.37 A).** This directly
-reverses the pre-fix headline at this corridor: cooling's apparent capacity advantage there was an
-artifact of the leak, not a real effect. **At MIDLAND_EL_PASO, cooling's advantage survives
-correction and strengthens into a genuine dominance**: cooling retains more capacity (996.65 A vs.
-941.55 A) AND achieves a LOWER risk (0.057 vs. 0.064) than wind — cooling beats wind on both axes at
-this corridor, not at the cost of extra risk. The two corridors now tell a materially different story
-from each other and from the pre-fix table: there is no single "cooling always wins" or "wind always
-wins" conclusion — the result is corridor-dependent, and the dependence is no longer confounded by
-the leak. A broader threshold sweep (0.03/0.05/0.08/0.10/0.15) shows the same corridor split holds at
+**At AUSTIN_CORPUS_CHRISTI, `ml_wind_corrected` and `ml_cooling_corrected` achieve the identical
+POINT rate (0.051) on Evaluate, and at that observed rate, wind's POINT retained capacity is higher
+(994.20 A vs. 977.37 A).** This reverses the pre-fix headline at this corridor's point estimates:
+cooling's apparent capacity advantage there was at least partly an artifact of the leak. **At
+MIDLAND_EL_PASO, cooling's point advantage survives correction**: cooling's POINT retained capacity
+is higher (996.65 A vs. 941.55 A) and its POINT achieved rate is lower (0.057 vs. 0.064) than wind's.
+
+**Correction (2026-10-06) — neither "genuine equal-achieved-risk comparison" nor "genuine
+dominance" is supported by an uncertainty interval, and this correction replaces that earlier
+framing.** The "Basis-selection gate" section below computed the actual numbers: a ±3.4
+percentage-point normal-approximation band sits around Austin's 5.1% point tie at n=157 — **equal
+observed rates here do not establish equal underlying risk**, only that this sample size cannot
+yet distinguish them. No block-bootstrap (or other) uncertainty interval has been computed for
+either corridor's achieved-rate or retained-capacity DIFFERENCE specifically (as opposed to the
+wind-vs-cooling MAE margin, which IS interval-estimated below and crosses zero at both corridors).
+Read every number in this paragraph as a POINT-ESTIMATE finding only: Austin shows a point tie on
+risk with a point capacity edge for wind; Midland shows a point advantage for cooling on both
+axes. Neither has been shown to survive a sample-size-aware uncertainty check. The two corridors
+still tell a materially different story from each other and from the pre-fix table — there is no
+single "cooling always wins" or "wind always wins" conclusion at the level of point estimates —
+but "corridor-dependent" describes the POINT estimates, not a statistically confirmed split. A
+broader threshold sweep (0.03/0.05/0.08/0.10/0.15) shows the same point-estimate corridor split at
 every nominal target checked, not only 0.05 (see the Pre-confirmation readiness pass section below
 for the full sweep and its honest gap: no uncertainty interval is yet attached to these achieved-rate
-figures). The calibrated quantile at alpha 0.05 (built from `ml_cooling_corrected`'s own point
+figures either). The calibrated quantile at alpha 0.05 (built from `ml_cooling_corrected`'s own point
 prediction) retains 973.27 A at Austin and 972.65 A at Midland at an achieved rate of 0.064 at both —
 offering a comparable order of retained capacity to the flat derating without a second calibration
 pass, though no longer the best achieved-rate/capacity combination at either corridor post-fix.
@@ -1024,24 +1035,30 @@ serial correlation on this dataset, not a direct re-test of any margin the froze
 published. Separately, the conservative-rating analysis (D-03) is now CORRECTED (2026-10-05, after the
 decision-time-leak fixes; see "Retained capacity at matched overrating rates" above for the full
 table and the superseded pre-fix version it replaces) and the current finding is corridor-dependent,
-not a single "cooling wins both corridors" result: at AUSTIN_CORPUS_CHRISTI, `ml_wind_corrected` and
-`ml_cooling_corrected` now achieve the IDENTICAL evaluate-period rate (0.051) at the same nominal 5%
-target — a genuine equal-achieved-risk comparison — and at that equal risk, **wind retains MORE
-capacity** (994.20 A vs. 977.37 A), reversing the pre-fix headline at this corridor outright. At
-MIDLAND_EL_PASO, cooling's advantage survives the leak fix and strengthens into genuine dominance:
-cooling retains more capacity (996.65 A vs. 941.55 A) AND achieves a LOWER risk (0.057 vs. 0.064) than
-wind there — not capacity traded for risk, both axes at once. (**Superseded, pre-fix framing, kept for
-the audit trail only:** an earlier version of this paragraph read cooling's capacity lead as coming
-"at a cost" of a higher achieved rate — 11.3%/6.2% vs. wind's 6.9%/4.3% — than wind's. Those specific
-figures were measured on the leaking periods this phase's decision-time fixes have since closed; they
-are superseded by the corrected table above, not merely restated with new numbers, and a true
-equal-achieved-risk comparison — re-deriving each candidate's derating until achieved rates actually
-match, remains the right eventual check but is less urgent at Austin now that this corridor's
-comparison already lands at equal risk by coincidence of the corrected numbers.) This
-retained-capacity finding remains a genuinely new axis the frozen record never measured; it now
-argues FOR keeping `ml_wind_corrected` live at Austin specifically (equal risk, more capacity), and
-FOR `ml_cooling_corrected`'s strength at Midland specifically — not a uniform argument for either
-candidate at both corridors. Where this verdict differs from the
+not a single "cooling wins both corridors" result at the level of POINT estimates: at
+AUSTIN_CORPUS_CHRISTI, `ml_wind_corrected` and `ml_cooling_corrected` achieve the identical
+evaluate-period POINT rate (0.051) at the same nominal 5% target, and at that observed rate,
+wind's POINT retained capacity is higher (994.20 A vs. 977.37 A), reversing the pre-fix headline
+at this corridor's point estimates. At MIDLAND_EL_PASO, cooling's point advantage survives the
+leak fix: cooling's POINT retained capacity is higher (996.65 A vs. 941.55 A) and its POINT
+achieved rate is lower (0.057 vs. 0.064) than wind's.
+
+**Correction (2026-10-06):** neither corridor's finding above is "genuine" in a statistically
+supported sense — no uncertainty interval has been computed for either corridor's achieved-rate
+or retained-capacity DIFFERENCE, and the one interval that IS available (the wind-vs-cooling MAE
+margin, via block-bootstrap) crosses zero at both corridors (see "Basis-selection gate" below: +5.53
+A [−1.60, 12.60] at Austin, −5.72 A [−12.76, 1.31] at Midland). Austin's rate "tie" at n=157 carries
+a ±3.4 percentage-point normal-approximation band — wide enough that equal observed rates establish
+only that this sample cannot yet distinguish the candidates, not that their underlying risk is
+equal. (**Superseded, pre-fix framing, kept for the audit trail only:** an earlier version of this
+paragraph read cooling's capacity lead as coming "at a cost" of a higher achieved rate —
+11.3%/6.2% vs. wind's 6.9%/4.3% — than wind's. Those specific figures were measured on the leaking
+periods this phase's decision-time fixes have since closed; they are superseded by the corrected
+table above, not merely restated with new numbers.) This retained-capacity finding remains a
+genuinely new axis the frozen record never measured, at the level of point estimates; it suggests,
+without yet statistically confirming, keeping `ml_wind_corrected` live at Austin and recognizing
+`ml_cooling_corrected`'s point-estimate strength at Midland — not a uniform argument for either
+candidate at both corridors, and not yet a confirmed one at either. Where this verdict differs from the
 frozen record's own: the frozen record states `ml_cooling_corrected` "wins on the held-out test set at
 both corridors" without qualification; this audit's own real-data replication shows that claim holds
 cleanly at one corridor and does not hold, by the frozen record's own comparison logic (beat the nearest
@@ -1112,18 +1129,23 @@ by decision, with its disposition:
 - **D-03:** Calibrated lower quantiles (alpha 0.05/0.10) fit, calibrated, and checked on three
   chronologically disjoint periods; calibration improves the evaluate-period exceedance rate for all but
   one (candidate, alpha) pair, named rather than hidden. Disposition: confirmed.
-- **D-03 (CORRECTED 2026-10-05, post-leak-fix — supersedes this bullet's own pre-fix version):** At a
-  shared nominal 5% calibration target, the corrected (decision-time-clean) table shows a
-  corridor-dependent result, not "cooling wins both": at AUSTIN_CORPUS_CHRISTI, wind and cooling now
-  achieve the IDENTICAL evaluate-period rate (0.051) — a genuine equal-achieved-risk comparison — and
-  wind retains more capacity there (994.20 A vs. 977.37 A). At MIDLAND_EL_PASO, cooling retains more
-  capacity (996.65 A vs. 941.55 A) AND achieves a lower rate (0.057 vs. 0.064) — genuine dominance, not
-  risk traded for capacity. (Superseded pre-fix bullet, kept for the audit trail: this bullet
-  previously read cooling as retaining the most capacity at both corridors at a higher achieved risk —
-  11.3%/6.2% vs. wind's 6.9%/4.3% — measured on periods the decision-time leak fixes have since
-  closed.) Disposition: confirmed as re-measured; the Austin side of the "at equal risk" question is
-  now actually answered (equal risk, wind wins capacity); Midland's dominance finding needs no
-  equal-risk re-derivation since cooling already wins on both axes as measured.
+- **D-03 (CORRECTED 2026-10-05, post-leak-fix; framing corrected again 2026-10-06 — supersedes this
+  bullet's own pre-fix version AND its first correction's "genuine equal-achieved-risk"/"genuine
+  dominance" language):** At a shared nominal 5% calibration target, the corrected
+  (decision-time-clean) table shows a corridor-dependent result AT THE LEVEL OF POINT ESTIMATES, not
+  "cooling wins both": at AUSTIN_CORPUS_CHRISTI, wind and cooling achieve the identical evaluate-period
+  POINT rate (0.051), and wind's POINT retained capacity is higher there (994.20 A vs. 977.37 A). At
+  MIDLAND_EL_PASO, cooling's POINT retained capacity is higher (996.65 A vs. 941.55 A) and its POINT
+  rate is lower (0.057 vs. 0.064). Neither corridor's finding has an uncertainty interval computed for
+  the achieved-rate or capacity DIFFERENCE itself; the one interval that exists for a closely related
+  quantity (wind-vs-cooling MAE margin) crosses zero at both corridors, and Austin's rate tie carries a
+  ±3.4-percentage-point band at n=157 — equal observed rates there establish that the sample can't yet
+  tell the candidates apart, not that their risk is actually equal. (Superseded pre-fix bullet, kept
+  for the audit trail: this bullet previously read cooling as retaining the most capacity at both
+  corridors at a higher achieved risk — 11.3%/6.2% vs. wind's 6.9%/4.3% — measured on periods the
+  decision-time leak fixes have since closed.) Disposition: confirmed as re-measured at the point-
+  estimate level only; "equal risk" and "dominance" both corrected to point-estimate language pending
+  an actual uncertainty interval on either corridor's rate/capacity difference.
 - **D-03:** Every reliability claim in this section is explicitly scoped to self-consistency against a
   reanalysis-derived truth series, never conductor-level field-validated safety. Disposition: confirmed,
   stated before the section's first number and repeated throughout.
@@ -1623,6 +1645,14 @@ threshold swept. This does not retroactively settle the 8% number itself (still 
 call, still never to be picked after seeing FRESH data) — it only means the specific pre-fix example
 cited here as a reason to question 8% no longer applies at its original magnitude; the broader
 point, that 8% is this pass's own unapproved proposal, stands unchanged.
+
+**(2026-10-06) This unresolved threshold does NOT block shadow collection from proceeding.** The
+8% figure governs the eventual FRESH-basis confirmation run's selection rule only — it has no
+bearing on whether `backend/forecast_shadow_pipeline.py`/`forecast_shadow_collect.py` can keep
+recording live predictions in the meantime. Collection is live-data plumbing (fetch, predict, log);
+the selection rule is an evaluation-time decision applied once, on the fixed date, to whatever data
+collection has produced by then. Waiting for the project owner to settle 8% before running
+collection would needlessly delay the very data accrual the eventual evaluation depends on.
 
 **Comparison method:** direct paired comparisons between every candidate pair (not only each vs.
 baseline), via the existing `paired_block_bootstrap_margin`/`block_length_sensitivity` machinery
