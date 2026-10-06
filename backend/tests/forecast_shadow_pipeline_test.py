@@ -341,16 +341,23 @@ def _synthetic_wind_fit_frame_real_cities(n=80, seed=1):
     return pd.DataFrame(rows)
 
 
-def _fake_synoptic_observation(station, air_temp=27.5, wind_speed=5.2, wind_direction=135.0):
-    def _fetch(location, start, end, provider="synoptic", **kw):
-        assert location == [station]
+def _fake_tceq_observation(cams_id, air_temp=27.5, wind_speed=5.2, wind_direction=135.0):
+    """Simulates a successful TCEQ-primary response -- the real composition's
+    primary path (`provider="tceq"`), with a `wind_source` provenance column
+    so `fetch_live_anchor_observation`'s actual-provider detection has
+    something real to read, same as `weather_provider.attach_provenance`
+    would set on the genuine path."""
+    def _fetch(location, start, end, provider="tceq", **kw):
+        assert provider == "tceq", f"expected the real primary 'tceq', got {provider!r}"
+        assert location == [cams_id]
         end_ts = pd.Timestamp(end)
-        idx = pd.MultiIndex.from_tuples([(station, end_ts)], names=["stid", "datetime_utc"])
+        idx = pd.MultiIndex.from_tuples([(cams_id, end_ts)], names=["stid", "datetime_utc"])
         return pd.DataFrame(
             {
                 "air_temp": [air_temp], "wind_speed": [wind_speed],
-                "wind_direction": [wind_direction], "solar_radiation": [410.0],
-                "relative_humidity": [48.0],
+                "wind_direction": [wind_direction], "relative_humidity": [48.0],
+                "wind_source": ["tceq"], "temp_source": ["tceq"],
+                "humidity_source": ["tceq"],
             },
             index=idx,
         )
@@ -358,36 +365,75 @@ def _fake_synoptic_observation(station, air_temp=27.5, wind_speed=5.2, wind_dire
 
 
 def test_fetch_live_anchor_observation_returns_the_latest_row_before_decision_time(monkeypatch):
-    monkeypatch.setattr(weather_provider, "fetch_weather", _fake_synoptic_observation("KAUS"))
+    monkeypatch.setattr(weather_provider, "fetch_weather", _fake_tceq_observation(config.TCEQ_STATIONS["AUSTIN"]))
     decision_time = pd.Timestamp("2026-10-06T12:00:00Z")
     anchor = shadow.fetch_live_anchor_observation("AUSTIN", decision_time)
     assert anchor["anchor_wind_speed"] == 5.2
     assert anchor["anchor_wind_direction"] == 135.0
-    assert anchor["anchor_source"] == "synoptic"
-    assert anchor["anchor_station"] == "KAUS"
+    assert anchor["anchor_source"] == "tceq"
+    assert anchor["anchor_station"] == config.TCEQ_STATIONS["AUSTIN"]
 
 
 def test_fetch_live_anchor_observation_rejects_unknown_city():
-    with pytest.raises(shadow.StaleOrMissingDataError, match="no known live station"):
+    with pytest.raises(shadow.StaleOrMissingDataError, match="no known TCEQ CAMS site"):
         shadow.fetch_live_anchor_observation("NOT_A_REAL_CITY", pd.Timestamp("2026-10-06T12:00:00Z"))
 
 
 def test_fetch_live_anchor_observation_wraps_a_failed_fetch(monkeypatch):
+    """Both the TCEQ primary attempt AND the explicit Synoptic retry raise
+    here -- confirms the function tries both sources (not just one) before
+    giving up, and reports that plainly rather than surfacing only the
+    first exception's text."""
     def _raise(*a, **kw):
         raise OSError("Set SYNOPTIC_TOKEN env var.")
     monkeypatch.setattr(weather_provider, "fetch_weather", _raise)
-    with pytest.raises(shadow.StaleOrMissingDataError, match="live observation fetch failed"):
+    with pytest.raises(shadow.StaleOrMissingDataError, match="no usable wind observation"):
         shadow.fetch_live_anchor_observation("AUSTIN", pd.Timestamp("2026-10-06T12:00:00Z"))
 
 
 def test_fetch_live_anchor_observation_rejects_empty_response(monkeypatch):
+    """Both sources return an empty frame -- same final, honest message as
+    the raise case; an empty response is handled identically to an
+    exception, not as a separate code path."""
     monkeypatch.setattr(weather_provider, "fetch_weather", lambda *a, **kw: pd.DataFrame())
-    with pytest.raises(shadow.StaleOrMissingDataError, match="no observation rows"):
+    with pytest.raises(shadow.StaleOrMissingDataError, match="no usable wind observation"):
         shadow.fetch_live_anchor_observation("AUSTIN", pd.Timestamp("2026-10-06T12:00:00Z"))
 
 
+def test_fetch_live_anchor_observation_falls_back_to_synoptic_on_unusable_tceq_response(monkeypatch):
+    """Positive control for the real gap a live run surfaced this session:
+    TCEQ's `daily_summary.pl` can return a MECHANICALLY SUCCESSFUL response
+    whose latest row is a not-yet-reported, null-wind trailing hour --
+    `weather_provider.fetch_weather`'s own `fallback=True` never triggers
+    for this case (it only catches a raised exception or a wholly empty
+    response), so this function must explicitly retry Synoptic itself."""
+    cams_id = config.TCEQ_STATIONS["AUSTIN"]
+    synoptic_station = config.SYNOPTIC_FALLBACK_STATIONS["AUSTIN"]
+
+    def _fetch(location, start, end, provider="tceq", **kw):
+        end_ts = pd.Timestamp(end)
+        if provider == "tceq":
+            assert location == [cams_id]
+            idx = pd.MultiIndex.from_tuples([(cams_id, end_ts)], names=["stid", "datetime_utc"])
+            return pd.DataFrame(
+                {"wind_speed": [None], "wind_direction": [None], "wind_source": [None]}, index=idx,
+            )
+        assert provider == "synoptic"
+        assert location == [synoptic_station]
+        idx = pd.MultiIndex.from_tuples([(synoptic_station, end_ts)], names=["stid", "datetime_utc"])
+        return pd.DataFrame(
+            {"wind_speed": [6.5], "wind_direction": [220.0], "wind_source": ["synoptic"]}, index=idx,
+        )
+
+    monkeypatch.setattr(weather_provider, "fetch_weather", _fetch)
+    anchor = shadow.fetch_live_anchor_observation("AUSTIN", pd.Timestamp("2026-10-06T12:00:00Z"))
+    assert anchor["anchor_wind_speed"] == 6.5
+    assert anchor["anchor_source"] == "synoptic"
+    assert anchor["anchor_station"] == synoptic_station
+
+
 def test_attach_wind_correction_inputs_populates_every_feature_frame_column(monkeypatch):
-    monkeypatch.setattr(weather_provider, "fetch_weather", _fake_synoptic_observation("KAUS"))
+    monkeypatch.setattr(weather_provider, "fetch_weather", _fake_tceq_observation(config.TCEQ_STATIONS["AUSTIN"]))
     row = _synthetic_row()
     frame = pd.DataFrame([row]).drop(columns=["anchor_wind_speed", "anchor_wind_direction"])
     enriched = shadow.attach_wind_correction_inputs(
@@ -399,8 +445,8 @@ def test_attach_wind_correction_inputs_populates_every_feature_frame_column(monk
     assert enriched["anchor_wind_direction"].iloc[0] == 135.0
     assert enriched["endpoint_city"].iloc[0] == "AUSTIN"
     assert enriched["datetime_utc"].iloc[0] == pd.Timestamp("2026-10-07T00:00:00Z")
-    assert enriched.attrs["anchor_source"] == "synoptic"
-    assert enriched.attrs["anchor_station"] == "KAUS"
+    assert enriched.attrs["anchor_source"] == "tceq"
+    assert enriched.attrs["anchor_station"] == config.TCEQ_STATIONS["AUSTIN"]
     # The real feature builder must accept this frame with no missing column.
     features = forecast_correction_models._wind_feature_frame(enriched, pooling="per_city")
     assert not features.isnull().any().any()
@@ -412,13 +458,13 @@ def test_wind_correction_shadow_method_completes_live_path_with_no_fallback_when
     working anchor source, the wind-corrected method must complete its
     real predictive path -- not merely avoid crashing.
     """
-    monkeypatch.setattr(weather_provider, "fetch_weather", _fake_synoptic_observation("KAUS"))
+    endpoint_city = config.CORRIDOR_ENDPOINTS[_CORRIDOR][0]
+    monkeypatch.setattr(weather_provider, "fetch_weather", _fake_tceq_observation(config.TCEQ_STATIONS[endpoint_city]))
     fit_frame = _synthetic_wind_fit_frame_real_cities()
     model = forecast_correction_models.fit_wind_correction(
         fit_frame, forecast_correction_models._make_wind_linear_regression, pooling="per_city",
     )
     geometry = corridor_discretization.corridor_geometry(_CORRIDOR)
-    endpoint_city = config.CORRIDOR_ENDPOINTS[_CORRIDOR][0]
     row = _synthetic_row(endpoint_city=endpoint_city)
     frame = pd.DataFrame([row]).drop(columns=["anchor_wind_speed", "anchor_wind_direction"])
 
@@ -434,10 +480,10 @@ def test_wind_correction_shadow_method_completes_live_path_with_no_fallback_when
 
 def test_shadow_pipeline_falls_back_explicitly_when_anchor_source_unavailable(monkeypatch):
     """
-    Negative control: a missing/failed anchor source (e.g. no
-    SYNOPTIC_TOKEN) must be caught by the pipeline's existing fail-safe
-    fallback machinery -- a named, traceable fallback, never a crash and
-    never a silent success.
+    Negative control: a missing/failed anchor source (both TCEQ and its
+    explicit Synoptic retry) must be caught by the pipeline's existing
+    fail-safe fallback machinery -- a named, traceable fallback, never a
+    crash and never a silent success.
     """
     def _raise(*a, **kw):
         raise OSError("Set SYNOPTIC_TOKEN env var.")
@@ -465,7 +511,7 @@ def test_shadow_pipeline_falls_back_explicitly_when_anchor_source_unavailable(mo
     prediction = pipeline.predict(frame, ts)
     assert prediction.fallback_used is True
     assert prediction.method == "raw_forecast"
-    assert "SYNOPTIC_TOKEN" in prediction.fallback_reason
+    assert "no usable wind observation" in prediction.fallback_reason
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -485,21 +531,22 @@ def _fake_fetch_single_run_const(air_temp=22.0, wind_speed=3.0, wind_direction=2
     return _fetch
 
 
-def _fake_synoptic_observation_per_station(speeds_by_station, direction=135.0):
-    """Like `_fake_synoptic_observation`, but returns a DIFFERENT wind
-    speed per station so the two cities' corrected ampacities genuinely
-    differ -- needed to prove the weakest-link reduction picks the real
-    minimum, not just whichever city happens to run first."""
-    def _fetch(location, start, end, provider="synoptic", **kw):
-        station = location[0]
-        speed = speeds_by_station[station]
+def _fake_tceq_observation_per_station(speeds_by_cams_id, direction=135.0):
+    """Like `_fake_tceq_observation`, but returns a DIFFERENT wind speed per
+    CAMS ID so the two cities' corrected ampacities genuinely differ --
+    needed to prove the weakest-link reduction picks the real minimum, not
+    just whichever city happens to run first. Simulates the real TCEQ
+    primary path (`wind_source="tceq"`)."""
+    def _fetch(location, start, end, provider="tceq", **kw):
+        cams_id = location[0]
+        speed = speeds_by_cams_id[cams_id]
         end_ts = pd.Timestamp(end)
-        idx = pd.MultiIndex.from_tuples([(station, end_ts)], names=["stid", "datetime_utc"])
+        idx = pd.MultiIndex.from_tuples([(cams_id, end_ts)], names=["stid", "datetime_utc"])
         return pd.DataFrame(
             {
                 "air_temp": [27.5], "wind_speed": [speed],
-                "wind_direction": [direction], "solar_radiation": [410.0],
-                "relative_humidity": [48.0],
+                "wind_direction": [direction], "relative_humidity": [48.0],
+                "wind_source": ["tceq"],
             },
             index=idx,
         )
@@ -518,11 +565,11 @@ def test_corridor_wind_correction_reduces_to_the_true_minimum_of_both_cities(mon
 
     monkeypatch.setattr(open_meteo_forecast_provider, "fetch_single_run", _fake_fetch_single_run_const())
     city_a, city_b = config.CORRIDOR_ENDPOINTS[_CORRIDOR]
-    station_a = config.SYNOPTIC_FALLBACK_STATIONS[city_a]
-    station_b = config.SYNOPTIC_FALLBACK_STATIONS[city_b]
+    cams_a = config.TCEQ_STATIONS[city_a]
+    cams_b = config.TCEQ_STATIONS[city_b]
     monkeypatch.setattr(
         weather_provider, "fetch_weather",
-        _fake_synoptic_observation_per_station({station_a: 2.0, station_b: 9.0}),
+        _fake_tceq_observation_per_station({cams_a: 2.0, cams_b: 9.0}),
     )
 
     fit_frame = _synthetic_wind_fit_frame_real_cities()
@@ -547,7 +594,7 @@ def test_corridor_wind_correction_reduces_to_the_true_minimum_of_both_cities(mon
     assert frame.attrs["bottleneck_city"] == (city_a if per_city[city_a] <= per_city[city_b] else city_b)
     assert set(frame.attrs["anchor_provenance"]) == {city_a, city_b}
     for city_provenance in frame.attrs["anchor_provenance"].values():
-        assert city_provenance["anchor_source"] == "synoptic"
+        assert city_provenance["anchor_source"] == "tceq"
 
 
 def test_corridor_wind_correction_fails_whole_prediction_when_either_city_anchor_unavailable(monkeypatch):
@@ -562,13 +609,18 @@ def test_corridor_wind_correction_fails_whole_prediction_when_either_city_anchor
 
     monkeypatch.setattr(open_meteo_forecast_provider, "fetch_single_run", _fake_fetch_single_run_const())
     city_a, city_b = config.CORRIDOR_ENDPOINTS[_CORRIDOR]
-    station_a = config.SYNOPTIC_FALLBACK_STATIONS[city_a]
-    station_b = config.SYNOPTIC_FALLBACK_STATIONS[city_b]
+    cams_a = config.TCEQ_STATIONS[city_a]
+    cams_b = config.TCEQ_STATIONS[city_b]
+    synoptic_b = config.SYNOPTIC_FALLBACK_STATIONS[city_b]
 
-    def _flaky(location, start, end, provider="synoptic", **kw):
-        if location[0] == station_b:
-            raise OSError("Set SYNOPTIC_TOKEN env var.")
-        return _fake_synoptic_observation_per_station({station_a: 2.0, station_b: 9.0})(location, start, end, provider=provider, **kw)
+    def _flaky(location, start, end, provider="tceq", **kw):
+        # city_b fails on BOTH the TCEQ primary attempt AND the explicit
+        # Synoptic retry `fetch_live_anchor_observation` makes when the
+        # primary's latest row is unusable -- city_a succeeds normally via
+        # TCEQ either way.
+        if location[0] in (cams_b, synoptic_b):
+            raise ValueError(f"simulated failure for city {city_b!r} on provider {provider!r}")
+        return _fake_tceq_observation_per_station({cams_a: 2.0, cams_b: 9.0})(location, start, end, provider=provider, **kw)
 
     monkeypatch.setattr(weather_provider, "fetch_weather", _flaky)
 
@@ -597,4 +649,6 @@ def test_corridor_wind_correction_fails_whole_prediction_when_either_city_anchor
     prediction = pipeline.predict(frame, ts)
     assert prediction.fallback_used is True
     assert prediction.method == "raw_forecast"
-    assert "SYNOPTIC_TOKEN" in prediction.fallback_reason
+    assert "no usable wind observation" in prediction.fallback_reason
+    assert city_b in prediction.fallback_reason
+    assert cams_b in prediction.fallback_reason

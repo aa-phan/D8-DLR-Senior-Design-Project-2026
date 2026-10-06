@@ -250,38 +250,71 @@ def fetch_live_anchor_observation(
 ) -> pd.Series:
     """
     Fetch the most recent REAL (near-real-time station) observation for
-    `city` at or before `decision_time`, via `weather_provider.fetch_weather`'s
-    Synoptic station path -- the production multi-provider observation
-    composer, never the Open-Meteo Archive API reanalysis
-    `open_meteo_provider.fetch_open_meteo` training used historically.
-    The archive lags by this phase's own documented ~1-day publication
-    delay (`forecast_experiment._resolve_window_end`) and cannot serve a
-    live "most recent observation" request; a station observation can.
+    `city` at or before `decision_time`, through
+    `weather_provider.fetch_weather`'s REAL ratified composition --
+    `provider="tceq"` (the project's primary for wind/temp/RH, WX-01),
+    which `fetch_weather`'s own `fallback=True` default automatically
+    retries against Synoptic (`FALLBACK_PROVIDER`) on a `ValueError`-shaped
+    primary failure -- never Synoptic requested directly. (An earlier
+    version of this function called `provider="synoptic"` directly,
+    bypassing the ratified primary entirely; fixed 2026-10-06.)
 
     This is the live equivalent of `forecast_experiment.anchored_pair_
     frame`'s anchor group (the last real observation a forecaster would
     have had at the anchor time) -- except that frame's anchor is itself
-    built from the Archive API, because at TRAINING time the anchor
-    moment was already historical and the archive had settled. At LIVE
-    decision time the anchor moment is effectively "now", where only a
-    station observation actually exists yet.
+    built from the Open-Meteo Archive API reanalysis, because at TRAINING
+    time the anchor moment was already historical and the archive had
+    settled. At LIVE decision time the anchor moment is effectively "now",
+    where only a station observation actually exists yet. **Matching
+    PIPELINE_SCHEMA units/columns does not establish that the live-station
+    anchor and the archive-derived training anchor behave statistically
+    equivalently** -- that empirical question is open and explicitly not
+    answered here (see module docstring).
+
+    **The ASOS-supplement asymmetry, by design, not an oversight.**
+    `weather_provider._supplement_with_asos` is wired only into the
+    Synoptic branch of `_fetch_station` (its own module docstring: "mixing
+    it into the TCEQ branch is not in WX-01's scope") -- so a TCEQ-primary
+    success here never gets ASOS's finer-grained supplement, while a
+    Synoptic fallback does (inherited automatically through
+    `_attempt_fallback` -> `_fetch_station`, same as every other
+    `fetch_weather` caller). For this function's single
+    most-recent-reading lookup (not a bulk historical fetch), ASOS's
+    sub-hourly resolution is not required to answer "what was the last
+    valid hourly reading" -- TCEQ's own hourly cadence is sufficient when
+    it succeeds.
+
+    **TCEQ's own freshness characteristic, confirmed empirically this
+    session:** `daily_summary.pl` returns a full 24-local-hour skeleton for
+    the current day with trailing NaN rows for hours not yet reported --
+    NOT a provider error, just an honest "not reported yet." The existing
+    at-or-before-decision_time filter plus the latest-row null check below
+    already treats an unreported trailing hour exactly like Synoptic's own
+    null-wind-field case (confirmed live: Corpus Christi's `KCRP` station,
+    2026-10-06) -- same established fallback policy, reused rather than
+    special-cased per provider.
 
     Returns a one-row Series with `anchor_wind_speed`, `anchor_wind_
     direction`, `anchor_observation_time` (the observation's own
     timestamp -- may be up to `lookback_hours` before `decision_time` if
     the station's most recent report is not instantaneous), `anchor_
-    source` ("synoptic"), and `anchor_station`.
+    source` (the ACTUAL provider that supplied the row -- "tceq" or
+    "synoptic", read from the frame's own `wind_source` provenance column,
+    never just "whichever was requested"), and `anchor_station` (the CAMS
+    ID when `anchor_source="tceq"`, the Synoptic station ID when a
+    fallback fired).
 
     Raises:
-        StaleOrMissingDataError: no known live station for `city`
-            (`config.SYNOPTIC_FALLBACK_STATIONS`), the fetch itself fails,
-            or no observation row exists at/before `decision_time` within
-            the lookback window.
+        StaleOrMissingDataError: no known CAMS site for `city`
+            (`config.TCEQ_STATIONS`), the fetch itself fails (including
+            both primary and fallback exhausted), or no observation row
+            exists at/before `decision_time` within the lookback window,
+            or the latest such row has a null required wind field.
     """
-    station = config.SYNOPTIC_FALLBACK_STATIONS.get(city)
-    if station is None:
+    cams_id = config.TCEQ_STATIONS.get(city)
+    if cams_id is None:
         raise StaleOrMissingDataError(
-            f"fetch_live_anchor_observation: no known live station for city {city!r}"
+            f"fetch_live_anchor_observation: no known TCEQ CAMS site for city {city!r}"
         )
     decision_time = pd.Timestamp(decision_time)
     if decision_time.tzinfo is None:
@@ -289,42 +322,93 @@ def fetch_live_anchor_observation(
     window_start = (decision_time - pd.Timedelta(hours=lookback_hours)).isoformat()
     window_end = decision_time.isoformat()
 
-    try:
-        obs = weather_provider.fetch_weather([station], window_start, window_end, provider="synoptic")
-    except Exception as exc:
-        raise StaleOrMissingDataError(
-            f"fetch_live_anchor_observation: live observation fetch failed for "
-            f"{city!r} (station {station!r}): {exc}"
-        ) from exc
+    def _latest_usable_row(location, provider, label):
+        """
+        One fetch-and-validate attempt. Returns the latest at-or-before-
+        decision_time row if its required wind fields are non-null, else
+        `None` -- a MECHANICALLY SUCCESSFUL but UNUSABLE response (e.g.
+        TCEQ's own trailing not-yet-reported hour, confirmed live this
+        session: `daily_summary.pl` returns a full 24-local-hour skeleton
+        with NaN for hours not yet published) is distinct from a raised
+        exception and is handled by the caller trying the next source, not
+        by raising here.
+        """
+        try:
+            frame = weather_provider.fetch_weather(location, window_start, window_end, provider=provider)
+        except Exception as exc:
+            logger.info("%s: fetch raised (%s) -- trying next source if any", label, exc)
+            return None
+        if frame.empty:
+            logger.info("%s: empty response -- trying next source if any", label)
+            return None
+        frame = frame.reset_index()
+        frame["datetime_utc"] = pd.to_datetime(frame["datetime_utc"], utc=True)
+        frame = frame[frame["datetime_utc"] <= decision_time].sort_values("datetime_utc")
+        if frame.empty:
+            logger.info(
+                "%s: no row at/before decision_time %s -- trying next source if any",
+                label, decision_time,
+            )
+            return None
+        row = frame.iloc[-1]
+        if pd.isnull(row.get("wind_speed")) or pd.isnull(row.get("wind_direction")):
+            logger.info(
+                "%s: latest row at %s has a null wind field -- trying next source if any",
+                label, row["datetime_utc"],
+            )
+            return None
+        return row
 
-    if obs.empty:
+    # Primary: TCEQ. `fetch_weather`'s own `fallback=True` already retries
+    # Synoptic automatically on a RAISED exception or an empty response --
+    # but NOT on a mechanically successful response whose specific latest
+    # row is unusable (TCEQ's trailing-NaN-hour case), since weather_
+    # provider has no notion of "the one row this caller cares about."
+    # That gap is this function's job to close, by explicitly trying the
+    # same Synoptic fallback target a second time, at the row level.
+    latest = _latest_usable_row([cams_id], "tceq", f"fetch_live_anchor_observation({city!r}, tceq CAMS {cams_id!r})")
+    actual_source = "tceq"
+    actual_station = cams_id
+
+    if latest is None:
+        synoptic_station = config.SYNOPTIC_FALLBACK_STATIONS.get(city)
+        if synoptic_station is not None:
+            latest = _latest_usable_row(
+                [synoptic_station], "synoptic",
+                f"fetch_live_anchor_observation({city!r}, explicit Synoptic retry, station {synoptic_station!r})",
+            )
+            actual_source = "synoptic"
+            actual_station = synoptic_station
+
+    if latest is None:
         raise StaleOrMissingDataError(
-            f"fetch_live_anchor_observation: no observation rows for {city!r} "
-            f"(station {station!r}) in [{window_start}, {window_end}]"
+            f"fetch_live_anchor_observation: no usable wind observation for {city!r} "
+            f"at/before decision_time {decision_time} within the {lookback_hours}h lookback "
+            f"window -- tried TCEQ CAMS {cams_id!r} and the explicit Synoptic retry "
+            f"(station {config.SYNOPTIC_FALLBACK_STATIONS.get(city)!r}); both either raised, "
+            "returned nothing, or had a null wind field on their latest row"
         )
 
-    obs = obs.reset_index()
-    obs["datetime_utc"] = pd.to_datetime(obs["datetime_utc"], utc=True)
-    obs = obs[obs["datetime_utc"] <= decision_time].sort_values("datetime_utc")
-    if obs.empty:
-        raise StaleOrMissingDataError(
-            f"fetch_live_anchor_observation: no observation at/before decision_time "
-            f"{decision_time} for {city!r} within the {lookback_hours}h lookback window"
+    # `wind_source` (units_def.PIPELINE_SCHEMA provenance column, set by
+    # `weather_provider.attach_provenance`) independently confirms which
+    # provider actually supplied the row -- cross-checked against
+    # `actual_source` (which attempt succeeded) rather than trusted alone,
+    # since `attach_provenance` is applied inside `_fetch_station` either way.
+    provenance_source = latest.get("wind_source")
+    if pd.notna(provenance_source) and provenance_source != actual_source:
+        logger.warning(
+            "fetch_live_anchor_observation(%r): attempt-tracked source %r disagrees with "
+            "wind_source provenance %r -- trusting provenance",
+            city, actual_source, provenance_source,
         )
-
-    latest = obs.iloc[-1]
-    if pd.isnull(latest.get("wind_speed")) or pd.isnull(latest.get("wind_direction")):
-        raise StaleOrMissingDataError(
-            f"fetch_live_anchor_observation: latest observation for {city!r} at "
-            f"{latest['datetime_utc']} has a null wind field"
-        )
+        actual_source = provenance_source
 
     return pd.Series({
         "anchor_wind_speed": float(latest["wind_speed"]),
         "anchor_wind_direction": float(latest["wind_direction"]),
         "anchor_observation_time": latest["datetime_utc"],
-        "anchor_source": "synoptic",
-        "anchor_station": station,
+        "anchor_source": actual_source if pd.notna(actual_source) else "unknown",
+        "anchor_station": actual_station,
     })
 
 

@@ -1211,3 +1211,53 @@ transient blip at this exact moment.
 **Verified, not merely trusted:** ran `backend/tests/forecast_experiment_audit_test.py` +
 `backend/tests/forecast_shadow_pipeline_test.py` + `backend/tests/forecast_shadow_collect_test.py`
 together (151/151 pass, unchanged) both before and after the dotenv wiring.
+
+### Session: 2026-10-06 (continued), conducted by Aaron Phan — wire the shadow pipeline to the real weather-provider composition
+
+The user asked why the shadow module's live anchor fetch only ever used Synoptic when the project
+has five weather providers (TCEQ CAMS, ASOS 1-minute, NSRDB, Open-Meteo Archive, Synoptic). Traced
+it to `forecast_shadow_pipeline.py:293`'s hardcoded `provider="synoptic"` call -- bypassing the
+project's own ratified composition (`weather_provider.py`: TCEQ primary for wind/temp/RH, with
+`fetch_weather`'s own `fallback=True` automatically retrying Synoptic on a primary failure) entirely,
+rather than a deliberate decision to skip it.
+
+Fixed by calling the real composition correctly: `fetch_live_anchor_observation` now requests
+`provider="tceq"` with the correct CAMS site ID (`config.TCEQ_STATIONS[city]`), not a Synoptic
+airport code. Traced and resolved one real wrinkle first: ASOS 1-minute supplementing is wired only
+into the Synoptic branch of `_fetch_station` (confirmed in `weather_provider.py`'s own docstring --
+"not in WX-01's scope" for TCEQ), so a TCEQ-primary success never gets ASOS's finer resolution; for
+this function's single most-recent-reading lookup (not a bulk historical fetch), TCEQ's own hourly
+cadence is sufficient and this asymmetry is documented as by-design, not an oversight.
+
+**Found and closed a second real gap while verifying live:** `fetch_weather`'s own automatic
+fallback only fires on a RAISED exception or a wholly empty response -- it has no way to know this
+caller only cares about one specific row (the latest, at-or-before-decision_time). Confirmed
+empirically this session: TCEQ's `daily_summary.pl` returns a full 24-local-hour skeleton for the
+current day with trailing NaN rows for hours not yet reported -- a MECHANICALLY SUCCESSFUL response
+whose latest row can still be unusable. Closed by refactoring `fetch_live_anchor_observation` into
+an explicit two-attempt chain: TCEQ primary, then (only if TCEQ's latest row is unusable, not just
+on a raised exception) an explicit Synoptic retry at the same station-resolution `weather_provider`
+already uses internally -- reusing the established null-wind-field fallback check rather than adding
+a new policy. Both attempts are logged by name; the final log/provenance records the ACTUAL provider
+that supplied each value (`wind_source`, cross-checked against which attempt succeeded), never just
+whichever was requested.
+
+**Verified live, for real, both corridors, after the fix:**
+- `AUSTIN_CORPUS_CHRISTI`: **genuine, fully-live, no-fallback completion** --
+  `requested=ml_wind_corrected actual=ml_wind_corrected fallback_used=False`. Both cities' TCEQ
+  attempts hit a null trailing hour; both explicit Synoptic retries succeeded (`KAUS`, `KCRP`),
+  logged with `anchor_source="synoptic"` per city -- the exact corridor that had never completed its
+  real predictive path at any point earlier this session.
+- `MIDLAND_EL_PASO`: honest fallback. Midland's station has a genuine null wind reading on BOTH TCEQ
+  and its Synoptic retry right now -- confirmed as a real, current station gap, not a code defect,
+  by the log naming both attempts explicitly.
+
+Updated 6 existing tests in `backend/tests/forecast_shadow_pipeline_test.py` to mock the real
+TCEQ-primary call shape (CAMS IDs, `wind_source` provenance) instead of the old Synoptic-only mocks,
+and added one new positive control proving the explicit Synoptic retry fires correctly when TCEQ's
+response is mechanically successful but unusable.
+
+**Verified, not merely trusted:** ran `backend/tests/forecast_experiment_audit_test.py` +
+`backend/tests/forecast_shadow_pipeline_test.py` + `backend/tests/forecast_shadow_collect_test.py`
+together (152/152 pass, 1 new) both before and after, plus two real live invocations of
+`backend/forecast_shadow_demo.py` against the actual TCEQ and Synoptic APIs for both corridors.
