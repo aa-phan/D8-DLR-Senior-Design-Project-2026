@@ -232,3 +232,73 @@ def test_log_prediction_writes_a_json_line_with_basis_caveat(tmp_path, monkeypat
     assert record["ampacity_amps"] == 500.0
     assert "reanalysis" in record["basis_caveat"].lower() or "Reanalysis" in record["basis_caveat"]
     assert record["decision_time"] == ts.decision_time.isoformat()
+
+
+def test_fetch_live_forecast_renames_provider_columns_to_fcst_prefix(monkeypatch):
+    """
+    Regression test for a real bug found by an actual live-network run of
+    this module (pre-confirmation readiness pass, 2026-10-05): the raw
+    provider returns `air_temp`/`wind_speed`/... (no prefix), but
+    `validate_and_prepare_shadow_row` and the correction models' feature
+    builders require `fcst_air_temp`/`fcst_wind_speed`/.... Every prior
+    test in this file passed `_synthetic_row()`'s already-prefixed columns
+    directly, so none of them could have caught this -- only an actual
+    live invocation surfaced it.
+    """
+    import open_meteo_forecast_provider
+
+    def _fake_fetch_single_run(lat, lon, run, forecast_days=None, **kwargs):
+        return pd.DataFrame([{
+            "datetime_utc": run + pd.Timedelta(hours=6),
+            "air_temp": 22.5, "wind_speed": 3.1, "wind_direction": 200.0,
+            "solar_radiation": 450.0, "relative_humidity": 60.0,
+        }])
+
+    monkeypatch.setattr(open_meteo_forecast_provider, "fetch_single_run", _fake_fetch_single_run)
+
+    valid_time = pd.Timestamp("2026-01-02T06:00:00Z")
+    row, ts = shadow.fetch_live_forecast_for_valid_time(
+        _CORRIDOR, valid_time, horizon_minutes=1440, lat=30.27, lon=-97.74,
+    )
+    for col in ("fcst_air_temp", "fcst_wind_speed", "fcst_wind_direction", "fcst_solar_radiation"):
+        assert col in row.index, f"{col} missing after rename -- provider's raw column survived unrenamed"
+    assert "air_temp" not in row.index, "raw provider column name should not survive alongside the renamed one"
+    # The renamed row must also satisfy validate_and_prepare_shadow_row directly.
+    frame = shadow.validate_and_prepare_shadow_row(row, corridor=_CORRIDOR)
+    assert frame["fcst_air_temp"].iloc[0] == 22.5
+
+
+def test_shadow_pipeline_rejects_unevaluated_horizon_before_attempting_fallback():
+    """
+    horizon_minutes must be a hard rejection (UnsupportedHorizonError),
+    never something the fallback machinery could silently absorb into a
+    raw_forecast answer a caller might mistake for a correction-model result.
+    """
+    pipeline = shadow.ShadowPipeline(_CORRIDOR, shadow.RawForecastShadowMethod())
+    row = _synthetic_row()
+    frame = pd.DataFrame([row])
+    ts = shadow.ShadowTimestamps(
+        initialization_time=pd.Timestamp("2026-10-04T00:00:00Z"),
+        availability_time=pd.Timestamp("2026-10-04T06:00:00Z"),
+        decision_time=pd.Timestamp("2026-10-04T12:00:00Z"),
+        valid_time=pd.Timestamp("2026-10-04T13:00:00Z"),
+        horizon_minutes=60,  # never evaluated -- only 1440 has evidence behind it
+    )
+    with pytest.raises(shadow.UnsupportedHorizonError, match="60"):
+        pipeline.predict(frame, ts)
+
+
+def test_shadow_pipeline_accepts_the_one_evaluated_horizon():
+    assert shadow.EVALUATED_HORIZONS_MINUTES == (1440,)
+    pipeline = shadow.ShadowPipeline(_CORRIDOR, shadow.RawForecastShadowMethod())
+    row = _synthetic_row()
+    frame = pd.DataFrame([row])
+    ts = shadow.ShadowTimestamps(
+        initialization_time=pd.Timestamp("2026-10-04T00:00:00Z"),
+        availability_time=pd.Timestamp("2026-10-04T06:00:00Z"),
+        decision_time=pd.Timestamp("2026-10-04T12:00:00Z"),
+        valid_time=pd.Timestamp("2026-10-05T12:00:00Z"),
+        horizon_minutes=1440,
+    )
+    prediction = pipeline.predict(frame, ts)
+    assert prediction.fallback_used is False

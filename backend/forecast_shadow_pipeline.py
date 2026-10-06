@@ -190,6 +190,23 @@ def fetch_live_forecast_for_valid_time(
             f"{valid_ts} in run {initialization_time}'s response: {exc}"
         ) from exc
 
+    # `fetch_single_run` returns the provider's own plain column names
+    # (air_temp, wind_speed, ...) -- apply the SAME "fcst_" rename
+    # `forecast_experiment.py`'s `_stacked_pair_frame` uses when building
+    # its own forecast-side columns (lines ~645-651), so this live row is
+    # shaped identically to what `validate_and_prepare_shadow_row` and the
+    # correction models' feature builders already expect. A real end-to-end
+    # run surfaced this mismatch (the raw provider never carried the
+    # "fcst_" prefix) -- caught by actually exercising this path, not by
+    # the synthetic-fixture unit tests, which always passed pre-prefixed rows.
+    row = row.rename({
+        "air_temp": "fcst_air_temp",
+        "wind_speed": "fcst_wind_speed",
+        "wind_direction": "fcst_wind_direction",
+        "solar_radiation": "fcst_solar_radiation",
+        "relative_humidity": "fcst_relative_humidity",
+    })
+
     if row.isnull().any():
         raise StaleOrMissingDataError(
             f"fetch_live_forecast_for_valid_time: null field(s) in the "
@@ -390,6 +407,32 @@ def load_correction_model(corridor: str, method_name: str):
     return joblib.load(path)
 
 
+class UnsupportedHorizonError(ValueError):
+    """
+    Raised by `ShadowPipeline.predict` when `timestamps.horizon_minutes`
+    is not one this phase's evidence base has actually evaluated for the
+    requested method. This phase's entire evidence base
+    (`docs/data-science/decisions/forecast_correction_followup_audit.md`)
+    is exclusively the 24-hour (1440-minute) horizon -- no number in that
+    document, and no fitted model this module loads, has ever been
+    checked against a 60-minute or any other horizon. A model/horizon
+    combination outside `EVALUATED_HORIZONS_MINUTES` is a REJECTION, not a
+    fallback-worthy runtime failure: it is checked and raised BEFORE the
+    primary-method try/except below, so it can never be silently absorbed
+    into a raw_forecast fallback the caller might mistake for "the
+    correction model ran and this is its answer."
+    """
+
+
+# This phase's entire evidence base is 24-hour-ahead only (see this
+# module's own docstring, "Horizon-independent by construction"). Every
+# `CorrectionMethod` this module ships is therefore only evaluated at
+# 1440 minutes -- stated here as one shared tuple, not per-method, because
+# there is currently exactly one evaluated horizon for the whole module,
+# not because future methods are assumed to share it.
+EVALUATED_HORIZONS_MINUTES: tuple[int, ...] = (1440,)
+
+
 class ShadowPipeline:
     """
     Ties retrieval -> validation -> correction -> logging -> fallback
@@ -410,7 +453,21 @@ class ShadowPipeline:
         and report `fallback_used=True` with the reason -- never silently
         swallowed, matching `DLRSafetyMonitor`'s fail-safe-not-fail-open
         discipline for its own G6 gate.
+
+        Raises:
+            UnsupportedHorizonError: if `timestamps.horizon_minutes` is not
+                in `EVALUATED_HORIZONS_MINUTES` -- checked first, before
+                the fallback machinery below, so an unsupported horizon is
+                a hard rejection rather than something that could resolve
+                to a fallback prediction.
         """
+        if timestamps.horizon_minutes not in EVALUATED_HORIZONS_MINUTES:
+            raise UnsupportedHorizonError(
+                f"ShadowPipeline.predict: horizon_minutes={timestamps.horizon_minutes} "
+                f"has no evaluated evidence behind it (evaluated: "
+                f"{EVALUATED_HORIZONS_MINUTES}) -- this phase's evidence base is "
+                f"24-hour-ahead only; do not call predict at an unevaluated horizon"
+            )
         try:
             amps = self.primary_method.predict(frame, self.geometry)
             return ShadowPrediction(
