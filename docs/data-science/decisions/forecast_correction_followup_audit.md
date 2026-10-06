@@ -1021,21 +1021,27 @@ at the i.i.d.-equivalent block length but stops excluding zero at longer block l
 temporal dependence in the hourly series — a finding about how fragile THIS margin, measured under the
 frozen record's own interval method, is at this corridor; it demonstrates that method's sensitivity to
 serial correlation on this dataset, not a direct re-test of any margin the frozen record itself
-published. Separately, the conservative-rating analysis (D-03) found `ml_cooling_corrected` retains the
-most usable capacity of any real candidate at a shared NOMINAL 5% calibration target at BOTH corridors
-(1,064.68 A / 56.0% of static at AUSTIN_CORPUS_CHRISTI; 962.50 A / 66.4% of static at MIDLAND_EL_PASO) —
-but this is NOT a comparison at equal realized risk: cooling's own ACHIEVED overrating rate on the
-Evaluate period (11.3% / 6.2%) is substantially higher than `ml_wind_corrected`'s achieved rate under
-the same nominal target (6.9% / 4.3%, roughly 1.4–1.6x lower). Cooling retains more capacity partly
-because it is carrying correspondingly more real risk, not purely because it is more capacity-efficient
-at a matched risk level — "equal risk" was never actually achieved by calibrating to a shared nominal
-target, only a shared TARGET was. A genuine equal-risk comparison would require re-deriving each
-candidate's own derating until each one's own ACHIEVED rate matches the others', then comparing retained
-capacity at that common achieved rate — not done in this phase, named as a remaining blocker below. This
-retained-capacity finding is a genuinely new axis the frozen record never measured, but its current
-framing overstates what it shows; it does not by itself argue for keeping `ml_cooling_corrected` live
-over `ml_wind_corrected`, since wind was never given the chance to be compared at cooling's own achieved
-risk level. Where this verdict differs from the
+published. Separately, the conservative-rating analysis (D-03) is now CORRECTED (2026-10-05, after the
+decision-time-leak fixes; see "Retained capacity at matched overrating rates" above for the full
+table and the superseded pre-fix version it replaces) and the current finding is corridor-dependent,
+not a single "cooling wins both corridors" result: at AUSTIN_CORPUS_CHRISTI, `ml_wind_corrected` and
+`ml_cooling_corrected` now achieve the IDENTICAL evaluate-period rate (0.051) at the same nominal 5%
+target — a genuine equal-achieved-risk comparison — and at that equal risk, **wind retains MORE
+capacity** (994.20 A vs. 977.37 A), reversing the pre-fix headline at this corridor outright. At
+MIDLAND_EL_PASO, cooling's advantage survives the leak fix and strengthens into genuine dominance:
+cooling retains more capacity (996.65 A vs. 941.55 A) AND achieves a LOWER risk (0.057 vs. 0.064) than
+wind there — not capacity traded for risk, both axes at once. (**Superseded, pre-fix framing, kept for
+the audit trail only:** an earlier version of this paragraph read cooling's capacity lead as coming
+"at a cost" of a higher achieved rate — 11.3%/6.2% vs. wind's 6.9%/4.3% — than wind's. Those specific
+figures were measured on the leaking periods this phase's decision-time fixes have since closed; they
+are superseded by the corrected table above, not merely restated with new numbers, and a true
+equal-achieved-risk comparison — re-deriving each candidate's derating until achieved rates actually
+match, remains the right eventual check but is less urgent at Austin now that this corridor's
+comparison already lands at equal risk by coincidence of the corrected numbers.) This
+retained-capacity finding remains a genuinely new axis the frozen record never measured; it now
+argues FOR keeping `ml_wind_corrected` live at Austin specifically (equal risk, more capacity), and
+FOR `ml_cooling_corrected`'s strength at Midland specifically — not a uniform argument for either
+candidate at both corridors. Where this verdict differs from the
 frozen record's own: the frozen record states `ml_cooling_corrected` "wins on the held-out test set at
 both corridors" without qualification; this audit's own real-data replication shows that claim holds
 cleanly at one corridor and does not hold, by the frozen record's own comparison logic (beat the nearest
@@ -1106,12 +1112,18 @@ by decision, with its disposition:
 - **D-03:** Calibrated lower quantiles (alpha 0.05/0.10) fit, calibrated, and checked on three
   chronologically disjoint periods; calibration improves the evaluate-period exceedance rate for all but
   one (candidate, alpha) pair, named rather than hidden. Disposition: confirmed.
-- **D-03:** At a shared NOMINAL 5% calibration target, `ml_cooling_corrected` retains the most usable
-  capacity of any real candidate at both corridors, ahead of persistence and the static rating — but its
-  own ACHIEVED overrating rate (11.3%/6.2%) is substantially higher than `ml_wind_corrected`'s (6.9%/4.3%)
-  under the same nominal target, so this is not a comparison at equal realized risk. Disposition:
-  confirmed as measured, but the "at equal risk" framing is withdrawn — a true equal-achieved-risk
-  comparison was not performed, named as a remaining blocker.
+- **D-03 (CORRECTED 2026-10-05, post-leak-fix — supersedes this bullet's own pre-fix version):** At a
+  shared nominal 5% calibration target, the corrected (decision-time-clean) table shows a
+  corridor-dependent result, not "cooling wins both": at AUSTIN_CORPUS_CHRISTI, wind and cooling now
+  achieve the IDENTICAL evaluate-period rate (0.051) — a genuine equal-achieved-risk comparison — and
+  wind retains more capacity there (994.20 A vs. 977.37 A). At MIDLAND_EL_PASO, cooling retains more
+  capacity (996.65 A vs. 941.55 A) AND achieves a lower rate (0.057 vs. 0.064) — genuine dominance, not
+  risk traded for capacity. (Superseded pre-fix bullet, kept for the audit trail: this bullet
+  previously read cooling as retaining the most capacity at both corridors at a higher achieved risk —
+  11.3%/6.2% vs. wind's 6.9%/4.3% — measured on periods the decision-time leak fixes have since
+  closed.) Disposition: confirmed as re-measured; the Austin side of the "at equal risk" question is
+  now actually answered (equal risk, wind wins capacity); Midland's dominance finding needs no
+  equal-risk re-derivation since cooling already wins on both axes as measured.
 - **D-03:** Every reliability claim in this section is explicitly scoped to self-consistency against a
   reanalysis-derived truth series, never conductor-level field-validated safety. Disposition: confirmed,
   stated before the section's first number and repeated throughout.
@@ -1601,9 +1613,16 @@ audit-resolved one):** a candidate is eligible only if its achieved overrating r
 calibration target does not exceed **8%** on the FRESH evaluation sample. Among eligible candidates,
 the primary ranking criterion is retained capacity (mean derated ampacity); MAE/RMSE are secondary,
 reported but not decisive. **The 8% ceiling is this pass's own proposed number, not a settled one** —
-D-03's own measurement already found cooling's ABLATION-basis achieved rate (11.3%/6.2%) exceeding a
-plausible 8% bar at one corridor, so the project owner may reasonably choose a different number; what
-must not happen is choosing it after seeing the FRESH result.
+D-03's own measurement at the time this protocol section was first written found cooling's
+ABLATION-basis achieved rate (11.3%/6.2%) exceeding a plausible 8% bar at one corridor, so the project
+owner may reasonably choose a different number; what must not happen is choosing it after seeing the
+FRESH result. **[2026-10-05, same-day correction]** The 11.3%/6.2% figure above was measured on
+periods the decision-time-leak fixes have since closed; the corrected achieved rates are 5.1%/5.7%
+(see "Retained capacity at matched overrating rates" above) — both now comfortably under 8% at every
+threshold swept. This does not retroactively settle the 8% number itself (still the project owner's
+call, still never to be picked after seeing FRESH data) — it only means the specific pre-fix example
+cited here as a reason to question 8% no longer applies at its original magnitude; the broader
+point, that 8% is this pass's own unapproved proposal, stands unchanged.
 
 **Comparison method:** direct paired comparisons between every candidate pair (not only each vs.
 baseline), via the existing `paired_block_bootstrap_margin`/`block_length_sensitivity` machinery

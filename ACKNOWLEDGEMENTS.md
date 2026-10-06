@@ -1085,6 +1085,16 @@ Claude Code was used to:
 
 **Verified, not merely trusted:** ran the real live-fetch path twice (one genuine non-fallback `raw_forecast` prediction, one genuine fallback on the anchor-feature gap), inspected the actual JSON-line log file contents directly rather than trusting a printed summary. Ran `backend/tests/forecast_shadow_pipeline_test.py` (18/18 pass, up from 15) and `backend/tests/forecast_experiment_audit_test.py` (120/120, unchanged) plus the full suite, same pre-existing 23 `corridor_discretization_test.py` failures, no new failures.
 
+### Session: 2026-10-05 (continued), conducted by Aaron Phan — documentation consistency, labeling audit, and the data-team handoff draft; direct working-tree task, no worktree isolation
+
+Claude Code was used to:
+
+1. Clean up stale verdict prose in `docs/data-science/decisions/forecast_correction_followup_audit.md`: the "Corrected verdict" section's retained-capacity paragraph and its D-03 disposition bullet still cited pre-leak-fix overrating numbers (11.3%/6.2% for cooling, 6.9%/4.3% for wind) as if current. Rewrote both to lead with the corrected, corridor-dependent finding (Austin: wind and cooling now tie at equal achieved risk, wind retains more capacity; Midland: cooling dominates on both axes) and kept the old numbers explicitly labeled as superseded, in place, per this document's own never-delete discipline. Added a same-day correction footnote to the v1 protocol section's own stale citation of the same pre-fix figures, without rewriting that section's historical text.
+2. Audited every quantile/overrating-rate number in the document for proper experimental/development-data labeling (requested as a labeling check, not new computation) — found the existing threshold-sweep and calibrated-quantile sections already carry explicit "reanalysis-derived, not field-validated" and "point estimate only" caveats from prior passes; no new labeling gaps found. Confirmed the shadow module's own prediction log (`forecast_shadow_pipeline.py`'s `log_prediction`) reports no quantile/overrating figures at all, so there was nothing to audit there.
+3. Drafted (did NOT send) `docs/data-science/decisions/data_team_handoff_request.md` — a standalone request document using the existing 6-item handoff spec as its technical content, proposing a 2026-10-25 delivery date (one week before the Nov 1 model freeze) and a contingency note that late/missing data triggers a separately labeled external validation pass, never a silent retroactive change to the frozen experiment.
+
+**Verified, not merely trusted:** ran `backend/tests/forecast_experiment_audit_test.py` and `backend/tests/forecast_shadow_pipeline_test.py` together (138/138 pass, unchanged), confirmed by direct `grep` that every remaining occurrence of the stale 11.3%/6.2%/6.9%/4.3% figures in the document is now inside text explicitly marked historical/superseded, not stated as current.
+
 ## Keeping This Updated
 
 This file should be reviewed and updated to reflect new AI-assisted work **before any significant commit** — i.e., before committing new features, substantial documentation, or non-trivial refactors produced with AI assistance. A commit is "significant" for this purpose if it would need describing in a standup/status update; trivial fixes (typos, formatting) don't require an update here.
