@@ -11,6 +11,10 @@
 # /data/models/, not source; regenerable via forecast_leadtime_calibration.py
 # and forecast_experiment.py.
 /data/experiment/
+# Shadow-prototype model artifacts and prediction logs (project pivot,
+# 2026-10-05) -- generated/regenerable, like /data/experiment/, via
+# forecast_shadow_pipeline.py.
+/data/shadow/
 .env
 __pycache__/
 *.pyc
