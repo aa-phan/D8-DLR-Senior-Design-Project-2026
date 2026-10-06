@@ -466,3 +466,135 @@ def test_shadow_pipeline_falls_back_explicitly_when_anchor_source_unavailable(mo
     assert prediction.fallback_used is True
     assert prediction.method == "raw_forecast"
     assert "SYNOPTIC_TOKEN" in prediction.fallback_reason
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 2026-10-06 (continued): the CORRIDOR-correct weakest-link reduction.
+# Training applies corridor_weakest_link to each city's own CORRECTED
+# AMPACITY, never to a raw weather variable -- these tests close the
+# single-city simplification named as a remaining gap by the prior pass.
+# ──────────────────────────────────────────────────────────────────────
+
+def _fake_fetch_single_run_const(air_temp=22.0, wind_speed=3.0, wind_direction=200.0, solar=400.0):
+    def _fetch(lat, lon, run, forecast_days=None, **kwargs):
+        return pd.DataFrame([{
+            "datetime_utc": run + pd.Timedelta(hours=6),
+            "air_temp": air_temp, "wind_speed": wind_speed, "wind_direction": wind_direction,
+            "solar_radiation": solar, "relative_humidity": 55.0,
+        }])
+    return _fetch
+
+
+def _fake_synoptic_observation_per_station(speeds_by_station, direction=135.0):
+    """Like `_fake_synoptic_observation`, but returns a DIFFERENT wind
+    speed per station so the two cities' corrected ampacities genuinely
+    differ -- needed to prove the weakest-link reduction picks the real
+    minimum, not just whichever city happens to run first."""
+    def _fetch(location, start, end, provider="synoptic", **kw):
+        station = location[0]
+        speed = speeds_by_station[station]
+        end_ts = pd.Timestamp(end)
+        idx = pd.MultiIndex.from_tuples([(station, end_ts)], names=["stid", "datetime_utc"])
+        return pd.DataFrame(
+            {
+                "air_temp": [27.5], "wind_speed": [speed],
+                "wind_direction": [direction], "solar_radiation": [410.0],
+                "relative_humidity": [48.0],
+            },
+            index=idx,
+        )
+    return _fetch
+
+
+def test_corridor_wind_correction_reduces_to_the_true_minimum_of_both_cities(monkeypatch):
+    """
+    Positive control: give the two endpoint cities deliberately different
+    live anchor wind speeds (via different stations) and confirm the
+    returned ampacity is the elementwise MINIMUM of the two cities' own
+    corrected ampacities -- not an average, not always city A, and not a
+    reduction applied to a raw weather variable.
+    """
+    import open_meteo_forecast_provider
+
+    monkeypatch.setattr(open_meteo_forecast_provider, "fetch_single_run", _fake_fetch_single_run_const())
+    city_a, city_b = config.CORRIDOR_ENDPOINTS[_CORRIDOR]
+    station_a = config.SYNOPTIC_FALLBACK_STATIONS[city_a]
+    station_b = config.SYNOPTIC_FALLBACK_STATIONS[city_b]
+    monkeypatch.setattr(
+        weather_provider, "fetch_weather",
+        _fake_synoptic_observation_per_station({station_a: 2.0, station_b: 9.0}),
+    )
+
+    fit_frame = _synthetic_wind_fit_frame_real_cities()
+    model = forecast_correction_models.fit_wind_correction(
+        fit_frame, forecast_correction_models._make_wind_linear_regression, pooling="per_city",
+    )
+    geometry = corridor_discretization.corridor_geometry(_CORRIDOR)
+    valid_time = pd.Timestamp("2026-10-07T00:00:00Z")
+    decision_time = pd.Timestamp("2026-10-06T12:00:00Z")
+
+    method = shadow.CorridorWindCorrectionMethod(
+        model, corridor=_CORRIDOR, model_version="test-version",
+        valid_time=valid_time, decision_time=decision_time, horizon_minutes=1440,
+    )
+    frame = pd.DataFrame([{"placeholder": True}])
+    amps = method.predict(frame, geometry)
+
+    per_city = frame.attrs["per_city_ampacity_amps"]
+    assert set(per_city) == {city_a, city_b}
+    assert amps == pytest.approx(min(per_city[city_a], per_city[city_b]))
+    assert frame.attrs["bottleneck_city"] in (city_a, city_b)
+    assert frame.attrs["bottleneck_city"] == (city_a if per_city[city_a] <= per_city[city_b] else city_b)
+    assert set(frame.attrs["anchor_provenance"]) == {city_a, city_b}
+    for city_provenance in frame.attrs["anchor_provenance"].values():
+        assert city_provenance["anchor_source"] == "synoptic"
+
+
+def test_corridor_wind_correction_fails_whole_prediction_when_either_city_anchor_unavailable(monkeypatch):
+    """
+    Negative control: a corridor rating must never be reported from only
+    ONE city's real data when the reduction requires both. If city B's
+    anchor fetch fails, the whole corridor prediction must fail (and be
+    caught by `ShadowPipeline`'s existing fallback) -- never silently
+    fall back to a single-city answer.
+    """
+    import open_meteo_forecast_provider
+
+    monkeypatch.setattr(open_meteo_forecast_provider, "fetch_single_run", _fake_fetch_single_run_const())
+    city_a, city_b = config.CORRIDOR_ENDPOINTS[_CORRIDOR]
+    station_a = config.SYNOPTIC_FALLBACK_STATIONS[city_a]
+    station_b = config.SYNOPTIC_FALLBACK_STATIONS[city_b]
+
+    def _flaky(location, start, end, provider="synoptic", **kw):
+        if location[0] == station_b:
+            raise OSError("Set SYNOPTIC_TOKEN env var.")
+        return _fake_synoptic_observation_per_station({station_a: 2.0, station_b: 9.0})(location, start, end, provider=provider, **kw)
+
+    monkeypatch.setattr(weather_provider, "fetch_weather", _flaky)
+
+    fit_frame = _synthetic_wind_fit_frame_real_cities()
+    model = forecast_correction_models.fit_wind_correction(
+        fit_frame, forecast_correction_models._make_wind_linear_regression, pooling="per_city",
+    )
+    valid_time = pd.Timestamp("2026-10-07T00:00:00Z")
+    decision_time = pd.Timestamp("2026-10-06T12:00:00Z")
+    ts = shadow.ShadowTimestamps(
+        initialization_time=pd.Timestamp("2026-10-06T00:00:00Z"),
+        availability_time=pd.Timestamp("2026-10-06T06:00:00Z"),
+        decision_time=decision_time, valid_time=valid_time, horizon_minutes=1440,
+    )
+    method = shadow.CorridorWindCorrectionMethod(
+        model, corridor=_CORRIDOR, model_version="test-version",
+        valid_time=valid_time, decision_time=decision_time, horizon_minutes=1440,
+    )
+    pipeline = shadow.ShadowPipeline(_CORRIDOR, method)
+    # A real, raw-forecast-usable frame -- the fallback method
+    # (RawForecastShadowMethod) genuinely reads `fcst_*` columns from
+    # whatever frame ShadowPipeline.predict was called with; a bare
+    # placeholder frame would make the FALLBACK itself raise, masking
+    # this test's actual assertion.
+    frame = pd.DataFrame([_synthetic_row(endpoint_city=city_a)])
+    prediction = pipeline.predict(frame, ts)
+    assert prediction.fallback_used is True
+    assert prediction.method == "raw_forecast"
+    assert "SYNOPTIC_TOKEN" in prediction.fallback_reason

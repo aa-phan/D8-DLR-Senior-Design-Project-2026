@@ -62,22 +62,19 @@ def run_once(corridor: str, method_name: str = "ml_wind_corrected", *, horizon_m
             model = shadow.load_correction_model(corridor, method_name)
             version = shadow.model_version_for(corridor, method_name)
             if method_name == "ml_wind_corrected":
-                # The wind-correction model's feature frame needs the live
-                # anchor observation, datetime_utc, and endpoint_city --
-                # none of which `validate_and_prepare_shadow_row` attaches
-                # (that function only knows about the forecast row itself).
-                # Passing these three through the constructor makes
-                # `WindCorrectionShadowMethod.predict` fetch the anchor
-                # observation ITSELF, inside the pipeline's own try/except,
-                # so a missing/failed anchor source (e.g. no
-                # SYNOPTIC_TOKEN) is caught by the pipeline's existing
-                # fail-safe fallback machinery with a real
-                # `fallback_reason`, rather than crashing this script
-                # before the pipeline ever runs.
-                primary = shadow.WindCorrectionShadowMethod(
-                    model, model_version=version,
-                    endpoint_city=city_a, valid_time=valid_time,
-                    decision_time=timestamps.decision_time,
+                # CorridorWindCorrectionMethod (2026-10-06) fetches BOTH
+                # endpoint cities' own live forecast + anchor observation
+                # and reduces through the same `corridor_weakest_link`
+                # training uses -- the corridor-correct form, closing the
+                # single-city (`WindCorrectionShadowMethod`) simplification
+                # this module used before. A missing/failed anchor source
+                # (e.g. no SYNOPTIC_TOKEN) for EITHER city is caught by the
+                # pipeline's existing fail-safe fallback machinery with a
+                # real `fallback_reason`, same as before.
+                primary = shadow.CorridorWindCorrectionMethod(
+                    model, corridor=corridor, model_version=version,
+                    valid_time=valid_time, decision_time=timestamps.decision_time,
+                    horizon_minutes=horizon_minutes,
                 )
             else:
                 primary = shadow.CoolingCorrectionShadowMethod(model, model_version=version)

@@ -50,6 +50,7 @@ import pandas as pd
 import config
 import corridor_discretization
 import forecast_correction_models
+import forecast_training
 import open_meteo_forecast_provider
 import thermal_model
 import weather_provider
@@ -324,19 +325,40 @@ def attach_wind_correction_inputs(
     `datetime_utc` = the valid time T), and `endpoint_city` (for the
     pooled model's endpoint indicator / the per_city model's grouping).
 
-    **Named simplification, not a silent approximation.** This attaches
-    ONE city's (`endpoint_city`) live anchor observation -- not the full
-    two-city weakest-link-at-anchor-time reduction
-    `forecast_experiment.corridor_anchored_pair_frame` uses for training
-    (`forecast_training.corridor_weakest_link` over BOTH cities' anchor
-    ampacities, independently of the valid-time bottleneck). That full
-    reduction needs both cities' live weather and both cities' ampacity
-    computed before a bottleneck can be chosen. `forecast_shadow_demo.
-    run_once` consistently uses the corridor's first configured endpoint
-    city for both the forecast fetch and this anchor fetch, so the
-    endpoint-indicator feature and the anchor observation always agree on
-    which city the row represents. Implementing the full two-city
-    reduction live is a concrete, named remaining gap for this prototype.
+    **Single-city by design here.** This function attaches ONE city's
+    (`endpoint_city`) live anchor observation -- it is the per-city
+    building block `CorridorWindCorrectionMethod` (2026-10-06) calls
+    once per endpoint city before reducing both cities' resulting
+    AMPACITIES through `forecast_training.corridor_weakest_link`, the
+    same two-stage per-city-then-minimum reduction
+    `forecast_experiment.corridor_anchored_pair_frame` uses for training.
+    Callers wanting the corridor-correct (both-cities, weakest-link)
+    prediction should use `CorridorWindCorrectionMethod`, not call this
+    function directly expecting a corridor-level answer.
+
+    **Archive-derived training anchor vs. live-station runtime anchor --
+    a named data-source change, not assumed interchangeable.** Training's
+    own anchor (`forecast_experiment.anchored_pair_frame`) comes from
+    Open-Meteo's Archive API, settled and historical by the time training
+    ran. This function's anchor comes from a live Synoptic station
+    report instead, because at genuine live decision time the anchor
+    moment is "now," where only a station observation exists yet -- the
+    Archive API's own ~1-day publication lag (see `forecast_experiment.
+    _resolve_window_end`) cannot serve a live "most recent observation"
+    request. Both paths ultimately populate the SAME `anchor_wind_speed`/
+    `anchor_wind_direction` columns in the SAME units (`PIPELINE_SCHEMA`'s
+    m/s and degrees, enforced by `weather_provider.fetch_weather`
+    regardless of provider), so the feature CONTRACT matches. What could
+    NOT be checked empirically in this pass: Synoptic's station path is
+    documented (`weather_provider.py`, "standalone 1940-present
+    historical-backfill source Synoptic cannot serve") as a recent-window
+    source, not a multi-year historical one, so there is no overlapping
+    date on which to directly compare an archive-derived anchor value
+    against a live-station anchor value for the SAME historical moment
+    this phase's training window covers (2024-01-20 through 2026-03-16).
+    This is a stated limitation, not an assumption of interchangeability
+    -- a sensor-grounded validation (see the data-team handoff request)
+    would be the way to actually check this empirically.
 
     Raises:
         StaleOrMissingDataError: propagated from
@@ -498,6 +520,99 @@ class WindCorrectionShadowMethod:
             frame["fcst_solar_radiation"].to_numpy(dtype=float), geometry.conductor,
         )
         return float(np.asarray(ampacity)[0])
+
+
+class CorridorWindCorrectionMethod:
+    """
+    The CORRIDOR-correct form of wind correction (2026-10-06 pass) --
+    closes the single-city simplification `WindCorrectionShadowMethod`/
+    `attach_wind_correction_inputs` named as a remaining gap.
+
+    Training's own convention (`forecast_experiment._wind_corrected_
+    ampacity`, called once per endpoint city, then reduced through
+    `forecast_training.corridor_weakest_link`) applies the weakest-link
+    MINIMUM to each city's own CORRECTED AMPACITY -- never to a raw
+    weather variable. This class reproduces that exact two-stage
+    reduction live: fetch both endpoint cities' own live forecast +
+    live anchor observation independently, correct each city's own
+    wind and run it through the same `predict_wind_correction` ->
+    `perpendicular_wind` -> `ieee738_ampacity` chain
+    `WindCorrectionShadowMethod` uses for one city, then take the
+    elementwise minimum of the two cities' resulting ampacities via
+    `forecast_training.corridor_weakest_link` -- the repository's one
+    weakest-link reduction, never a second copy of the rule.
+
+    `predict(frame, geometry)` IGNORES the single-city `frame` passed by
+    `ShadowPipeline.predict` for its own correction math -- it exists
+    only so this class satisfies the `CorrectionMethod` protocol
+    `ShadowPipeline` expects, so `ShadowPipeline` itself needs no change.
+    Both cities' live data is fetched internally. Provenance (per-city
+    ampacity, the winning/bottleneck city, and each city's anchor
+    provenance) is written onto the PASSED-IN `frame`'s own `.attrs`
+    (mutated in place, the same pattern `WindCorrectionShadowMethod.
+    predict` already uses), so `ShadowPipeline.predict`'s existing
+    provenance-reading code (`frame.attrs.items()`) picks it up with no
+    change there either.
+
+    Raises:
+        StaleOrMissingDataError: propagated from either city's forecast
+            or anchor fetch -- EITHER city failing fails the whole
+            corridor prediction (a corridor rating with only one city's
+            real data is not the weakest-link reduction training used,
+            and must not be silently reported as though it were).
+    """
+
+    name = "ml_wind_corrected"
+
+    def __init__(
+        self, model: "forecast_correction_models.WindCorrectionModel", *,
+        corridor: str, model_version: Optional[str] = None,
+        valid_time, decision_time, horizon_minutes: int,
+    ):
+        self.model = model
+        self.model_version = model_version
+        self.corridor = corridor
+        self.valid_time = valid_time
+        self.decision_time = decision_time
+        self.horizon_minutes = horizon_minutes
+
+    def predict(self, frame: pd.DataFrame, geometry) -> float:
+        cities = config.CORRIDOR_ENDPOINTS[self.corridor]
+        per_city_amps: dict = {}
+        per_city_provenance: dict = {}
+        for city in cities:
+            lat, lon = config.CITY_COORDINATES[city]
+            row, _ = fetch_live_forecast_for_valid_time(
+                self.corridor, self.valid_time, horizon_minutes=self.horizon_minutes,
+                lat=lat, lon=lon,
+            )
+            city_frame = validate_and_prepare_shadow_row(row, corridor=self.corridor)
+            city_frame = attach_wind_correction_inputs(
+                city_frame, endpoint_city=city,
+                valid_time=self.valid_time, decision_time=self.decision_time,
+            )
+            prediction = forecast_correction_models.predict_wind_correction(self.model, city_frame)
+            perp = thermal_model.perpendicular_wind(prediction.speed, prediction.direction, geometry.bearing_deg)
+            amps = thermal_model.ieee738_ampacity(
+                city_frame["fcst_air_temp"].to_numpy(dtype=float), perp,
+                city_frame["fcst_solar_radiation"].to_numpy(dtype=float), geometry.conductor,
+            )
+            per_city_amps[city] = float(np.asarray(amps)[0])
+            per_city_provenance[city] = {
+                "anchor_observation_time": city_frame.attrs.get("anchor_observation_time"),
+                "anchor_source": city_frame.attrs.get("anchor_source"),
+                "anchor_station": city_frame.attrs.get("anchor_station"),
+            }
+
+        amps_a = np.array([per_city_amps[cities[0]]])
+        amps_b = np.array([per_city_amps[cities[1]]])
+        dlr_amps, bottleneck_index, _ = forecast_training.corridor_weakest_link(amps_a, amps_b, {}, {})
+        bottleneck_city = cities[int(bottleneck_index[0])]
+
+        frame.attrs["per_city_ampacity_amps"] = per_city_amps
+        frame.attrs["bottleneck_city"] = bottleneck_city
+        frame.attrs["anchor_provenance"] = per_city_provenance
+        return float(dlr_amps[0])
 
 
 class CoolingCorrectionShadowMethod:
