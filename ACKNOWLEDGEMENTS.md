@@ -1179,3 +1179,35 @@ Claude Code was used to check, rather than blindly redo, four more items from th
 - **Item 5 (reproducibility).** Added a named, dated requirement to the v2 protocol section (append-only) stating that whoever runs the fixed Nov 24 evaluation must additionally persist the raw verification-data API response(s) and an explicit retrieval timestamp alongside `_fresh_confirmation_report`'s existing JSON output — not implemented in code this pass, since doing so safely would require exercising the FRESH-basis path this pass's hard rule correctly forbids touching before Nov 24.
 
 **Verified, not merely trusted:** ran `backend/tests/forecast_experiment_audit_test.py` + `backend/tests/forecast_shadow_pipeline_test.py` + `backend/tests/forecast_shadow_collect_test.py` together (151/151 pass, documentation-only change for items 2-5 beyond the one doc addition).
+
+### Session: 2026-10-06 (continued), conducted by Aaron Phan — wire SYNOPTIC_TOKEN into the live path without ever exposing it
+
+The user asked how to let the running process see `SYNOPTIC_TOKEN` (set in `.env`) without
+widening Claude's own file-read permissions, since the real blocker turned out to be that nothing
+in this repo auto-loads `.env` into the process environment at all — every existing credential read
+(`dlr_pipeline.py`, `smoke_test.py`, `station_explorer.py`) is a bare `os.getenv(...)` with a
+shell-export instruction in a comment. Confirmed this directly: the var was absent from the shell
+environment, and no `dotenv`-style loader existed anywhere in the codebase.
+
+Added `python-dotenv` (`requirements.txt`) and a single `load_dotenv()` call at the top of
+`backend/forecast_shadow_pipeline.py` — deliberately NOT in `config.py`, whose own docstring
+promises import has no side effects, and NOT in `dlr_pipeline.py`, which stays untouched per every
+prior pass's scope rule. `load_dotenv()` never overrides an already-exported variable, so a real
+shell export still takes precedence over `.env` if both exist. Claude never read `.env`'s contents
+or the token's value at any point — only checked `bool(os.environ.get("SYNOPTIC_TOKEN"))` before
+and after, consistent with the security discipline set in the prior passes.
+
+**Verified live, for real:** ran `backend/forecast_shadow_demo.py` against the real Synoptic API for
+both corridors. `MIDLAND_EL_PASO` achieved genuine, fully-live, no-fallback completion —
+`requested=ml_wind_corrected actual=ml_wind_corrected fallback_used=False`, real station provenance
+(`KMAF`, `KELP`), real weakest-link reduction (bottleneck city `EL_PASO` at 1149.8A, the lower of
+the two cities' corrected ampacities) — logged with all four distinct timestamps
+(initialization/availability/decision/valid) in `data/shadow/predictions/MIDLAND_EL_PASO.jsonl`.
+`AUSTIN_CORPUS_CHRISTI` fell back honestly (`fallback_used=True`) because Corpus Christi's own most
+recent station report (`KCRP`, 2026-10-06T22:20:00Z) has a genuinely null wind field right now — a
+real, current station data gap, not a code defect; re-run once, same result, confirming it's not a
+transient blip at this exact moment.
+
+**Verified, not merely trusted:** ran `backend/tests/forecast_experiment_audit_test.py` +
+`backend/tests/forecast_shadow_pipeline_test.py` + `backend/tests/forecast_shadow_collect_test.py`
+together (151/151 pass, unchanged) both before and after the dotenv wiring.

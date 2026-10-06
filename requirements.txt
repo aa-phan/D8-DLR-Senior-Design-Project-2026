@@ -26,3 +26,4 @@ scipy==1.17.1
 pytest==9.0.3
 beautifulsoup4==4.14.3
 scikit-learn==1.9.1
+python-dotenv==1.2.4

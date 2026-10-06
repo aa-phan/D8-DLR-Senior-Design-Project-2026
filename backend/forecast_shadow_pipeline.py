@@ -46,6 +46,7 @@ from typing import Optional, Protocol
 
 import numpy as np
 import pandas as pd
+from dotenv import load_dotenv
 
 import config
 import corridor_discretization
@@ -55,6 +56,21 @@ import open_meteo_forecast_provider
 import thermal_model
 import weather_provider
 import wind_vector
+
+# Every other credential read in this repo (`dlr_pipeline.py`, `smoke_test.py`,
+# `station_explorer.py`) is a bare `os.getenv("SYNOPTIC_TOKEN")` with a
+# shell-export instruction in a comment -- there is no existing `.env`-loading
+# convention to extend. This call is new and scoped deliberately to this
+# shadow-pipeline module alone, never to `config.py` (whose own docstring
+# promises import has no side effects -- a dotenv load would break that
+# contract for every other caller of `config`). `load_dotenv()`'s default
+# behavior never overrides a variable already present in the environment, so
+# a shell-exported `SYNOPTIC_TOKEN` still takes precedence over a `.env` file
+# if both exist. This module itself never reads the token's value -- only
+# `dlr_pipeline.fetch_timeseries` (via `weather_provider`) does, and it reads
+# it from `os.environ`, same as before; this just ensures `.env`'s contents
+# have reached `os.environ` by the time that call happens.
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
