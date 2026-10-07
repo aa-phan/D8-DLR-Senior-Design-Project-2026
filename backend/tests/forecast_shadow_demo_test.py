@@ -21,6 +21,17 @@ import forecast_shadow_demo as demo
 import forecast_shadow_pipeline as shadow
 
 
+class _StopHereSentinel(Exception):
+    """
+    Raised by a monkeypatched `fetch_live_forecast_for_valid_time` purely to
+    halt `run_once` right after capturing its call args -- deliberately NOT
+    `shadow.StaleOrMissingDataError`, which `run_once` now catches itself
+    (2026-10-06 fix: a forecast-fetch failure falls back to the static
+    rating instead of propagating) and would make these grid-selection
+    tests observe a returned `ShadowPrediction`, not a raised exception.
+    """
+
+
 def test_run_once_requests_a_valid_time_on_the_six_hour_utc_grid(monkeypatch):
     """
     The provider's Previous-Runs model only has runs at 6-hourly UTC
@@ -52,10 +63,10 @@ def test_run_once_requests_a_valid_time_on_the_six_hour_utc_grid(monkeypatch):
 
     def _capture(corridor, valid_time, horizon_minutes, *, lat, lon):
         captured["valid_time"] = valid_time
-        raise shadow.StaleOrMissingDataError("stop here -- only capturing the call")
+        raise _StopHereSentinel("stop here -- only capturing the call")
 
     monkeypatch.setattr(shadow, "fetch_live_forecast_for_valid_time", _capture)
-    with pytest.raises(shadow.StaleOrMissingDataError):
+    with pytest.raises(_StopHereSentinel):
         demo.run_once("AUSTIN_CORPUS_CHRISTI")
 
     valid_time = captured["valid_time"]
@@ -82,11 +93,11 @@ def test_run_once_requests_a_valid_time_strictly_more_than_eleven_hours_out(monk
 
     def _capture(corridor, valid_time, horizon_minutes, *, lat, lon):
         captured["valid_time"] = valid_time
-        raise shadow.StaleOrMissingDataError("stop here -- only capturing the call")
+        raise _StopHereSentinel("stop here -- only capturing the call")
 
     monkeypatch.setattr(shadow, "fetch_live_forecast_for_valid_time", _capture)
     before = pd.Timestamp.utcnow()
-    with pytest.raises(shadow.StaleOrMissingDataError):
+    with pytest.raises(_StopHereSentinel):
         demo.run_once("AUSTIN_CORPUS_CHRISTI")
     after = pd.Timestamp.utcnow()
 
@@ -123,6 +134,55 @@ def test_run_once_uses_raw_forecast_method_without_attempting_any_model_load(mon
     prediction = demo.run_once("AUSTIN_CORPUS_CHRISTI", "raw_forecast")
     assert prediction.method == "raw_forecast"
     assert prediction.fallback_used is False
+
+
+def test_run_once_falls_back_to_static_rating_when_forecast_fetch_fails(monkeypatch, capsys):
+    """
+    Found live on GitHub Actions (2026-10-06): `fetch_live_forecast_for_
+    valid_time` sat outside any try/except in `run_once`, so a real
+    network timeout hitting it (confirmed independently against BOTH
+    Open-Meteo and, in a separate run, TCEQ) escaped all the way to
+    `forecast_shadow_collect.py`'s broad `except Exception`, which logs a
+    HARD FAILURE (exit code 1) -- contradicting `collect_once`'s own
+    comment, which already promised a graceful, logged fallback for "a
+    missing anchor/model/forecast source". Without a forecast row there is
+    no data to compute even `raw_forecast`'s ampacity from, so the correct
+    fallback is this project's established total-unavailability discipline
+    (`DLRSafetyMonitor`'s G6 gate: report the known-conservative static
+    rating, never crash or guess) -- per endpoint city, reduced by the
+    same weakest-link principle used elsewhere.
+    """
+    def _raise_stale(corridor, valid_time, horizon_minutes, *, lat, lon):
+        raise shadow.StaleOrMissingDataError(
+            f"fetch_live_forecast_for_valid_time: retrieval failed for "
+            f"corridor {corridor!r}: synthetic timeout"
+        )
+
+    monkeypatch.setattr(shadow, "fetch_live_forecast_for_valid_time", _raise_stale)
+
+    prediction = demo.run_once("MIDLAND_EL_PASO", "ml_wind_corrected")
+
+    assert prediction.method == "static_rating_fallback"
+    assert prediction.fallback_used is True
+    assert "synthetic timeout" in prediction.fallback_reason
+    assert prediction.model_version is None
+    # MIDLAND=1800.0, EL_PASO=1450.0 (config.STATIC_RATINGS) -- the
+    # weakest-link minimum, never an average or the stronger city's value.
+    assert prediction.ampacity_amps == min(
+        config.STATIC_RATINGS["MIDLAND"], config.STATIC_RATINGS["EL_PASO"]
+    )
+    assert prediction.ampacity_amps == 1450.0
+    # ShadowTimestamps must still be real and internally consistent even
+    # though the HTTP call never completed -- all four fields are
+    # computable from valid_time/horizon_minutes alone.
+    assert prediction.timestamps.valid_time > prediction.timestamps.decision_time
+    assert (
+        prediction.timestamps.valid_time - prediction.timestamps.initialization_time
+    ) == pd.Timedelta(minutes=1440)
+
+    captured = capsys.readouterr()
+    assert "actual=static_rating_fallback" in captured.out
+    assert "fallback_used=True" in captured.out
 
 
 def test_run_once_falls_back_to_raw_forecast_when_no_persisted_model_exists(monkeypatch, tmp_path, capsys):

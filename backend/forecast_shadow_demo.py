@@ -52,9 +52,60 @@ def run_once(corridor: str, method_name: str = "ml_wind_corrected", *, horizon_m
         candidate += pd.Timedelta(hours=6)
     valid_time = candidate
 
-    row, timestamps = shadow.fetch_live_forecast_for_valid_time(
-        corridor, valid_time, horizon_minutes=horizon_minutes, lat=lat, lon=lon,
-    )
+    try:
+        row, timestamps = shadow.fetch_live_forecast_for_valid_time(
+            corridor, valid_time, horizon_minutes=horizon_minutes, lat=lat, lon=lon,
+        )
+    except shadow.StaleOrMissingDataError as exc:
+        # Found live on GitHub Actions (2026-10-06): this call sat outside
+        # any try/except, so a forecast-provider timeout (seen hitting BOTH
+        # Open-Meteo and, separately, TCEQ across different runs -- not one
+        # flaky provider) escaped all the way to forecast_shadow_collect.py's
+        # broad `except Exception`, which logs it as a HARD FAILURE (exit
+        # code 1) rather than the graceful, logged fallback collect_once's
+        # own comment already promises for "a missing anchor/model/forecast
+        # source". Without a forecast row there is no data to compute even
+        # `raw_forecast`'s ampacity from (both need the same fetched row) --
+        # so the fallback here is the project's established total-
+        # unavailability discipline (DLRSafetyMonitor's G6 gate: on total
+        # failure, report the known-conservative STATIC_RATINGS value, never
+        # silently crash or guess), applied per endpoint city and reduced by
+        # the same weakest-link principle `forecast_training.
+        # corridor_weakest_link` applies elsewhere in this module, just
+        # without that function's array machinery, which this scalar case
+        # doesn't need.
+        city_b = config.CORRIDOR_ENDPOINTS[corridor][1]
+        static_fallback_amps = min(
+            config.STATIC_RATINGS[city_a], config.STATIC_RATINGS[city_b],
+        )
+        horizon = pd.Timedelta(minutes=horizon_minutes)
+        initialization_time = valid_time - horizon
+        availability_time = initialization_time + pd.Timedelta(
+            hours=shadow._resolve_publication_lag_hours()
+        )
+        timestamps = shadow.ShadowTimestamps(
+            initialization_time=initialization_time,
+            availability_time=availability_time,
+            decision_time=pd.Timestamp.now(tz="UTC"),
+            valid_time=valid_time,
+            horizon_minutes=horizon_minutes,
+        )
+        prediction = shadow.ShadowPrediction(
+            corridor=corridor, method="static_rating_fallback",
+            ampacity_amps=static_fallback_amps, timestamps=timestamps,
+            fallback_used=True, fallback_reason=str(exc), model_version=None,
+            input_provenance={"static_ratings_amps": {
+                city_a: config.STATIC_RATINGS[city_a],
+                city_b: config.STATIC_RATINGS[city_b],
+            }},
+        )
+        log_path = shadow.ShadowPipeline(corridor, shadow.RawForecastShadowMethod()).log_prediction(prediction)
+        print(f"[{corridor}] requested={method_name} actual=static_rating_fallback "
+              f"fallback_used=True ampacity={prediction.ampacity_amps:.1f}A "
+              f"model_version=None -> logged at {log_path}")
+        print(f"  fallback_reason: {prediction.fallback_reason}")
+        return prediction
+
     frame = shadow.validate_and_prepare_shadow_row(row, corridor=corridor)
 
     # Tracks a substitution made HERE, at the script level, before ShadowPipeline

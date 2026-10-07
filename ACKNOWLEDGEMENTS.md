@@ -1554,3 +1554,40 @@ rediscover from scratch.
 `forecast_correction_experiment.md`, and the Phase 3 planning directory (this was a documentation
 addition to the followup audit record only). Ran `backend/tests/forecast_experiment_audit_test.py`
 (120/120 pass, unchanged).
+
+### Session: 2026-10-06 (continued), conducted by Aaron Phan — fix per-corridor isolation: forecast-fetch failures were escaping to a hard crash
+
+After the model-artifact fix, running the workflow repeatedly to confirm `MIDLAND_EL_PASO`'s own
+success surfaced a more important finding than the one being checked for: across 5 real runs, a
+network timeout hit TWO DIFFERENT providers at different times -- Open-Meteo's single-runs API
+(twice, Midland) and separately TCEQ's `daily_summary.pl` (once, Austin's own anchor fetch, which
+WAS caught gracefully) -- ruling out "one corridor is cursed" or "one provider is down" as the
+explanation. The real pattern: Austin's TCEQ timeout fell back cleanly
+(`fallback_used=True`, exit 0); Midland's Open-Meteo timeout did NOT -- it propagated past
+`run_once` entirely and surfaced as `forecast_shadow_collect: hard failure for corridor
+'MIDLAND_EL_PASO'`, exit code 1, the whole workflow run marked failed.
+
+Root cause, confirmed by reading the code rather than guessing further: `forecast_shadow_demo.py`'s
+`run_once` called `shadow.fetch_live_forecast_for_valid_time(...)` with no try/except around it at
+all -- only the later model-loading step was wrapped. `collect_once`'s own comment explicitly
+promised otherwise ("the expected fallback path for a missing anchor/model/forecast source is
+already caught and logged inside run_once"), naming "forecast" as one of three sources that should
+degrade gracefully -- the implementation simply never matched that stated intent for this one path.
+A prior pass's ACKNOWLEDGEMENTS entry had claimed per-corridor isolation was "confirmed, not
+rebuilt" without ever having exercised a forecast-fetch failure specifically to prove it.
+
+Checked with the user before changing anything (this directly contradicts a previous pass's
+verification claim). Fixed by catching `shadow.StaleOrMissingDataError` around the forecast-fetch
+call and falling back to this project's own established total-unavailability discipline
+(`DLRSafetyMonitor`'s G6 gate: on total failure, report the known-conservative `STATIC_RATINGS`
+value, never crash or guess silently) -- per endpoint city, reduced by the weakest-link minimum,
+since without a forecast row there is no data to compute even `raw_forecast`'s ampacity from. Two
+existing tests that had deliberately used `StaleOrMissingDataError` as a "stop here" sentinel were
+updated to use a dedicated sentinel exception instead, since `run_once` now legitimately catches
+the real one.
+
+**Verified, not merely trusted:** added a new regression test exercising the exact failure this
+fix addresses (a synthetic timeout raised from the forecast-fetch call), asserting the fallback
+method name, the correct weakest-link static-rating value (MIDLAND/EL_PASO -> 1450.0A, the lower
+of the two), and that the persisted log entry is honest about it. Ran the full targeted suite
+(180/180 pass, 1 new) before committing.
