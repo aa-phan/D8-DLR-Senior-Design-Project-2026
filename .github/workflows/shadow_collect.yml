@@ -70,7 +70,21 @@ jobs:
             (cd /tmp/shadow-data-branch && git checkout --orphan shadow-collection-data && git rm -rf . >/dev/null 2>&1 || true)
           fi
           mkdir -p /tmp/shadow-data-branch/data/shadow/predictions
-          cp data/shadow/predictions/*.jsonl /tmp/shadow-data-branch/data/shadow/predictions/ 2>/dev/null || echo "No prediction files produced this run (all corridors may have hit an unexpected early error)."
+          # APPEND, never overwrite (fixed 2026-10-07): `cp` here previously
+          # replaced the destination file wholesale every run, so the data
+          # branch only ever held the SINGLE most recent run's entry per
+          # corridor -- 10 real runs' worth of predictions were silently
+          # destroyed before this was caught. `>>` onto a nonexistent file
+          # creates it, so the very first run (and a brand-new corridor
+          # file) still works correctly.
+          found_any=0
+          for f in data/shadow/predictions/*.jsonl; do
+            [ -e "$f" ] || continue
+            found_any=1
+            bn=$(basename "$f")
+            cat "$f" >> "/tmp/shadow-data-branch/data/shadow/predictions/$bn"
+          done
+          [ "$found_any" -eq 1 ] || echo "No prediction files produced this run (all corridors may have hit an unexpected early error)."
           cd /tmp/shadow-data-branch
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

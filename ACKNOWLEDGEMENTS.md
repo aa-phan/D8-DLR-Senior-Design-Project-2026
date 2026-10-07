@@ -1674,3 +1674,32 @@ pinning that the header is actually sent, not just intended; updated the shared 
 helper to accept and record `headers` (every other existing caller still works unmodified, since
 the parameter defaults to `None`). Ran the full relevant suite across six test files (216/216
 pass, 1 new) before committing.
+
+### Session: 2026-10-07 (continued), conducted by Aaron Phan — fix silent data-loss bug in collection persistence
+
+While assembling collected results for the user to take to external analysis, checked the
+`shadow-collection-data` branch's actual commit history rather than trusting a single read of the
+latest commit. Every one of the 11 real collection runs so far produced exactly 1 line per
+corridor's `.jsonl` file on that branch -- never more, confirmed by walking every commit's file
+content directly. Root cause: the workflow's commit step used `cp data/shadow/predictions/*.jsonl
+...`, which replaces the destination file wholesale; since each GitHub Actions run starts from a
+fresh checkout with no local copy of prior predictions (by design -- `/data/shadow/predictions/`
+is git-ignored on `main`), each run's single new line overwrote, rather than joined, whatever was
+previously committed to the data branch. Ten runs' worth of real predictions were silently and
+irrecoverably lost before this was caught.
+
+Checked with the user before fixing (a correct call, not an obvious one -- the user could
+reasonably have wanted the partial data as-is first). Fixed by replacing the `cp` with a per-file
+append loop (`cat "$f" >> destination`), which both creates a nonexistent destination file (first
+run, or a brand-new corridor) and correctly appends to an existing one. Explicitly handles the
+case where a corridor produced no local file at all (e.g. a crash before `log_prediction` ever
+ran) without corrupting what's already on the branch.
+
+**Verified, not merely trusted:** the original overwrite bug was first CONFIRMED (not assumed) by
+reading every commit's file content directly, not just the latest one. The fix's three real
+cases (branch file absent, branch file present and growing, a corridor producing no file at all)
+were each exercised against a disposable temp directory under `bash` specifically (not this
+session's interactive `zsh`, whose different glob-expansion behavior on a no-match pattern would
+have given a false negative) before trusting it in CI. Ran the full relevant local test suite
+(61/61 pass, unchanged -- this is a workflow-YAML-only fix, no Python code touched) as a
+regression check.
