@@ -131,6 +131,18 @@ def test_run_once_falls_back_to_raw_forecast_when_no_persisted_model_exists(monk
     `load_correction_model`) must be caught by `run_once` itself and demoed
     as `raw_forecast` -- not an unhandled crash, and not silently reported
     as though `ml_wind_corrected` had actually run.
+
+    `fallback_used` must be `True` here: a missing model artifact IS a
+    fallback, even though it happens at the script level before
+    `ShadowPipeline` ever runs, not inside `ShadowPipeline.predict`. Found
+    via GitHub Actions' real first run (2026-10-06): the runner has no
+    persisted model at all (the `data/shadow/models/` directory is
+    git-ignored, local-only), and the previous version of this test pinned
+    the resulting `requested=ml_wind_corrected actual=raw_forecast
+    fallback_used=False` as correct -- exactly the fallback-signal
+    conflation this project's reporting discipline exists to prevent
+    elsewhere. Fixed in `run_once` via `dataclasses.replace`, so both the
+    printed line and the persisted log entry are honest about it.
     """
     monkeypatch.setattr(shadow, "SHADOW_MODEL_DIR", str(tmp_path))
 
@@ -150,7 +162,11 @@ def test_run_once_falls_back_to_raw_forecast_when_no_persisted_model_exists(monk
     monkeypatch.setattr(shadow, "fetch_live_forecast_for_valid_time", _fake_fetch)
     prediction = demo.run_once("AUSTIN_CORPUS_CHRISTI", "ml_wind_corrected")
     assert prediction.method == "raw_forecast"
-    assert prediction.fallback_used is False  # the demo-level fallback, not ShadowPipeline's own
+    assert prediction.fallback_used is True
+    assert prediction.fallback_reason is not None
+    assert "no persisted" in prediction.fallback_reason
+    assert "ml_wind_corrected" in prediction.fallback_reason
+    assert "AUSTIN_CORPUS_CHRISTI" in prediction.fallback_reason
     captured = capsys.readouterr()
     assert "no persisted" in captured.err
 

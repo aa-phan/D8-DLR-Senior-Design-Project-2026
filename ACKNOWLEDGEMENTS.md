@@ -1460,3 +1460,42 @@ test suite still passes, which would not have caught this class of bug at all. R
 `backend/tests/forecast_shadow_pipeline_test.py` + `forecast_shadow_collect_test.py` +
 `forecast_shadow_healthcheck_test.py` + `forecast_shadow_demo_test.py` +
 `forecast_experiment_audit_test.py` together (179/179 pass, unchanged).
+
+### Session: 2026-10-06 (continued), conducted by Aaron Phan — loop: fix a real fallback-signal bug found by the first clean run
+
+The same successful GitHub Actions run (after the dependency fix above) surfaced a second, more
+interesting issue: with no `SYNOPTIC_TOKEN` secret set yet AND no persisted model artifact
+available on the runner (`data/shadow/models/` is git-ignored, local-only), both corridors
+printed `requested=ml_wind_corrected actual=raw_forecast fallback_used=False` -- a direct
+contradiction. A missing model IS a fallback, but `backend/forecast_shadow_demo.py`'s own
+`run_once` caught `FileNotFoundError` and silently swapped `primary` to `RawForecastShadowMethod`
+*before* constructing `ShadowPipeline`, so the pipeline itself never saw a substitution happen and
+correctly reported `fallback_used=False` from its own narrow point of view -- exactly the kind of
+fallback-signal conflation this project has spent several passes eliminating elsewhere (provider
+fallback vs. prediction-method fallback kept deliberately distinct).
+
+Worse: this exact behavior was already pinned as *correct* by a test the adversarial-mutation-
+testing pass (two commits prior, `2b86c3b`) had added or left in place --
+`assert prediction.fallback_used is False  # the demo-level fallback, not ShadowPipeline's own`.
+A textbook case of the mutation-testing skill's own stated risk: "a killed mutant is still in
+scope... a mismatch means the test enshrines a bug." The bug was real; the coverage was not
+protective.
+
+Fixed in `forecast_shadow_demo.py`: track whether a model-missing substitution happened locally,
+and if so, use `dataclasses.replace` to correct `prediction.fallback_used`/`fallback_reason`
+*before* `pipeline.log_prediction` writes it -- so both the printed line and the persisted JSONL
+entry are honest, not just one or the other. Updated the test that had pinned the old behavior to
+assert the corrected one, with a comment explaining why the old assertion was wrong rather than
+silently flipping it.
+
+Flagged, not silently decided: this run also revealed that the GitHub Actions runner can **never**
+produce a real `ml_wind_corrected` prediction today, independent of the `SYNOPTIC_TOKEN` secret --
+the trained model artifact itself was never made available to that environment (it only exists in
+this developer's local, git-ignored `data/shadow/models/`). Whether to commit model artifacts to
+the repo, retrain on first CI run, or something else is a real design decision with tradeoffs,
+reported to the user rather than resolved unilaterally.
+
+**Verified, not merely trusted:** ran the full targeted suite (179/179 pass) after the fix, then
+re-triggered the actual GitHub Actions workflow and confirmed via its real log output that both
+corridors now correctly report `fallback_used=True` with a precise reason, rather than trusting
+the local fix alone.

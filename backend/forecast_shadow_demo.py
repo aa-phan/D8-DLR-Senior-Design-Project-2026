@@ -24,7 +24,9 @@ protocol in `docs/data-science/decisions/forecast_correction_followup_audit.md`.
 """
 from __future__ import annotations
 
+import dataclasses
 import sys
+from typing import Optional
 
 import config
 import forecast_shadow_pipeline as shadow
@@ -55,6 +57,18 @@ def run_once(corridor: str, method_name: str = "ml_wind_corrected", *, horizon_m
     )
     frame = shadow.validate_and_prepare_shadow_row(row, corridor=corridor)
 
+    # Tracks a substitution made HERE, at the script level, before ShadowPipeline
+    # ever sees a method -- distinct from a fallback ShadowPipeline.predict
+    # performs internally (a bad/missing weather input). Without this, a missing
+    # model artifact silently became a "successful raw_forecast prediction, no
+    # fallback" in both the printed line and the persisted log entry, because
+    # `primary` was already swapped to RawForecastShadowMethod by the time
+    # ShadowPipeline ever ran -- it had no way to know a substitution occurred.
+    # Conflating this with "no fallback happened" is exactly the failure mode
+    # this project's fallback-reporting discipline exists to prevent elsewhere
+    # (see ShadowPipeline.predict's own fallback_used/fallback_reason fields).
+    model_missing_reason: Optional[str] = None
+
     if method_name == "raw_forecast":
         primary = shadow.RawForecastShadowMethod()
     else:
@@ -79,11 +93,24 @@ def run_once(corridor: str, method_name: str = "ml_wind_corrected", *, horizon_m
             else:
                 primary = shadow.CoolingCorrectionShadowMethod(model, model_version=version)
         except FileNotFoundError:
-            print(f"no persisted {method_name!r} model for {corridor!r} -- demoing raw_forecast only", file=sys.stderr)
+            model_missing_reason = (
+                f"no persisted {method_name!r} model artifact found for {corridor!r} "
+                "(demo-script substitution to raw_forecast, not a ShadowPipeline-level "
+                "data/provider fallback)"
+            )
+            print(model_missing_reason, file=sys.stderr)
             primary = shadow.RawForecastShadowMethod()
 
     pipeline = shadow.ShadowPipeline(corridor, primary)
     prediction = pipeline.predict(frame, timestamps)
+    if model_missing_reason is not None:
+        # Make the substitution visible in BOTH the printed line and the
+        # persisted log entry -- log_prediction below writes this exact
+        # object, so fixing only the print would leave the on-disk record
+        # just as misleading as before.
+        prediction = dataclasses.replace(
+            prediction, fallback_used=True, fallback_reason=model_missing_reason,
+        )
     log_path = pipeline.log_prediction(prediction)
     print(f"[{corridor}] requested={method_name} actual={prediction.method} "
           f"fallback_used={prediction.fallback_used} ampacity={prediction.ampacity_amps:.1f}A "
