@@ -27,3 +27,5 @@ pytest==9.0.3
 beautifulsoup4==4.14.3
 scikit-learn==1.9.1
 python-dotenv==1.2.4
+requests==2.32.5
+matplotlib==3.10.8

@@ -1421,3 +1421,42 @@ regression outside the shadow module.
 No GitHub issue was filed (no `audit`/`adversarial` label convention exists in this repo, and this
 session has an outstanding unpushed commit by the user's own choice -- filing issues on a
 not-yet-pushed state was out of scope). Nothing was pushed to the remote.
+
+### Session: 2026-10-06 (continued), conducted by Aaron Phan — loop: diagnose and fix the GitHub Actions workflow's first real run
+
+A `/loop` agent (scope pre-authorized by the user, narrowly, after an auto-mode classifier
+correctly blocked an initial broader attempt) checked the Shadow Collection workflow's first
+real run and found it failed with `ModuleNotFoundError: No module named 'requests'`.
+
+Root cause: `backend/requirements.txt`'s own docstring states it is "the single source of truth
+for this repo's runtime dependencies," existing specifically to serve DS-NF2 (reproducibility) --
+but `requests` (imported by `station_explorer.py`, reached transitively through
+`forecast_shadow_pipeline.py -> corridor_discretization.py -> station_explorer.py`) was never
+declared there. It only ever worked locally because `requests` happened to already be installed
+in this developer's own `.venv` by some other means, unrelated to `requirements.txt` itself --
+exactly the undeclared-dependency failure mode DS-NF2 exists to prevent, surfaced for the first
+time by a genuinely clean environment (GitHub's runner) rather than caught locally.
+
+Fixing it required editing `requirements.txt`, which was outside this loop's original
+pre-authorized file list. Stopped and asked the user before touching it, per the loop's own
+scoping rule, rather than working around the restriction (e.g. patching only inside the workflow
+YAML and leaving the real dependency list incomplete). User expanded the authorized scope to
+include `requirements.txt` explicitly.
+
+While verifying the fix with a genuinely clean, disposable virtualenv (not just this developer's
+own `.venv`, which already had the missing packages installed) rather than trusting the local
+test suite's pass, found a SECOND undeclared dependency of the same kind: `matplotlib`, imported
+at module level by `backend/dlr_pipeline.py:25-26` and reached via `weather_provider.py`'s own
+import of `dlr_pipeline` for `fetch_timeseries` -- same root cause, same blast radius, not yet
+triggered because the first missing import (`requests`) had already crashed the run before
+reaching it. Added both to `requirements.txt`, pinned to the versions already verified working
+(`requests==2.32.5`, `matplotlib==3.10.8`), matching this file's own stated convention of
+recording versions already verified in the environment rather than choosing from a registry.
+
+**Verified, not merely trusted:** built a disposable virtualenv from scratch, installed ONLY
+`requirements.txt` (nothing else), confirmed `import forecast_shadow_collect` succeeds and a real
+end-to-end collector run completes with exit code 0 for both corridors -- not just that the local
+test suite still passes, which would not have caught this class of bug at all. Ran
+`backend/tests/forecast_shadow_pipeline_test.py` + `forecast_shadow_collect_test.py` +
+`forecast_shadow_healthcheck_test.py` + `forecast_shadow_demo_test.py` +
+`forecast_experiment_audit_test.py` together (179/179 pass, unchanged).
