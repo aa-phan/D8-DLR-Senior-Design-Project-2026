@@ -1,0 +1,53 @@
+name: Shadow Collection Diagnostic (TEMPORARY)
+
+# TEMPORARY diagnostic workflow (2026-10-07) -- NOT part of regular collection.
+# Runs each corridor as a fully independent job on its own separate GitHub
+# Actions runner, with no shared process, no shared connection, and no
+# INTER_CORRIDOR_DELAY_S between them. Purpose: isolate whether the repeated
+# "second request always times out" pattern (confirmed position-dependent,
+# not corridor-specific, via an earlier order-swap test) is caused by
+# something in forecast_shadow_collect.py's own single-process loop
+# (e.g. a stale DNS resolution or connection-reuse quirk across two
+# sequential calls in the same Python process) or by GitHub's shared
+# runner IP pool itself (in which case two separate runners might still
+# share the same underlying IP range and could still both fail, or could
+# both succeed if the real constraint was process-local all along).
+# Delete this file once the diagnostic question is answered.
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  austin_corpus_christi:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+      - name: Run AUSTIN_CORPUS_CHRISTI alone
+        env:
+          SYNOPTIC_TOKEN: ${{ secrets.SYNOPTIC_TOKEN }}
+        run: |
+          PYTHONPATH=backend python backend/forecast_shadow_demo.py AUSTIN_CORPUS_CHRISTI ml_wind_corrected
+
+  midland_el_paso:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+      - name: Run MIDLAND_EL_PASO alone
+        env:
+          SYNOPTIC_TOKEN: ${{ secrets.SYNOPTIC_TOKEN }}
+        run: |
+          PYTHONPATH=backend python backend/forecast_shadow_demo.py MIDLAND_EL_PASO ml_wind_corrected
