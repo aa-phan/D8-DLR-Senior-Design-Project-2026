@@ -5,11 +5,11 @@ milestone_name: )
 current_phase: 05
 current_phase_name: "Shadow Collector: Five-Method Side-by-Side Challenger Recording"
 status: executing
-stopped_at: Completed 05-03-PLAN.md
-last_updated: "2026-10-07T21:36:56.402Z"
+stopped_at: Completed plans 05-03 and 05-04 (parallel Wave 3)
+last_updated: "2026-10-07T21:52:04.932Z"
 last_activity: 2026-10-07
-last_activity_desc: "Phase 05 Plan 02 complete: five-candidate shadow orchestration, shared fetch, real persistence_24h, live cycle proven"
-state_head: df672813887b6f54df7355643284dc83958f3476
+last_activity_desc: "Phase 05 Wave 3 complete: both corridors wired to the five-candidate orchestrator (05-03), reference_ml_refit_24h artifact fit and live predict path (05-04)"
+state_head: 935f588225161130c279f49ceb9d51347fd3552a
 progress:
   total_phases: 5
   completed_phases: 4
@@ -74,6 +74,7 @@ Progress: [████████░░] 80%
 |------|----------|-------|-------|
 | Phase 05 P01 | N/A | 1 tasks | 1 files |
 | Phase 05 P03 | 20min | 2 tasks | 2 files |
+| Phase 05 P04 | ~45 min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -98,6 +99,7 @@ Progress: [████████░░] 80%
   six-field legacy mirror for ml_wind_corrected, and no-migration strategy for already-committed
   flat-shape rows on shadow-collection-data (05-01).
 - [Phase 05]: collect_once wired to run_once_all_methods for every corridor (05-03); real two-corridor live cycle exits 0 in ~32s, well under the 15-minute workflow budget
+- [Phase 05]: reference_ml_refit_24h's real artifact fit via fit_fitted_arms's exact arm-5 recipe on the pinned train-plus-validation window (18834 rows/corridor); real live truth-proxy predict path replaces 05-02's honest unavailable stub
 
 ### Pending Todos
 
@@ -139,7 +141,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-10-07T21:36:56.222Z
-Stopped at: Completed 05-03-PLAN.md
+Last session: 2026-10-07T21:52:04.757Z
+Stopped at: Completed plans 05-03 and 05-04 (parallel Wave 3)
 `/gsd-plan-phase 1` in this workstream.
 Resume file: None

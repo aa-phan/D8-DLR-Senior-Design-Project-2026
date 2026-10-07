@@ -318,7 +318,7 @@ def run_once_all_methods(corridor: str, *, horizon_minutes: int = 1440) -> dict:
         )
 
     try:
-        results["reference_ml_refit_24h"] = shadow.ReferenceRefit24hShadowMethod().compute(corridor)
+        results["reference_ml_refit_24h"] = shadow.ReferenceRefit24hShadowMethod().compute(corridor, decision_time)
     except Exception as exc:
         results["reference_ml_refit_24h"] = shadow.ShadowPrediction(
             corridor=corridor, method="reference_ml_refit_24h", ampacity_amps=None,
