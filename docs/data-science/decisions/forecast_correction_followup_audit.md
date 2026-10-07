@@ -115,6 +115,41 @@ ampere in the frozen record's Verdict section is an agreement between two model 
 unaware of this fact would read the reported margins as field-validated accuracy rather than
 self-consistency between two physics simulations run on two different weather inputs.
 
+**Addendum (2026-10-06) — this is also a documented-vs-actual provider mismatch, not just a
+provenance gap.** `docs/data-science/decisions/data_provider.md` (ratified 2026-09-15, §"Recommended
+Composition") names **NSRDB PSM v4 as the project's ratified primary solar source** — not
+Open-Meteo. `forecast_experiment.py`'s truth-side pipeline (the same `anchored_pair_frame` path this
+finding describes) has never called NSRDB for any of this phase's experiments; it has always used
+Open-Meteo's Archive API, for both the wind/temp truth series this finding already covers and the
+solar input IEEE 738 needs. This was not a deliberate substitution made with a documented rationale —
+it was not noticed until this session's conversation surfaced it. Two things follow, and they are
+different claims:
+
+1. **The provenance finding above (physics-on-physics, not sensor-validated) is unaffected.** NSRDB
+   PSM v4 is itself a satellite-derived reanalysis product (confirmed in `data_provider.md`'s own
+   NSRDB section), not a sensor network — switching to it would not have made the truth side
+   sensor-validated. It would still be "which reanalysis product," not "reanalysis vs. real
+   observation."
+2. **It is nonetheless a real deviation from the team's own ratified decision**, and that deviation
+   is exactly why every true-side number in both the frozen record and this entire follow-up audit
+   should be read as "Open-Meteo reanalysis," not "this project's chosen solar source" — the two are
+   not currently the same thing, and `data_provider.md` itself was never updated to say so.
+
+**Why this is being recorded here rather than fixed now (2026-10-06 decision):** correcting it
+would mean changing `forecast_experiment.py`'s truth-side data source — a frozen, byte-identity-gated
+module this entire audit has treated as untouchable — and refitting every model this phase evaluated,
+right as the project is heading into the 2026-11-01 model freeze. It is also not simply a drop-in
+swap: NSRDB PSM v4's documented historical depth is **2018–2025** (`data_provider.md`'s NSRDB
+section), while the frozen training window this phase's experiments use is **`FROZEN_WINDOW_START`
+= 2024-01-20 through `FROZEN_WINDOW_END` = 2026-09-29** (`forecast_experiment_audit.py:64,84`) — a
+window that extends roughly nine months past NSRDB's own stated coverage. A real switch would need a
+secondary source for that gap, not a clean one-provider swap, and no `NREL_API_KEY`/`NREL_API_EMAIL`
+credential has ever been obtained (`data_provider.md`'s own NSRDB section: "no API key was obtained,
+no actual data pull was performed this pass"). This is recorded explicitly as a **deferred follow-up
+item for after the Nov 1/Nov 24 milestones**, not resolved here — flagged so the project's final
+documentation accurately reflects that the published NSRDB-primary decision and the actual truth-side
+data source have diverged, rather than leaving that gap implicit for a future reader to rediscover.
+
 ### Finding 2 — split-boundary reproducibility
 
 **Verdict: the frozen record's stated split boundary is reproducible only because it was pinned;

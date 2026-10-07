@@ -1522,3 +1522,35 @@ and lock file still are.
 **Verified, not merely trusted:** ran the full targeted shadow-module suite (59/59 pass, unchanged
 -- this was a tracked-files-only change, no code touched) after the `.gitignore` edit and before
 committing.
+
+### Session: 2026-10-06 (continued), conducted by Aaron Phan — document the NSRDB-vs-actual provider gap
+
+While diagnosing why NSRDB has no live credential configured, traced why: `data_provider.md`
+(ratified 2026-09-15) names NSRDB PSM v4 as the project's ratified primary SOLAR source, but no
+code path in this repo -- not `forecast_experiment.py`'s truth-side pipeline, not the shadow
+prototype's live forecast fetch -- has ever actually called it. User's own framing, correctly:
+the published decision and the actual data source have diverged, and that needs to be
+discoverable from the documentation itself, not left implicit.
+
+Checked, before writing anything, whether simply switching `forecast_experiment.py` to NSRDB now
+was viable: it is not, for two independent reasons, not merely an effort tradeoff. NSRDB PSM v4's
+own documented historical depth (`data_provider.md`) is 2018-2025; the frozen training window this
+phase's every experiment uses (`FROZEN_WINDOW_START`/`FROZEN_WINDOW_END` in
+`forecast_experiment_audit.py`) extends to 2026-09-29 -- about nine months past NSRDB's actual
+coverage, meaning a real switch isn't a drop-in provider swap. Separately, no NREL credential has
+ever been obtained. Presented both blockers plus the schedule risk of touching frozen training
+code this close to the Nov 1 freeze; user chose to document the gap now and defer the actual fix
+to after the Nov 1/24 milestones, rather than pursue it under deadline pressure.
+
+Added a dated addendum to Finding 1 (truth-side provenance) in
+`docs/data-science/decisions/forecast_correction_followup_audit.md`, explicitly distinguishing two
+different claims: the existing provenance finding (physics-on-physics, not sensor-validated) is
+unaffected by which reanalysis product is used, since NSRDB PSM v4 is itself a reanalysis product,
+not a sensor network -- but the documented-vs-actual provider deviation is real and now recorded,
+with its own blockers named, as a deferred follow-up rather than left for a future reader to
+rediscover from scratch.
+
+**Verified, not merely trusted:** confirmed zero diff on `backend/`, the frozen
+`forecast_correction_experiment.md`, and the Phase 3 planning directory (this was a documentation
+addition to the followup audit record only). Ran `backend/tests/forecast_experiment_audit_test.py`
+(120/120 pass, unchanged).
