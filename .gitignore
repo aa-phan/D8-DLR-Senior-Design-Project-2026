@@ -11,10 +11,18 @@
 # /data/models/, not source; regenerable via forecast_leadtime_calibration.py
 # and forecast_experiment.py.
 /data/experiment/
-# Shadow-prototype model artifacts and prediction logs (project pivot,
-# 2026-10-05) -- generated/regenerable, like /data/experiment/, via
-# forecast_shadow_pipeline.py.
-/data/shadow/
+# Shadow-prototype prediction logs and the collector's lock file (project
+# pivot, 2026-10-05) -- generated per-run, not source.
+# `/data/shadow/models/` is DELIBERATELY NOT ignored (2026-10-06): the
+# trained .joblib artifacts there must reach the GitHub Actions runner,
+# which has no other way to obtain them (no network access to retrain,
+# and the cached ABLATION-basis data they're fit from isn't shipped
+# either) -- without this carve-out every scheduled run silently falls
+# back to raw_forecast, never producing the real ml_wind_corrected
+# prediction the collector exists to log. Revisit if the model is
+# retrained after the 2026-11-01 freeze point.
+/data/shadow/predictions/
+/data/shadow/.collect.lock
 .env
 __pycache__/
 *.pyc

@@ -1499,3 +1499,26 @@ reported to the user rather than resolved unilaterally.
 re-triggered the actual GitHub Actions workflow and confirmed via its real log output that both
 corridors now correctly report `fallback_used=True` with a precise reason, rather than trusting
 the local fix alone.
+
+### Session: 2026-10-06 (continued), conducted by Aaron Phan — ship the trained model artifacts to the GitHub Actions runner
+
+User pushed back correctly on the loop's framing: an "honest fallback" is still a collector that
+has never once produced the prediction it exists to make. Root-caused: `/data/shadow/` was
+entirely git-ignored, including `models/` -- the trained `.joblib` artifacts
+(`ml_wind_corrected_*`, `ml_cooling_corrected_*`) only ever existed on this developer's own
+machine, never reaching the runner, which has no network path to retrain them either.
+
+Presented three real options with tradeoffs (commit the artifacts directly; retrain on every
+scheduled run from cached ABLATION-basis data; a separate one-time training job) rather than
+picking one unilaterally. User chose committing the artifacts directly, appropriate since the
+model is frozen until the 2026-11-01 point anyway.
+
+Narrowed `.gitignore`'s blanket `/data/shadow/` exclusion to `/data/shadow/predictions/` and
+`/data/shadow/.collect.lock` specifically -- true per-run generated state -- while leaving
+`/data/shadow/models/` trackable. Verified the carve-out with `git check-ignore` before committing
+anything: the four `.joblib` files (total ~285KB) are no longer ignored; the predictions directory
+and lock file still are.
+
+**Verified, not merely trusted:** ran the full targeted shadow-module suite (59/59 pass, unchanged
+-- this was a tracked-files-only change, no code touched) after the `.gitignore` edit and before
+committing.
