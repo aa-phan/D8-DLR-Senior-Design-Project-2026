@@ -13,6 +13,7 @@ import config
 import corridor_discretization
 import forecast_correction_models
 import forecast_shadow_pipeline as shadow
+import thermal_model
 import weather_provider
 
 _CORRIDOR = "AUSTIN_CORPUS_CHRISTI"
@@ -680,3 +681,363 @@ def test_corridor_wind_correction_fails_whole_prediction_when_either_city_anchor
     assert "no usable wind observation" in prediction.fallback_reason
     assert city_b in prediction.fallback_reason
     assert cams_b in prediction.fallback_reason
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Adversarial mutation-testing pass (2026-10-06): closes coverage gaps
+# surfaced by manually probing the existing suite -- each test below
+# corresponds to a mutation that SURVIVED (the pre-existing suite stayed
+# green under it) before this test was added, then was killed by it.
+# ──────────────────────────────────────────────────────────────────────
+
+def test_fetch_live_forecast_accepts_decision_time_exactly_at_availability_time(monkeypatch):
+    """
+    Boundary: the docstring says decision_time "must be >= availability_time"
+    (inclusive) -- survived mutant: `<` -> `<=` on the rejection check, which
+    would wrongly reject a request made AT the exact availability instant.
+    The clock is pinned via monkeypatch (not raced against real wall-clock
+    time, which cannot land on an exact nanosecond boundary reliably) so
+    decision_time is deterministically EQUAL to availability_time.
+    """
+    import open_meteo_forecast_provider
+
+    def _fake_fetch_single_run(lat, lon, run, forecast_days=None, **kwargs):
+        return pd.DataFrame([{
+            "datetime_utc": run + pd.Timedelta(hours=6),
+            "air_temp": 20.0, "wind_speed": 3.0, "wind_direction": 100.0,
+            "solar_radiation": 300.0, "relative_humidity": 50.0,
+        }])
+
+    monkeypatch.setattr(open_meteo_forecast_provider, "fetch_single_run", _fake_fetch_single_run)
+    lag_hours = shadow._resolve_publication_lag_hours()
+    horizon_minutes = 1440
+    initialization_time = pd.Timestamp("2026-10-10T00:00:00Z")
+    availability_time = initialization_time + pd.Timedelta(hours=lag_hours)
+    valid_time = initialization_time + pd.Timedelta(minutes=horizon_minutes)
+
+    class _FixedTimestamp(pd.Timestamp):
+        @classmethod
+        def now(cls, tz=None):
+            return availability_time if tz is not None else availability_time.tz_localize(None)
+
+    monkeypatch.setattr(pd, "Timestamp", _FixedTimestamp)
+    row, ts = shadow.fetch_live_forecast_for_valid_time(
+        _CORRIDOR, valid_time, horizon_minutes=horizon_minutes, lat=30.27, lon=-97.74,
+    )
+    assert row is not None
+    assert ts.decision_time == availability_time
+
+
+def test_fetch_live_forecast_uses_the_real_publication_lag_not_zero(monkeypatch):
+    """
+    Survived mutant: `_DEFAULT_PUBLICATION_LAG_HOURS = 6.0` -> `0.0`. A
+    decision_time that is available only because the real ~6h lag is
+    applied (and would be REJECTED under a zero lag) proves the constant's
+    value is load-bearing, not just its presence.
+    """
+    import open_meteo_forecast_provider
+
+    def _fake_fetch_single_run(lat, lon, run, forecast_days=None, **kwargs):
+        return pd.DataFrame([{
+            "datetime_utc": run + pd.Timedelta(hours=6),
+            "air_temp": 20.0, "wind_speed": 3.0, "wind_direction": 100.0,
+            "solar_radiation": 300.0, "relative_humidity": 50.0,
+        }])
+
+    monkeypatch.setattr(open_meteo_forecast_provider, "fetch_single_run", _fake_fetch_single_run)
+    lag_hours = shadow._resolve_publication_lag_hours()
+    assert lag_hours > 0.0, "a zero real lag would make this test meaningless"
+    now = pd.Timestamp.now(tz="UTC")
+    horizon_minutes = 1440
+    # initialization_time lands 1 hour before "now"; availability_time is
+    # init + lag_hours, i.e. (lag_hours - 1) hours AFTER "now" -- decision_time
+    # ("now") is therefore BEFORE availability_time and must be rejected.
+    valid_time = now + pd.Timedelta(minutes=horizon_minutes) - pd.Timedelta(hours=1)
+    with pytest.raises(shadow.StaleOrMissingDataError, match="availability_time"):
+        shadow.fetch_live_forecast_for_valid_time(
+            _CORRIDOR, valid_time, horizon_minutes=horizon_minutes, lat=30.27, lon=-97.74,
+        )
+
+
+def test_fetch_live_forecast_rejects_a_row_with_only_one_null_field(monkeypatch):
+    """
+    Survived mutant: `row.isnull().any()` -> `row.isnull().all()`, which
+    would only reject a row where EVERY field is null. A row with exactly
+    one null field (the others valid) must still be rejected.
+    """
+    import open_meteo_forecast_provider
+
+    def _fake_fetch_single_run(lat, lon, run, forecast_days=None, **kwargs):
+        return pd.DataFrame([{
+            "datetime_utc": run + pd.Timedelta(hours=6),
+            "air_temp": None, "wind_speed": 3.0, "wind_direction": 100.0,
+            "solar_radiation": 300.0, "relative_humidity": 50.0,
+        }])
+
+    monkeypatch.setattr(open_meteo_forecast_provider, "fetch_single_run", _fake_fetch_single_run)
+    past_valid_time = pd.Timestamp("2026-01-01T00:00:00Z")
+    with pytest.raises(shadow.StaleOrMissingDataError, match="null field"):
+        shadow.fetch_live_forecast_for_valid_time(
+            _CORRIDOR, past_valid_time, horizon_minutes=1440, lat=30.27, lon=-97.74,
+        )
+
+
+def test_fetch_live_anchor_observation_rejects_a_row_with_only_wind_direction_null(monkeypatch):
+    """
+    Survived mutant: `pd.isnull(wind_speed) or pd.isnull(wind_direction)` ->
+    `and`, which would only reject when BOTH are null. A row with a valid
+    wind_speed but a null wind_direction (or vice versa) must still be
+    rejected as unusable -- `_wind_feature_frame` needs both.
+    """
+    cams_id = config.TCEQ_STATIONS["AUSTIN"]
+    synoptic_station = config.SYNOPTIC_FALLBACK_STATIONS["AUSTIN"]
+
+    def _fetch(location, start, end, provider="tceq", **kw):
+        end_ts = pd.Timestamp(end)
+        if provider == "tceq":
+            idx = pd.MultiIndex.from_tuples([(cams_id, end_ts)], names=["stid", "datetime_utc"])
+            # wind_speed present and valid, wind_direction null -- a partial
+            # null that the pre-existing OR check correctly rejects.
+            return pd.DataFrame(
+                {"wind_speed": [5.0], "wind_direction": [None], "wind_source": [None]}, index=idx,
+            )
+        raise OSError("Synoptic also unavailable for this probe")
+
+    monkeypatch.setattr(weather_provider, "fetch_weather", _fetch)
+    with pytest.raises(shadow.StaleOrMissingDataError, match="null wind field"):
+        shadow.fetch_live_anchor_observation("AUSTIN", pd.Timestamp("2026-10-06T12:00:00Z"))
+
+
+def test_fetch_live_anchor_observation_picks_the_latest_of_several_rows_not_the_first(monkeypatch):
+    """
+    Survived mutant: `sort_values("datetime_utc")` -> descending, which
+    makes `.iloc[-1]` select the EARLIEST row instead of the latest. Every
+    pre-existing test supplied exactly one row per fetch, so this ordering
+    was never actually exercised with multiple candidate rows. This test
+    supplies three rows at different timestamps within the lookback window
+    and confirms the chronologically LATEST one's wind values are returned,
+    not the first-appearing one.
+    """
+    cams_id = config.TCEQ_STATIONS["AUSTIN"]
+    decision_time = pd.Timestamp("2026-10-06T12:00:00Z")
+
+    def _fetch(location, start, end, provider="tceq", **kw):
+        assert provider == "tceq"
+        # Deliberately out of chronological order in the returned frame,
+        # so a naive "first row" or "last row of an unsorted frame" read
+        # would pick the wrong one -- only an explicit sort-then-last is
+        # correct.
+        rows = [
+            {"datetime_utc": decision_time - pd.Timedelta(hours=1), "wind_speed": 9.9, "wind_direction": 10.0, "wind_source": "tceq"},
+            {"datetime_utc": decision_time - pd.Timedelta(hours=3), "wind_speed": 1.1, "wind_direction": 20.0, "wind_source": "tceq"},
+            {"datetime_utc": decision_time - pd.Timedelta(hours=5), "wind_speed": 5.5, "wind_direction": 30.0, "wind_source": "tceq"},
+        ]
+        idx = pd.MultiIndex.from_tuples([(cams_id, r["datetime_utc"]) for r in rows], names=["stid", "datetime_utc"])
+        return pd.DataFrame(
+            {"wind_speed": [r["wind_speed"] for r in rows],
+             "wind_direction": [r["wind_direction"] for r in rows],
+             "wind_source": [r["wind_source"] for r in rows]},
+            index=idx,
+        )
+
+    monkeypatch.setattr(weather_provider, "fetch_weather", _fetch)
+    anchor = shadow.fetch_live_anchor_observation("AUSTIN", decision_time, lookback_hours=6.0)
+    # The chronologically latest row is decision_time - 1h (wind_speed 9.9),
+    # not the first-appearing row in the frame (wind_speed 9.9 happens to
+    # also be first here deliberately -- assert on the VALUE, which is
+    # unambiguous, and on the timestamp, which pins down which row won).
+    assert anchor["anchor_wind_speed"] == 9.9
+    assert anchor["anchor_observation_time"] == decision_time - pd.Timedelta(hours=1)
+
+
+def test_fetch_live_anchor_observation_trusts_provenance_over_attempt_tracking_on_disagreement(monkeypatch):
+    """
+    Survived mutant: `provenance_source != actual_source` -> `==`, which
+    makes the "trust provenance over attempt-tracking" correction a no-op
+    (it would only ever re-assign a value that's already equal). This is
+    only observable when provenance genuinely DISAGREES with which attempt
+    the code THINKS succeeded -- never exercised by any pre-existing
+    fixture, which always set `wind_source` to match the requested
+    provider. Here the TCEQ attempt nominally "succeeds" (no exception, a
+    usable row) but the frame's own `wind_source` provenance column says
+    "synoptic" -- the function must trust the provenance column, not the
+    attempt it thinks ran.
+    """
+    cams_id = config.TCEQ_STATIONS["AUSTIN"]
+
+    def _fetch(location, start, end, provider="tceq", **kw):
+        assert provider == "tceq"
+        end_ts = pd.Timestamp(end)
+        idx = pd.MultiIndex.from_tuples([(cams_id, end_ts)], names=["stid", "datetime_utc"])
+        return pd.DataFrame(
+            {"wind_speed": [4.2], "wind_direction": [88.0], "wind_source": ["synoptic"]}, index=idx,
+        )
+
+    monkeypatch.setattr(weather_provider, "fetch_weather", _fetch)
+    anchor = shadow.fetch_live_anchor_observation("AUSTIN", pd.Timestamp("2026-10-06T12:00:00Z"))
+    assert anchor["anchor_source"] == "synoptic"
+
+
+def test_shadow_pipeline_predict_propagates_corridor_method_provenance_excluding_geometry(monkeypatch):
+    """
+    Integration gap: no pre-existing test called `ShadowPipeline.predict`
+    (which filters `frame.attrs` for `input_provenance`, dropping only the
+    `geometry` key) together with `CorridorWindCorrectionMethod` (which
+    WRITES the real per-city provenance onto `frame.attrs`) -- every
+    existing provenance assertion called the method's `.predict` directly,
+    bypassing `ShadowPipeline` entirely. Survived mutant: the geometry
+    filter's `!=` -> `==`, which would make `input_provenance` report ONLY
+    `{"geometry": ...}` (or `None`) instead of the real per-city data.
+    """
+    import open_meteo_forecast_provider
+
+    def _fake_fetch_single_run(lat, lon, run, forecast_days=None, **kwargs):
+        return pd.DataFrame([{
+            "datetime_utc": run + pd.Timedelta(hours=6),
+            "air_temp": 22.0, "wind_speed": 3.0, "wind_direction": 200.0,
+            "solar_radiation": 400.0, "relative_humidity": 55.0,
+        }])
+
+    monkeypatch.setattr(open_meteo_forecast_provider, "fetch_single_run", _fake_fetch_single_run)
+    city_a, city_b = config.CORRIDOR_ENDPOINTS[_CORRIDOR]
+    cams_a = config.TCEQ_STATIONS[city_a]
+    cams_b = config.TCEQ_STATIONS[city_b]
+
+    def _fake_anchor(location, start, end, provider="tceq", **kw):
+        cams_id = location[0]
+        speed = 2.0 if cams_id == cams_a else 9.0
+        end_ts = pd.Timestamp(end)
+        idx = pd.MultiIndex.from_tuples([(cams_id, end_ts)], names=["stid", "datetime_utc"])
+        return pd.DataFrame(
+            {"wind_speed": [speed], "wind_direction": [135.0], "wind_source": ["tceq"]}, index=idx,
+        )
+
+    monkeypatch.setattr(weather_provider, "fetch_weather", _fake_anchor)
+    fit_frame = _synthetic_wind_fit_frame_real_cities()
+    model = forecast_correction_models.fit_wind_correction(
+        fit_frame, forecast_correction_models._make_wind_linear_regression, pooling="per_city",
+    )
+    valid_time = pd.Timestamp("2026-10-07T00:00:00Z")
+    decision_time = pd.Timestamp("2026-10-06T12:00:00Z")
+    method = shadow.CorridorWindCorrectionMethod(
+        model, corridor=_CORRIDOR, model_version="test-version",
+        valid_time=valid_time, decision_time=decision_time, horizon_minutes=1440,
+    )
+    pipeline = shadow.ShadowPipeline(_CORRIDOR, method)
+    ts = shadow.ShadowTimestamps(
+        initialization_time=pd.Timestamp("2026-10-06T00:00:00Z"),
+        availability_time=pd.Timestamp("2026-10-06T06:00:00Z"),
+        decision_time=decision_time, valid_time=valid_time, horizon_minutes=1440,
+    )
+    frame = pd.DataFrame([{"placeholder": True}])
+    prediction = pipeline.predict(frame, ts)
+
+    assert prediction.fallback_used is False
+    assert prediction.input_provenance is not None
+    assert "geometry" not in prediction.input_provenance
+    assert set(prediction.input_provenance["per_city_ampacity_amps"]) == {city_a, city_b}
+    assert prediction.input_provenance["bottleneck_city"] in (city_a, city_b)
+    assert set(prediction.input_provenance["anchor_provenance"]) == {city_a, city_b}
+
+
+@pytest.mark.parametrize("air_temp", [-60.0, 60.0])
+def test_validate_and_prepare_shadow_row_accepts_temperature_at_exact_boundary(air_temp):
+    """Survived mutant: `-60.0 <= air_temp` -> `-59.0 <= air_temp` (and the
+    symmetric case at the upper bound) -- the boundary values themselves
+    were never tested, only values well inside or well outside the range."""
+    row = _synthetic_row(fcst_air_temp=air_temp)
+    frame = shadow.validate_and_prepare_shadow_row(row, corridor=_CORRIDOR)
+    assert frame["fcst_air_temp"].iloc[0] == air_temp
+
+
+def test_validate_and_prepare_shadow_row_rejects_temperature_just_past_lower_boundary():
+    row = _synthetic_row(fcst_air_temp=-60.01)
+    with pytest.raises(ValueError, match="outside"):
+        shadow.validate_and_prepare_shadow_row(row, corridor=_CORRIDOR)
+
+
+def test_validate_and_prepare_shadow_row_accepts_exactly_zero_wind_speed():
+    """Survived mutant: `wind_speed < 0.0` -> `<= 0.0`. Calm wind (0.0 m/s)
+    is physically valid and must be accepted, not rejected as though it
+    were negative."""
+    row = _synthetic_row(fcst_wind_speed=0.0)
+    frame = shadow.validate_and_prepare_shadow_row(row, corridor=_CORRIDOR)
+    assert frame["fcst_wind_speed"].iloc[0] == 0.0
+
+
+def test_validate_and_prepare_shadow_row_accepts_exactly_zero_solar_radiation():
+    """Survived mutant: `solar < 0.0` -> `<= 0.0`. Night-time (0.0 W/m^2
+    solar radiation) is physically valid and must be accepted."""
+    row = _synthetic_row(fcst_solar_radiation=0.0)
+    frame = shadow.validate_and_prepare_shadow_row(row, corridor=_CORRIDOR)
+    assert frame["fcst_solar_radiation"].iloc[0] == 0.0
+
+
+def test_wind_correction_shadow_method_propagates_anchor_attrs_onto_callers_frame_object(monkeypatch):
+    """
+    Survived mutant: deleting `frame.attrs.update(enriched.attrs)` --
+    which the code's own comment names as fixing a real propagation bug
+    (`enriched` is a fresh copy, not an alias, so without this line the
+    CALLER's frame object -- the one `ShadowPipeline.predict` reads
+    `.attrs` from afterward -- never sees the anchor provenance at all).
+    No pre-existing test asserted on the ORIGINAL frame object's `.attrs`
+    after `predict` returned; they only checked the return value.
+    """
+    monkeypatch.setattr(weather_provider, "fetch_weather", _fake_tceq_observation(config.TCEQ_STATIONS["AUSTIN"]))
+    fit_frame = _synthetic_wind_fit_frame_real_cities()
+    model = forecast_correction_models.fit_wind_correction(
+        fit_frame, forecast_correction_models._make_wind_linear_regression, pooling="per_city",
+    )
+    geometry = corridor_discretization.corridor_geometry(_CORRIDOR)
+    endpoint_city = config.CORRIDOR_ENDPOINTS[_CORRIDOR][0]
+    row = _synthetic_row(endpoint_city=endpoint_city)
+    frame = pd.DataFrame([row]).drop(columns=["anchor_wind_speed", "anchor_wind_direction"])
+
+    method = shadow.WindCorrectionShadowMethod(
+        model, endpoint_city=endpoint_city,
+        valid_time=pd.Timestamp("2026-10-07T00:00:00Z"),
+        decision_time=pd.Timestamp("2026-10-06T12:00:00Z"),
+    )
+    method.predict(frame, geometry)
+    # Asserting on the ORIGINAL `frame` object passed in, not any return
+    # value or internal copy -- this is exactly the alias/copy distinction
+    # the deleted line exists to bridge.
+    assert frame.attrs.get("anchor_source") == "tceq"
+    assert frame.attrs.get("anchor_station") == config.TCEQ_STATIONS["AUSTIN"]
+
+
+def test_raw_forecast_shadow_method_does_not_swap_wind_speed_and_direction():
+    """
+    Survived mutant: swapping the `fcst_wind_speed`/`fcst_wind_direction`
+    arguments to `thermal_model.perpendicular_wind`. The pre-existing test
+    only asserted `amps > 0.0`, which both the correct and swapped-argument
+    call satisfy (IEEE 738 produces a positive ampacity for any physically
+    plausible pair of numbers in either argument slot) -- not
+    discriminating. This test instead computes the expected perpendicular
+    wind directly, in the documented argument order, and confirms the
+    method's result matches a correctly-ordered call and DIFFERS from a
+    deliberately swapped-order call, for a case where speed and direction
+    are numerically different enough that swapping them changes the
+    result.
+    """
+    geometry = corridor_discretization.corridor_geometry(_CORRIDOR)
+    row = _synthetic_row(fcst_wind_speed=2.0, fcst_wind_direction=250.0)
+    frame = pd.DataFrame([row])
+    method = shadow.RawForecastShadowMethod()
+    amps = method.predict(frame, geometry)
+
+    correct_perp = thermal_model.perpendicular_wind(
+        np.array([2.0]), np.array([250.0]), geometry.bearing_deg,
+    )
+    correct_amps = float(np.asarray(thermal_model.ieee738_ampacity(
+        np.array([28.0]), correct_perp, np.array([600.0]), geometry.conductor,
+    ))[0])
+    swapped_perp = thermal_model.perpendicular_wind(
+        np.array([250.0]), np.array([2.0]), geometry.bearing_deg,
+    )
+    swapped_amps = float(np.asarray(thermal_model.ieee738_ampacity(
+        np.array([28.0]), swapped_perp, np.array([600.0]), geometry.conductor,
+    ))[0])
+
+    assert amps == pytest.approx(correct_amps)
+    assert amps != pytest.approx(swapped_amps)

@@ -1363,3 +1363,61 @@ touched).
 Settings, and pushing this commit to `main` so the schedule actually activates. Neither step
 happens without the user's explicit push/action, per this session's standing push-authorization
 rule.
+
+### Session: 2026-10-06 (continued), conducted by Aaron Phan — adversarial mutation-testing pass on the shadow pipeline
+
+Claude Code was used to run a manual adversarial + mutation testing campaign (the
+`adversarial-mutation-test` plugin skill's methodology, adapted: no `nix`/`mutation-probe` binary
+available in this environment, so each mutation was applied by hand -- edit, run the targeted test
+file, observe pass/fail, revert immediately -- rather than via the skill's bundled tool) against the
+four shadow-prototype modules: `forecast_shadow_pipeline.py`, `forecast_shadow_demo.py`,
+`forecast_shadow_collect.py`, `forecast_shadow_healthcheck.py`.
+
+28 manual mutation probes applied across the four modules (conditionals negated, comparisons
+flipped, boundaries shifted by one, side-effects deleted, argument orders swapped, constants
+changed). 18 survived the pre-existing suite; all 18 closed with new, discriminating tests (each
+re-probed individually afterward to confirm the specific mutation that survived is now killed, with
+no regression to any other test). No real bug was found that needed a code fix -- every survivor was
+a genuine coverage gap in otherwise-correct code, confirmed against each function's own documented
+intent before writing a test, never the other direction (an already-buggy behavior encoded as
+"expected").
+
+The most significant gap: `forecast_shadow_demo.py` had ZERO dedicated tests before this pass --
+only ever exercised by real live-network runs in prior passes, or as a black box by
+`forecast_shadow_collect_test.py`'s monkeypatching of `run_once` itself (which never exercises
+`run_once`'s own internal logic). A new `forecast_shadow_demo_test.py` closes this, including the
+valid-time 6-hour-grid-selection loop -- a piece of logic the module's own comment says was fixed
+after a real live run surfaced a bug no synthetic test could have caught, yet had never itself been
+tested.
+
+Two other high-value, non-obvious gaps: (1) every pre-existing test supplied exactly ONE candidate
+row per fetch, so the "pick the chronologically latest row" selection logic in both
+`fetch_live_anchor_observation`'s `_latest_usable_row` and (by the same class of gap)
+`forecast_shadow_healthcheck.py`'s `_last_entry` had never actually been exercised with multiple
+rows/log lines -- a sort-order or line-selection bug in either would have gone undetected
+indefinitely. (2) `WindCorrectionShadowMethod.predict`'s `frame.attrs.update(enriched.attrs)` line
+-- which the code's own comment names as fixing a real alias/copy propagation bug -- had no test
+asserting on the ORIGINAL frame object's `.attrs` after `predict()` returned; deleting the line
+entirely left the suite green.
+
+One mutation (the grid-selection while loop's `<=` boundary in `forecast_shadow_demo.py`) is
+accepted as a documented, practically-unreachable edge case rather than forced into a test: it only
+differs from correct behavior at an exact nanosecond equality that real wall-clock time essentially
+never produces, and the loop is self-correcting regardless of its starting offset (a separate
+probed mutation on the initial `+12h` seed confirmed this empirically -- changing it to `+6h`
+produces the same final answer, just one more loop iteration).
+
+**Verified, not merely trusted:** every one of the 18 closed gaps was re-probed individually after
+its test was added, confirming that SPECIFIC mutation (and no broader set of tests) is what now
+fails under it. Two tests were caught and fixed mid-pass when they initially raced real wall-clock
+time non-deterministically (an "exactly at the boundary" assertion that can't be reliably hit via
+real elapsed time) -- both rewritten to pin the clock via monkeypatch instead of asserting on an
+unreproducible timing coincidence. Final counts: `forecast_shadow_pipeline_test.py` 29 -> 43,
+`forecast_shadow_healthcheck_test.py` 4 -> 7, `forecast_shadow_demo_test.py` 0 -> 5 (new file),
+`forecast_shadow_collect_test.py` unchanged at 4 (no survivors found). Full targeted suite: 37 -> 59
+passed. Broader `forecast_experiment_audit_test.py` suite: 120 passed, unchanged, confirming no
+regression outside the shadow module.
+
+No GitHub issue was filed (no `audit`/`adversarial` label convention exists in this repo, and this
+session has an outstanding unpushed commit by the user's own choice -- filing issues on a
+not-yet-pushed state was out of scope). Nothing was pushed to the remote.
