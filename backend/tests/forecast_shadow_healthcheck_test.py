@@ -117,3 +117,53 @@ def test_check_reports_healthy_at_the_exact_age_boundary(predictions_dir, monkey
     for corridor in ("AUSTIN_CORPUS_CHRISTI", "MIDLAND_EL_PASO"):
         _write_entry(os.path.join(predictions_dir, f"{corridor}.jsonl"), exactly_at_threshold, fallback_used=False)
     assert healthcheck.check(max_age_minutes=1440) == 0
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Plan 05-05, Task 1: proves (not merely argues) that `forecast_shadow_
+# healthcheck.py` needs ZERO code change against a new-shape (schema_
+# version: 2) row -- the six-field top-level mirror 05-01-SUMMARY.md
+# approved means `_last_entry`/`check`'s existing `entry.get('logged_at')`/
+# `entry.get('fallback_used')` top-level reads see exactly what they saw
+# for an old-shape row.
+# ──────────────────────────────────────────────────────────────────────
+
+def test_check_reports_the_same_verdict_for_a_new_shape_schema_version_2_row(predictions_dir):
+    """
+    This file itself (`forecast_shadow_healthcheck.py`) carries zero diff
+    from this task -- only this test is new. A new-shape entry's top-level
+    mirror fields (`method`, `ampacity_amps`, `fallback_used`,
+    `fallback_reason`, `model_version`, `input_provenance`) are an exact
+    copy of `candidates["ml_wind_corrected"]`'s own fields, so `check`
+    reports the identical healthy verdict and "corrected"/"fallback"
+    status string it would report for an equivalent old-shape entry.
+    """
+    now = datetime.now(timezone.utc)
+    new_shape_entry = {
+        "schema_version": 2,
+        "corridor": "AUSTIN_CORPUS_CHRISTI",
+        "decision_time": now.isoformat(), "valid_time": now.isoformat(),
+        "logged_at": now.isoformat(),
+        "candidates": {
+            "ml_wind_corrected": {
+                "status": "ok", "ampacity_amps": 700.0, "fallback_used": False,
+                "fallback_reason": None, "model_version": "v2",
+                "input_provenance": None, "reason": None,
+            },
+            "ml_cooling_corrected": {"status": "ok", "ampacity_amps": 690.0, "fallback_used": False, "fallback_reason": None, "model_version": "v2", "input_provenance": None, "reason": None},
+            "raw_forecast": {"status": "ok", "ampacity_amps": 650.0, "fallback_used": False, "fallback_reason": None, "model_version": None, "input_provenance": None, "reason": None},
+            "persistence_24h": {"status": "unavailable", "ampacity_amps": None, "fallback_used": False, "fallback_reason": None, "model_version": None, "input_provenance": None, "reason": "no prior entry within tolerance"},
+            "reference_ml_refit_24h": {"status": "unavailable", "ampacity_amps": None, "fallback_used": False, "fallback_reason": None, "model_version": None, "input_provenance": None, "reason": "no persisted artifact"},
+        },
+        # The six-field legacy mirror, byte-for-byte copied from
+        # candidates["ml_wind_corrected"] -- the ONLY fields `_last_entry`/
+        # `check` actually read.
+        "method": "ml_wind_corrected", "ampacity_amps": 700.0,
+        "fallback_used": False, "fallback_reason": None,
+        "model_version": "v2", "input_provenance": None,
+    }
+    with open(os.path.join(predictions_dir, "AUSTIN_CORPUS_CHRISTI.jsonl"), "a") as fh:
+        fh.write(json.dumps(new_shape_entry) + "\n")
+    _write_entry(os.path.join(predictions_dir, "MIDLAND_EL_PASO.jsonl"), now, fallback_used=False)
+
+    assert healthcheck.check(max_age_minutes=1440) == 0
