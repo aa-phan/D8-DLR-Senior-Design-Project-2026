@@ -37,6 +37,33 @@ is **not** outcome inspection. This runbook note, and every check this phase ran
 collector works, stayed entirely inside that boundary — no FRESH-basis row's predicted-vs-truth
 outcome was inspected, or will be, before 2026-11-24T00:00:00 UTC.
 
+### Confirming the next SCHEDULED run (D-10)
+
+**What is confirmed today (2026-10-07, manual dispatch):** a real `gh workflow run "Shadow
+Collection"` dispatch ran the full pipeline end to end on the actual `ubuntu-latest` CI runner,
+completed successfully in ~1m2s (well under the 15-minute `timeout-minutes` budget — no headroom
+concern), and committed a new `schema_version: 2` entry for both corridors to
+`shadow-collection-data`, each carrying all five candidate names under `candidates`. This proves
+the pipeline runs correctly on the real CI runner with the expanded five-candidate shape.
+
+**What this does NOT prove, and remains an outstanding, dated follow-up:** a manual
+`workflow_dispatch` run is not the same trigger as the cron `schedule` trigger (`0 6,18 * * *`
+UTC) — D-10 explicitly requires confirming the *next scheduled* run, not just a manually-triggered
+one. The next cron boundary after this phase's own work is **2026-10-08T06:00:00 UTC**. After that
+boundary has actually passed, confirm it with:
+
+```bash
+git fetch origin shadow-collection-data
+git log -1 --format=%cI origin/shadow-collection-data
+gh run list --repo <owner>/<repo> --workflow="Shadow Collection" --limit 5 --json event,status,conclusion,createdAt
+```
+Look for an entry with `"event": "schedule"` and `createdAt` at or after `2026-10-08T06:00:00Z`,
+`"conclusion": "success"`, and confirm the newest commit on `shadow-collection-data` postdates it
+with a `schema_version: 2` entry (same per-field check as the manual-dispatch confirmation above).
+**Do not treat today's manual-dispatch confirmation as satisfying this check** — this phase's own
+SUMMARY records today's manual confirmation as done and names the scheduled-run confirmation as
+outstanding, to be checked after the boundary above passes, not fabricated as already-confirmed.
+
 ## Verified input contract (summary)
 
 | Variable | Source | Fallback |
