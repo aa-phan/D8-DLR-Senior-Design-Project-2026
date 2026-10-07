@@ -455,6 +455,26 @@ def fetch_single_run(lat: float, lon: float, run, hourly_vars=None, forecast_day
         OPEN_METEO_SINGLE_RUNS_BASE,
         params=params,
         timeout=config.FORECAST_EXPERIMENT_HTTP_TIMEOUT_S,
+        # `Connection: close` (2026-10-07): confirmed via an isolated-runner
+        # diagnostic that calling this endpoint twice within the SAME
+        # process -- once per corridor, back-to-back, in
+        # forecast_shadow_collect.py's own loop -- reproducibly times out
+        # on the second call, while the identical request from two
+        # separate processes (or two separate GitHub Actions runners)
+        # succeeds every time. The published Open-Meteo free-tier rate
+        # limits (600 calls/min) are far too generous to explain this, and
+        # no rate-limit header is exposed either way -- ruling out a
+        # documented quota as the cause. This points at per-process
+        # HTTP keep-alive/connection-pool reuse (each `requests.get` call
+        # already opens its own short-lived `Session`, but an underlying
+        # kept-alive TCP/TLS connection to the same host could still be
+        # reused across calls at a lower layer) as the most likely
+        # mechanism. Forcing the connection closed after this response is
+        # the direct, minimal mitigation for that specific hypothesis --
+        # if repeated-corridor runs still fail after this, that hypothesis
+        # itself needs revisiting, the same discipline applied to the
+        # now-abandoned rate-limit theory.
+        headers={"Connection": "close"},
     )
 
     if r.status_code == 400:

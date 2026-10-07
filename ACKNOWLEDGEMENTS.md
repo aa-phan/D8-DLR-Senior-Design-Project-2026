@@ -1639,3 +1639,38 @@ insufficient, not just "untested") rather than leaving a stale, superseded ratio
 **Verified, not merely trusted:** re-ran the full targeted shadow-module suite after reverting the
 diagnostic change (61/61 pass across the four most relevant test files) to confirm the revert
 itself introduced no regression.
+
+### Session: 2026-10-07 (continued), conducted by Aaron Phan — isolate and fix the real root cause: per-process connection reuse
+
+User proposed the decisive test: run each corridor as a fully independent job on its own separate
+GitHub Actions runner. Built a temporary diagnostic workflow (`shadow_collect_diagnostic.yml`,
+two parallel jobs, no shared process, no delay) to test it directly rather than guessing further.
+Result: BOTH corridors succeeded genuinely, every time, with zero failures -- conclusively ruling
+out GitHub's shared-runner-IP-pool rate limiting (isolated runners still draw from the same shared
+IP pool and would still collide if that were the real cause).
+
+Before that, checked Open-Meteo's actual published rate limits (their public pricing page): free
+tier is 600 calls/minute, 5,000/hour, 10,000/day -- so generous that two sequential requests can't
+plausibly trigger it; also confirmed no rate-limit header is exposed on a successful response.
+This had already weakened the rate-limit theory considerably before the isolated-runner test
+settled it outright.
+
+Conclusion: the failure is specific to issuing BOTH requests within the SAME Python process
+(`forecast_shadow_collect.py`'s own sequential loop) -- not the network, not either provider, not
+GitHub's infrastructure. Most likely mechanism: HTTP keep-alive/connection-pool reuse at a layer
+below `requests`'s own per-call `Session` (each `requests.get()` call already opens and closes its
+own session, but an underlying kept-alive TCP/TLS connection to the same host can still be reused
+across calls). Fixed by sending `Connection: close` on `fetch_single_run`'s request
+(`open_meteo_forecast_provider.py`) -- the one function call the shadow pipeline's forecast-fetch
+path actually uses, confirmed earlier this session. Framed explicitly, same discipline as every
+abandoned theory before it: a mitigation for this specific, now best-supported hypothesis, not an
+unconditionally confirmed fix -- if failures persist, this hypothesis needs revisiting too.
+
+Deleted the temporary diagnostic workflow once its question was answered, per its own stated
+purpose; it was never meant to be a lasting addition.
+
+**Verified, not merely trusted:** added a dedicated test (`test_fetch_single_run_forces_connection_close`)
+pinning that the header is actually sent, not just intended; updated the shared `_mock_get` test
+helper to accept and record `headers` (every other existing caller still works unmodified, since
+the parameter defaults to `None`). Ran the full relevant suite across six test files (216/216
+pass, 1 new) before committing.

@@ -71,11 +71,12 @@ class _FakeResponse:
 
 
 def _mock_get(monkeypatch, payload=None, json_exc=None, recorder=None, status_code=200):
-    def fake_get(url, params=None, timeout=None):
+    def fake_get(url, params=None, timeout=None, headers=None):
         if recorder is not None:
             recorder["calls"] = recorder.get("calls", 0) + 1
             recorder["params"] = params
             recorder["url"] = url
+            recorder["headers"] = headers
         return _FakeResponse(payload=payload, json_exc=json_exc, status_code=status_code)
 
     monkeypatch.setattr(open_meteo_forecast_provider.requests, "get", fake_get)
@@ -256,6 +257,26 @@ def test_fetch_single_run_does_not_send_start_or_end_date(monkeypatch):
     assert "start_date" not in recorder["params"]
     assert "end_date" not in recorder["params"]
     assert recorder["params"]["models"] == "ecmwf_ifs"
+
+
+def test_fetch_single_run_forces_connection_close(monkeypatch):
+    """
+    2026-10-07: an isolated-GitHub-Actions-runner diagnostic confirmed two
+    calls to this endpoint within the SAME process reproducibly time out
+    on the second call, while the identical request from two separate
+    processes succeeds every time -- ruling out a documented rate limit
+    (Open-Meteo's published free-tier limit, 600 calls/min, is far too
+    generous to explain two sequential requests) and pointing at
+    per-process HTTP connection reuse instead. `Connection: close` is the
+    direct, minimal mitigation for that hypothesis -- this test pins that
+    the header is actually sent, not just intended.
+    """
+    recorder = {}
+    _mock_get(monkeypatch, payload=_forecast_payload(n_hours=4), recorder=recorder)
+
+    open_meteo_forecast_provider.fetch_single_run(30.2711, -97.7437, "2025-07-01T00:00")
+
+    assert recorder["headers"] == {"Connection": "close"}
 
 
 def test_fetch_single_run_forecast_days_param_is_passed_when_given(monkeypatch):
