@@ -259,3 +259,127 @@ def test_run_once_logs_and_returns_the_same_prediction(monkeypatch, tmp_path):
         logged = json.loads(fh.readline())
     assert logged["ampacity_amps"] == prediction.ampacity_amps
     assert logged["method"] == prediction.method
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Plan 05-02: run_once_all_methods -- the five-candidate orchestration
+# entry point. Network-free throughout: the shared fetch itself is
+# monkeypatched to a synthetic success/failure, never a real network call.
+# ──────────────────────────────────────────────────────────────────────
+
+def _fake_shared_inputs_factory(cities, *, air_temp=30.0, wind_speed=5.0, wind_direction=90.0,
+                                  solar=500.0, anchor_wind_speed=4.0, anchor_wind_direction=95.0,
+                                  anchor_air_temp=29.0):
+    def _fake_shared_inputs(corridor_arg, *, valid_time, decision_time, horizon_minutes):
+        frame = pd.DataFrame([{
+            "fcst_air_temp": air_temp, "fcst_wind_speed": wind_speed,
+            "fcst_wind_direction": wind_direction, "fcst_solar_radiation": solar,
+        }])
+        frame.attrs["geometry"] = None
+        anchor = pd.Series({
+            "anchor_wind_speed": anchor_wind_speed, "anchor_wind_direction": anchor_wind_direction,
+            "anchor_air_temp": anchor_air_temp, "anchor_observation_time": decision_time,
+            "anchor_source": "tceq", "anchor_station": "TEST",
+        })
+        return {
+            city: shadow.SharedCityFetchResult(city, frame.copy(), None, anchor.copy(), None)
+            for city in cities
+        }
+    return _fake_shared_inputs
+
+
+def test_run_once_all_methods_attempts_all_five_and_isolates_one_sabotaged_candidate(monkeypatch, tmp_path):
+    """D-07: a REAL code-level exception inside one candidate's own
+    computation must be caught by that candidate's own try/except and
+    recorded as status='failed'; the other four candidates still compute
+    and log for the same cycle."""
+    monkeypatch.setattr(shadow, "SHADOW_PREDICTIONS_DIR", str(tmp_path))
+    corridor = "AUSTIN_CORPUS_CHRISTI"
+    cities = config.CORRIDOR_ENDPOINTS[corridor]
+
+    monkeypatch.setattr(shadow, "fetch_shared_corridor_inputs", _fake_shared_inputs_factory(cities))
+
+    original = shadow.Persistence24hShadowMethod.compute
+
+    def _raise(self, corridor_arg, decision_time):
+        raise RuntimeError("deliberate sabotage for the isolation test")
+
+    monkeypatch.setattr(shadow.Persistence24hShadowMethod, "compute", _raise)
+    try:
+        results = demo.run_once_all_methods(corridor)
+    finally:
+        shadow.Persistence24hShadowMethod.compute = original
+
+    assert set(results) == set(shadow.CANDIDATE_METHOD_NAMES)
+    assert results["persistence_24h"].status == "failed"
+    assert "deliberate sabotage" in (results["persistence_24h"].reason or "")
+    for name in shadow.CANDIDATE_METHOD_NAMES:
+        if name == "persistence_24h":
+            continue
+        assert results[name].status != "failed", (name, results[name])
+
+    # The same cycle's log line must still carry all five candidates --
+    # one candidate's failure must not have aborted the write.
+    import json
+    path = __import__("os").path.join(str(tmp_path), f"{corridor}.jsonl")
+    with open(path) as fh:
+        record = json.loads(fh.readline())
+    assert record["schema_version"] == 2
+    assert set(record["candidates"]) == set(shadow.CANDIDATE_METHOD_NAMES)
+    assert record["candidates"]["persistence_24h"]["status"] == "failed"
+
+
+def test_run_once_all_methods_reports_reference_refit_as_unavailable_on_a_clean_run(monkeypatch, tmp_path):
+    """On a clean run (no sabotage, no persisted reference artifact),
+    `reference_ml_refit_24h` must read unavailable, and the three
+    per-city-reduced candidates must reach status='ok' (real persisted
+    wind/cooling models already exist in this repo for this corridor)."""
+    monkeypatch.setattr(shadow, "SHADOW_PREDICTIONS_DIR", str(tmp_path))
+    corridor = "AUSTIN_CORPUS_CHRISTI"
+    cities = config.CORRIDOR_ENDPOINTS[corridor]
+    monkeypatch.setattr(shadow, "fetch_shared_corridor_inputs", _fake_shared_inputs_factory(cities))
+
+    results = demo.run_once_all_methods(corridor)
+
+    assert results["reference_ml_refit_24h"].status == "unavailable"
+    assert "reference_ml_refit_24h" in (results["reference_ml_refit_24h"].reason or "")
+    for name in shadow.CANDIDATE_METHOD_NAMES:
+        assert results[name].status != "failed", (name, results[name])
+
+
+def test_run_once_all_methods_marks_ml_wind_corrected_unavailable_when_one_citys_anchor_missing(monkeypatch, tmp_path):
+    """D-04: a candidate whose required inputs are missing for this cycle
+    (here, one city's anchor) is recorded unavailable, independent of
+    every other candidate's own availability -- raw_forecast (needs no
+    anchor) must still read ok."""
+    monkeypatch.setattr(shadow, "SHADOW_PREDICTIONS_DIR", str(tmp_path))
+    corridor = "AUSTIN_CORPUS_CHRISTI"
+    cities = config.CORRIDOR_ENDPOINTS[corridor]
+
+    frame = pd.DataFrame([{
+        "fcst_air_temp": 30.0, "fcst_wind_speed": 5.0, "fcst_wind_direction": 90.0,
+        "fcst_solar_radiation": 500.0,
+    }])
+    frame.attrs["geometry"] = None
+    anchor = pd.Series({
+        "anchor_wind_speed": 4.0, "anchor_wind_direction": 95.0, "anchor_air_temp": 29.0,
+        "anchor_observation_time": pd.Timestamp.now(tz="UTC"), "anchor_source": "tceq",
+        "anchor_station": "TEST",
+    })
+
+    def _fake_shared_inputs(corridor_arg, *, valid_time, decision_time, horizon_minutes):
+        results = {}
+        for i, city in enumerate(cities):
+            if i == 0:
+                results[city] = shadow.SharedCityFetchResult(city, frame.copy(), None, None, "simulated anchor gap")
+            else:
+                results[city] = shadow.SharedCityFetchResult(city, frame.copy(), None, anchor.copy(), None)
+        return results
+
+    monkeypatch.setattr(shadow, "fetch_shared_corridor_inputs", _fake_shared_inputs)
+
+    results = demo.run_once_all_methods(corridor)
+
+    assert results["ml_wind_corrected"].status == "unavailable"
+    assert results["ml_cooling_corrected"].status == "unavailable"
+    assert results["raw_forecast"].status == "ok"

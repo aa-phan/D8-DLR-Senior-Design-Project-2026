@@ -1041,3 +1041,295 @@ def test_raw_forecast_shadow_method_does_not_swap_wind_speed_and_direction():
 
     assert amps == pytest.approx(correct_amps)
     assert amps != pytest.approx(swapped_amps)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Plan 05-02: shared-input fetch, corridor-level reduction for all three
+# reused candidates, a real persistence_24h, an honest
+# reference_ml_refit_24h stub, and the new nested schema.
+# ──────────────────────────────────────────────────────────────────────
+
+def _fake_fetch_single_run_counting(counter, **overrides):
+    base = {"air_temp": 22.0, "wind_speed": 3.0, "wind_direction": 200.0, "solar_radiation": 400.0}
+    base.update(overrides)
+
+    def _fetch(lat, lon, run, forecast_days=None, **kwargs):
+        counter["forecast"] += 1
+        return pd.DataFrame([{
+            "datetime_utc": run + pd.Timedelta(hours=6),
+            "air_temp": base["air_temp"], "wind_speed": base["wind_speed"],
+            "wind_direction": base["wind_direction"], "solar_radiation": base["solar_radiation"],
+            "relative_humidity": 55.0,
+        }])
+    return _fetch
+
+
+def test_fetch_shared_corridor_inputs_makes_at_most_two_forecast_and_two_anchor_calls(monkeypatch):
+    """D-02/T-05-02-05: exactly one shared fetch per city per cycle -- never
+    a second network call for a second candidate's own benefit."""
+    import open_meteo_forecast_provider
+
+    counter = {"forecast": 0, "anchor": 0}
+    monkeypatch.setattr(
+        open_meteo_forecast_provider, "fetch_single_run", _fake_fetch_single_run_counting(counter),
+    )
+
+    def _fake_anchor(location, start, end, provider="tceq", **kw):
+        counter["anchor"] += 1
+        cams_id = location[0]
+        end_ts = pd.Timestamp(end)
+        idx = pd.MultiIndex.from_tuples([(cams_id, end_ts)], names=["stid", "datetime_utc"])
+        return pd.DataFrame(
+            {"air_temp": [27.5], "wind_speed": [5.0], "wind_direction": [135.0],
+             "wind_source": ["tceq"]}, index=idx,
+        )
+
+    monkeypatch.setattr(weather_provider, "fetch_weather", _fake_anchor)
+
+    valid_time = pd.Timestamp("2026-10-07T00:00:00Z")
+    decision_time = pd.Timestamp("2026-10-06T12:00:00Z")
+    result = shadow.fetch_shared_corridor_inputs(
+        _CORRIDOR, valid_time=valid_time, decision_time=decision_time, horizon_minutes=1440,
+    )
+    city_a, city_b = config.CORRIDOR_ENDPOINTS[_CORRIDOR]
+    assert set(result) == {city_a, city_b}
+    assert counter["forecast"] <= 2
+    assert counter["anchor"] <= 2
+    for city, outcome in result.items():
+        assert outcome.forecast_frame is not None and outcome.forecast_error is None
+        assert outcome.anchor is not None and outcome.anchor_error is None
+
+
+def test_fetch_shared_corridor_inputs_isolates_one_citys_anchor_failure(monkeypatch):
+    """One city's anchor failure must not block that SAME city's own
+    forecast fetch, nor the other city's forecast/anchor fetches (D-02)."""
+    import open_meteo_forecast_provider
+
+    counter = {"forecast": 0}
+    monkeypatch.setattr(
+        open_meteo_forecast_provider, "fetch_single_run", _fake_fetch_single_run_counting(counter),
+    )
+    city_a, city_b = config.CORRIDOR_ENDPOINTS[_CORRIDOR]
+    cams_b = config.TCEQ_STATIONS[city_b]
+    synoptic_b = config.SYNOPTIC_FALLBACK_STATIONS[city_b]
+
+    def _flaky(location, start, end, provider="tceq", **kw):
+        if location[0] in (cams_b, synoptic_b):
+            raise ValueError(f"simulated anchor failure for {city_b!r}")
+        cams_id = location[0]
+        end_ts = pd.Timestamp(end)
+        idx = pd.MultiIndex.from_tuples([(cams_id, end_ts)], names=["stid", "datetime_utc"])
+        return pd.DataFrame(
+            {"air_temp": [27.5], "wind_speed": [5.0], "wind_direction": [135.0],
+             "wind_source": ["tceq"]}, index=idx,
+        )
+
+    monkeypatch.setattr(weather_provider, "fetch_weather", _flaky)
+
+    valid_time = pd.Timestamp("2026-10-07T00:00:00Z")
+    decision_time = pd.Timestamp("2026-10-06T12:00:00Z")
+    result = shadow.fetch_shared_corridor_inputs(
+        _CORRIDOR, valid_time=valid_time, decision_time=decision_time, horizon_minutes=1440,
+    )
+    # city_a's forecast AND anchor both succeed.
+    assert result[city_a].forecast_frame is not None
+    assert result[city_a].anchor is not None
+    # city_b's forecast still succeeds even though its anchor fails.
+    assert result[city_b].forecast_frame is not None
+    assert result[city_b].anchor is None
+    assert result[city_b].anchor_error is not None
+
+
+def test_fetch_live_anchor_observation_returns_anchor_air_temp(monkeypatch):
+    """Plan 05-02: the returned Series must carry `anchor_air_temp`
+    alongside the five pre-existing keys, read from the same fetched row,
+    no new network call."""
+    monkeypatch.setattr(weather_provider, "fetch_weather", _fake_tceq_observation(config.TCEQ_STATIONS["AUSTIN"]))
+    anchor = shadow.fetch_live_anchor_observation("AUSTIN", pd.Timestamp("2026-10-06T12:00:00Z"))
+    assert anchor["anchor_air_temp"] == pytest.approx(27.5)
+    assert {"anchor_wind_speed", "anchor_wind_direction", "anchor_air_temp",
+            "anchor_observation_time", "anchor_source", "anchor_station"} <= set(anchor.index)
+
+
+def test_fetch_live_anchor_observation_passes_through_nan_when_air_temp_missing(monkeypatch):
+    """A null/missing air_temp on an otherwise-usable row must pass
+    through as NaN, not raise a second temperature-specific validation."""
+    cams_id = config.TCEQ_STATIONS["AUSTIN"]
+
+    def _fetch(location, start, end, provider="tceq", **kw):
+        end_ts = pd.Timestamp(end)
+        idx = pd.MultiIndex.from_tuples([(cams_id, end_ts)], names=["stid", "datetime_utc"])
+        return pd.DataFrame(
+            {"wind_speed": [5.0], "wind_direction": [135.0], "wind_source": ["tceq"]}, index=idx,
+        )
+
+    monkeypatch.setattr(weather_provider, "fetch_weather", _fetch)
+    anchor = shadow.fetch_live_anchor_observation("AUSTIN", pd.Timestamp("2026-10-06T12:00:00Z"))
+    assert np.isnan(anchor["anchor_air_temp"])
+
+
+def test_corridor_reduce_per_city_reduces_two_cities_to_the_minimum():
+    geometry = corridor_discretization.corridor_geometry(_CORRIDOR)
+    city_a, city_b = config.CORRIDOR_ENDPOINTS[_CORRIDOR]
+
+    class _FixedPerCityMethod:
+        name = "fixed"
+
+        def predict(self, frame, geometry):
+            return frame["fixed_amps"].iloc[0]
+
+    city_frames = {
+        city_a: pd.DataFrame([{"fixed_amps": 1200.0}]),
+        city_b: pd.DataFrame([{"fixed_amps": 900.0}]),
+    }
+    dlr_amps, per_city, bottleneck_city = shadow._corridor_reduce_per_city(
+        _FixedPerCityMethod(), city_frames, geometry,
+    )
+    assert dlr_amps == pytest.approx(900.0)
+    assert per_city == {city_a: 1200.0, city_b: 900.0}
+    assert bottleneck_city == city_b
+
+
+@pytest.mark.parametrize("city_frames", [{"A": None}, {"A": None, "B": None, "C": None}])
+def test_corridor_reduce_per_city_rejects_wrong_city_count(city_frames):
+    with pytest.raises(ValueError, match=str(len(city_frames))):
+        shadow._corridor_reduce_per_city(None, city_frames, None)
+
+
+def _write_jsonl_entry(path, entry):
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write(__import__("json").dumps(entry) + "\n")
+
+
+def test_persistence_24h_cold_start_returns_unavailable_never_raises(tmp_path, monkeypatch):
+    monkeypatch.setattr(shadow, "SHADOW_PREDICTIONS_DIR", str(tmp_path))
+    result = shadow.Persistence24hShadowMethod().compute(_CORRIDOR, pd.Timestamp.now(tz="UTC"))
+    assert result.status == "unavailable"
+    assert "cold start" in (result.reason or "").lower() or "gap" in (result.reason or "").lower()
+    assert result.ampacity_amps is None
+
+
+def test_persistence_24h_propagates_unavailable_from_matched_entrys_raw_forecast(tmp_path, monkeypatch):
+    monkeypatch.setattr(shadow, "SHADOW_PREDICTIONS_DIR", str(tmp_path))
+    path = str(tmp_path / f"{_CORRIDOR}.jsonl")
+    now = pd.Timestamp.now(tz="UTC")
+    _write_jsonl_entry(path, {
+        "schema_version": 2, "valid_time": now.isoformat(),
+        "candidates": {"raw_forecast": {
+            "status": "unavailable", "ampacity_amps": None, "fallback_used": False,
+            "fallback_reason": None, "model_version": None, "input_provenance": None,
+            "reason": "no usable forecast this cycle",
+        }},
+    })
+    result = shadow.Persistence24hShadowMethod().compute(_CORRIDOR, now)
+    assert result.status == "unavailable"
+    assert "raw_forecast" in result.reason
+    assert "unavailable" in result.reason
+
+
+def test_persistence_24h_skips_a_pre_cutover_flat_shape_line_without_raising(tmp_path, monkeypatch):
+    """A pre-cutover flat-shape row (no schema_version, or schema_version
+    1) is a normal, expected, skippable input -- never a corruption."""
+    monkeypatch.setattr(shadow, "SHADOW_PREDICTIONS_DIR", str(tmp_path))
+    path = str(tmp_path / f"{_CORRIDOR}.jsonl")
+    now = pd.Timestamp.now(tz="UTC")
+    _write_jsonl_entry(path, {
+        "method": "ml_wind_corrected", "ampacity_amps": 1234.0, "fallback_used": False,
+        "fallback_reason": None, "model_version": None, "input_provenance": None,
+        "logged_at": now.isoformat(), "valid_time": now.isoformat(),
+    })
+    result = shadow.Persistence24hShadowMethod().compute(_CORRIDOR, now)
+    # The flat-shape row is skipped entirely -- no match exists, so this is
+    # the honest cold-start case, never a crash and never a false match on
+    # the skipped line's own 1234.0 value.
+    assert result.status == "unavailable"
+    assert result.ampacity_amps is None
+
+
+def test_reference_refit_24h_stub_reports_unavailable_naming_missing_path(tmp_path, monkeypatch):
+    monkeypatch.setattr(shadow, "SHADOW_MODEL_DIR", str(tmp_path))
+
+    def _should_not_be_called(*a, **k):
+        raise AssertionError("no fetch/feature-build/training function may be called by this stub")
+
+    monkeypatch.setattr(weather_provider, "fetch_weather", _should_not_be_called)
+    result = shadow.ReferenceRefit24hShadowMethod().compute(_CORRIDOR)
+    assert result.status == "unavailable"
+    assert "reference_ml_refit_24h" in result.reason
+    assert _CORRIDOR in result.reason
+    assert result.ampacity_amps is None
+
+
+def test_log_cycle_predictions_writes_all_five_candidates_with_exact_schema(tmp_path, monkeypatch):
+    monkeypatch.setattr(shadow, "SHADOW_PREDICTIONS_DIR", str(tmp_path))
+    ts = shadow.ShadowTimestamps(
+        initialization_time=pd.Timestamp("2026-10-06T00:00:00Z"),
+        availability_time=pd.Timestamp("2026-10-06T06:00:00Z"),
+        decision_time=pd.Timestamp("2026-10-06T12:00:00Z"),
+        valid_time=pd.Timestamp("2026-10-07T00:00:00Z"),
+        horizon_minutes=1440,
+    )
+    candidates = {
+        name: shadow.ShadowPrediction(
+            corridor=_CORRIDOR, method=name, ampacity_amps=1000.0 + i, timestamps=ts,
+            fallback_used=False, model_version=f"v-{name}", input_provenance={"k": name},
+            status="ok", reason=None,
+        )
+        for i, name in enumerate(shadow.CANDIDATE_METHOD_NAMES)
+    }
+    path = shadow.log_cycle_predictions(_CORRIDOR, candidates, ts)
+
+    import json
+    with open(path) as fh:
+        record = json.loads(fh.readline())
+
+    assert record["schema_version"] == 2
+    assert set(record["candidates"]) == set(shadow.CANDIDATE_METHOD_NAMES)
+    for name, cand in record["candidates"].items():
+        assert set(cand) == {"status", "ampacity_amps", "fallback_used", "fallback_reason",
+                              "model_version", "input_provenance", "reason"}
+    mirror = record["candidates"]["ml_wind_corrected"]
+    assert record["method"] == "ml_wind_corrected"
+    assert record["ampacity_amps"] == mirror["ampacity_amps"]
+    assert record["fallback_used"] == mirror["fallback_used"]
+    assert record["fallback_reason"] == mirror["fallback_reason"]
+    assert record["model_version"] == mirror["model_version"]
+    assert record["input_provenance"] == mirror["input_provenance"]
+
+
+def test_log_cycle_predictions_mirrors_ml_wind_corrected_even_when_unavailable(tmp_path, monkeypatch):
+    """The six-field top-level mirror must be an exact copy of
+    `ml_wind_corrected`'s own fields EVEN WHEN that candidate's own status
+    is not 'ok' -- an honest null, never a different candidate's value
+    silently promoted into that slot."""
+    monkeypatch.setattr(shadow, "SHADOW_PREDICTIONS_DIR", str(tmp_path))
+    ts = shadow.ShadowTimestamps(
+        initialization_time=pd.Timestamp("2026-10-06T00:00:00Z"),
+        availability_time=pd.Timestamp("2026-10-06T06:00:00Z"),
+        decision_time=pd.Timestamp("2026-10-06T12:00:00Z"),
+        valid_time=pd.Timestamp("2026-10-07T00:00:00Z"),
+        horizon_minutes=1440,
+    )
+    candidates = {
+        name: shadow.ShadowPrediction(
+            corridor=_CORRIDOR, method=name, ampacity_amps=777.0, timestamps=ts,
+            fallback_used=False, status="ok", reason=None,
+        )
+        for name in shadow.CANDIDATE_METHOD_NAMES
+    }
+    candidates["ml_wind_corrected"] = shadow.ShadowPrediction(
+        corridor=_CORRIDOR, method="ml_wind_corrected", ampacity_amps=None, timestamps=ts,
+        fallback_used=False, status="unavailable", reason="no anchor this cycle",
+    )
+    path = shadow.log_cycle_predictions(_CORRIDOR, candidates, ts)
+
+    import json
+    with open(path) as fh:
+        record = json.loads(fh.readline())
+
+    assert record["method"] == "ml_wind_corrected"
+    assert record["ampacity_amps"] is None
+    assert record["candidates"]["ml_wind_corrected"]["status"] == "unavailable"
+    # A different candidate's genuine 777.0 value must NEVER leak into the
+    # mirror just because ml_wind_corrected itself had nothing to report.
+    assert record["ampacity_amps"] != 777.0

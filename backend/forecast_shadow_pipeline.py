@@ -142,6 +142,7 @@ def _resolve_publication_lag_hours() -> float:
 
 def fetch_live_forecast_for_valid_time(
     corridor: str, valid_time, horizon_minutes: int, *, lat: float, lon: float,
+    decision_time=None,
 ) -> tuple[pd.Series, ShadowTimestamps]:
     """
     Retrieve ONE live forecast row whose model run genuinely covers
@@ -158,6 +159,15 @@ def fetch_live_forecast_for_valid_time(
     horizon_minutes rather than always reusing "the latest run" or a
     fixed lookback regardless of how far out valid_time is.
 
+    `decision_time` (Plan 05-02, D-02): keyword-only, defaults to `None`,
+    in which case `decision_time` is computed internally exactly as
+    before (`pd.Timestamp.now(tz="UTC")`) -- byte-identical behavior for
+    every existing caller. When provided, that exact value is used
+    instead of calling `pd.Timestamp.now()`, so one shared `decision_time`
+    can be pinned across both endpoint cities' fetches in the same cycle
+    (`fetch_shared_corridor_inputs`) rather than each city's fetch
+    independently computing its own microseconds-apart "now."
+
     Raises:
         StaleOrMissingDataError: on any network failure, `SingleRunUnavailable`,
             an empty/null response row, or a decision_time that falls
@@ -168,7 +178,7 @@ def fetch_live_forecast_for_valid_time(
     horizon = pd.Timedelta(minutes=horizon_minutes)
     initialization_time = valid_ts - horizon
     availability_time = initialization_time + pd.Timedelta(hours=_resolve_publication_lag_hours())
-    decision_time = pd.Timestamp.now(tz="UTC")
+    decision_time = pd.Timestamp.now(tz="UTC") if decision_time is None else decision_time
 
     if decision_time < availability_time:
         raise StaleOrMissingDataError(
@@ -414,9 +424,19 @@ def fetch_live_anchor_observation(
         )
         actual_source = provenance_source
 
+    # Plan 05-02 (D-01/D-06): `ml_cooling_corrected`'s feature build needs
+    # `anchor_air_temp` alongside the wind fields -- read from the SAME
+    # already-fetched `latest` row, no new network call. A null/missing
+    # `air_temp` on an otherwise-usable (valid wind) row is passed through
+    # as NaN rather than validated here a second time; the downstream
+    # cooling-correction feature build already handles a null feature.
+    raw_air_temp = latest.get("air_temp")
+    anchor_air_temp = float(raw_air_temp) if pd.notna(raw_air_temp) else float("nan")
+
     return pd.Series({
         "anchor_wind_speed": float(latest["wind_speed"]),
         "anchor_wind_direction": float(latest["wind_direction"]),
+        "anchor_air_temp": anchor_air_temp,
         "anchor_observation_time": latest["datetime_utc"],
         "anchor_source": actual_source if pd.notna(actual_source) else "unknown",
         "anchor_station": actual_station,
@@ -548,17 +568,191 @@ def validate_and_prepare_shadow_row(row: pd.Series, *, corridor: str) -> pd.Data
 
 
 @dataclass(frozen=True)
+class SharedCityFetchResult:
+    """
+    Plan 05-02 (D-02): one endpoint city's own forecast-fetch outcome and
+    anchor-fetch outcome, captured INDEPENDENTLY -- a failed anchor fetch
+    for this city does not prevent its forecast fetch from being recorded
+    (and vice versa), and this city's own pair of outcomes never affects
+    the other city's. `forecast_frame`/`anchor` are `None` exactly when
+    the corresponding `*_error` is set (a successful fetch always pairs
+    with a `None` error, a failed one always pairs with a `None` result).
+    """
+
+    city: str
+    forecast_frame: Optional[pd.DataFrame]
+    forecast_error: Optional[str]
+    anchor: Optional[pd.Series]
+    anchor_error: Optional[str]
+
+
+def fetch_shared_corridor_inputs(
+    corridor: str, *, valid_time, decision_time, horizon_minutes: int,
+) -> dict:
+    """
+    Plan 05-02 (D-02): fetch each endpoint city's live forecast row and
+    live anchor observation EXACTLY ONCE per cycle -- at most two forecast
+    fetches and two anchor fetches total for a two-city corridor -- so
+    every candidate computed from this cycle's result shares the exact
+    same forecast row, the exact same anchor observation, and the exact
+    same `decision_time`, rather than each candidate (or each city) make
+    its own independent network call.
+
+    Each city's forecast attempt and anchor attempt are isolated in their
+    own try/except; a failure in one never prevents the other three
+    attempts (this city's other input, or either of the other city's
+    inputs) from being made. A candidate that discovers one of its
+    required inputs is `None` on the returned result reports itself
+    `status="unavailable"` (D-04) -- this function itself never raises
+    for a single city's fetch failure.
+
+    Returns a `{city: SharedCityFetchResult}` mapping, one entry per city
+    in `config.CORRIDOR_ENDPOINTS[corridor]`.
+    """
+    results: dict = {}
+    for city in config.CORRIDOR_ENDPOINTS[corridor]:
+        lat, lon = config.CITY_COORDINATES[city]
+
+        forecast_frame: Optional[pd.DataFrame] = None
+        forecast_error: Optional[str] = None
+        try:
+            row, _ = fetch_live_forecast_for_valid_time(
+                corridor, valid_time, horizon_minutes=horizon_minutes,
+                lat=lat, lon=lon, decision_time=decision_time,
+            )
+            forecast_frame = validate_and_prepare_shadow_row(row, corridor=corridor)
+        except (StaleOrMissingDataError, ValueError, KeyError) as exc:
+            forecast_error = str(exc)
+
+        anchor: Optional[pd.Series] = None
+        anchor_error: Optional[str] = None
+        try:
+            anchor = fetch_live_anchor_observation(city, decision_time)
+        except StaleOrMissingDataError as exc:
+            anchor_error = str(exc)
+
+        results[city] = SharedCityFetchResult(
+            city=city, forecast_frame=forecast_frame, forecast_error=forecast_error,
+            anchor=anchor, anchor_error=anchor_error,
+        )
+    return results
+
+
+def _enrich_city_frame_for_correction(
+    forecast_frame: pd.DataFrame, *, anchor: pd.Series, endpoint_city: str, valid_time, geometry,
+) -> pd.DataFrame:
+    """
+    Plan 05-02 (D-01/D-06): a PURE, no-fetch enrichment -- given an
+    already-validated forecast frame (from `fetch_shared_corridor_
+    inputs`'s own result, never re-fetched here) and an already-fetched
+    anchor `Series`, returns a frame carrying every column
+    `forecast_correction_models._wind_feature_frame` AND
+    `_cooling_feature_frame` need: `anchor_wind_speed`/`anchor_wind_
+    direction`/`anchor_air_temp`, `datetime_utc=valid_time`,
+    `endpoint_city`, and the two perpendicular-wind columns
+    (`fcst_perp_wind_ms`/`anchor_perp_wind_ms`) via the SAME
+    `thermal_model.perpendicular_wind` function `forecast_experiment.
+    _add_correction_columns` uses -- never a second wind-projection
+    implementation.
+
+    Deliberately duplicates `attach_wind_correction_inputs`'s field-
+    setting shape rather than calling that function, which fetches its
+    own anchor internally -- this function must never fetch, so the
+    orchestrator's one shared fetch per cycle (D-02) is never silently
+    doubled.
+    """
+    valid_ts = pd.Timestamp(valid_time)
+    if valid_ts.tzinfo is None:
+        valid_ts = valid_ts.tz_localize("UTC")
+
+    anchor_wind_speed = float(anchor["anchor_wind_speed"])
+    anchor_wind_direction = float(anchor["anchor_wind_direction"])
+
+    enriched = forecast_frame.copy()
+    enriched["anchor_wind_speed"] = anchor_wind_speed
+    enriched["anchor_wind_direction"] = anchor_wind_direction
+    enriched["anchor_air_temp"] = float(anchor["anchor_air_temp"])
+    enriched["datetime_utc"] = valid_ts
+    enriched["endpoint_city"] = endpoint_city
+
+    enriched["fcst_perp_wind_ms"] = thermal_model.perpendicular_wind(
+        enriched["fcst_wind_speed"].to_numpy(dtype=float),
+        enriched["fcst_wind_direction"].to_numpy(dtype=float),
+        geometry.bearing_deg,
+    )
+    anchor_perp = thermal_model.perpendicular_wind(
+        anchor_wind_speed, anchor_wind_direction, geometry.bearing_deg,
+    )
+    enriched["anchor_perp_wind_ms"] = float(np.asarray(anchor_perp))
+
+    enriched.attrs["geometry"] = forecast_frame.attrs.get("geometry", geometry)
+    anchor_observation_time = anchor["anchor_observation_time"]
+    enriched.attrs["anchor_observation_time"] = (
+        anchor_observation_time.isoformat()
+        if hasattr(anchor_observation_time, "isoformat")
+        else anchor_observation_time
+    )
+    enriched.attrs["anchor_source"] = anchor["anchor_source"]
+    enriched.attrs["anchor_station"] = anchor["anchor_station"]
+    return enriched
+
+
+def _corridor_reduce_per_city(method: "CorrectionMethod", city_frames: dict, geometry) -> tuple:
+    """
+    Plan 05-02 (D-01/D-06): generalizes `CorridorWindCorrectionMethod`'s
+    own two-stage per-city-then-weakest-link reduction to ANY
+    `CorrectionMethod`, driven by the orchestrator's already-fetched,
+    already-enriched per-city frames rather than a self-fetching method.
+
+    Calls `method.predict(frame, geometry)` once per city in
+    `sorted(city_frames)`'s own order (a deterministic city-A/city-B
+    assignment, matching `forecast_training.corridor_weakest_link`'s own
+    tie-break-to-lower-index convention), reduces the two resulting
+    ampacities via that same function, and returns
+    `(dlr_amps, per_city_ampacity_amps, bottleneck_city)`.
+
+    Raises:
+        ValueError: naming the found city count, if `city_frames` does
+            not carry exactly two entries.
+    """
+    if len(city_frames) != 2:
+        raise ValueError(
+            f"_corridor_reduce_per_city: expected exactly two cities, found "
+            f"{len(city_frames)} ({sorted(city_frames)!r})"
+        )
+
+    cities = sorted(city_frames)
+    per_city_amps: dict = {}
+    for city in cities:
+        per_city_amps[city] = float(method.predict(city_frames[city], geometry))
+
+    amps_a = np.array([per_city_amps[cities[0]]])
+    amps_b = np.array([per_city_amps[cities[1]]])
+    dlr_amps, bottleneck_index, _ = forecast_training.corridor_weakest_link(amps_a, amps_b, {}, {})
+    bottleneck_city = cities[int(bottleneck_index[0])]
+    return float(dlr_amps[0]), per_city_amps, bottleneck_city
+
+
+@dataclass(frozen=True)
 class ShadowPrediction:
     """One method's output: the corrected ampacity, the method name, and whether a fallback was used."""
 
     corridor: str
     method: str
-    ampacity_amps: float
-    timestamps: ShadowTimestamps
+    ampacity_amps: Optional[float]
+    timestamps: Optional[ShadowTimestamps]
     fallback_used: bool
     fallback_reason: Optional[str] = None
     model_version: Optional[str] = None
     input_provenance: Optional[dict] = None
+    # Plan 05-02 (D-01/D-04/D-07): per-candidate outcome, distinct from
+    # `fallback_used`/`fallback_reason` (a method-internal fallback that
+    # still produced a genuine value). `status="ok"` by default so every
+    # existing call site (this file, forecast_shadow_demo.py, every test)
+    # keeps constructing a ShadowPrediction unmodified. `reason` names WHY
+    # no value exists this cycle when status is "unavailable" or "failed".
+    status: str = "ok"
+    reason: Optional[str] = None
 
 
 class CorrectionMethod(Protocol):
@@ -819,6 +1013,154 @@ def model_version_for(corridor: str, method_name: str) -> str:
     return f"{method_name}_{corridor}@{mtime.isoformat()}"
 
 
+# Plan 05-02 (D-05, Pitfall 3): how close a prior logged entry's own
+# `valid_time` must land to this cycle's `decision_time` to count as "the"
+# 24h-ago anchor. Generous for the twice-daily (not exactly-24h-apart)
+# collection cadence -- named here as a module constant, not a magic
+# number inline, so the tolerance is visible and changeable in one place.
+_PERSISTENCE_VALID_TIME_TOLERANCE = pd.Timedelta(minutes=90)
+
+
+class Persistence24hShadowMethod:
+    """
+    Plan 05-02 (D-05): the live, decision-time-available form of
+    `persistence_24h` -- reads THIS collector's own prior logged entry
+    for the same corridor, never a reanalysis/archive backfill. Unlike
+    `forecast_shadow_healthcheck._last_entry` (which correctly wants the
+    positionally-LAST line for its own different purpose, freshness),
+    this method must find the entry whose own `valid_time` is closest to
+    `this_cycle_decision_time` -- at the twice-daily cadence, the
+    immediately-preceding entry's `valid_time` is only ~12h old, not 24h
+    (05-RESEARCH.md Pitfall 3).
+
+    Reads the entry's own `candidates.raw_forecast` sub-object (not
+    `ml_wind_corrected`'s) -- see 05-02-PLAN.md's objective for why
+    `raw_forecast` is the least-processed, least-correction-model-
+    derivative of the five candidates and therefore the right baseline
+    anchor for a model-independent persistence arm.
+    """
+
+    name = "persistence_24h"
+
+    def compute(self, corridor: str, this_cycle_decision_time) -> "ShadowPrediction":
+        decision_ts = pd.Timestamp(this_cycle_decision_time)
+        if decision_ts.tzinfo is None:
+            decision_ts = decision_ts.tz_localize("UTC")
+
+        path = os.path.join(SHADOW_PREDICTIONS_DIR, f"{corridor}.jsonl")
+        best_entry: Optional[dict] = None
+        best_delta: Optional[pd.Timedelta] = None
+
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                    except json.JSONDecodeError:
+                        # A malformed line is skipped, never raised on --
+                        # this reader must never crash the collector.
+                        continue
+                    # A pre-cutover flat-shape row (no schema_version, or
+                    # schema_version 1) is a normal, expected, skippable
+                    # input here -- not a corruption (05-01-SUMMARY.md's
+                    # own no-migration strategy).
+                    if entry.get("schema_version", 1) < 2:
+                        continue
+                    raw_valid_time = entry.get("valid_time")
+                    if raw_valid_time is None:
+                        continue
+                    try:
+                        entry_valid_time = pd.Timestamp(raw_valid_time)
+                    except (ValueError, TypeError):
+                        continue
+                    if entry_valid_time.tzinfo is None:
+                        entry_valid_time = entry_valid_time.tz_localize("UTC")
+                    delta = abs(entry_valid_time - decision_ts)
+                    if delta <= _PERSISTENCE_VALID_TIME_TOLERANCE and (
+                        best_delta is None or delta < best_delta
+                    ):
+                        best_entry = entry
+                        best_delta = delta
+
+        if best_entry is None:
+            return ShadowPrediction(
+                corridor=corridor, method=self.name, ampacity_amps=None,
+                timestamps=None, fallback_used=False, status="unavailable",
+                reason=(
+                    "no prior entry within tolerance of decision_time "
+                    f"{decision_ts.isoformat()} (cold start, or a gap in "
+                    "this corridor's collection history)"
+                ),
+            )
+
+        raw_candidate = (best_entry.get("candidates") or {}).get("raw_forecast") or {}
+        raw_status = raw_candidate.get("status")
+        if raw_status != "ok":
+            return ShadowPrediction(
+                corridor=corridor, method=self.name, ampacity_amps=None,
+                timestamps=None, fallback_used=False, status="unavailable",
+                reason=(
+                    "the matched prior entry's own raw_forecast candidate "
+                    f"was itself {raw_status!r}"
+                ),
+            )
+
+        provenance = None
+        if raw_candidate.get("per_city_ampacity_amps") is not None or raw_candidate.get("bottleneck_city") is not None:
+            provenance = {
+                "per_city_ampacity_amps": raw_candidate.get("per_city_ampacity_amps"),
+                "bottleneck_city": raw_candidate.get("bottleneck_city"),
+            }
+        elif isinstance(raw_candidate.get("input_provenance"), dict):
+            provenance = raw_candidate.get("input_provenance")
+
+        return ShadowPrediction(
+            corridor=corridor, method=self.name,
+            ampacity_amps=raw_candidate.get("ampacity_amps"),
+            timestamps=None, fallback_used=False, status="ok",
+            input_provenance=provenance,
+        )
+
+
+class ReferenceRefit24hShadowMethod:
+    """
+    Plan 05-02 (D-03/D-04): an HONEST stub. `data/shadow/models/` holds no
+    `reference_ml_refit_24h_*.joblib` artifact yet (05-RESEARCH.md,
+    confirmed via `git ls-files`) -- this method's one job this plan is to
+    exist, be wired into the five-candidate loop, and report
+    `status="unavailable"` with a reason naming the missing path, exactly
+    like any other missing-input case (D-04), never a fallback
+    substitution and never an inline training/refit call (D-09's "no
+    silent protocol changes", this plan's own prohibitions). 05-04
+    replaces this body with the real predict path once the artifact
+    exists, without changing this method's name or its callers'
+    expectations of its return shape.
+    """
+
+    name = "reference_ml_refit_24h"
+
+    def compute(self, corridor: str) -> "ShadowPrediction":
+        try:
+            load_correction_model(corridor, self.name)
+        except FileNotFoundError as exc:
+            return ShadowPrediction(
+                corridor=corridor, method=self.name, ampacity_amps=None,
+                timestamps=None, fallback_used=False, status="unavailable",
+                reason=str(exc),
+            )
+        # Not reachable in this plan -- no artifact exists yet to load
+        # successfully. 05-04 replaces this stub body with the real
+        # 24h-refit-MLP predict path once it does.
+        raise NotImplementedError(
+            f"ReferenceRefit24hShadowMethod.compute({corridor!r}): a "
+            f"persisted artifact loaded successfully, but this plan's stub "
+            f"has no predict path yet -- 05-04 implements it."
+        )
+
+
 class UnsupportedHorizonError(ValueError):
     """
     Raised by `ShadowPipeline.predict` when `timestamps.horizon_minutes`
@@ -843,6 +1185,25 @@ class UnsupportedHorizonError(ValueError):
 # there is currently exactly one evaluated horizon for the whole module,
 # not because future methods are assumed to share it.
 EVALUATED_HORIZONS_MINUTES: tuple[int, ...] = (1440,)
+
+# Plan 05-02 (D-01): the five real (non-oracle) 24-hour-lead candidates
+# this phase records side by side every cycle, in D-01's own order.
+# `ml_wind_corrected` stays the provisional default (the legacy mirror
+# target in `log_cycle_predictions`); the other four are additive
+# recording only -- this phase declares no winner.
+CANDIDATE_METHOD_NAMES: tuple[str, ...] = (
+    "ml_wind_corrected", "ml_cooling_corrected", "raw_forecast",
+    "persistence_24h", "reference_ml_refit_24h",
+)
+
+# The three candidates needing the per-city-then-weakest-link reduction
+# `_corridor_reduce_per_city` performs; `persistence_24h` and
+# `reference_ml_refit_24h` are corridor-level by construction (one read
+# of this collector's own prior log, one artifact load) and never go
+# through this reduction.
+PER_CITY_REDUCED_METHOD_NAMES: tuple[str, ...] = (
+    "ml_wind_corrected", "ml_cooling_corrected", "raw_forecast",
+)
 
 
 class ShadowPipeline:
@@ -930,3 +1291,65 @@ class ShadowPipeline:
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(record) + "\n")
         return path
+
+
+def log_cycle_predictions(
+    corridor: str, candidates: dict, timestamps: ShadowTimestamps,
+) -> str:
+    """
+    Plan 05-02 (D-06, 05-01-SUMMARY.md's approved schema_version-2 shape):
+    writes exactly ONE JSON line per cycle to the SAME `data/shadow/
+    predictions/<corridor>.jsonl` path `ShadowPipeline.log_prediction`
+    already writes (append mode, never a second file/directory), carrying
+    all five candidates nested under their own names plus the six-field
+    backward-compatible top-level mirror of `candidates["ml_wind_
+    corrected"]` -- an EXACT, byte-for-byte copy of that one candidate's
+    own fields, including when `ml_wind_corrected` itself is
+    "unavailable" or "failed" that cycle (05-01-SUMMARY.md's own approved
+    mirror rule, cited by name, not re-derived).
+
+    `candidates` must carry every name in `CANDIDATE_METHOD_NAMES`;
+    `timestamps` is the ONE shared quadruple fetched once for the whole
+    cycle (D-02) -- not read per-candidate from each `ShadowPrediction`'s
+    own (possibly `None`) `timestamps` field.
+    """
+    os.makedirs(SHADOW_PREDICTIONS_DIR, exist_ok=True)
+    path = os.path.join(SHADOW_PREDICTIONS_DIR, f"{corridor}.jsonl")
+
+    def _candidate_record(prediction: ShadowPrediction) -> dict:
+        return {
+            "status": prediction.status,
+            "ampacity_amps": prediction.ampacity_amps,
+            "fallback_used": prediction.fallback_used,
+            "fallback_reason": prediction.fallback_reason,
+            "model_version": prediction.model_version,
+            "input_provenance": prediction.input_provenance,
+            "reason": prediction.reason,
+        }
+
+    candidate_records = {
+        name: _candidate_record(candidates[name]) for name in CANDIDATE_METHOD_NAMES
+    }
+    mirror = candidate_records["ml_wind_corrected"]
+
+    record = {
+        "schema_version": 2,
+        "corridor": corridor,
+        **timestamps.as_dict(),
+        "logged_at": datetime.now(timezone.utc).isoformat(),
+        "basis_caveat": (
+            "Reanalysis-derived development comparison; this live prediction's "
+            "quality is not independently sensor-validated."
+        ),
+        "candidates": candidate_records,
+        "method": "ml_wind_corrected",
+        "ampacity_amps": mirror["ampacity_amps"],
+        "fallback_used": mirror["fallback_used"],
+        "fallback_reason": mirror["fallback_reason"],
+        "model_version": mirror["model_version"],
+        "input_provenance": mirror["input_provenance"],
+    }
+
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(record) + "\n")
+    return path

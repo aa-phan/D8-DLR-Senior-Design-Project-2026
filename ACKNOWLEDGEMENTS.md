@@ -1774,3 +1774,48 @@ format (the parser expects a `- **D-NN:**` bullet format instead). Proceeded the
 did: manually grepped every plan for every one of D-01 through D-11 and confirmed each is cited by at
 least one plan before finalizing, rather than trusting the tool's negative result or silently ignoring
 it.
+
+### Session: 2026-10-07 (continued), conducted by Aaron Phan — five-candidate shadow collection (Phase 05 Plan 02)
+
+User asked to execute Phase 05 Plan 02: extend the shadow collector to record all five real
+24-hour-lead candidates (`ml_wind_corrected`, `ml_cooling_corrected`, `raw_forecast`,
+`persistence_24h`, `reference_ml_refit_24h`) side by side every cycle, instead of the single
+candidate it recorded before, per the schema approved in Plan 01's checkpoint.
+
+Claude Code was used to:
+
+1. Add `fetch_shared_corridor_inputs` to `backend/forecast_shadow_pipeline.py` -- one shared
+   forecast + anchor fetch per endpoint city per cycle, isolated per-city/per-input so one city's
+   anchor failure never blocks its own forecast fetch or the other city's inputs.
+2. Add `_enrich_city_frame_for_correction` and generalize `_corridor_reduce_per_city` so
+   `ml_cooling_corrected` and `raw_forecast` are now corridor-level (both endpoint cities,
+   weakest-link-reduced) for the first time -- closing a gap the prior single-city implementation
+   had left for those two candidates.
+3. Add a real `Persistence24hShadowMethod` that scans this collector's own prior JSONL log for the
+   entry whose `valid_time` is closest to the current cycle's `decision_time` (within a 90-minute
+   tolerance), never the positionally-last line -- and an honest `ReferenceRefit24hShadowMethod`
+   stub reporting `status="unavailable"` with the missing-artifact path, since no persisted
+   24-hour refit model exists yet.
+4. Extend `ShadowPrediction` with `status`/`reason` fields (additive, default-preserving) and add
+   `log_cycle_predictions`, writing the schema_version-2 nested-per-candidate JSONL shape approved
+   in Plan 01, including the six-field backward-compatible top-level mirror of
+   `ml_wind_corrected`'s own fields.
+5. Add `run_once_all_methods` to `backend/forecast_shadow_demo.py` -- the five-candidate
+   orchestration entry point, with five SEPARATE try/except blocks (never one shared block) so one
+   candidate's real code-level failure never prevents the other four from computing and logging in
+   the same cycle.
+6. Run one real live collection cycle against live network/weather-provider endpoints for
+   `AUSTIN_CORPUS_CHRISTI`, inspecting the actual appended JSONL line directly rather than
+   asserting success from a mocked run.
+
+**Verified, not merely trusted:** 16 new network-free unit/integration tests covering the shared
+fetch's per-city independence, the new `anchor_air_temp` key, the corridor-level reduction's
+`ValueError` on a wrong city count, `persistence_24h`'s valid_time-matched (not last-line)
+selection (cold start, propagated-unavailable, and pre-cutover flat-shape-skip cases), the
+`reference_ml_refit_24h` stub's honest unavailable report, the new schema's exact shape including
+the unavailable-mirror case, and a deliberate-sabotage test proving one candidate's exception
+never blocks the other four. Full relevant suite (65/65 pass, all pre-existing tests green,
+unchanged) before committing. Every frozen Phase 3/4 production module confirmed to carry zero
+git diff. One real live cycle run end to end and its logged output directly inspected (see
+`.planning/workstreams/ml-modeling/phases/05-shadow-collector-five-method-side-by-side-challenger-recordi/05-02-SUMMARY.md`
+for the per-candidate outcome).
