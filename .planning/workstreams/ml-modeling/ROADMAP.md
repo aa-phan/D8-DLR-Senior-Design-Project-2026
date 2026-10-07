@@ -414,11 +414,11 @@ UTC evaluation without touching that protocol. Production (`dlr_pipeline.py`) re
 reasoning. `05-CONTEXT.md`'s eleven locked decisions D-01 through D-11 are this phase's scope and are
 carried in each plan's `requirements:` field, exactly as Phase 3/4's plans used `[D-02, D-03, D-04]`.
 **Depends on:** Phase 4
-**Plans:** 5 plans
+**Plans:** 1/5 plans executed
 
 Plans:
 
-- [ ] 05-01-PLAN.md — Checkpoint: human approval of the new nested-per-candidate JSONL schema
+- [x] 05-01-PLAN.md — Checkpoint: human approval of the new nested-per-candidate JSONL schema
   (schema_version 2) and the historical-data strategy for already-committed flat-shape rows on
   `shadow-collection-data` — the one-way-door decision (D-06) gated before any implementing code
 - [ ] 05-02-PLAN.md — Tracer: shared-input fetch (D-02), corridor-level weakest-link reduction
