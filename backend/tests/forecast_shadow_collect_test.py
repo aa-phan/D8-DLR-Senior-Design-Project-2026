@@ -1,7 +1,7 @@
 """
 Tests for the scheduler-ready collection entry point
-(`backend/forecast_shadow_collect.py`). Network-free: `run_once` itself
-is monkeypatched so these tests check the lock/exit-code contract, not
+(`backend/forecast_shadow_collect.py`). Network-free: `run_once_all_methods`
+itself is monkeypatched so these tests check the lock/exit-code contract, not
 live retrieval (that's `forecast_shadow_pipeline_test.py`'s job).
 
 `INTER_CORRIDOR_DELAY_S` is pinned to 0 in every test via an autouse
@@ -26,7 +26,7 @@ def _no_real_delay(monkeypatch):
 def test_collect_once_returns_zero_and_calls_every_corridor(monkeypatch, tmp_path):
     monkeypatch.setattr(collect, "_LOCK_PATH", str(tmp_path / "collect.lock"))
     called = []
-    monkeypatch.setattr(forecast_shadow_demo, "run_once", lambda corridor, method: called.append(corridor))
+    monkeypatch.setattr(forecast_shadow_demo, "run_once_all_methods", lambda corridor: called.append(corridor))
     assert collect.collect_once() == 0
     assert set(called) == set(config.CORRIDOR_ENDPOINTS)
 
@@ -42,7 +42,7 @@ def test_collect_once_sleeps_between_corridors_but_not_before_the_first(monkeypa
     monkeypatch.setattr(collect, "INTER_CORRIDOR_DELAY_S", 5.0)
     sleeps = []
     monkeypatch.setattr(collect.time, "sleep", lambda s: sleeps.append(s))
-    monkeypatch.setattr(forecast_shadow_demo, "run_once", lambda corridor, method: None)
+    monkeypatch.setattr(forecast_shadow_demo, "run_once_all_methods", lambda corridor: None)
 
     assert collect.collect_once() == 0
 
@@ -55,11 +55,11 @@ def test_collect_once_returns_one_on_a_hard_failure_but_still_tries_every_corrid
     monkeypatch.setattr(collect, "_LOCK_PATH", str(tmp_path / "collect.lock"))
     attempted = []
 
-    def _flaky(corridor, method):
+    def _flaky(corridor):
         attempted.append(corridor)
         raise RuntimeError("a bug, not an expected fallback condition")
 
-    monkeypatch.setattr(forecast_shadow_demo, "run_once", _flaky)
+    monkeypatch.setattr(forecast_shadow_demo, "run_once_all_methods", _flaky)
     assert collect.collect_once() == 1
     assert set(attempted) == set(config.CORRIDOR_ENDPOINTS)
 
@@ -68,7 +68,7 @@ def test_collect_once_returns_two_and_skips_entirely_when_lock_already_held(monk
     lock_path = str(tmp_path / "collect.lock")
     monkeypatch.setattr(collect, "_LOCK_PATH", lock_path)
     called = []
-    monkeypatch.setattr(forecast_shadow_demo, "run_once", lambda corridor, method: called.append(corridor))
+    monkeypatch.setattr(forecast_shadow_demo, "run_once_all_methods", lambda corridor: called.append(corridor))
 
     # Hold the lock ourselves, simulating a still-running prior invocation.
     holder = open(lock_path, "w")
@@ -82,6 +82,6 @@ def test_collect_once_returns_two_and_skips_entirely_when_lock_already_held(monk
 
 def test_collect_once_releases_the_lock_so_a_later_invocation_can_proceed(monkeypatch, tmp_path):
     monkeypatch.setattr(collect, "_LOCK_PATH", str(tmp_path / "collect.lock"))
-    monkeypatch.setattr(forecast_shadow_demo, "run_once", lambda corridor, method: None)
+    monkeypatch.setattr(forecast_shadow_demo, "run_once_all_methods", lambda corridor: None)
     assert collect.collect_once() == 0
     assert collect.collect_once() == 0  # second call must not see a stale held lock

@@ -5,16 +5,16 @@ milestone_name: )
 current_phase: 05
 current_phase_name: "Shadow Collector: Five-Method Side-by-Side Challenger Recording"
 status: executing
-stopped_at: Completed plan 05-01
-last_updated: "2026-10-07T21:28:57.844Z"
+stopped_at: Completed 05-03-PLAN.md
+last_updated: "2026-10-07T21:36:56.402Z"
 last_activity: 2026-10-07
 last_activity_desc: "Phase 05 Plan 02 complete: five-candidate shadow orchestration, shared fetch, real persistence_24h, live cycle proven"
-state_head: 6523d1bd4deafd2e2193e064f969f531671ce898
+state_head: df672813887b6f54df7355643284dc83958f3476
 progress:
   total_phases: 5
   completed_phases: 4
   total_plans: 26
-  completed_plans: 22
+  completed_plans: 24
   percent: 80
 ---
 
@@ -37,7 +37,7 @@ held-out test set — see `docs/data-science/decisions/forecast_correction_exper
 ## Current Position
 
 Phase: 05 (Shadow Collector: Five-Method Side-by-Side Challenger Recording) — EXECUTING
-Plan: 2 of 5
+Plan: 3 of 5
 Status: Ready to execute
 vs. persistence at AUSTIN_CORPUS_CHRISTI/MIDLAND_EL_PASO, both 95% CIs excluding zero. The original
 1-hour approach (Wave 1) hit a bit-identical forecast/truth data-source dead end and was pivoted
@@ -73,6 +73,7 @@ Progress: [████████░░] 80%
 | Plan | Duration | Tasks | Files |
 |------|----------|-------|-------|
 | Phase 05 P01 | N/A | 1 tasks | 1 files |
+| Phase 05 P03 | 20min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -96,6 +97,7 @@ Progress: [████████░░] 80%
 - [Phase 05]: Approved as written - nested per-candidate JSONL schema (schema_version 2) with
   six-field legacy mirror for ml_wind_corrected, and no-migration strategy for already-committed
   flat-shape rows on shadow-collection-data (05-01).
+- [Phase 05]: collect_once wired to run_once_all_methods for every corridor (05-03); real two-corridor live cycle exits 0 in ~32s, well under the 15-minute workflow budget
 
 ### Pending Todos
 
@@ -137,7 +139,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-10-07T20:59:09.606Z
-Stopped at: Completed plan 05-01
+Last session: 2026-10-07T21:36:56.222Z
+Stopped at: Completed 05-03-PLAN.md
 `/gsd-plan-phase 1` in this workstream.
 Resume file: None

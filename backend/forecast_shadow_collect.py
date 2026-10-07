@@ -14,12 +14,14 @@ Runnable today, by hand:
     PYTHONPATH=backend .venv/bin/python3 backend/forecast_shadow_collect.py
 
 Exit codes (for a cron/launchd wrapper to alert on):
-    0  every corridor was attempted and logged something (a non-fallback
-       prediction, a fallback prediction, or a result -- `run_once`
-       itself never lets a retrieval/model/anchor failure escape
-       uncaught; see `forecast_shadow_pipeline.ShadowPipeline.predict`).
-    1  a hard failure escaped `run_once` for at least one corridor
-       (a bug, not an expected fallback condition) -- see stderr.
+    0  every corridor was attempted and logged something (all five
+       candidates' results, each independently ok/fallback/unavailable/
+       failed -- `run_once_all_methods` itself never lets a retrieval/
+       model/anchor failure escape uncaught; see
+       `forecast_shadow_pipeline.ShadowPipeline.predict`).
+    1  a hard failure escaped `run_once_all_methods` for at least one
+       corridor (a bug, not an expected fallback/unavailable condition
+       for any individual candidate) -- see stderr.
     2  skipped entirely: another invocation already holds the lock
        (duplicate-run protection -- see `_acquire_lock`). This is NOT a
        failure; a scheduler should not alert on exit code 2 unless it
@@ -98,14 +100,15 @@ def collect_once() -> int:
                 # INTER_CORRIDOR_DELAY_S's own docstring for why this exists.
                 time.sleep(INTER_CORRIDOR_DELAY_S)
             try:
-                forecast_shadow_demo.run_once(corridor, "ml_wind_corrected")
+                forecast_shadow_demo.run_once_all_methods(corridor)
             except Exception:
-                # A failure HERE means something escaped run_once's own
-                # try/except entirely (a real bug) -- the expected
-                # fallback path for a missing anchor/model/forecast
-                # source is already caught and logged inside run_once /
-                # ShadowPipeline.predict. This is the failure-reporting
-                # path a cron wrapper's exit-code check is for.
+                # A failure HERE means something escaped
+                # run_once_all_methods's own try/except entirely (a real
+                # bug) -- each of the five candidates' own expected
+                # fallback/unavailable/failed paths is already caught and
+                # logged inside run_once_all_methods / ShadowPipeline.predict.
+                # This is the failure-reporting path a cron wrapper's
+                # exit-code check is for.
                 hard_failure = True
                 print(f"forecast_shadow_collect: hard failure for corridor {corridor!r}:", file=sys.stderr)
                 traceback.print_exc(file=sys.stderr)

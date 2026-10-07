@@ -1819,3 +1819,34 @@ unchanged) before committing. Every frozen Phase 3/4 production module confirmed
 git diff. One real live cycle run end to end and its logged output directly inspected (see
 `.planning/workstreams/ml-modeling/phases/05-shadow-collector-five-method-side-by-side-challenger-recordi/05-02-SUMMARY.md`
 for the per-candidate outcome).
+
+### Session: 2026-10-07 (continued), conducted by Aaron Phan — wire the scheduled collector to the five-candidate orchestrator (Phase 05 Plan 03)
+
+User asked to execute Phase 05 Plan 03: switch the real cron-triggered entry point
+(`backend/forecast_shadow_collect.py`) from the old hardcoded single-method call to the
+five-candidate orchestrator Plan 02 built, for every corridor, and prove it with a real
+two-corridor live cycle.
+
+Claude Code was used to:
+
+1. Change `collect_once`'s single call site from
+   `forecast_shadow_demo.run_once(corridor, "ml_wind_corrected")` to
+   `forecast_shadow_demo.run_once_all_methods(corridor)` -- the only functional line changed in
+   `backend/forecast_shadow_collect.py`; the lock, inter-corridor delay, and exit-code contract
+   (0/1/2) left untouched.
+2. Update every monkeypatch target in `backend/tests/forecast_shadow_collect_test.py` from the
+   old two-argument `run_once` to the new one-argument `run_once_all_methods`, preserving each
+   test's own assertion intent (which corridors were called, sleep timing, hard-failure
+   propagation, lock contention, lock release).
+3. Run one real live collection cycle against live network/weather-provider endpoints for BOTH
+   corridors (`AUSTIN_CORPUS_CHRISTI`, `MIDLAND_EL_PASO`), inspecting the actual appended JSONL
+   lines directly rather than asserting success from a mocked run, and measuring real wall-clock
+   duration against the scheduled workflow's 15-minute budget.
+
+**Verified, not merely trusted:** all 5 existing tests in `forecast_shadow_collect_test.py` pass
+against the new monkeypatch target; a grep confirmed the old `"ml_wind_corrected"` literal is gone
+from the call site and `run_once_all_methods` is the new call; one real two-corridor live cycle
+exited 0 and both corridors' freshly appended JSONL lines were directly parsed and confirmed to
+carry `schema_version: 2` with all five candidate names present (see
+`.planning/workstreams/ml-modeling/phases/05-shadow-collector-five-method-side-by-side-challenger-recordi/05-03-SUMMARY.md`
+for the full per-candidate outcome and measured duration).
