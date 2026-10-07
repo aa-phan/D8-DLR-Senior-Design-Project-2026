@@ -1591,3 +1591,32 @@ fix addresses (a synthetic timeout raised from the forecast-fetch call), asserti
 method name, the correct weakest-link static-rating value (MIDLAND/EL_PASO -> 1450.0A, the lower
 of the two), and that the persisted log entry is honest about it. Ran the full targeted suite
 (180/180 pass, 1 new) before committing.
+
+### Session: 2026-10-07, conducted by Aaron Phan — mitigate the repeated Midland retrieval timeout
+
+Triggered a fresh run to verify both corridors' retrieval end to end. Austin succeeded genuinely;
+Midland failed identically to four prior runs -- same Open-Meteo single-runs API timeout, same
+stale-looking run timestamp. Investigated rather than retrying blindly or assuming a transient
+blip, per the user's explicit direction.
+
+Ruled out two real possibilities before settling on a third: (1) the exact real request (full
+params -- units, model, timezone, forecast_days, read directly from
+`open_meteo_forecast_provider.py`) was reconstructed and run directly from this machine, twice,
+for both Midland and Austin -- both succeeded in under a second, ruling out a broken request,
+an unavailable run, or an Open-Meteo-side outage for this specific query; (2) the request
+parameters, coordinates, and code path were otherwise identical to what Austin's (working) call
+uses. What remained, consistent with every run observed: Midland is always the SECOND corridor
+processed, with zero delay after Austin's request, in `forecast_shadow_collect.py`'s own loop --
+pointing at a per-source-IP rate limit on Open-Meteo's side, triggered specifically by GitHub
+Actions' shared runner IP pool serving many unrelated jobs' requests in the same window.
+
+Added `INTER_CORRIDOR_DELAY_S` (15s) to `forecast_shadow_collect.py`, applied only BETWEEN
+corridors (never before the first, since there is no prior request to space apart from). Framed
+explicitly in its own docstring as a mitigation for a working hypothesis, not a confirmed root-
+cause fix -- if corridors still fail after this, the rate-limit theory itself needs revisiting,
+not just a longer delay.
+
+**Verified, not merely trusted:** added a dedicated test proving the delay fires between
+corridors and not before the first; added an autouse fixture pinning the delay to 0 in every
+other existing test, since without it those tests would now sleep for real wall-clock seconds per
+corridor for no reason. Ran the full targeted suite (181/181 pass, 1 new) before committing.

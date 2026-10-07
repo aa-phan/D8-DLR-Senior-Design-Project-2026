@@ -31,12 +31,29 @@ from __future__ import annotations
 import fcntl
 import os
 import sys
+import time
 import traceback
 
 import config
 import forecast_shadow_demo
 
 _LOCK_PATH = os.path.join("data", "shadow", ".collect.lock")
+
+# INTER_CORRIDOR_DELAY_S: a pause between corridors' live-provider requests,
+# added 2026-10-07 after four real GitHub Actions runs reproduced an
+# identical pattern -- the SECOND corridor processed in the loop timed out
+# against Open-Meteo's single-runs API (HTTPSConnectionPool read timeout),
+# while the exact same request (same run, same location, full real params)
+# succeeded in well under a second when issued directly from a non-CI
+# machine. GitHub-hosted runners share outbound IP ranges across many
+# unrelated jobs; the leading hypothesis is a per-IP rate limit on
+# Open-Meteo's side triggering on the second rapid-fire request specifically
+# from that shared pool, not a defect in the request itself or in Open-
+# Meteo's run availability (both independently ruled out by direct,
+# parameter-identical calls). This delay is a mitigation for that
+# hypothesis, not a confirmed root-cause fix -- if corridors still fail
+# after this change, the rate-limit theory itself needs revisiting.
+INTER_CORRIDOR_DELAY_S: float = 15.0
 
 
 def _acquire_lock():
@@ -73,7 +90,11 @@ def collect_once() -> int:
 
     try:
         hard_failure = False
-        for corridor in config.CORRIDOR_ENDPOINTS:
+        for i, corridor in enumerate(config.CORRIDOR_ENDPOINTS):
+            if i > 0:
+                # Only between corridors, never before the first -- see
+                # INTER_CORRIDOR_DELAY_S's own docstring for why this exists.
+                time.sleep(INTER_CORRIDOR_DELAY_S)
             try:
                 forecast_shadow_demo.run_once(corridor, "ml_wind_corrected")
             except Exception:
