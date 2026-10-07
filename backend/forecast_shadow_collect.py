@@ -90,7 +90,14 @@ def collect_once() -> int:
 
     try:
         hard_failure = False
-        for i, corridor in enumerate(config.CORRIDOR_ENDPOINTS):
+        # TEMPORARY DIAGNOSTIC (2026-10-07) -- reversed order, one test run
+        # only, to check whether MIDLAND_EL_PASO's repeated Open-Meteo
+        # timeout is about being processed SECOND (position-dependent) or
+        # something specific to that corridor/location regardless of
+        # position. Revert to `config.CORRIDOR_ENDPOINTS` order immediately
+        # after this one run, whatever the result.
+        _corridors_this_run = list(reversed(list(config.CORRIDOR_ENDPOINTS)))
+        for i, corridor in enumerate(_corridors_this_run):
             if i > 0:
                 # Only between corridors, never before the first -- see
                 # INTER_CORRIDOR_DELAY_S's own docstring for why this exists.
