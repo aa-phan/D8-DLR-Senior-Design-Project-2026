@@ -1328,3 +1328,38 @@ Consistent with the prior pass's own explicit status line, collection remains co
 not active anywhere, and is not described as active per the user's own stated bar (a scheduled
 invocation producing a valid log plus a passing health check) — neither has happened yet on any
 host, because no host has been designated.
+
+### Session: 2026-10-06 (continued), conducted by Aaron Phan — set up GitHub Actions as the collection host
+
+The user had no designated collection host yet. Recommended GitHub Actions over a self-hosted
+cron job given the project's constraints: no budget, no server to provision/maintain, and a
+7-week window (through the fixed 2026-11-24 evaluation date) where a personal laptop's sleep/
+reboot behavior would introduce exactly the collection gaps a continuous collector should avoid.
+User confirmed this choice.
+
+Added `.github/workflows/shadow_collect.yml`: runs `backend/forecast_shadow_collect.py` on the
+same twice-daily UTC schedule the runbook already specified, reads `SYNOPTIC_TOKEN` from a GitHub
+Actions repository secret (never touches this machine, never visible in any log), and commits the
+resulting `data/shadow/predictions/*.jsonl` files to a dedicated `shadow-collection-data` branch
+(bootstrapped as an orphan branch on its first run) rather than `main` — keeping ~100 automated
+commits over the collection window off the branch anyone actually reviews. A no-op run (identical
+content) correctly produces no commit, verified against a disposable local git remote before
+trusting the logic in CI.
+
+Updated `docs/data-science/decisions/shadow_collection_runbook.md` to document GitHub Actions as
+the current host, moved the original cron setup to an explicitly-labeled fallback section (kept,
+not deleted, in case GitHub Actions ever becomes unviable), and added retrieval instructions for
+the data branch.
+
+**Verified, not merely trusted:** validated the workflow YAML parses; exercised the branch-
+bootstrap/commit/dedupe logic three times (first-run orphan creation, second-run append, third-run
+no-op) against a scratch bare git repository, not just read through by eye. Ran
+`backend/tests/forecast_experiment_audit_test.py` + `backend/tests/forecast_shadow_pipeline_test.py` +
+`backend/tests/forecast_shadow_collect_test.py` + `backend/tests/forecast_shadow_healthcheck_test.py`
+together (157/157 pass, unchanged — this was a docs/workflow-only change, no application code
+touched).
+
+**Not yet done, requires the user:** adding the `SYNOPTIC_TOKEN` secret in the GitHub repo's
+Settings, and pushing this commit to `main` so the schedule actually activates. Neither step
+happens without the user's explicit push/action, per this session's standing push-authorization
+rule.

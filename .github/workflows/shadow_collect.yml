@@ -1,0 +1,83 @@
+name: Shadow Collection
+
+# Experimental/shadow forecast-correction prototype (ml-modeling workstream, Phase 4
+# follow-up). This workflow is NEVER invoked by production -- dlr_pipeline.py and every
+# other production caller remain untouched. It exists solely to run
+# backend/forecast_shadow_collect.py twice daily so real shadow predictions accumulate
+# ahead of the fixed 2026-11-24 evaluation date. See
+# docs/data-science/decisions/shadow_collection_runbook.md for the full operational
+# reference and docs/data-science/decisions/forecast_correction_followup_audit.md for
+# the technical rationale.
+
+on:
+  schedule:
+    # 06:00 and 18:00 UTC daily -- matches the runbook's existing cron cadence exactly.
+    - cron: '0 6,18 * * *'
+  workflow_dispatch: {} # allow a manual run for testing, from the Actions tab
+
+permissions:
+  contents: write # needed to push collected logs to the shadow-collection-data branch
+
+concurrency:
+  group: shadow-collection
+  cancel-in-progress: false # never cancel a run already in flight; let forecast_shadow_collect.py's own flock handle true concurrency
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code (main)
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Run shadow collector
+        env:
+          SYNOPTIC_TOKEN: ${{ secrets.SYNOPTIC_TOKEN }}
+        run: |
+          PYTHONPATH=backend python backend/forecast_shadow_collect.py
+        # Exit 0: both corridors attempted (success or honest fallback -- both healthy).
+        # Exit 1: a genuine code bug -- this SHOULD fail the job and notify via GitHub's
+        #         own workflow-failure email, which doubles as alerting.
+        # Exit 2: a concurrent run held the lock -- shouldn't occur with cancel-in-progress:
+        #         false serializing runs, but is non-fatal if it ever does.
+
+      - name: Health check
+        run: |
+          PYTHONPATH=backend python backend/forecast_shadow_healthcheck.py
+
+      - name: Commit predictions to shadow-collection-data branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          rm -rf /tmp/shadow-data-branch
+          if git ls-remote --exit-code --heads origin shadow-collection-data >/dev/null 2>&1; then
+            git clone --branch shadow-collection-data --single-branch "$REPO_URL" /tmp/shadow-data-branch
+          else
+            echo "shadow-collection-data branch does not exist yet -- creating it as an orphan branch."
+            git clone "$REPO_URL" /tmp/shadow-data-branch
+            (cd /tmp/shadow-data-branch && git checkout --orphan shadow-collection-data && git rm -rf . >/dev/null 2>&1 || true)
+          fi
+          mkdir -p /tmp/shadow-data-branch/data/shadow/predictions
+          cp data/shadow/predictions/*.jsonl /tmp/shadow-data-branch/data/shadow/predictions/ 2>/dev/null || echo "No prediction files produced this run (all corridors may have hit an unexpected early error)."
+          cd /tmp/shadow-data-branch
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f data/shadow/predictions/*.jsonl 2>/dev/null || true
+          if ! git diff --cached --quiet; then
+            git commit -m "shadow collection: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            git push origin shadow-collection-data
+          else
+            echo "No changes to commit this run."
+          fi

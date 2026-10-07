@@ -21,22 +21,52 @@ Two distinct, never-conflated failure types in every log entry:
 
 Every log entry additionally preserves the issued ampacity, `model_version`, full `input_provenance`, and all four timestamps (`initialization_time`/`availability_time`/`decision_time`/`valid_time`) — enough to reproduce, after the fact, exactly what was actually available at the moment each prediction was made.
 
-## Host requirements
+## Host: GitHub Actions (chosen 2026-10-06)
 
-- Any host (Linux or macOS) with network access to Open-Meteo, TCEQ (`daily_summary.pl`, unauthenticated), and Synoptic.
-- Python 3.12, this repo's `.venv` per `requirements.txt` (includes `python-dotenv` as of 2026-10-06).
-- A `SYNOPTIC_TOKEN` credential (see below). No TCEQ credential needed.
-- Persistent uptime for the life of the collection window (through **2026-11-24**, the fixed evaluation date) — a machine that regularly sleeps or reboots unpredictably will produce collection gaps. Gaps are handled gracefully (logged, not fatal) but a host that's reliably on is still what makes the data useful.
+No persistent machine is designated or required. The collector runs on GitHub's own scheduled
+runners via `.github/workflows/shadow_collect.yml` — free, no provisioning, no uptime/sleep
+concerns, and it matches the existing twice-daily cadence exactly (`cron: '0 6,18 * * *'`).
 
-## Credential setup (never exposes the secret)
+**One-time setup (do this once, before the first scheduled run):**
+1. In the GitHub repo → **Settings → Secrets and variables → Actions → New repository secret**,
+   name it exactly `SYNOPTIC_TOKEN`, paste the token value there. GitHub encrypts it; it is never
+   visible in logs, never committed, and Claude has never seen or will see its value.
+2. Push `.github/workflows/shadow_collect.yml` to `main` (or merge the PR that adds it). That's the
+   only manual step — the schedule activates automatically once the file is on the repo's default
+   branch.
+3. Optionally trigger one manual run immediately via the **Actions** tab → "Shadow Collection" →
+   **Run workflow**, to confirm it works before waiting for the next 06:00/18:00 UTC boundary.
 
-Either works — a real shell export always takes precedence if both are present:
+**Where results land:** a dedicated `shadow-collection-data` branch (created automatically by the
+workflow on its first run) — never `main`. This keeps ~100 automated commits over the collection
+window off the branch anyone actually reviews. Each run commits only if the logs changed since the
+last run; a day where every corridor hit the exact same fallback twice produces no-op commits
+naturally (identical JSON lines dedupe via `git diff --cached --quiet`).
+
+**Stop:** delete or disable the workflow file on `main` (or disable it from the Actions tab's "..."
+menu on the workflow page) — no server to touch, no crontab to edit.
+**Restart:** re-enable the workflow; it resumes on the next scheduled boundary. State is entirely
+in the `shadow-collection-data` branch's append-only logs, nothing to reset.
+
+**To retrieve the collected data later** (e.g. for the Nov 24 evaluation):
+```bash
+git fetch origin shadow-collection-data
+git show shadow-collection-data:data/shadow/predictions/AUSTIN_CORPUS_CHRISTI.jsonl
+```
+
+## Credential setup for local/manual runs (never exposes the secret)
+
+Not needed for the GitHub Actions path above (the secret lives in GitHub, not on your machine).
+For running the collector by hand or via the fallback cron option below, either works — a real
+shell export always takes precedence if both are present:
 ```bash
 export SYNOPTIC_TOKEN=<token>          # matches this repo's existing convention
 ```
-or a `.env` file in the repo root containing `SYNOPTIC_TOKEN=<token>` (loaded automatically via `python-dotenv`, wired in `forecast_shadow_pipeline.py` only — never printed, logged, or committed by any tooling in this repo).
+or a `.env` file in the repo root containing `SYNOPTIC_TOKEN=<token>` (loaded automatically via
+`python-dotenv`, wired in `forecast_shadow_pipeline.py` only — never printed, logged, or committed
+by any tooling in this repo).
 
-## Exact commands
+## Exact commands (local testing, or manual runs on any machine)
 
 **One-shot run (both corridors):**
 ```bash
@@ -50,22 +80,27 @@ PYTHONPATH=backend .venv/bin/python3.12 backend/forecast_shadow_healthcheck.py
 ```
 Exit 0 = every corridor has a log entry within the last 24h (override with `--max-age-minutes`). An all-fallback recent run is still reported healthy — this only answers "is the scheduler firing," never "is every input source available right now."
 
-## Scheduler (cron, chosen for Linux/macOS portability)
+## Fallback option: self-hosted cron (only if GitHub Actions ever becomes unviable)
 
-Cadence: **06:00 and 18:00 UTC daily** (00:00/12:00 CDT currently) — roughly matches the anchor station's own refresh cadence without over-polling.
+Not the current plan — documented so this isn't lost if GitHub Actions' free minutes, reliability,
+or some future constraint ever forces a move to an actual persistent host.
+
+Cadence: **06:00 and 18:00 UTC daily** (00:00/12:00 CDT currently) — same schedule as the workflow.
 
 ```cron
 0 6,18 * * * cd <repo_root> && PYTHONPATH=backend <repo_root>/.venv/bin/python3.12 backend/forecast_shadow_collect.py >> data/shadow/collect.cron.log 2>&1
 ```
 
-Install: `crontab -e`, paste the line above with `<repo_root>` replaced by the real absolute path on that host, save.
+Install: `crontab -e`, paste the line above with `<repo_root>` replaced by the real absolute path on that host, save. This path also needs `SYNOPTIC_TOKEN` set per the credential setup above, and logs land locally in `data/shadow/predictions/` rather than the `shadow-collection-data` branch.
 
-**Stop:** `crontab -e`, delete the line (or `crontab -r` to remove the whole crontab — only do this if nothing else is scheduled on that host).
-**Restart:** re-add the same line; collection resumes on the next 06:00/18:00 UTC boundary. No state needs to be reset — the collector is stateless between runs except for the append-only logs.
+**Stop:** `crontab -e`, delete the line. **Restart:** re-add it; resumes on the next boundary.
 
 ## Durable storage
 
-`data/shadow/predictions/<corridor>.jsonl` — append-only, one JSON object per line, git-ignored (same convention as every other generated report in this phase). Nothing in this collector ever deletes or rewrites a prior entry.
+- **GitHub Actions path (current):** `shadow-collection-data` branch, `data/shadow/predictions/<corridor>.jsonl` — append-only, one JSON object per line, committed by the workflow after each run.
+- **Local/fallback-cron path:** same file layout, but on disk at `data/shadow/predictions/`, git-ignored (same convention as every other generated report in this phase).
+
+Nothing in this collector ever deletes or rewrites a prior entry, on either path.
 
 ## Monitoring, without inspecting any reserved outcome
 
