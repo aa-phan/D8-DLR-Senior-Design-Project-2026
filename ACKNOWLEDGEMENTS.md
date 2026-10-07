@@ -1819,3 +1819,53 @@ unchanged) before committing. Every frozen Phase 3/4 production module confirmed
 git diff. One real live cycle run end to end and its logged output directly inspected (see
 `.planning/workstreams/ml-modeling/phases/05-shadow-collector-five-method-side-by-side-challenger-recordi/05-02-SUMMARY.md`
 for the per-candidate outcome).
+
+### Session: 2026-10-07 (continued), conducted by Aaron Phan — reference_ml_refit_24h artifact fit and live predict path (Phase 05 Plan 04)
+
+User asked to execute Phase 05 Plan 04: fit and commit the missing `reference_ml_refit_24h` MLP
+model artifact for both corridors (a one-time offline step reusing Phase 3/4's exact arm-5 fitting
+recipe), build a live "truth-proxy" feature reconstruction from near-real-time station
+observations, and wire the real predict path into `ReferenceRefit24hShadowMethod`, replacing Plan
+02's honest unavailable stub.
+
+Claude Code was used to:
+
+1. Add `backend/forecast_shadow_fit_reference_refit.py` -- a standalone, offline, `__main__`-driven
+   script that calls `forecast_experiment._stacked_pair_frame`, `forecast_experiment._arm5_truth_frame`,
+   `forecast_training.build_training_matrix(horizon_minutes=1440)`, and `forecast_training.
+   fit_corridor_model` in that exact sequence (the same sequence `fit_fitted_arms` already runs for
+   arm 5), on the pinned train-plus-validation window (`forecast_experiment_audit.FROZEN_WINDOW_START`
+   through the day before `FROZEN_TEST_SPLIT_START`), persisting the result via `forecast_shadow_
+   pipeline.save_correction_model`. Ran it for real (not mocked) against live Open-Meteo endpoints
+   for both corridors, producing two committed `.joblib` artifacts (18,834 training rows each).
+2. Add `fetch_live_truth_proxy_series` to `backend/forecast_shadow_pipeline.py` -- a 7-hour,
+   decision-time-available, corridor-level truth-proxy series built from live TCEQ/Synoptic station
+   observations for both endpoint cities, run through the same `thermal_model` physics and
+   `forecast_training.corridor_weakest_link` reduction training used, raising a named
+   `StaleOrMissingDataError` on the first missing/null required hour found (never interpolating).
+3. Replace `ReferenceRefit24hShadowMethod.compute`'s stub body with the real predict path: load the
+   persisted artifact, build the live feature row via `ampacity_forecast.build_ml_features` on the
+   truth-proxy series, and predict from the last row -- never fitting/retraining at prediction time.
+4. Fix the one downstream call site this signature change broke (`forecast_shadow_demo.py`'s
+   `run_once_all_methods`, a 1-line fix) and update its own test (which had asserted the old stub's
+   behavior and would otherwise have issued a real, unmocked network call after this change).
+5. Run one real, isolated live call to the real predict path against live TCEQ data for
+   `AUSTIN_CORPUS_CHRISTI`, confirming it completes without raising and reports an honestly,
+   specifically-named live-data gap (a missing `solar_radiation` field from TCEQ's AUSTIN CAMS
+   station at one required hour) -- not the old "no persisted artifact" message.
+
+**Verified, not merely trusted:** 12 new network-free unit/integration tests (4 for the offline fit
+script's call order/loadability/pinned-window-dates/per-corridor loop; 8 for the live truth-proxy
+series' shape, its missing-hour and null-field error cases, a complete-window `ok` prediction via a
+fake estimator, a zero-fit-calls assertion, and an integration check feeding the REAL persisted
+artifact a synthetic truth-proxy frame end to end) plus 1 updated orchestration test. Full relevant
+suite (66/66 pass in `forecast_shadow_pipeline_test.py`, 4/4 in the new fit-script test file, 9/9 in
+`forecast_shadow_demo_test.py`) before committing. A full `backend/tests/` regression run (857
+passed, 23 failed) surfaced 23 pre-existing failures in `corridor_discretization_test.py`
+unconnected to any file this plan touches -- logged to this phase's `deferred-items.md`, not fixed,
+per this plan's own scope boundary. Every frozen Phase 1/3/4 module (`forecast_experiment.py`,
+`forecast_training.py`, `forecast_experiment_audit.py`, `ampacity_forecast.py`, `thermal_model.py`,
+`weather_provider.py`) confirmed to carry zero git diff throughout both task commits. One real
+offline fit and one real live predict call both run against live network endpoints, not mocked (see
+`.planning/workstreams/ml-modeling/phases/05-shadow-collector-five-method-side-by-side-challenger-recordi/05-04-SUMMARY.md`
+for the full outcome).
