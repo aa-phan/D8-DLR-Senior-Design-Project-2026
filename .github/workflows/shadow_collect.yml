@@ -85,10 +85,22 @@ jobs:
             cat "$f" >> "/tmp/shadow-data-branch/data/shadow/predictions/$bn"
           done
           [ "$found_any" -eq 1 ] || echo "No prediction files produced this run (all corridors may have hit an unexpected early error)."
+
+          # Render the top-level README.md table (2026-10-07): ran from
+          # THIS checkout (main) so backend/forecast_shadow_render_table.py
+          # resolves, but reading the data branch's own (just-appended)
+          # predictions directory and writing the data branch's own
+          # top-level README.md -- GitHub renders a branch's root
+          # README.md automatically, so switching to shadow-collection-data
+          # shows this table immediately, no digging into raw JSONL.
+          PYTHONPATH=backend python backend/forecast_shadow_render_table.py \
+            /tmp/shadow-data-branch/data/shadow/predictions \
+            /tmp/shadow-data-branch/README.md
+
           cd /tmp/shadow-data-branch
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -f data/shadow/predictions/*.jsonl 2>/dev/null || true
+          git add -f data/shadow/predictions/*.jsonl README.md 2>/dev/null || true
           if ! git diff --cached --quiet; then
             git commit -m "shadow collection: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
             git push origin shadow-collection-data

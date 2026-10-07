@@ -1703,3 +1703,33 @@ session's interactive `zsh`, whose different glob-expansion behavior on a no-mat
 have given a false negative) before trusting it in CI. Ran the full relevant local test suite
 (61/61 pass, unchanged -- this is a workflow-YAML-only fix, no Python code touched) as a
 regression check.
+
+### Session: 2026-10-07 (continued), conducted by Aaron Phan — render a top-level summary table on the data branch
+
+User asked for a way to see the collected predictions as a table, visible at the top level of the
+`shadow-collection-data` branch without digging into raw JSONL files.
+
+Added `backend/forecast_shadow_render_table.py`: a pure function (`render_markdown`) turning the
+collector's JSONL logs into a Markdown document, one section per corridor, most-recent-prediction-
+first, plus a CLI entry point. Wired into `.github/workflows/shadow_collect.yml`'s existing commit
+step -- runs after the append-fix logic (so it picks up this run's newly-appended entries too),
+writes to the data branch's own top-level `README.md`, which GitHub renders automatically when
+that branch is opened.
+
+Carried forward two things already established earlier this session rather than letting them get
+lost in a fresh file: the "experimental/shadow, not field-validated" basis caveat this whole phase
+has required on every number, and the just-confirmed finding that `STATIC_RATINGS` is this
+project's own unverified placeholder, never confirmed by Power Systems -- both appear at the top
+of the rendered table, not just in a document three files away.
+
+Deliberately NOT including a dynamic "rendered at" timestamp in the output: the file must be a
+pure function of the JSONL input so a day with no new predictions regenerates byte-identical
+content, preserving the workflow's existing `git diff --cached --quiet` no-op-commit behavior
+rather than forcing a spurious commit every single run regardless of whether new data landed.
+
+**Verified, not merely trusted:** 8 new unit tests (empty-state caveat text, sorting, pipe-
+character escaping inside a table cell, null-value handling, long-reason truncation, and an
+explicit determinism check across two renders of the same input). Also ran the renderer against
+the REAL data currently on the `shadow-collection-data` branch (fetched via `git show`) to confirm
+the output reads correctly against actual collected data, not just synthetic fixtures. Full
+relevant suite (224/224 pass, 8 new) before committing.
