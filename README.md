@@ -8,10 +8,11 @@ Regenerated automatically after every `shadow_collect.yml` run — do not hand-e
 
 ## AUSTIN_CORPUS_CHRISTI
 
-5 logged prediction(s), most recent first.
+6 logged prediction(s), most recent first.
 
 | Decision time (UTC) | Valid time (UTC) | Method | Fallback? | Ampacity (A) | Model version | Notes |
 |---|---|---|---|---|---|---|
+| 2026-10-07T22:33:21.729464+00:00 | 2026-10-08T12:00:00+00:00 | ml_wind_corrected | No | 1069.3 | ml_wind_corrected_AUSTIN_CORPUS_CHRISTI@2026-10-07T22:32:53.893639+00:00 |  |
 | 2026-10-07T22:05:58.463378+00:00 | 2026-10-08T12:00:00+00:00 | ml_wind_corrected | No | 1091.2 | ml_wind_corrected_AUSTIN_CORPUS_CHRISTI@2026-10-07T22:05:30.593605+00:00 |  |
 | 2026-10-07T12:30:34.069561+00:00 | 2026-10-08T00:00:00+00:00 | ml_wind_corrected | No | 1062.1 | ml_wind_corrected_AUSTIN_CORPUS_CHRISTI@2026-10-07T12:30:03.087442+00:00 |  |
 | 2026-10-07T07:43:54.603303+00:00 | 2026-10-08T00:00:00+00:00 | ml_wind_corrected | No | 1062.1 | ml_wind_corrected_AUSTIN_CORPUS_CHRISTI@2026-10-07T07:43:27.653869+00:00 |  |
@@ -20,10 +21,11 @@ Regenerated automatically after every `shadow_collect.yml` run — do not hand-e
 
 ## MIDLAND_EL_PASO
 
-5 logged prediction(s), most recent first.
+6 logged prediction(s), most recent first.
 
 | Decision time (UTC) | Valid time (UTC) | Method | Fallback? | Ampacity (A) | Model version | Notes |
 |---|---|---|---|---|---|---|
+| 2026-10-07T22:33:43.192350+00:00 | 2026-10-08T12:00:00+00:00 | ml_wind_corrected | No | 1166.5 | ml_wind_corrected_MIDLAND_EL_PASO@2026-10-07T22:32:53.893639+00:00 |  |
 | 2026-10-07T22:06:20.222166+00:00 | 2026-10-08T12:00:00+00:00 | ml_wind_corrected | No | 1207.3 | ml_wind_corrected_MIDLAND_EL_PASO@2026-10-07T22:05:30.593605+00:00 |  |
 | 2026-10-07T12:30:55.011306+00:00 | 2026-10-08T00:00:00+00:00 | ml_wind_corrected | No | 1009.6 | ml_wind_corrected_MIDLAND_EL_PASO@2026-10-07T12:30:03.087442+00:00 |  |
 | 2026-10-07T07:44:18.225802+00:00 | 2026-10-08T00:00:00+00:00 | ml_wind_corrected | No | 1002.7 | ml_wind_corrected_MIDLAND_EL_PASO@2026-10-07T07:43:27.653869+00:00 |  |
