@@ -1620,3 +1620,22 @@ not just a longer delay.
 corridors and not before the first; added an autouse fixture pinning the delay to 0 in every
 other existing test, since without it those tests would now sleep for real wall-clock seconds per
 corridor for no reason. Ran the full targeted suite (181/181 pass, 1 new) before committing.
+
+### Session: 2026-10-07 (continued), conducted by Aaron Phan — diagnostic order-swap confirms position-dependence, 15s delay insufficient
+
+Verified the 15s delay's actual effect rather than assuming it worked: triggered a run, got the
+exact same Midland timeout as every prior run, unchanged. Investigated further per the user's
+explicit direction rather than lengthening the delay blindly.
+
+Made one clearly-labeled TEMPORARY diagnostic commit (`4a5aeb8`) reversing corridor processing
+order for a single test run, to distinguish "always whichever corridor is second" from "always
+Midland specifically." Result: with Midland first and Austin second, MIDLAND succeeded genuinely
+and AUSTIN failed with the identical Open-Meteo timeout -- conclusive proof this is purely
+position-dependent (always the second request in the loop), never corridor- or location-specific.
+Reverted the diagnostic change immediately as promised, regardless of the result, and updated
+`INTER_CORRIDOR_DELAY_S`'s own docstring to record the measured finding (15s confirmed
+insufficient, not just "untested") rather than leaving a stale, superseded rationale in the code.
+
+**Verified, not merely trusted:** re-ran the full targeted shadow-module suite after reverting the
+diagnostic change (61/61 pass across the four most relevant test files) to confirm the revert
+itself introduced no regression.
