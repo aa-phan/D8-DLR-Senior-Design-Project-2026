@@ -13,6 +13,7 @@ import config
 import corridor_discretization
 import forecast_correction_models
 import forecast_shadow_pipeline as shadow
+import forecast_training
 import thermal_model
 import weather_provider
 
@@ -1246,14 +1247,14 @@ def test_persistence_24h_skips_a_pre_cutover_flat_shape_line_without_raising(tmp
     assert result.ampacity_amps is None
 
 
-def test_reference_refit_24h_stub_reports_unavailable_naming_missing_path(tmp_path, monkeypatch):
+def test_reference_refit_24h_reports_unavailable_naming_missing_path_when_no_artifact(tmp_path, monkeypatch):
     monkeypatch.setattr(shadow, "SHADOW_MODEL_DIR", str(tmp_path))
 
     def _should_not_be_called(*a, **k):
-        raise AssertionError("no fetch/feature-build/training function may be called by this stub")
+        raise AssertionError("no fetch/feature-build/training function may be called when the artifact itself is missing")
 
     monkeypatch.setattr(weather_provider, "fetch_weather", _should_not_be_called)
-    result = shadow.ReferenceRefit24hShadowMethod().compute(_CORRIDOR)
+    result = shadow.ReferenceRefit24hShadowMethod().compute(_CORRIDOR, pd.Timestamp.now(tz="UTC"))
     assert result.status == "unavailable"
     assert "reference_ml_refit_24h" in result.reason
     assert _CORRIDOR in result.reason
@@ -1333,3 +1334,178 @@ def test_log_cycle_predictions_mirrors_ml_wind_corrected_even_when_unavailable(t
     # A different candidate's genuine 777.0 value must NEVER leak into the
     # mirror just because ml_wind_corrected itself had nothing to report.
     assert record["ampacity_amps"] != 777.0
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Plan 05-04: fetch_live_truth_proxy_series and the real
+# ReferenceRefit24hShadowMethod.compute predict path.
+# ─────────────────────────────────────────────────────────────────────────
+
+_TRUTH_PROXY_ANCHOR = pd.Timestamp("2026-10-07T18:00:00Z")
+_TRUTH_PROXY_LOOKBACK_HOURS = config.FORECAST_ML_ROLLING_WINDOW_HOURS
+
+
+def _synthetic_truth_proxy_city_frame(
+    anchor_time=_TRUTH_PROXY_ANCHOR, *, lookback_hours=_TRUTH_PROXY_LOOKBACK_HOURS,
+    skip_hour=None, null_field=None, null_field_hour=None,
+):
+    """One city's own synthetic hourly station window, shaped like
+    `weather_provider.fetch_weather`'s real return (a `datetime_utc`
+    column plus `air_temp`/`wind_speed`/`wind_direction`/`solar_radiation`)
+    -- complete by default, with knobs to drop one hour entirely
+    (`skip_hour`) or null one field at one hour (`null_field`/
+    `null_field_hour`), for the gap/null tests below."""
+    rows = []
+    for h in range(lookback_hours, -1, -1):
+        ts = anchor_time - pd.Timedelta(hours=h)
+        if skip_hour is not None and ts == skip_hour:
+            continue
+        row = {
+            "datetime_utc": ts,
+            "air_temp": 25.0 + h,
+            "wind_speed": 5.0,
+            "wind_direction": 100.0,
+            "solar_radiation": 400.0,
+        }
+        if null_field is not None and null_field_hour is not None and ts == null_field_hour:
+            row[null_field] = float("nan")
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def _install_fake_fetch_weather(monkeypatch, *, city_frames: dict):
+    """Monkeypatch `weather_provider.fetch_weather` to return
+    `city_frames[cams_id]` for a station-path call whose single requested
+    CAMS id matches -- never issuing a real network call."""
+
+    def _fake_fetch_weather(location, start, end, provider="synoptic", **kwargs):
+        assert provider == "tceq"
+        cams_id = location[0]
+        frame = city_frames.get(cams_id)
+        if frame is None:
+            return pd.DataFrame(columns=["datetime_utc", "air_temp", "wind_speed", "wind_direction", "solar_radiation"])
+        return frame.copy()
+
+    monkeypatch.setattr(weather_provider, "fetch_weather", _fake_fetch_weather)
+
+
+def _complete_truth_proxy_city_frames():
+    austin_cams = config.TCEQ_STATIONS["AUSTIN"]
+    corpus_cams = config.TCEQ_STATIONS["CORPUS_CHRISTI"]
+    return {
+        austin_cams: _synthetic_truth_proxy_city_frame(),
+        corpus_cams: _synthetic_truth_proxy_city_frame(),
+    }
+
+
+def test_fetch_live_truth_proxy_series_returns_seven_rows_ending_at_anchor_time(monkeypatch):
+    _install_fake_fetch_weather(monkeypatch, city_frames=_complete_truth_proxy_city_frames())
+
+    series = shadow.fetch_live_truth_proxy_series(_CORRIDOR, _TRUTH_PROXY_ANCHOR)
+
+    assert list(series.columns) == ["datetime_utc", "dlr_amps", "air_temp", "wind_speed", "solar_radiation"]
+    assert len(series) == 7
+    assert series["datetime_utc"].is_monotonic_increasing
+    assert series["datetime_utc"].iloc[-1] == _TRUTH_PROXY_ANCHOR
+
+
+def test_fetch_live_truth_proxy_series_raises_naming_the_missing_hour_and_city(monkeypatch):
+    missing_hour = _TRUTH_PROXY_ANCHOR - pd.Timedelta(hours=3)
+    austin_cams = config.TCEQ_STATIONS["AUSTIN"]
+    corpus_cams = config.TCEQ_STATIONS["CORPUS_CHRISTI"]
+    city_frames = {
+        austin_cams: _synthetic_truth_proxy_city_frame(skip_hour=missing_hour),
+        corpus_cams: _synthetic_truth_proxy_city_frame(),
+    }
+    _install_fake_fetch_weather(monkeypatch, city_frames=city_frames)
+
+    with pytest.raises(shadow.StaleOrMissingDataError) as exc_info:
+        shadow.fetch_live_truth_proxy_series(_CORRIDOR, _TRUTH_PROXY_ANCHOR)
+
+    message = str(exc_info.value)
+    assert "AUSTIN" in message
+    assert missing_hour.isoformat() in message
+
+
+def test_fetch_live_truth_proxy_series_treats_a_null_required_field_like_a_missing_hour(monkeypatch):
+    null_hour = _TRUTH_PROXY_ANCHOR - pd.Timedelta(hours=2)
+    austin_cams = config.TCEQ_STATIONS["AUSTIN"]
+    corpus_cams = config.TCEQ_STATIONS["CORPUS_CHRISTI"]
+    city_frames = {
+        austin_cams: _synthetic_truth_proxy_city_frame(
+            null_field="solar_radiation", null_field_hour=null_hour,
+        ),
+        corpus_cams: _synthetic_truth_proxy_city_frame(),
+    }
+    _install_fake_fetch_weather(monkeypatch, city_frames=city_frames)
+
+    with pytest.raises(shadow.StaleOrMissingDataError) as exc_info:
+        shadow.fetch_live_truth_proxy_series(_CORRIDOR, _TRUTH_PROXY_ANCHOR)
+
+    message = str(exc_info.value)
+    assert "AUSTIN" in message
+    assert "solar_radiation" in message
+    assert null_hour.isoformat() in message
+
+
+class _FakeMLPEstimator:
+    """A minimal stand-in for a fitted `MLPRegressor` -- records whether
+    (and with what shape) `.predict` was called, without touching
+    scikit-learn at all."""
+
+    def __init__(self, value=1234.5):
+        self.value = value
+        self.predict_calls = []
+
+    def predict(self, X):
+        self.predict_calls.append(np.asarray(X).shape)
+        return np.array([self.value])
+
+
+def test_reference_refit_24h_compute_predicts_ok_from_a_complete_synthetic_window(monkeypatch):
+    fake_model = _FakeMLPEstimator(value=1555.0)
+    monkeypatch.setattr(shadow, "load_correction_model", lambda corridor, method_name: fake_model)
+    monkeypatch.setattr(shadow, "model_version_for", lambda corridor, method_name: "fake@test")
+    _install_fake_fetch_weather(monkeypatch, city_frames=_complete_truth_proxy_city_frames())
+
+    result = shadow.ReferenceRefit24hShadowMethod().compute(_CORRIDOR, _TRUTH_PROXY_ANCHOR)
+
+    assert result.status == "ok"
+    assert isinstance(result.ampacity_amps, float)
+    assert np.isfinite(result.ampacity_amps)
+    assert result.ampacity_amps == 1555.0
+    assert result.input_provenance["per_city_ampacity_amps"] is None
+    assert result.input_provenance["per_city_not_applicable_reason"]
+    # The real estimator's own .predict was actually called -- not bypassed.
+    assert len(fake_model.predict_calls) == 1
+
+
+def test_reference_refit_24h_compute_never_calls_fit_corridor_model(monkeypatch):
+    fake_model = _FakeMLPEstimator()
+    monkeypatch.setattr(shadow, "load_correction_model", lambda corridor, method_name: fake_model)
+    monkeypatch.setattr(shadow, "model_version_for", lambda corridor, method_name: "fake@test")
+    _install_fake_fetch_weather(monkeypatch, city_frames=_complete_truth_proxy_city_frames())
+
+    def _must_not_fit(*a, **k):
+        raise AssertionError("ReferenceRefit24hShadowMethod.compute must never fit/retrain an estimator")
+
+    monkeypatch.setattr(forecast_training, "fit_corridor_model", _must_not_fit)
+
+    result = shadow.ReferenceRefit24hShadowMethod().compute(_CORRIDOR, _TRUTH_PROXY_ANCHOR)
+    assert result.status == "ok"
+
+
+def test_reference_refit_24h_compute_loads_and_predicts_from_the_real_persisted_artifact(monkeypatch):
+    """Integration check (network-free): Task 1's REAL, already-committed
+    artifact fed a synthetic (non-network) 7-row truth-proxy frame through
+    the real `build_ml_features` + `.predict(...)` path -- proving the
+    offline fit and the live feature-building path agree on feature
+    shape/order. Does NOT monkeypatch SHADOW_MODEL_DIR -- loads the real
+    on-disk artifact committed by Task 1."""
+    _install_fake_fetch_weather(monkeypatch, city_frames=_complete_truth_proxy_city_frames())
+
+    result = shadow.ReferenceRefit24hShadowMethod().compute(_CORRIDOR, _TRUTH_PROXY_ANCHOR)
+
+    assert result.status == "ok"
+    assert isinstance(result.ampacity_amps, float)
+    assert np.isfinite(result.ampacity_amps)

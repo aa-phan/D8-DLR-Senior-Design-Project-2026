@@ -19,6 +19,7 @@ import pytest
 import config
 import forecast_shadow_demo as demo
 import forecast_shadow_pipeline as shadow
+import weather_provider
 
 
 class _StopHereSentinel(Exception):
@@ -329,20 +330,43 @@ def test_run_once_all_methods_attempts_all_five_and_isolates_one_sabotaged_candi
     assert record["candidates"]["persistence_24h"]["status"] == "failed"
 
 
-def test_run_once_all_methods_reports_reference_refit_as_unavailable_on_a_clean_run(monkeypatch, tmp_path):
-    """On a clean run (no sabotage, no persisted reference artifact),
-    `reference_ml_refit_24h` must read unavailable, and the three
-    per-city-reduced candidates must reach status='ok' (real persisted
-    wind/cooling models already exist in this repo for this corridor)."""
+def _fake_truth_proxy_fetch_weather(location, start, end, provider="synoptic", **kwargs):
+    """Plan 05-04: a complete, network-free 7-hour station window for
+    whichever single CAMS id `fetch_live_truth_proxy_series` requests --
+    used so this file's `run_once_all_methods` tests stay network-free
+    even though `reference_ml_refit_24h` is no longer a stub."""
+    end_ts = pd.Timestamp(end)
+    if end_ts.tzinfo is None:
+        end_ts = end_ts.tz_localize("UTC")
+    rows = []
+    for h in range(config.FORECAST_ML_ROLLING_WINDOW_HOURS, -1, -1):
+        rows.append({
+            "datetime_utc": end_ts - pd.Timedelta(hours=h),
+            "air_temp": 25.0, "wind_speed": 5.0, "wind_direction": 100.0,
+            "solar_radiation": 400.0,
+        })
+    return pd.DataFrame(rows)
+
+
+def test_run_once_all_methods_reports_reference_refit_as_ok_with_a_real_artifact_and_truth_proxy_window(monkeypatch, tmp_path):
+    """Plan 05-04: now that a real persisted artifact exists for this
+    corridor and the live truth-proxy path is wired, a clean run with a
+    complete (mocked, network-free) truth-proxy window must reach
+    `reference_ml_refit_24h` status='ok' -- no longer the 05-02 stub's
+    perpetual 'no persisted artifact' unavailability. The three
+    per-city-reduced candidates must also reach status='ok' (real
+    persisted wind/cooling models already exist in this repo for this
+    corridor)."""
     monkeypatch.setattr(shadow, "SHADOW_PREDICTIONS_DIR", str(tmp_path))
+    monkeypatch.setattr(weather_provider, "fetch_weather", _fake_truth_proxy_fetch_weather)
     corridor = "AUSTIN_CORPUS_CHRISTI"
     cities = config.CORRIDOR_ENDPOINTS[corridor]
     monkeypatch.setattr(shadow, "fetch_shared_corridor_inputs", _fake_shared_inputs_factory(cities))
 
     results = demo.run_once_all_methods(corridor)
 
-    assert results["reference_ml_refit_24h"].status == "unavailable"
-    assert "reference_ml_refit_24h" in (results["reference_ml_refit_24h"].reason or "")
+    assert results["reference_ml_refit_24h"].status == "ok"
+    assert isinstance(results["reference_ml_refit_24h"].ampacity_amps, float)
     for name in shadow.CANDIDATE_METHOD_NAMES:
         assert results[name].status != "failed", (name, results[name])
 

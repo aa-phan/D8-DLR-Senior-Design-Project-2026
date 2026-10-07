@@ -48,6 +48,7 @@ import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
 
+import ampacity_forecast
 import config
 import corridor_discretization
 import forecast_correction_models
@@ -1125,39 +1126,270 @@ class Persistence24hShadowMethod:
         )
 
 
+# Plan 05-04: how close a live station row must land to one of the seven
+# required hourly timestamps in `fetch_live_truth_proxy_series`'s window
+# to count as that hour's own observation. Named module constant, not a
+# magic number inline -- mirrors `_PERSISTENCE_VALID_TIME_TOLERANCE`'s own
+# convention above.
+_TRUTH_PROXY_HOUR_TOLERANCE = pd.Timedelta(minutes=20)
+
+# The required fields `fetch_live_truth_proxy_series` validates per hour,
+# per city -- a null in ANY of these at a required hour is the same
+# "missing hour" failure as no row at all (Plan 05-04 action step 2,
+# T-05-04-01): never silently passed through to the physics/weakest-link
+# reduction below.
+_TRUTH_PROXY_REQUIRED_FIELDS = ("air_temp", "wind_speed", "wind_direction", "solar_radiation")
+
+
+def _select_hour_row(frame: pd.DataFrame, target_ts: "pd.Timestamp", tolerance: "pd.Timedelta"):
+    """
+    Return the row in `frame` (carrying a `datetime_utc` column) closest
+    to `target_ts`, or `None` if `frame` is empty or that closest row's
+    own distance from `target_ts` exceeds `tolerance`. Never interpolates
+    or invents a row -- only ever selects an actually-observed one.
+    """
+    if frame.empty:
+        return None
+    diffs = (frame["datetime_utc"] - target_ts).abs()
+    idx = diffs.idxmin()
+    if diffs.loc[idx] > tolerance:
+        return None
+    return frame.loc[idx]
+
+
+def fetch_live_truth_proxy_series(
+    corridor: str, anchor_time, *, lookback_hours: float = None,
+) -> pd.DataFrame:
+    """
+    Plan 05-04 (D-05's decision-time discipline, generalized for arm 5's
+    own lagged/rolling feature needs): build a 7-row, hourly, corridor-
+    level TRUTH-PROXY series -- `anchor_time - lookback_hours` through
+    `anchor_time` inclusive -- from near-real-time station observations,
+    shaped EXACTLY like `forecast_experiment._arm5_truth_frame`'s own
+    output (`datetime_utc`, `dlr_amps`, `air_temp`, `wind_speed`,
+    `solar_radiation`) so it can be fed straight into `ampacity_forecast.
+    build_ml_features` -- the SAME feature builder arm 5's own offline fit
+    (`forecast_training.build_training_matrix`) already calls.
+
+    For EACH endpoint city, fetches ONE window of `provider="tceq"`
+    station observations (the project's primary for wind/temp, WX-01;
+    `fetch_weather`'s own `fallback=True` default retries Synoptic
+    automatically on a primary failure -- never requested directly, same
+    discipline `fetch_live_anchor_observation` already uses) spanning
+    `[anchor_time - lookback_hours, anchor_time]`, then selects, for each
+    of the 7 target hourly timestamps, the closest row within
+    `_TRUTH_PROXY_HOUR_TOLERANCE` (20 minutes). A missing hour, or a
+    matched row with a null required field (`_TRUTH_PROXY_REQUIRED_
+    FIELDS`), raises `StaleOrMissingDataError` naming the corridor, city,
+    and the specific missing/null hour on the FIRST such gap found -- this
+    function never accumulates multiple gaps before raising, and never
+    interpolates, pads, or backfills a missing hour (D-04/T-05-04-01).
+
+    Once both cities' 7-hour windows are fully validated, each city's own
+    hourly ampacity is computed via the SAME `thermal_model.
+    perpendicular_wind` + `thermal_model.ieee738_ampacity` chain every
+    other method in this module uses, against the corridor's own
+    `geometry.bearing_deg`/`conductor` (`corridor_discretization.
+    corridor_geometry`); the two cities' 7-element ampacity arrays are
+    reduced via ONE call to `forecast_training.corridor_weakest_link` --
+    the repository's one weakest-link reduction, never a second copy of
+    the rule, and never one call per hour.
+
+    `lookback_hours` defaults to `config.FORECAST_ML_ROLLING_WINDOW_HOURS`
+    (6) -- the exact depth arm 5's own lag/rolling features need
+    (`config.FORECAST_ML_LAG_HOURS`'s max of 6h, `FORECAST_ML_ROLLING_
+    WINDOW_HOURS`), looked up at call time rather than bound as a mutable
+    default so a test's `config` monkeypatch is honored.
+
+    Returns:
+        A `pd.DataFrame` with exactly 7 rows, columns `datetime_utc`,
+        `dlr_amps`, `air_temp`, `wind_speed`, `solar_radiation`, sorted
+        ascending by `datetime_utc`, whose LAST row's `datetime_utc`
+        equals `anchor_time`.
+
+    Raises:
+        StaleOrMissingDataError: on any window-fetch failure, or any
+            missing/null required hour for either endpoint city.
+    """
+    if lookback_hours is None:
+        lookback_hours = config.FORECAST_ML_ROLLING_WINDOW_HOURS
+    lookback_hours = int(lookback_hours)
+
+    anchor_ts = pd.Timestamp(anchor_time)
+    if anchor_ts.tzinfo is None:
+        anchor_ts = anchor_ts.tz_localize("UTC")
+    window_start = anchor_ts - pd.Timedelta(hours=lookback_hours)
+    # Ascending: anchor_time - lookback_hours, ..., anchor_time - 1h, anchor_time.
+    target_times = [anchor_ts - pd.Timedelta(hours=h) for h in range(lookback_hours, -1, -1)]
+
+    geometry = corridor_discretization.corridor_geometry(corridor)
+    city_a, city_b = config.CORRIDOR_ENDPOINTS[corridor]
+
+    per_city_fields: dict = {}
+    for city in (city_a, city_b):
+        cams_id = config.TCEQ_STATIONS.get(city)
+        if cams_id is None:
+            raise StaleOrMissingDataError(
+                f"fetch_live_truth_proxy_series: corridor {corridor!r}: no "
+                f"known TCEQ CAMS site for city {city!r}"
+            )
+        try:
+            frame = weather_provider.fetch_weather(
+                [cams_id], window_start.isoformat(), anchor_ts.isoformat(), provider="tceq",
+            )
+        except Exception as exc:
+            raise StaleOrMissingDataError(
+                f"fetch_live_truth_proxy_series: corridor {corridor!r} city "
+                f"{city!r}: window fetch failed: {exc}"
+            ) from exc
+
+        if frame.empty:
+            frame = pd.DataFrame(columns=["datetime_utc", *_TRUTH_PROXY_REQUIRED_FIELDS])
+        else:
+            frame = frame.reset_index()
+            frame["datetime_utc"] = pd.to_datetime(frame["datetime_utc"], utc=True)
+
+        fields: dict = {field: [] for field in _TRUTH_PROXY_REQUIRED_FIELDS}
+        for target_ts in target_times:
+            row = _select_hour_row(frame, target_ts, _TRUTH_PROXY_HOUR_TOLERANCE)
+            if row is None:
+                raise StaleOrMissingDataError(
+                    f"fetch_live_truth_proxy_series: corridor {corridor!r} "
+                    f"city {city!r}: no usable station row within "
+                    f"{_TRUTH_PROXY_HOUR_TOLERANCE} of required hour "
+                    f"{target_ts.isoformat()}"
+                )
+            for field in _TRUTH_PROXY_REQUIRED_FIELDS:
+                value = row.get(field)
+                if pd.isnull(value):
+                    raise StaleOrMissingDataError(
+                        f"fetch_live_truth_proxy_series: corridor {corridor!r} "
+                        f"city {city!r}: null {field!r} at required hour "
+                        f"{target_ts.isoformat()}"
+                    )
+                fields[field].append(float(value))
+        per_city_fields[city] = fields
+
+    perp_a = thermal_model.perpendicular_wind(
+        np.array(per_city_fields[city_a]["wind_speed"], dtype=float),
+        np.array(per_city_fields[city_a]["wind_direction"], dtype=float),
+        geometry.bearing_deg,
+    )
+    amps_a = np.asarray(
+        thermal_model.ieee738_ampacity(
+            np.array(per_city_fields[city_a]["air_temp"], dtype=float), perp_a,
+            np.array(per_city_fields[city_a]["solar_radiation"], dtype=float), geometry.conductor,
+        ),
+        dtype=float,
+    )
+    perp_b = thermal_model.perpendicular_wind(
+        np.array(per_city_fields[city_b]["wind_speed"], dtype=float),
+        np.array(per_city_fields[city_b]["wind_direction"], dtype=float),
+        geometry.bearing_deg,
+    )
+    amps_b = np.asarray(
+        thermal_model.ieee738_ampacity(
+            np.array(per_city_fields[city_b]["air_temp"], dtype=float), perp_b,
+            np.array(per_city_fields[city_b]["solar_radiation"], dtype=float), geometry.conductor,
+        ),
+        dtype=float,
+    )
+
+    dlr_amps, _, winning_columns = forecast_training.corridor_weakest_link(
+        amps_a, amps_b,
+        {
+            "air_temp": np.array(per_city_fields[city_a]["air_temp"], dtype=float),
+            "wind_speed": np.array(per_city_fields[city_a]["wind_speed"], dtype=float),
+            "solar_radiation": np.array(per_city_fields[city_a]["solar_radiation"], dtype=float),
+        },
+        {
+            "air_temp": np.array(per_city_fields[city_b]["air_temp"], dtype=float),
+            "wind_speed": np.array(per_city_fields[city_b]["wind_speed"], dtype=float),
+            "solar_radiation": np.array(per_city_fields[city_b]["solar_radiation"], dtype=float),
+        },
+    )
+
+    return pd.DataFrame({
+        "datetime_utc": target_times,
+        "dlr_amps": dlr_amps,
+        "air_temp": winning_columns["air_temp"],
+        "wind_speed": winning_columns["wind_speed"],
+        "solar_radiation": winning_columns["solar_radiation"],
+    }).sort_values("datetime_utc").reset_index(drop=True)
+
+
+_PER_CITY_NOT_APPLICABLE_REASON = (
+    "reference_ml_refit_24h is architecturally corridor-level-native with no "
+    "per-city decomposition at inference time, exactly as at training time: "
+    "the estimator is fit on forecast_experiment._arm5_truth_frame's own "
+    "weakest-link-reduced corridor series and never sees a per-city value, "
+    "so there is no per-city ampacity to report here either."
+)
+
+
 class ReferenceRefit24hShadowMethod:
     """
-    Plan 05-02 (D-03/D-04): an HONEST stub. `data/shadow/models/` holds no
-    `reference_ml_refit_24h_*.joblib` artifact yet (05-RESEARCH.md,
-    confirmed via `git ls-files`) -- this method's one job this plan is to
-    exist, be wired into the five-candidate loop, and report
-    `status="unavailable"` with a reason naming the missing path, exactly
-    like any other missing-input case (D-04), never a fallback
-    substitution and never an inline training/refit call (D-09's "no
-    silent protocol changes", this plan's own prohibitions). 05-04
-    replaces this body with the real predict path once the artifact
-    exists, without changing this method's name or its callers'
-    expectations of its return shape.
+    Plan 05-04 (D-03/D-04): the real predict path, replacing 05-02's
+    honest `status="unavailable"` stub now that a persisted arm-5 MLP
+    artifact exists for both corridors (`backend/forecast_shadow_fit_
+    reference_refit.py`). Loads the persisted estimator via `load_
+    correction_model` (never fits/retrains it -- D-09, T-05-04-04), builds
+    its live feature row from `fetch_live_truth_proxy_series`'s 7-hour
+    truth-proxy window via `ampacity_forecast.build_ml_features` (the SAME
+    feature builder the offline fit used), and predicts from the LAST row
+    (the one anchored at `anchor_time`, the only row whose lag/rolling
+    features are fully determined).
     """
 
     name = "reference_ml_refit_24h"
 
-    def compute(self, corridor: str) -> "ShadowPrediction":
+    def compute(self, corridor: str, anchor_time) -> "ShadowPrediction":
         try:
-            load_correction_model(corridor, self.name)
+            estimator = load_correction_model(corridor, self.name)
         except FileNotFoundError as exc:
             return ShadowPrediction(
                 corridor=corridor, method=self.name, ampacity_amps=None,
                 timestamps=None, fallback_used=False, status="unavailable",
                 reason=str(exc),
             )
-        # Not reachable in this plan -- no artifact exists yet to load
-        # successfully. 05-04 replaces this stub body with the real
-        # 24h-refit-MLP predict path once it does.
-        raise NotImplementedError(
-            f"ReferenceRefit24hShadowMethod.compute({corridor!r}): a "
-            f"persisted artifact loaded successfully, but this plan's stub "
-            f"has no predict path yet -- 05-04 implements it."
+
+        try:
+            truth_proxy_series = fetch_live_truth_proxy_series(corridor, anchor_time)
+        except StaleOrMissingDataError as exc:
+            return ShadowPrediction(
+                corridor=corridor, method=self.name, ampacity_amps=None,
+                timestamps=None, fallback_used=False, status="unavailable",
+                reason=str(exc),
+            )
+
+        indexed = truth_proxy_series.set_index("datetime_utc").sort_index()
+        features = ampacity_forecast.build_ml_features(indexed)
+        last_row = features.iloc[[-1]]
+
+        if bool(last_row.isnull().to_numpy().any()):
+            # Structurally should be impossible given fetch_live_truth_proxy_
+            # series's own per-hour validation above -- asserted, not merely
+            # trusted, per this plan's own <behavior> spec.
+            raise AssertionError(
+                f"ReferenceRefit24hShadowMethod.compute({corridor!r}): the "
+                f"live feature row built from a validated 7-hour truth-proxy "
+                f"window still carries a null value -- refusing to predict "
+                f"from it: {last_row.to_dict(orient='records')}"
+            )
+
+        prediction = float(np.asarray(estimator.predict(last_row.to_numpy(dtype=float)))[0])
+
+        provenance = {
+            "truth_proxy_window_start": truth_proxy_series["datetime_utc"].iloc[0].isoformat(),
+            "truth_proxy_window_end": truth_proxy_series["datetime_utc"].iloc[-1].isoformat(),
+            "per_city_ampacity_amps": None,
+            "per_city_not_applicable_reason": _PER_CITY_NOT_APPLICABLE_REASON,
+        }
+        return ShadowPrediction(
+            corridor=corridor, method=self.name, ampacity_amps=prediction,
+            timestamps=None, fallback_used=False, status="ok",
+            model_version=model_version_for(corridor, self.name),
+            input_provenance=provenance,
         )
 
 
