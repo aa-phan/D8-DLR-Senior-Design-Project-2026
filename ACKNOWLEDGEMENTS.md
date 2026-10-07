@@ -1733,3 +1733,44 @@ explicit determinism check across two renders of the same input). Also ran the r
 the REAL data currently on the `shadow-collection-data` branch (fetched via `git show`) to confirm
 the output reads correctly against actual collected data, not just synthetic fixtures. Full
 relevant suite (224/224 pass, 8 new) before committing.
+
+### Session: 2026-10-07 (continued), conducted by Aaron Phan — Phase 5 planning: five-method shadow collection
+
+User had already gathered Phase 5's scope through a separate context-gathering step (eleven locked
+decisions, D-01 through D-11, captured in `05-CONTEXT.md`) and a separate research pass
+(`05-RESEARCH.md`, code-grounded with file:line citations). Claude Code (the GSD planner agent) was
+used to turn those two documents into five executable `PLAN.md` files breaking down how the existing
+single-candidate shadow collector (`backend/forecast_shadow_pipeline.py`/`forecast_shadow_demo.py`/
+`forecast_shadow_collect.py`) gets extended to record all five of Phase 3/4's real candidates side by
+side every cycle, never wiring anything into production and never re-litigating Phase 3/4's verdict.
+
+By direct read of the actual source (not assumed from the research pass), found two gaps the
+research document's own architecture diagram did not call out: (1) `ml_cooling_corrected` and
+`raw_forecast` are single-city predictors today — nothing corridor-reduces them across both
+endpoint cities the way wind correction already does, which the locked decisions require for all
+five candidates; and (2) `reference_ml_refit_24h`'s model needs multi-hour lagged ampacity features
+(`ampacity_forecast.build_ml_features`) that the collector's own twice-daily log cannot supply at
+hourly granularity even once a persisted artifact exists — a live reconstruction from a short window
+of near-real-time station observations, run through the same physics the rest of the module already
+uses, is a new piece of plumbing this planning pass had to design rather than assume away.
+
+Produced: a standalone checkpoint-only plan gating the JSONL schema's one-way-door restructuring
+behind an explicit human decision before any code touches it (per the project's `REVERSIBILITY_GATES`
+rule that a checkpoint and its implementing code may never share a plan); a tracer plan proving the
+five-candidate architecture end to end for one corridor; two plans expanding to both corridors and
+giving the sixth candidate a real artifact and a real live-data path in parallel; and a closing plan
+updating the rendered README table, the operational runbook, and a real GitHub Actions dispatch. Also
+made an explicit, documented design call — flagged as the planner's own discretion, not re-derived
+from the locked decisions — that the new `persistence_24h` candidate anchors on the matching prior
+cycle's `raw_forecast` value rather than `ml_wind_corrected`'s, so a baseline arm never becomes
+secretly derivative of a correction model's own output.
+
+**Verified, not merely trusted:** every plan's structure was validated against this project's own
+`gsd-tools.cjs query verify.plan-structure` and `frontmatter.validate` checks (all five passed) rather
+than assumed correct from authoring. The automated `check.decision-coverage-plan` gate returned
+`passed: false, reason: could-not-parse` against `05-CONTEXT.md` — the same already-known parser
+limitation recorded in this project's own `STATE.md` for Phase 4's identical `### D-NN:`-heading
+format (the parser expects a `- **D-NN:**` bullet format instead). Proceeded the same way Phase 4
+did: manually grepped every plan for every one of D-01 through D-11 and confirmed each is cited by at
+least one plan before finalizing, rather than trusting the tool's negative result or silently ignoring
+it.

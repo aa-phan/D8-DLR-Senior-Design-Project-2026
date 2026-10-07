@@ -401,3 +401,33 @@ and may be executed first or in parallel if that better fits available capacity)
 
 *(none — Phase 999.1 promoted to Phase 3 above, 2026-09-28; Phase 4 broken down into 6 plans,
 2026-09-30)*
+
+### Phase 5: Shadow Collector: Five-Method Side-by-Side Challenger Recording
+
+**Goal:** Extend the existing, inert shadow collector to record all five of Phase 3/4's real
+(non-oracle) 24-hour-lead candidates side by side every cycle — `ml_wind_corrected`,
+`ml_cooling_corrected`, `reference_ml_refit_24h`, `raw_forecast`, `persistence_24h` — from the same
+shared inputs, keeping `ml_wind_corrected` as the provisional production default and declaring no
+winner, feeding more FRESH-basis observational data into the already-scheduled 2026-11-24T00:00:00
+UTC evaluation without touching that protocol. Production (`dlr_pipeline.py`) remains unchanged.
+**Requirements**: No FCST/ANOM requirement ID applies — mirrors Phase 3/4's own no-new-requirement-ID
+reasoning. `05-CONTEXT.md`'s eleven locked decisions D-01 through D-11 are this phase's scope and are
+carried in each plan's `requirements:` field, exactly as Phase 3/4's plans used `[D-02, D-03, D-04]`.
+**Depends on:** Phase 4
+**Plans:** 5 plans
+
+Plans:
+
+- [ ] 05-01-PLAN.md — Checkpoint: human approval of the new nested-per-candidate JSONL schema
+  (schema_version 2) and the historical-data strategy for already-committed flat-shape rows on
+  `shadow-collection-data` — the one-way-door decision (D-06) gated before any implementing code
+- [ ] 05-02-PLAN.md — Tracer: shared-input fetch (D-02), corridor-level weakest-link reduction
+  generalized to all three reused candidates, a real `persistence_24h` (D-05), an honest
+  `reference_ml_refit_24h` stub (D-04), and the new schema — proven for one corridor, one live cycle
+- [ ] 05-03-PLAN.md — Wire `forecast_shadow_collect.py`'s scheduled entry point to the five-candidate
+  orchestrator for every corridor, and prove it with a real two-corridor live cycle (D-01, D-10)
+- [ ] 05-04-PLAN.md — Fit and commit `reference_ml_refit_24h`'s real artifact (D-03), build the live
+  decision-time-available truth-proxy reconstruction its lagged features need, and wire its real
+  predict path (D-04) — run in parallel with 05-03
+- [ ] 05-05-PLAN.md — Render both JSONL shapes correctly forever, document D-08's runbook note, and
+  confirm the real GitHub Actions run end to end plus the next-scheduled-run follow-up (D-08, D-10)
