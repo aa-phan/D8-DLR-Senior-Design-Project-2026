@@ -8,43 +8,16 @@ Regenerated automatically after every `shadow_collect.yml` run — do not hand-e
 
 ## AUSTIN_CORPUS_CHRISTI
 
-7 logged prediction(s), most recent first.
+8 logged prediction(s), most recent first.
 
-### Cycle — decision time 2026-10-08T00:45:36.848499+00:00 (valid time 2026-10-08T12:00:00+00:00)
+All five candidates per cycle (`schema_version: 2`), most recent 4 of 4 shown:
 
-All five candidates recorded this cycle (`schema_version: 2`):
-
-| Candidate | Status | Ampacity (A) | Fallback? | Model version | Notes |
-|---|---|---|---|---|---|
-| ml_wind_corrected | ok | 1046.1 | No | ml_wind_corrected_AUSTIN_CORPUS_CHRISTI@2026-10-08T00:45:12.573507+00:00 |  |
-| ml_cooling_corrected | ok | 1186.7 | No | ml_cooling_corrected_AUSTIN_CORPUS_CHRISTI@2026-10-08T00:45:12.573048+00:00 |  |
-| raw_forecast | ok | 1086.5 | No | — |  |
-| persistence_24h | unavailable | — | No | — | no prior entry within tolerance of decision_time 2026-10-08T00:45:36.848499+00:00 (cold start, or a … |
-| reference_ml_refit_24h | unavailable | — | No | — | fetch_live_truth_proxy_series: corridor 'AUSTIN_CORPUS_CHRISTI' city 'AUSTIN': null 'solar_radiation… |
-
-### Cycle — decision time 2026-10-07T22:33:21.729464+00:00 (valid time 2026-10-08T12:00:00+00:00)
-
-All five candidates recorded this cycle (`schema_version: 2`):
-
-| Candidate | Status | Ampacity (A) | Fallback? | Model version | Notes |
-|---|---|---|---|---|---|
-| ml_wind_corrected | ok | 1069.3 | No | ml_wind_corrected_AUSTIN_CORPUS_CHRISTI@2026-10-07T22:32:53.893639+00:00 |  |
-| ml_cooling_corrected | ok | 1190.6 | No | ml_cooling_corrected_AUSTIN_CORPUS_CHRISTI@2026-10-07T22:32:53.892999+00:00 |  |
-| raw_forecast | ok | 1086.5 | No | — |  |
-| persistence_24h | unavailable | — | No | — | no prior entry within tolerance of decision_time 2026-10-07T22:33:21.729464+00:00 (cold start, or a … |
-| reference_ml_refit_24h | unavailable | — | No | — | fetch_live_truth_proxy_series: corridor 'AUSTIN_CORPUS_CHRISTI' city 'AUSTIN': no usable station row… |
-
-### Cycle — decision time 2026-10-07T22:05:58.463378+00:00 (valid time 2026-10-08T12:00:00+00:00)
-
-All five candidates recorded this cycle (`schema_version: 2`):
-
-| Candidate | Status | Ampacity (A) | Fallback? | Model version | Notes |
-|---|---|---|---|---|---|
-| ml_wind_corrected | ok | 1091.2 | No | ml_wind_corrected_AUSTIN_CORPUS_CHRISTI@2026-10-07T22:05:30.593605+00:00 |  |
-| ml_cooling_corrected | ok | 1226.8 | No | ml_cooling_corrected_AUSTIN_CORPUS_CHRISTI@2026-10-07T22:05:30.592957+00:00 |  |
-| raw_forecast | ok | 1086.5 | No | — |  |
-| persistence_24h | unavailable | — | No | — | no prior entry within tolerance of decision_time 2026-10-07T22:05:58.463378+00:00 (cold start, or a … |
-| reference_ml_refit_24h | unavailable | — | No | — | fetch_live_truth_proxy_series: corridor 'AUSTIN_CORPUS_CHRISTI' city 'AUSTIN': no usable station row… |
+| Decision time (UTC) | Valid time (UTC) | ml_wind_corrected | ml_cooling_corrected | raw_forecast | persistence_24h | reference_ml_refit_24h | Notes |
+|---|---|---|---|---|---|---|---|
+| 2026-10-08T01:31:14.392105+00:00 | 2026-10-08T18:00:00+00:00 | ✓ 945.4 | ✓ 1064.0 | ✓ 946.7 | unavailable | unavailable | persistence_24h: no prior entry within tolerance of decision_time 2026-10-08T01:31:14.392105+00:00 (cold start, or a gap in this corridor's collection history); reference_ml_refit_24h: fetch_live_trut… |
+| 2026-10-08T00:45:36.848499+00:00 | 2026-10-08T12:00:00+00:00 | ✓ 1046.1 | ✓ 1186.7 | ✓ 1086.5 | unavailable | unavailable | persistence_24h: no prior entry within tolerance of decision_time 2026-10-08T00:45:36.848499+00:00 (cold start, or a gap in this corridor's collection history); reference_ml_refit_24h: fetch_live_trut… |
+| 2026-10-07T22:33:21.729464+00:00 | 2026-10-08T12:00:00+00:00 | ✓ 1069.3 | ✓ 1190.6 | ✓ 1086.5 | unavailable | unavailable | persistence_24h: no prior entry within tolerance of decision_time 2026-10-07T22:33:21.729464+00:00 (cold start, or a gap in this corridor's collection history); reference_ml_refit_24h: fetch_live_trut… |
+| 2026-10-07T22:05:58.463378+00:00 | 2026-10-08T12:00:00+00:00 | ✓ 1091.2 | ✓ 1226.8 | ✓ 1086.5 | unavailable | unavailable | persistence_24h: no prior entry within tolerance of decision_time 2026-10-07T22:05:58.463378+00:00 (cold start, or a gap in this corridor's collection history); reference_ml_refit_24h: fetch_live_trut… |
 
 | Decision time (UTC) | Valid time (UTC) | Method | Fallback? | Ampacity (A) | Model version | Notes |
 |---|---|---|---|---|---|---|
@@ -55,43 +28,16 @@ All five candidates recorded this cycle (`schema_version: 2`):
 
 ## MIDLAND_EL_PASO
 
-7 logged prediction(s), most recent first.
+8 logged prediction(s), most recent first.
 
-### Cycle — decision time 2026-10-08T00:45:57.638423+00:00 (valid time 2026-10-08T12:00:00+00:00)
+All five candidates per cycle (`schema_version: 2`), most recent 4 of 4 shown:
 
-All five candidates recorded this cycle (`schema_version: 2`):
-
-| Candidate | Status | Ampacity (A) | Fallback? | Model version | Notes |
-|---|---|---|---|---|---|
-| ml_wind_corrected | ok | 1200.8 | No | ml_wind_corrected_MIDLAND_EL_PASO@2026-10-08T00:45:12.573507+00:00 |  |
-| ml_cooling_corrected | ok | 1160.7 | No | ml_cooling_corrected_MIDLAND_EL_PASO@2026-10-08T00:45:12.573507+00:00 |  |
-| raw_forecast | ok | 1082.8 | No | — |  |
-| persistence_24h | unavailable | — | No | — | no prior entry within tolerance of decision_time 2026-10-08T00:45:57.638423+00:00 (cold start, or a … |
-| reference_ml_refit_24h | unavailable | — | No | — | fetch_live_truth_proxy_series: corridor 'MIDLAND_EL_PASO' city 'MIDLAND': null 'solar_radiation' at … |
-
-### Cycle — decision time 2026-10-07T22:33:43.192350+00:00 (valid time 2026-10-08T12:00:00+00:00)
-
-All five candidates recorded this cycle (`schema_version: 2`):
-
-| Candidate | Status | Ampacity (A) | Fallback? | Model version | Notes |
-|---|---|---|---|---|---|
-| ml_wind_corrected | ok | 1166.5 | No | ml_wind_corrected_MIDLAND_EL_PASO@2026-10-07T22:32:53.893639+00:00 |  |
-| ml_cooling_corrected | ok | 1174.3 | No | ml_cooling_corrected_MIDLAND_EL_PASO@2026-10-07T22:32:53.893639+00:00 |  |
-| raw_forecast | ok | 1082.8 | No | — |  |
-| persistence_24h | unavailable | — | No | — | no prior entry within tolerance of decision_time 2026-10-07T22:33:43.192350+00:00 (cold start, or a … |
-| reference_ml_refit_24h | unavailable | — | No | — | fetch_live_truth_proxy_series: corridor 'MIDLAND_EL_PASO' city 'MIDLAND': no usable station row with… |
-
-### Cycle — decision time 2026-10-07T22:06:20.222166+00:00 (valid time 2026-10-08T12:00:00+00:00)
-
-All five candidates recorded this cycle (`schema_version: 2`):
-
-| Candidate | Status | Ampacity (A) | Fallback? | Model version | Notes |
-|---|---|---|---|---|---|
-| ml_wind_corrected | ok | 1207.3 | No | ml_wind_corrected_MIDLAND_EL_PASO@2026-10-07T22:05:30.593605+00:00 |  |
-| ml_cooling_corrected | ok | 1169.6 | No | ml_cooling_corrected_MIDLAND_EL_PASO@2026-10-07T22:05:30.593605+00:00 |  |
-| raw_forecast | ok | 1082.8 | No | — |  |
-| persistence_24h | unavailable | — | No | — | no prior entry within tolerance of decision_time 2026-10-07T22:06:20.222166+00:00 (cold start, or a … |
-| reference_ml_refit_24h | unavailable | — | No | — | fetch_live_truth_proxy_series: corridor 'MIDLAND_EL_PASO' city 'MIDLAND': no usable station row with… |
+| Decision time (UTC) | Valid time (UTC) | ml_wind_corrected | ml_cooling_corrected | raw_forecast | persistence_24h | reference_ml_refit_24h | Notes |
+|---|---|---|---|---|---|---|---|
+| 2026-10-08T01:31:35.791102+00:00 | 2026-10-08T18:00:00+00:00 | ✓ 990.4 | ✓ 1000.5 | ✓ 853.0 | unavailable | unavailable | persistence_24h: no prior entry within tolerance of decision_time 2026-10-08T01:31:35.791102+00:00 (cold start, or a gap in this corridor's collection history); reference_ml_refit_24h: fetch_live_trut… |
+| 2026-10-08T00:45:57.638423+00:00 | 2026-10-08T12:00:00+00:00 | ✓ 1200.8 | ✓ 1160.7 | ✓ 1082.8 | unavailable | unavailable | persistence_24h: no prior entry within tolerance of decision_time 2026-10-08T00:45:57.638423+00:00 (cold start, or a gap in this corridor's collection history); reference_ml_refit_24h: fetch_live_trut… |
+| 2026-10-07T22:33:43.192350+00:00 | 2026-10-08T12:00:00+00:00 | ✓ 1166.5 | ✓ 1174.3 | ✓ 1082.8 | unavailable | unavailable | persistence_24h: no prior entry within tolerance of decision_time 2026-10-07T22:33:43.192350+00:00 (cold start, or a gap in this corridor's collection history); reference_ml_refit_24h: fetch_live_trut… |
+| 2026-10-07T22:06:20.222166+00:00 | 2026-10-08T12:00:00+00:00 | ✓ 1207.3 | ✓ 1169.6 | ✓ 1082.8 | unavailable | unavailable | persistence_24h: no prior entry within tolerance of decision_time 2026-10-07T22:06:20.222166+00:00 (cold start, or a gap in this corridor's collection history); reference_ml_refit_24h: fetch_live_trut… |
 
 | Decision time (UTC) | Valid time (UTC) | Method | Fallback? | Ampacity (A) | Model version | Notes |
 |---|---|---|---|---|---|---|
