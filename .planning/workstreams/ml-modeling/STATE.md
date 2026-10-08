@@ -4,12 +4,12 @@ milestone: v1.3
 milestone_name: )
 current_phase: 05
 current_phase_name: "Shadow Collector: Five-Method Side-by-Side Challenger Recording"
-status: executing
+status: completed
 stopped_at: Completed plans 05-03 and 05-04 (parallel Wave 3)
-last_updated: "2026-10-07T21:52:04.932Z"
+last_updated: "2026-10-08T00:42:13.533Z"
 last_activity: 2026-10-07
-last_activity_desc: "Phase 05 Wave 3 complete: both corridors wired to the five-candidate orchestrator (05-03), reference_ml_refit_24h artifact fit and live predict path (05-04)"
-state_head: 935f588225161130c279f49ceb9d51347fd3552a
+last_activity_desc: "Phase 05 complete: five-candidate shadow collection verified 11/11, live on scheduled GitHub Actions runs"
+state_head: c6f73dd46e9aee09a146d444d43142f6bb4195fb
 progress:
   total_phases: 5
   completed_phases: 4
@@ -38,7 +38,7 @@ held-out test set — see `docs/data-science/decisions/forecast_correction_exper
 
 Phase: 05 (Shadow Collector: Five-Method Side-by-Side Challenger Recording) — EXECUTING
 Plan: 3 of 5
-Status: Ready to execute
+Status: completed
 vs. persistence at AUSTIN_CORPUS_CHRISTI/MIDLAND_EL_PASO, both 95% CIs excluding zero. The original
 1-hour approach (Wave 1) hit a bit-identical forecast/truth data-source dead end and was pivoted
 (D-04) to a 24-hour lead via Previous Runs API — kept in the record as a labeled non-primary
