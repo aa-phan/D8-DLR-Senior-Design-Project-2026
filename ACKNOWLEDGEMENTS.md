@@ -1951,3 +1951,64 @@ run's confirmation is explicitly left as an outstanding, dated follow-up for aft
 2026-10-08T06:00:00 UTC boundary -- not fabricated as already confirmed (see
 `.planning/workstreams/ml-modeling/phases/05-shadow-collector-five-method-side-by-side-challenger-recordi/05-05-SUMMARY.md`
 for the full outcome).
+
+### Session: 2026-10-08, conducted by Aaron Phan — post-ship UAT: render-table readability and the reference_ml_refit_24h solar gap
+
+User reviewed the live `shadow-collection-data` README after Phase 5 shipped and flagged two issues:
+(1) the new per-cycle rendering adds a full multi-line sub-table on every single collection run,
+with no limit, making the README unbounded and hard to track; (2) `persistence_24h` and
+`reference_ml_refit_24h` were unavailable on multiple runs, and the three candidates with no
+persisted-model version (`raw_forecast`, `persistence_24h`, `reference_ml_refit_24h` while
+unavailable) showed no model-version data.
+
+Claude Code was used to:
+
+1. Investigate both reports against the real code rather than assuming either was a transient
+   issue. For (2), traced `reference_ml_refit_24h`'s live failure to `fetch_live_truth_proxy_series`
+   requiring `solar_radiation` from `provider="tceq"` -- confirmed by direct read that
+   `tceq_provider.fetch_tceq`'s own `_RETURN_COLUMNS` never includes it (that provider is wired for
+   wind/temp/RH only), and that this project's Synoptic/ASOS airport-station fallback doesn't report
+   solar either (no `*_solar*` key in a real live OBS payload) -- meaning this project currently has
+   NO live near-real-time station solar source at all, so the candidate was failing on
+   (near-)every cycle, not merely during a cold-start window. `persistence_24h`'s own unavailability
+   was confirmed as genuine, self-resolving cold start (needs a ~24h-prior logged entry that the
+   collector hasn't had time to accrue yet) -- a different, non-structural cause.
+2. Presented both findings plus two concrete design options each (compact-table-with-cap vs.
+   capped-detail-blocks for the render table; document-the-limitation vs. wire-a-real-solar-source
+   for the data gap) via `AskUserQuestion` rather than picking a direction unilaterally -- user chose
+   the compact one-row-per-cycle format with a cap, and a real attempt at wiring a solar source.
+3. Rewrote `backend/forecast_shadow_render_table.py`'s new-shape rendering: replaced the
+   one-sub-section-per-cycle format with ONE compact table (one row per cycle, one column per
+   candidate, a checkmark-prefixed ampacity or a status word per cell, a trailing aggregated Notes
+   column for any non-"ok" candidate's own reason) capped at `RENDERED_CYCLE_CAP` (20) most-recent
+   cycles -- older cycles stay fully intact, unpruned, in the raw JSONL; only the rendered view is
+   bounded, and the document says explicitly how many older cycles were omitted.
+4. Wired a real solar-radiation source into `backend/forecast_shadow_pipeline.py`'s
+   `fetch_live_truth_proxy_series`: added `_fetch_solar_proxy_hours`, which sources
+   `solar_radiation` from `open_meteo_forecast_provider.fetch_historical_forecast` (a lat/lon bulk
+   NWP-model hindcast for the SAME already-past window -- safe here despite Phase 3's "bit-identical
+   to truth" 1-hour-LEAD finding about the same product family, since every target hour here is
+   already in the past relative to `anchor_time`, so there is no leakage risk) instead of from TCEQ,
+   with its own wider hourly-match tolerance (`_TRUTH_PROXY_SOLAR_HOUR_TOLERANCE`, 35 min, vs. the
+   station path's 20 min) since the source itself is hourly-only. Station fields (`air_temp`,
+   `wind_speed`, `wind_direction`) are unchanged, still from TCEQ/Synoptic. Added
+   `input_provenance["solar_source"] = "open_meteo_historical_forecast"` to
+   `ReferenceRefit24hShadowMethod`'s own provenance dict so this is never silently presented as a
+   true station reading.
+
+**Verified, not merely trusted:** 15 new tests (6 for the render-table's compact format, cap
+behavior, and omission note; 6 for the solar-proxy source's three failure modes -- fetch failure,
+missing hour, null value -- mirroring the existing station-path tests against the new source; 1
+for off-the-hour anchor tolerance; 1 provenance check for the new `solar_source` field; 1 corrected
+regression test that previously asserted a null-solar failure against TCEQ, which can no longer
+occur since solar no longer comes from there). Full relevant suite (110/110 pass) run AFTER the
+fix, not merely before -- including re-running network-free tests that, before this pass's own
+discovery, had been silently making real live network calls to
+`open_meteo_forecast_provider.fetch_historical_forecast` (no longer the case: a dedicated fake
+installer, `_install_fake_fetch_historical_forecast`, is now wired into every existing truth-proxy
+test's default setup). Every frozen Phase 1/3/4 production module confirmed to carry zero git diff.
+One real live call to `ReferenceRefit24hShadowMethod.compute` against live endpoints confirmed the
+fix closed the SPECIFIC solar failure it targeted (the live error message changed from a
+solar-radiation gap to an unrelated, pre-existing station-availability gap for AUSTIN's own
+wind/temp at one hour -- reported to the user as a separate, not-yet-fixed finding, not silently
+folded into this session's own claimed fix).

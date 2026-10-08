@@ -1373,20 +1373,73 @@ def _synthetic_truth_proxy_city_frame(
     return pd.DataFrame(rows)
 
 
-def _install_fake_fetch_weather(monkeypatch, *, city_frames: dict):
+def _synthetic_solar_proxy_frame(
+    anchor_time=_TRUTH_PROXY_ANCHOR, *, lookback_hours=_TRUTH_PROXY_LOOKBACK_HOURS,
+    skip_hour=None, null_hour=None,
+):
+    """2026-10-08: `solar_radiation`'s own synthetic source, shaped like
+    `open_meteo_forecast_provider.fetch_historical_forecast`'s real
+    return (`datetime_utc`, `solar_radiation`, plus the other hourly vars
+    that function also returns) -- complete by default, with knobs to
+    drop or null one hour, mirroring `_synthetic_truth_proxy_city_frame`'s
+    own knobs for the (now solar-free) station frame below."""
+    rows = []
+    for h in range(lookback_hours, -1, -1):
+        ts = anchor_time - pd.Timedelta(hours=h)
+        if skip_hour is not None and ts == skip_hour:
+            continue
+        value = 400.0
+        if null_hour is not None and ts == null_hour:
+            value = float("nan")
+        rows.append({
+            "datetime_utc": ts, "air_temp": 25.0, "wind_speed": 5.0,
+            "wind_direction": 100.0, "solar_radiation": value, "relative_humidity": 50.0,
+        })
+    return pd.DataFrame(rows)
+
+
+def _install_fake_fetch_historical_forecast(monkeypatch, *, frame=None, raise_exc=None):
+    """Monkeypatch `open_meteo_forecast_provider.fetch_historical_forecast`
+    (the solar-proxy source every truth-proxy test now depends on) to
+    return `frame` (defaulting to a complete synthetic window) for BOTH
+    endpoint cities, or raise `raise_exc` if given -- never issuing a
+    real network call. `_install_fake_fetch_weather` below calls this
+    with the default complete frame automatically, so existing callers
+    need no change unless a test wants to exercise a solar-specific gap."""
+
+    def _fake_fetch_historical_forecast(lat, lon, start, end):
+        if raise_exc is not None:
+            raise raise_exc
+        return (frame if frame is not None else _synthetic_solar_proxy_frame()).copy()
+
+    monkeypatch.setattr(
+        shadow.open_meteo_forecast_provider, "fetch_historical_forecast",
+        _fake_fetch_historical_forecast,
+    )
+
+
+def _install_fake_fetch_weather(monkeypatch, *, city_frames: dict, solar_frame=None, solar_raise_exc=None):
     """Monkeypatch `weather_provider.fetch_weather` to return
     `city_frames[cams_id]` for a station-path call whose single requested
-    CAMS id matches -- never issuing a real network call."""
+    CAMS id matches -- never issuing a real network call. Also installs
+    the default (complete) solar-proxy fake via
+    `_install_fake_fetch_historical_forecast` (2026-10-08: solar no
+    longer comes from this station path at all -- see
+    `_TRUTH_PROXY_STATION_FIELDS`), unless a test passes its own
+    `solar_frame`/`solar_raise_exc` to exercise a solar-specific gap."""
 
     def _fake_fetch_weather(location, start, end, provider="synoptic", **kwargs):
         assert provider == "tceq"
         cams_id = location[0]
         frame = city_frames.get(cams_id)
         if frame is None:
-            return pd.DataFrame(columns=["datetime_utc", "air_temp", "wind_speed", "wind_direction", "solar_radiation"])
+            return pd.DataFrame(columns=["datetime_utc", "air_temp", "wind_speed", "wind_direction"])
         return frame.copy()
 
     monkeypatch.setattr(weather_provider, "fetch_weather", _fake_fetch_weather)
+    _install_fake_fetch_historical_forecast(
+        monkeypatch, frame=solar_frame, raise_exc=solar_raise_exc,
+    )
 
 
 def _complete_truth_proxy_city_frames():
@@ -1433,7 +1486,7 @@ def test_fetch_live_truth_proxy_series_treats_a_null_required_field_like_a_missi
     corpus_cams = config.TCEQ_STATIONS["CORPUS_CHRISTI"]
     city_frames = {
         austin_cams: _synthetic_truth_proxy_city_frame(
-            null_field="solar_radiation", null_field_hour=null_hour,
+            null_field="air_temp", null_field_hour=null_hour,
         ),
         corpus_cams: _synthetic_truth_proxy_city_frame(),
     }
@@ -1444,8 +1497,88 @@ def test_fetch_live_truth_proxy_series_treats_a_null_required_field_like_a_missi
 
     message = str(exc_info.value)
     assert "AUSTIN" in message
+    assert "air_temp" in message
+    assert null_hour.isoformat() in message
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 2026-10-08 ("investigate wiring NSRDB or forecast-API solar"):
+# `solar_radiation` now comes from `open_meteo_forecast_provider.
+# fetch_historical_forecast`, never TCEQ -- these three tests pin that
+# source's own three failure modes (total fetch failure, a missing
+# required hour, a null value at a required hour), mirroring the
+# station-path tests above but against the new source.
+# ──────────────────────────────────────────────────────────────────────
+
+
+def test_fetch_live_truth_proxy_series_raises_when_solar_proxy_fetch_fails(monkeypatch):
+    _install_fake_fetch_weather(
+        monkeypatch, city_frames=_complete_truth_proxy_city_frames(),
+        solar_raise_exc=RuntimeError("Open-Meteo historical-forecast: 503"),
+    )
+
+    with pytest.raises(shadow.StaleOrMissingDataError) as exc_info:
+        shadow.fetch_live_truth_proxy_series(_CORRIDOR, _TRUTH_PROXY_ANCHOR)
+
+    assert "solar-proxy" in str(exc_info.value)
+
+
+def test_fetch_live_truth_proxy_series_raises_naming_the_missing_solar_hour(monkeypatch):
+    missing_hour = _TRUTH_PROXY_ANCHOR - pd.Timedelta(hours=4)
+    _install_fake_fetch_weather(
+        monkeypatch, city_frames=_complete_truth_proxy_city_frames(),
+        solar_frame=_synthetic_solar_proxy_frame(skip_hour=missing_hour),
+    )
+
+    with pytest.raises(shadow.StaleOrMissingDataError) as exc_info:
+        shadow.fetch_live_truth_proxy_series(_CORRIDOR, _TRUTH_PROXY_ANCHOR)
+
+    message = str(exc_info.value)
+    assert "solar" in message.lower()
+    assert missing_hour.isoformat() in message
+
+
+def test_fetch_live_truth_proxy_series_treats_a_null_solar_hour_like_a_missing_one(monkeypatch):
+    null_hour = _TRUTH_PROXY_ANCHOR - pd.Timedelta(hours=1)
+    _install_fake_fetch_weather(
+        monkeypatch, city_frames=_complete_truth_proxy_city_frames(),
+        solar_frame=_synthetic_solar_proxy_frame(null_hour=null_hour),
+    )
+
+    with pytest.raises(shadow.StaleOrMissingDataError) as exc_info:
+        shadow.fetch_live_truth_proxy_series(_CORRIDOR, _TRUTH_PROXY_ANCHOR)
+
+    message = str(exc_info.value)
     assert "solar_radiation" in message
     assert null_hour.isoformat() in message
+
+
+def test_fetch_live_truth_proxy_series_solar_source_tolerates_off_the_hour_anchor(monkeypatch):
+    """
+    Open-Meteo's historical-forecast product is hourly-ON-THE-HOUR, but a
+    real `decision_time` almost never lands exactly on one (e.g.
+    `00:45:36`). `_TRUTH_PROXY_SOLAR_HOUR_TOLERANCE` (35 min) must still
+    resolve each off-the-hour target time to its nearest hourly solar
+    row -- this is the exact live-run failure mode `_TRUTH_PROXY_HOUR_
+    TOLERANCE`'s own tighter 20-minute figure would have caused.
+    """
+    off_hour_anchor = _TRUTH_PROXY_ANCHOR + pd.Timedelta(minutes=45, seconds=36)
+    austin_cams = config.TCEQ_STATIONS["AUSTIN"]
+    corpus_cams = config.TCEQ_STATIONS["CORPUS_CHRISTI"]
+    city_frames = {
+        austin_cams: _synthetic_truth_proxy_city_frame(anchor_time=off_hour_anchor),
+        corpus_cams: _synthetic_truth_proxy_city_frame(anchor_time=off_hour_anchor),
+    }
+    # The solar source's own rows land on the HOUR nearest each target
+    # time, not at the off-the-hour target times themselves -- exactly
+    # how the real Open-Meteo product reports.
+    solar_frame = _synthetic_solar_proxy_frame(anchor_time=_TRUTH_PROXY_ANCHOR + pd.Timedelta(hours=1))
+    _install_fake_fetch_weather(monkeypatch, city_frames=city_frames, solar_frame=solar_frame)
+
+    series = shadow.fetch_live_truth_proxy_series(_CORRIDOR, off_hour_anchor)
+
+    assert len(series) == 7
+    assert series["solar_radiation"].notna().all()
 
 
 class _FakeMLPEstimator:
@@ -1476,6 +1609,8 @@ def test_reference_refit_24h_compute_predicts_ok_from_a_complete_synthetic_windo
     assert result.ampacity_amps == 1555.0
     assert result.input_provenance["per_city_ampacity_amps"] is None
     assert result.input_provenance["per_city_not_applicable_reason"]
+    # 2026-10-08: never silently presented as a true station observation.
+    assert result.input_provenance["solar_source"] == "open_meteo_historical_forecast"
     # The real estimator's own .predict was actually called -- not bypassed.
     assert len(fake_model.predict_calls) == 1
 

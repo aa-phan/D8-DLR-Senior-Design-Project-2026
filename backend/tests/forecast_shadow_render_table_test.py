@@ -258,6 +258,100 @@ def test_render_markdown_new_shape_unavailable_candidate_shows_its_reason(tmp_pa
     assert "unavailable" in markdown
 
 
+# ──────────────────────────────────────────────────────────────────────
+# 2026-10-08: compact one-row-per-cycle format + RENDERED_CYCLE_CAP
+# (replaces the one-sub-section-per-cycle format that grew the README by
+# a full multi-line block on every single collection run, forever).
+# ──────────────────────────────────────────────────────────────────────
+
+
+def test_render_markdown_new_shape_renders_one_row_not_a_subsection(tmp_path):
+    """
+    The compact format must emit exactly one table row per cycle, not the
+    old multi-line "### Cycle — ..." sub-section header the prior format
+    used -- this is the behavior change this test exists to pin.
+    """
+    _write_entry(str(tmp_path / "AUSTIN_CORPUS_CHRISTI.jsonl"), _new_shape_entry())
+
+    markdown = render_table.render_markdown(str(tmp_path))
+
+    assert "### Cycle" not in markdown  # the old per-cycle sub-section header is gone
+    # One row: all five candidates' own cells appear on the SAME line as
+    # the cycle's decision_time, not on five separate lines below it.
+    row_lines = [
+        line for line in markdown.splitlines()
+        if "2026-10-07T06:52:09+00:00" in line and "|" in line
+    ]
+    assert len(row_lines) == 1, row_lines
+
+
+def test_render_markdown_new_shape_row_shows_ok_candidates_with_checkmark_ampacity(tmp_path):
+    _write_entry(str(tmp_path / "AUSTIN_CORPUS_CHRISTI.jsonl"), _new_shape_entry())
+
+    markdown = render_table.render_markdown(str(tmp_path))
+
+    assert "✓ 650.0" in markdown  # ml_wind_corrected
+    assert "✓ 640.0" in markdown  # ml_cooling_corrected
+    assert "✓ 600.0" in markdown  # raw_forecast
+
+
+def test_render_markdown_new_shape_row_shows_unavailable_status_not_a_bare_ampacity(tmp_path):
+    _write_entry(str(tmp_path / "AUSTIN_CORPUS_CHRISTI.jsonl"), _new_shape_entry())
+
+    markdown = render_table.render_markdown(str(tmp_path))
+
+    # persistence_24h and reference_ml_refit_24h are unavailable in the
+    # fixture -- their own cell must say so, never a bare "—" that could
+    # be mistaken for "no data" vs. "this candidate reported a real gap".
+    assert "| unavailable |" in markdown
+
+
+def test_render_markdown_new_shape_notes_column_names_which_candidate_and_why(tmp_path):
+    _write_entry(str(tmp_path / "AUSTIN_CORPUS_CHRISTI.jsonl"), _new_shape_entry())
+
+    markdown = render_table.render_markdown(str(tmp_path))
+
+    assert "persistence_24h: no prior entry within tolerance of decision_time" in markdown
+    assert "reference_ml_refit_24h: no persisted reference_ml_refit_24h model artifact" in markdown
+    # An "ok" candidate must never appear in the Notes aggregate.
+    assert "ml_wind_corrected:" not in markdown
+    assert "ml_cooling_corrected:" not in markdown
+    assert "raw_forecast:" not in markdown
+
+
+def test_render_markdown_new_shape_caps_rendered_cycles_and_says_so(tmp_path):
+    """
+    `RENDERED_CYCLE_CAP` + 5 cycles logged -> only the cap's worth render,
+    newest first, and the document says how many older ones were omitted
+    -- never silently truncated with no indication.
+    """
+    path = str(tmp_path / "AUSTIN_CORPUS_CHRISTI.jsonl")
+    total = render_table.RENDERED_CYCLE_CAP + 5
+    for i in range(total):
+        _write_entry(path, _new_shape_entry(
+            decision_time=f"2026-10-07T{i:02d}:00:00+00:00", valid_time="x",
+        ))
+
+    markdown = render_table.render_markdown(str(tmp_path))
+
+    # The oldest 5 decision_times (00..04) must be omitted from the render.
+    for i in range(5):
+        assert f"2026-10-07T{i:02d}:00:00+00:00" not in markdown
+    # The newest RENDERED_CYCLE_CAP must all be present.
+    for i in range(5, total):
+        assert f"2026-10-07T{i:02d}:00:00+00:00" in markdown
+    assert "5 older cycle(s) omitted" in markdown
+    assert f"{total} logged prediction(s)" in markdown  # the TOTAL count is never understated
+
+
+def test_render_markdown_new_shape_under_cap_does_not_print_an_omission_note(tmp_path):
+    _write_entry(str(tmp_path / "AUSTIN_CORPUS_CHRISTI.jsonl"), _new_shape_entry())
+
+    markdown = render_table.render_markdown(str(tmp_path))
+
+    assert "omitted" not in markdown
+
+
 def test_render_markdown_mixed_old_and_new_shape_lines_both_render_in_one_document(tmp_path):
     """
     The real situation this collector is in from the cutover forward: one

@@ -38,6 +38,19 @@ CANDIDATE_METHOD_NAMES: tuple[str, ...] = (
     "persistence_24h", "reference_ml_refit_24h",
 )
 
+# RENDERED_CYCLE_CAP (2026-10-08, "the new render format is messy, it'll
+# add a new table after every run"): the number of most-recent
+# schema_version>=2 cycles rendered per corridor. The one-block-per-cycle
+# format this replaced grew the README by a full multi-line sub-table on
+# every single collection run with no limit, forever. This caps the
+# RENDERED view only -- every cycle beyond the cap is still in the raw
+# `data/shadow/predictions/<corridor>.jsonl` on `shadow-collection-data`,
+# untouched and un-pruned; nothing is deleted, only what this specific
+# README shows is bounded. Pre-cutover (flat-shape) rows are never capped
+# -- that stream is finite and stopped growing at the cutover, per 05-01's
+# approved "no migration" strategy, so there is nothing to bound there.
+RENDERED_CYCLE_CAP = 20
+
 # Flagged explicitly (2026-10-07, "verify the static rating is realistic
 # first"): the per-city STATIC_RATINGS values are this project's own
 # unverified placeholder -- the arithmetic midpoint of a *range* given in
@@ -110,35 +123,79 @@ def _render_legacy_row(e: dict) -> str:
     )
 
 
-def _render_new_shape_block(e: dict) -> list[str]:
+def _render_candidate_cell(c: dict) -> str:
     """
-    Renders one schema_version>=2 cycle's all-five-candidates record as its
-    own sub-section with a dedicated per-candidate table -- a reader can
-    tell, per cycle, which of the five candidates produced a value and
-    which did not, without opening the raw JSONL (this task's own
-    behavior spec). `reason` is shown ahead of `fallback_reason` in the
-    Notes column since an unavailable/failed candidate's `reason` is the
-    more informative field when both could theoretically be present.
+    One cell's worth of one candidate's outcome for the compact one-
+    row-per-cycle table: a checkmark-prefixed ampacity when it produced a
+    real value, or a short status word when it did not. Never embeds the
+    candidate's own `reason`/`fallback_reason` text here -- those are
+    long, free-form strings that would blow out a 5-candidate-wide row;
+    `_render_new_shape_row` collects them into one trailing Notes column
+    instead, per status, not per cell.
     """
-    block = [
-        f"### Cycle — decision time {e.get('decision_time', '')} (valid time {e.get('valid_time', '')})",
-        "",
-        "All five candidates recorded this cycle (`schema_version: 2`):",
-        "",
-        "| Candidate | Status | Ampacity (A) | Fallback? | Model version | Notes |",
-        "|---|---|---|---|---|---|",
-    ]
+    status = c.get("status") or "—"
+    ampacity = c.get("ampacity_amps")
+    if status == "ok" and isinstance(ampacity, (int, float)):
+        return f"✓ {ampacity:.1f}"
+    return status  # "unavailable" / "failed" / "—" -- never a bare ampacity without its status
+
+
+def _render_new_shape_row(e: dict) -> str:
+    """
+    Renders one schema_version>=2 cycle as ONE table row (2026-10-08, per
+    the user's own "compact one-row-per-cycle" direction, replacing the
+    original one-sub-section-per-cycle format that grew the README by a
+    full multi-line block on every single run forever). One column per
+    candidate (`_render_candidate_cell`), plus a trailing Notes column
+    that aggregates every non-"ok" candidate's own `reason` (preferred)
+    or `fallback_reason`, name-prefixed and semicolon-joined, so a reader
+    can still see WHY a candidate was unavailable/failed without the
+    per-candidate detail sub-tables the old format used.
+    """
     candidates = e.get("candidates") or {}
+    cells = [_render_candidate_cell(candidates.get(name) or {}) for name in CANDIDATE_METHOD_NAMES]
+    notes_parts = []
     for name in CANDIDATE_METHOD_NAMES:
         c = candidates.get(name) or {}
-        status = c.get("status") or "—"
-        ampacity = c.get("ampacity_amps")
-        ampacity_str = f"{ampacity:.1f}" if isinstance(ampacity, (int, float)) else "—"
-        fallback = "Yes" if c.get("fallback_used") else "No"
-        model_version = c.get("model_version") or "—"
-        note = _escape_note(c.get("reason") or c.get("fallback_reason"))
+        if c.get("status") == "ok":
+            continue
+        reason = c.get("reason") or c.get("fallback_reason")
+        if reason:
+            notes_parts.append(f"{name}: {reason}")
+    notes = _escape_note("; ".join(notes_parts), limit=200)
+    return (
+        f"| {e.get('decision_time', '')} | {e.get('valid_time', '')} | " +
+        " | ".join(cells) +
+        f" | {notes} |"
+    )
+
+
+def _render_new_shape_table(entries: list[dict]) -> list[str]:
+    """
+    Renders every schema_version>=2 entry for one corridor as ONE compact
+    table, most-recent-first, capped to `RENDERED_CYCLE_CAP` rows. Caller
+    passes already-sorted, already-filtered (schema_version>=2) entries
+    for a single corridor; this function owns only the cap and the table
+    shape, not the sort/filter.
+    """
+    if not entries:
+        return []
+    shown = entries[:RENDERED_CYCLE_CAP]
+    header_cells = " | ".join(CANDIDATE_METHOD_NAMES)
+    block = [
+        "All five candidates per cycle (`schema_version: 2`), most recent "
+        f"{len(shown)} of {len(entries)} shown:",
+        "",
+        f"| Decision time (UTC) | Valid time (UTC) | {header_cells} | Notes |",
+        "|---|---|" + "---|" * len(CANDIDATE_METHOD_NAMES) + "---|",
+    ]
+    block.extend(_render_new_shape_row(e) for e in shown)
+    if len(entries) > RENDERED_CYCLE_CAP:
+        block.append("")
         block.append(
-            f"| {name} | {status} | {ampacity_str} | {fallback} | {model_version} | {note} |"
+            f"_{len(entries) - RENDERED_CYCLE_CAP} older cycle(s) omitted from this "
+            "render -- still present, unpruned, in the raw "
+            "`data/shadow/predictions/<corridor>.jsonl` file._"
         )
     block.append("")
     return block
@@ -151,16 +208,20 @@ def render_markdown(predictions_dir: str) -> str:
     `log_cycle_predictions` writes) in, a complete Markdown document out.
     One section per corridor, most recent first.
 
-    Each logged line is rendered per its OWN shape (`entry.get(
+    Each logged line is grouped by its OWN shape (`entry.get(
     "schema_version", 1) >= 2`), per 05-01-SUMMARY.md's approved,
-    forever-coexisting-shapes strategy: a pre-cutover flat-shape entry
-    renders as a single table row, byte-identical to this module's
-    original (schema_version-naive) behavior; a schema_version-2 entry
-    renders as its own all-five-candidates sub-section. A single corridor
-    file mixing both shapes (the real situation from the cutover forward)
-    renders both correctly, in the same most-recent-first order, in one
-    document -- old rows keep reopening/extending the same legacy table
-    whenever consecutive, new-shape rows interrupt it with their own block.
+    forever-coexisting-shapes strategy: pre-cutover flat-shape entries
+    render as a single legacy table, byte-identical to this module's
+    original (schema_version-naive) behavior; schema_version>=2 entries
+    render as ONE compact one-row-per-cycle table, capped to the most
+    recent `RENDERED_CYCLE_CAP` cycles (2026-10-08 -- the original
+    one-sub-section-per-cycle format grew the README by a full block on
+    every run forever). Every schema_version>=2 row is strictly newer
+    than every flat-shape row (the collector only ever wrote flat-shape
+    rows before the cutover and only ever writes schema_version>=2 rows
+    after it), so the two groups never actually interleave in a real
+    corridor file -- this function renders the new-shape table first,
+    then the legacy table, rather than re-deriving that ordering per row.
     """
     lines = [
         "# Shadow Collection — Live Predictions",
@@ -186,20 +247,18 @@ def render_markdown(predictions_dir: str) -> str:
         lines.append(f"{len(entries)} logged prediction(s), most recent first.")
         lines.append("")
 
-        legacy_table_open = False
-        for e in entries:
-            if e.get("schema_version", 1) >= 2:
-                legacy_table_open = False
-                lines.extend(_render_new_shape_block(e))
-            else:
-                if not legacy_table_open:
-                    lines.append(
-                        "| Decision time (UTC) | Valid time (UTC) | Method | Fallback? | "
-                        "Ampacity (A) | Model version | Notes |"
-                    )
-                    lines.append("|---|---|---|---|---|---|---|")
-                    legacy_table_open = True
-                lines.append(_render_legacy_row(e))
+        new_entries = [e for e in entries if e.get("schema_version", 1) >= 2]
+        old_entries = [e for e in entries if e.get("schema_version", 1) < 2]
+
+        lines.extend(_render_new_shape_table(new_entries))
+
+        if old_entries:
+            lines.append(
+                "| Decision time (UTC) | Valid time (UTC) | Method | Fallback? | "
+                "Ampacity (A) | Model version | Notes |"
+            )
+            lines.append("|---|---|---|---|---|---|---|")
+            lines.extend(_render_legacy_row(e) for e in old_entries)
         lines.append("")
 
     return "\n".join(lines) + "\n"

@@ -1133,12 +1133,46 @@ class Persistence24hShadowMethod:
 # convention above.
 _TRUTH_PROXY_HOUR_TOLERANCE = pd.Timedelta(minutes=20)
 
-# The required fields `fetch_live_truth_proxy_series` validates per hour,
-# per city -- a null in ANY of these at a required hour is the same
-# "missing hour" failure as no row at all (Plan 05-04 action step 2,
-# T-05-04-01): never silently passed through to the physics/weakest-link
-# reduction below.
-_TRUTH_PROXY_REQUIRED_FIELDS = ("air_temp", "wind_speed", "wind_direction", "solar_radiation")
+# 2026-10-08 ("investigate wiring NSRDB or forecast-API solar"): the
+# station fields `fetch_live_truth_proxy_series` validates against
+# `provider="tceq"` (Synoptic-fallback-eligible). `solar_radiation` is
+# deliberately NOT in this tuple -- confirmed by direct read,
+# `tceq_provider.fetch_tceq`'s own `_RETURN_COLUMNS` never includes it
+# (that provider is wired for wind/temp/RH only, per this project's own
+# WX-01 scope), and the Synoptic/ASOS airport stations this project's
+# anchor-wind path already falls back to don't report it either (no
+# `*_solar*` key ever appears in a live `fetch_weather(provider="synoptic")`
+# OBS payload) -- so there is no live NEAR-REAL-TIME STATION solar source
+# anywhere in this codebase to require it from. A null in ANY of these
+# three at a required hour is the same "missing hour" failure as no row
+# at all (Plan 05-04 action step 2, T-05-04-01): never silently passed
+# through to the physics/weakest-link reduction below.
+_TRUTH_PROXY_STATION_FIELDS = ("air_temp", "wind_speed", "wind_direction")
+
+# All fields the assembled truth-proxy series ultimately carries, station
+# fields plus the separately-sourced `solar_radiation` below -- used only
+# for the final per-hour null re-check after both sources are merged.
+_TRUTH_PROXY_REQUIRED_FIELDS = _TRUTH_PROXY_STATION_FIELDS + ("solar_radiation",)
+
+# 2026-10-08: `solar_radiation`'s own source and matching tolerance.
+# `open_meteo_forecast_provider.fetch_historical_forecast` is a lat/lon
+# bulk NWP-model HINDCAST (never a station observation) for a recent,
+# already-past window -- the same "bit-identical to truth for a
+# necessarily-recent window" product Phase 3 Wave 1 found for a 1-HOUR
+# LEAD (03-01-SUMMARY.md's Critical Finding), but used here in the exact
+# regime where that property is a feature, not a defect: every target
+# hour below is already in the past relative to `anchor_time`, so there
+# is no leakage risk, and a model hindcast is the closest thing to a real
+# solar observation this project's live infrastructure can actually
+# reach. Every `input_provenance` this function's caller attaches names
+# this source explicitly (`solar_source`) -- never silently presented as
+# a true station reading. Hourly-only data: the tolerance is wide enough
+# (35 min) to always resolve to the nearest hour regardless of exactly
+# where within that hour `anchor_time`/a target hour falls (max possible
+# true distance to the nearest hour is 30 min) -- `_TRUTH_PROXY_HOUR_
+# TOLERANCE`'s own 20-minute figure was tuned for continuous station
+# data and would spuriously reject a correct hourly match here.
+_TRUTH_PROXY_SOLAR_HOUR_TOLERANCE = pd.Timedelta(minutes=35)
 
 
 def _select_hour_row(frame: pd.DataFrame, target_ts: "pd.Timestamp", tolerance: "pd.Timedelta"):
@@ -1155,6 +1189,53 @@ def _select_hour_row(frame: pd.DataFrame, target_ts: "pd.Timestamp", tolerance: 
     if diffs.loc[idx] > tolerance:
         return None
     return frame.loc[idx]
+
+
+def _fetch_solar_proxy_hours(
+    corridor: str, city: str, lat: float, lon: float,
+    window_start: "pd.Timestamp", anchor_ts: "pd.Timestamp",
+    target_times: list,
+) -> list:
+    """
+    One city's `solar_radiation` values for `fetch_live_truth_proxy_series`'s
+    `target_times`, sourced from `open_meteo_forecast_provider.
+    fetch_historical_forecast(lat, lon, window_start, anchor_ts)` -- see
+    `_TRUTH_PROXY_SOLAR_HOUR_TOLERANCE`'s own module-level comment for why
+    this lat/lon NWP hindcast, not a station reading, is this project's
+    only reachable near-real-time solar source. Returns one float per
+    `target_times` entry, in the same order; never interpolates, pads, or
+    backfills a missing/null hour (same discipline as the station path).
+    """
+    try:
+        frame = open_meteo_forecast_provider.fetch_historical_forecast(
+            lat, lon, window_start.isoformat(), anchor_ts.isoformat(),
+        )
+    except Exception as exc:
+        raise StaleOrMissingDataError(
+            f"fetch_live_truth_proxy_series: corridor {corridor!r} city "
+            f"{city!r}: solar-proxy (Open-Meteo historical forecast) "
+            f"window fetch failed: {exc}"
+        ) from exc
+
+    values = []
+    for target_ts in target_times:
+        row = _select_hour_row(frame, target_ts, _TRUTH_PROXY_SOLAR_HOUR_TOLERANCE)
+        if row is None:
+            raise StaleOrMissingDataError(
+                f"fetch_live_truth_proxy_series: corridor {corridor!r} city "
+                f"{city!r}: no usable Open-Meteo historical-forecast solar "
+                f"row within {_TRUTH_PROXY_SOLAR_HOUR_TOLERANCE} of required "
+                f"hour {target_ts.isoformat()}"
+            )
+        value = row.get("solar_radiation")
+        if pd.isnull(value):
+            raise StaleOrMissingDataError(
+                f"fetch_live_truth_proxy_series: corridor {corridor!r} city "
+                f"{city!r}: null 'solar_radiation' (Open-Meteo historical "
+                f"forecast) at required hour {target_ts.isoformat()}"
+            )
+        values.append(float(value))
+    return values
 
 
 def fetch_live_truth_proxy_series(
@@ -1201,6 +1282,16 @@ def fetch_live_truth_proxy_series(
     WINDOW_HOURS`), looked up at call time rather than bound as a mutable
     default so a test's `config` monkeypatch is honored.
 
+    `solar_radiation` is sourced separately from `air_temp`/`wind_speed`/
+    `wind_direction`: neither TCEQ nor this project's Synoptic fallback
+    reports it, so it comes from `open_meteo_forecast_provider.
+    fetch_historical_forecast` (a lat/lon bulk NWP-model hindcast for this
+    SAME already-past window, never a station reading -- see
+    `_TRUTH_PROXY_SOLAR_HOUR_TOLERANCE`'s own comment for why this is
+    safe here despite Phase 3's "bit-identical to truth" 1-hour-lead
+    finding about the same product family). Every caller's own
+    `input_provenance` names this source explicitly as `solar_source`.
+
     Returns:
         A `pd.DataFrame` with exactly 7 rows, columns `datetime_utc`,
         `dlr_amps`, `air_temp`, `wind_speed`, `solar_radiation`, sorted
@@ -1209,7 +1300,8 @@ def fetch_live_truth_proxy_series(
 
     Raises:
         StaleOrMissingDataError: on any window-fetch failure, or any
-            missing/null required hour for either endpoint city.
+            missing/null required hour for either endpoint city, from
+            either the station or the solar-proxy source.
     """
     if lookback_hours is None:
         lookback_hours = config.FORECAST_ML_ROLLING_WINDOW_HOURS
@@ -1244,12 +1336,12 @@ def fetch_live_truth_proxy_series(
             ) from exc
 
         if frame.empty:
-            frame = pd.DataFrame(columns=["datetime_utc", *_TRUTH_PROXY_REQUIRED_FIELDS])
+            frame = pd.DataFrame(columns=["datetime_utc", *_TRUTH_PROXY_STATION_FIELDS])
         else:
             frame = frame.reset_index()
             frame["datetime_utc"] = pd.to_datetime(frame["datetime_utc"], utc=True)
 
-        fields: dict = {field: [] for field in _TRUTH_PROXY_REQUIRED_FIELDS}
+        fields: dict = {field: [] for field in _TRUTH_PROXY_STATION_FIELDS}
         for target_ts in target_times:
             row = _select_hour_row(frame, target_ts, _TRUTH_PROXY_HOUR_TOLERANCE)
             if row is None:
@@ -1259,7 +1351,7 @@ def fetch_live_truth_proxy_series(
                     f"{_TRUTH_PROXY_HOUR_TOLERANCE} of required hour "
                     f"{target_ts.isoformat()}"
                 )
-            for field in _TRUTH_PROXY_REQUIRED_FIELDS:
+            for field in _TRUTH_PROXY_STATION_FIELDS:
                 value = row.get(field)
                 if pd.isnull(value):
                     raise StaleOrMissingDataError(
@@ -1268,6 +1360,11 @@ def fetch_live_truth_proxy_series(
                         f"{target_ts.isoformat()}"
                     )
                 fields[field].append(float(value))
+
+        lat, lon = config.CITY_COORDINATES[city]
+        fields["solar_radiation"] = _fetch_solar_proxy_hours(
+            corridor, city, lat, lon, window_start, anchor_ts, target_times,
+        )
         per_city_fields[city] = fields
 
     perp_a = thermal_model.perpendicular_wind(
@@ -1384,6 +1481,7 @@ class ReferenceRefit24hShadowMethod:
             "truth_proxy_window_end": truth_proxy_series["datetime_utc"].iloc[-1].isoformat(),
             "per_city_ampacity_amps": None,
             "per_city_not_applicable_reason": _PER_CITY_NOT_APPLICABLE_REASON,
+            "solar_source": "open_meteo_historical_forecast",
         }
         return ShadowPrediction(
             corridor=corridor, method=self.name, ampacity_amps=prediction,
