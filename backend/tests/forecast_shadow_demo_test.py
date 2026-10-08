@@ -407,3 +407,87 @@ def test_run_once_all_methods_marks_ml_wind_corrected_unavailable_when_one_citys
     assert results["ml_wind_corrected"].status == "unavailable"
     assert results["ml_cooling_corrected"].status == "unavailable"
     assert results["raw_forecast"].status == "ok"
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 2026-10-08 ("bundle-level ampacity"): run_once_all_methods wires real
+# bundle computation into the live orchestration loop, end to end.
+# ──────────────────────────────────────────────────────────────────────
+
+
+def test_run_once_all_methods_wires_mixed_bundle_counts_for_midland_el_paso(monkeypatch, tmp_path):
+    """
+    MIDLAND_EL_PASO: config.SUBCONDUCTORS_PER_PHASE gives MIDLAND=2,
+    EL_PASO=1 -- the exact mixed-count corridor named in the request.
+    `_fake_shared_inputs_factory` feeds BOTH endpoint cities identical
+    weather, so their PER-CONDUCTOR ampacities tie -- any bundle
+    bottleneck observed here can only come from the subconductor count
+    itself, never from a weather-driven per-conductor difference,
+    isolating exactly the behavior under test.
+    """
+    monkeypatch.setattr(shadow, "SHADOW_PREDICTIONS_DIR", str(tmp_path))
+    corridor = "MIDLAND_EL_PASO"
+    cities = config.CORRIDOR_ENDPOINTS[corridor]
+    monkeypatch.setattr(shadow, "fetch_shared_corridor_inputs", _fake_shared_inputs_factory(cities))
+
+    results = demo.run_once_all_methods(corridor)
+
+    raw = results["raw_forecast"]
+    assert raw.status == "ok"
+    per_city = raw.input_provenance["per_city_ampacity_amps"]
+    assert per_city["MIDLAND"] == per_city["EL_PASO"]  # tied per-conductor inputs
+
+    bundle = raw.bundle
+    assert bundle["status"] == "ok"
+    assert bundle["endpoint_bundle_ampacity_amps"]["MIDLAND"] == 2 * per_city["MIDLAND"]
+    assert bundle["endpoint_bundle_ampacity_amps"]["EL_PASO"] == 1 * per_city["EL_PASO"]
+    # Despite tied per-conductor values, EL_PASO's own single subconductor
+    # makes it the bundle bottleneck -- the mixed count alone decides it.
+    assert bundle["bundle_bottleneck_city"] == "EL_PASO"
+    assert bundle["corridor_bundle_ampacity_amps"] == per_city["EL_PASO"]
+    assert bundle["subconductors_per_phase"] == {"MIDLAND": 2, "EL_PASO": 1}
+    assert bundle["config_version"] == config.BUNDLE_CONFIG_VERSION
+
+    # Persisted through the real logging path -- not just present on the
+    # in-memory ShadowPrediction.
+    import json
+    path = __import__("os").path.join(str(tmp_path), f"{corridor}.jsonl")
+    with open(path) as fh:
+        record = json.loads(fh.readline())
+    logged_bundle = record["candidates"]["raw_forecast"]["bundle"]
+    assert logged_bundle["bundle_bottleneck_city"] == "EL_PASO"
+    assert logged_bundle["corridor_bundle_ampacity_amps"] == per_city["EL_PASO"]
+
+
+def test_run_once_all_methods_bundle_unavailable_mirrors_the_candidates_own_unavailable_reason(monkeypatch, tmp_path):
+    """A candidate that is itself unavailable this cycle (here: a missing
+    anchor for ml_wind_corrected) must report bundle unavailable with a
+    reason tied to that same cause -- never silently omitted, never a
+    generic unrelated message."""
+    monkeypatch.setattr(shadow, "SHADOW_PREDICTIONS_DIR", str(tmp_path))
+    corridor = "AUSTIN_CORPUS_CHRISTI"
+    cities = config.CORRIDOR_ENDPOINTS[corridor]
+
+    def _fake_shared_missing_anchor(corridor_arg, *, valid_time, decision_time, horizon_minutes):
+        frame = pd.DataFrame([{
+            "fcst_air_temp": 30.0, "fcst_wind_speed": 5.0,
+            "fcst_wind_direction": 90.0, "fcst_solar_radiation": 500.0,
+        }])
+        frame.attrs["geometry"] = None
+        return {
+            city: shadow.SharedCityFetchResult(city, frame.copy(), None, None, "anchor fetch failed (test)")
+            for city in cities
+        }
+
+    monkeypatch.setattr(shadow, "fetch_shared_corridor_inputs", _fake_shared_missing_anchor)
+
+    results = demo.run_once_all_methods(corridor)
+
+    wind = results["ml_wind_corrected"]
+    assert wind.status == "unavailable"
+    assert wind.bundle["status"] == "unavailable"
+    assert wind.bundle["reason"] == wind.reason
+    # raw_forecast needs no anchor at all -- unaffected, still a real ok
+    # bundle result, proving candidates are validated independently (D-04).
+    assert results["raw_forecast"].status == "ok"
+    assert results["raw_forecast"].bundle["status"] == "ok"

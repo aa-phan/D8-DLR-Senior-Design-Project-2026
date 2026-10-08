@@ -51,6 +51,44 @@ STATIC_RATINGS: dict[str, float] = {
 DEFAULT_STATIC_RATING: float = 900.0
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Bundle (subconductors-per-phase) configuration -- shadow-collector reporting only
+# ──────────────────────────────────────────────────────────────────────────────
+# 2026-10-08. The Power Systems sub-team's PROVISIONAL per-city subconductor-
+# per-phase count. **Explicitly a regional assumption, not yet confirmed for
+# any specific line segment** -- stated that way by the team supplying these
+# numbers; this project has no independent verification of them and must not
+# present them as equipment-confirmed. A "subconductor" here is one of N
+# physical ACSR conductors bundled in parallel to carry ONE PHASE's current
+# -- never the three phases of a three-phase circuit, which each already
+# carry their own independent current and must never be summed/multiplied
+# together. `BUNDLE_CONFIG_VERSION` is bumped whenever this dict changes, so
+# a shadow-collector record already on disk can always be read back against
+# the exact assumption set that produced it, even after the live config
+# changes -- the versioned value is written into every persisted bundle
+# record, never implied from "whatever this dict currently says."
+BUNDLE_CONFIG_VERSION: str = "v1-provisional-2026-10-08"
+
+SUBCONDUCTORS_PER_PHASE: dict[str, int] = {
+    "AUSTIN": 2,
+    "CORPUS_CHRISTI": 2,
+    "MIDLAND": 2,
+    "EL_PASO": 1,
+}
+
+# Attached verbatim to every "ok" bundle record (never paraphrased per call
+# site) so a reader of the raw JSONL sees the same honesty caveat the chat
+# response carries -- this is a conductor-based thermal estimate under an
+# equal-current-sharing assumption across subconductors, not a verified
+# equipment-limited circuit rating (breaker/switch/terminal ampacity, actual
+# per-subconductor current imbalance, etc. are all out of scope here).
+BUNDLE_RATING_BASIS: str = (
+    "Conductor-based bundle thermal estimate (equal-current-sharing assumption "
+    "across subconductors) -- NOT a verified equipment-limited circuit rating. "
+    "Subconductor-per-phase counts are the Power Systems sub-team's provisional, "
+    "regional assumption, not yet confirmed for any specific line segment."
+)
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Per-location G4 plausibility bounds (Amps)
 # ──────────────────────────────────────────────────────────────────────────────
 # Each city's documented "Worst Case Static Limit (I) [A]" range from

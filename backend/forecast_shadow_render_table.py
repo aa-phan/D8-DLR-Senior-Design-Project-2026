@@ -102,27 +102,6 @@ def _escape_note(text, limit: int = 100) -> str:
     return note
 
 
-def _render_legacy_row(e: dict) -> str:
-    """
-    The EXACT, unchanged single-row rendering for a pre-cutover (no
-    `schema_version`, or `schema_version < 2`) flat-shape entry -- byte-
-    identical to this function's behavior before the schema_version-2
-    branch below existed, per 05-01-SUMMARY.md's "no migration of
-    historical rows" approved strategy: old rows render forever, exactly
-    as they always have.
-    """
-    fallback = "Yes" if e.get("fallback_used") else "No"
-    note = _escape_note(e.get("fallback_reason"))
-    model_version = e.get("model_version") or "—"
-    ampacity = e.get("ampacity_amps")
-    ampacity_str = f"{ampacity:.1f}" if isinstance(ampacity, (int, float)) else "—"
-    return (
-        f"| {e.get('decision_time', '')} | {e.get('valid_time', '')} | "
-        f"{e.get('method', '')} | {fallback} | {ampacity_str} | "
-        f"{model_version} | {note} |"
-    )
-
-
 def _render_candidate_cell(c: dict) -> str:
     """
     One cell's worth of one candidate's outcome for the compact one-
@@ -209,19 +188,16 @@ def render_markdown(predictions_dir: str) -> str:
     One section per corridor, most recent first.
 
     Each logged line is grouped by its OWN shape (`entry.get(
-    "schema_version", 1) >= 2`), per 05-01-SUMMARY.md's approved,
-    forever-coexisting-shapes strategy: pre-cutover flat-shape entries
-    render as a single legacy table, byte-identical to this module's
-    original (schema_version-naive) behavior; schema_version>=2 entries
-    render as ONE compact one-row-per-cycle table, capped to the most
-    recent `RENDERED_CYCLE_CAP` cycles (2026-10-08 -- the original
+    "schema_version", 1) >= 2`). schema_version>=2 entries render as ONE
+    compact one-row-per-cycle table, capped to the most recent
+    `RENDERED_CYCLE_CAP` cycles (2026-10-08 -- the original
     one-sub-section-per-cycle format grew the README by a full block on
-    every run forever). Every schema_version>=2 row is strictly newer
-    than every flat-shape row (the collector only ever wrote flat-shape
-    rows before the cutover and only ever writes schema_version>=2 rows
-    after it), so the two groups never actually interleave in a real
-    corridor file -- this function renders the new-shape table first,
-    then the legacy table, rather than re-deriving that ordering per row.
+    every run forever). 2026-10-08 (second pass, "remove that" -- the
+    rendered view no longer shows pre-cutover flat-shape rows as a table
+    at all): those rows are summarized in a single one-line count instead
+    -- they are NEVER deleted or migrated from the raw JSONL (05-01's own
+    approved "no migration" strategy), only no longer rendered as their
+    own table underneath the new one.
     """
     lines = [
         "# Shadow Collection — Live Predictions",
@@ -253,12 +229,21 @@ def render_markdown(predictions_dir: str) -> str:
         lines.extend(_render_new_shape_table(new_entries))
 
         if old_entries:
+            # 2026-10-08 ("why does the readme still have the old table
+            # underneath the new one -- remove that"): pre-cutover
+            # flat-shape rows are no longer rendered as their own table at
+            # all. They are NOT deleted or migrated (05-01's own approved
+            # strategy) -- still fully present, untouched, in the raw
+            # `<corridor>.jsonl` on `shadow-collection-data` -- only the
+            # RENDERED view stops showing them, exactly like
+            # `RENDERED_CYCLE_CAP`'s own "older cycles omitted" note above.
             lines.append(
-                "| Decision time (UTC) | Valid time (UTC) | Method | Fallback? | "
-                "Ampacity (A) | Model version | Notes |"
+                f"_{len(old_entries)} pre-cutover (single-method) entries exist in "
+                "this corridor's raw history and are not rendered here -- see "
+                f"`data/shadow/predictions/{corridor}.jsonl` on this branch for "
+                "the full single-candidate record._"
             )
-            lines.append("|---|---|---|---|---|---|---|")
-            lines.extend(_render_legacy_row(e) for e in old_entries)
+            lines.append("")
         lines.append("")
 
     return "\n".join(lines) + "\n"

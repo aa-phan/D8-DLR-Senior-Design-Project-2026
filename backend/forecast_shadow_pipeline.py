@@ -734,6 +734,82 @@ def _corridor_reduce_per_city(method: "CorrectionMethod", city_frames: dict, geo
     return float(dlr_amps[0]), per_city_amps, bottleneck_city
 
 
+# 2026-10-08 ("bundle-level ampacity"): the reason this function takes
+# ALREADY-PER-CONDUCTOR, ALREADY-PER-ENDPOINT values (never the corridor-
+# reduced `dlr_amps` `_corridor_reduce_per_city` also returns) is D-01's own
+# scaling order -- subconductor scaling must happen BEFORE the weakest-link
+# corridor reduction, never after, because the two endpoints can carry
+# different bundle counts (confirmed live: AUSTIN=2, CORPUS_CHRISTI=2,
+# MIDLAND=2, EL_PASO=1, per `config.SUBCONDUCTORS_PER_PHASE`). Scaling an
+# already-corridor-reduced single value by one bundle count would silently
+# assume both endpoints share that count, which this corridor pair's own
+# MIDLAND_EL_PASO case (2 vs. 1) falsifies.
+def compute_endpoint_bundle_ampacity(per_city_ampacity_amps: Optional[dict]) -> dict:
+    """
+    Scales each city's own single-conductor ampacity by
+    `config.SUBCONDUCTORS_PER_PHASE[city]` (never by 3 for three phases --
+    a subconductor bundle is a PER-PHASE parallel-conductor count, entirely
+    unrelated to the three independent phases of a three-phase circuit),
+    then reduces the two endpoints' own bundle ampacities via a corridor-
+    level MINIMUM -- a SEPARATE weakest-link reduction from the one
+    `_corridor_reduce_per_city` already applied to the per-conductor values,
+    never a re-scaling of that function's own `dlr_amps` return.
+
+    Returns a dict, always one of two shapes:
+
+    - Unavailable (`per_city_ampacity_amps` is falsy, or names a city not in
+      `config.SUBCONDUCTORS_PER_PHASE`): `{"status": "unavailable", "reason":
+      <str>, "config_version": config.BUNDLE_CONFIG_VERSION}`. Never raises,
+      never invents a value -- the caller's own candidate keeps its existing
+      per-conductor result regardless of this function's outcome.
+    - Ok: `{"status": "ok", "endpoint_bundle_ampacity_amps": {city: float},
+      "corridor_bundle_ampacity_amps": float, "bundle_bottleneck_city": str,
+      "subconductors_per_phase": {city: int}, "config_version":
+      config.BUNDLE_CONFIG_VERSION, "rating_basis":
+      config.BUNDLE_RATING_BASIS, "reason": None}`. `bundle_bottleneck_city`
+      is computed independently of whatever `bottleneck_city` the caller's
+      own per-conductor reduction found -- the two identities may differ
+      (exactly MIDLAND_EL_PASO's own mixed-count case can produce), and
+      this function never assumes they match.
+    """
+    if not per_city_ampacity_amps:
+        return {
+            "status": "unavailable",
+            "reason": "no per-city (endpoint) ampacity available for this candidate",
+            "config_version": config.BUNDLE_CONFIG_VERSION,
+        }
+
+    missing = [c for c in per_city_ampacity_amps if c not in config.SUBCONDUCTORS_PER_PHASE]
+    if missing:
+        return {
+            "status": "unavailable",
+            "reason": (
+                f"no configured SUBCONDUCTORS_PER_PHASE entry for city(ies) {missing!r}"
+            ),
+            "config_version": config.BUNDLE_CONFIG_VERSION,
+        }
+
+    endpoint_bundle_ampacity_amps = {
+        city: config.SUBCONDUCTORS_PER_PHASE[city] * float(amps)
+        for city, amps in per_city_ampacity_amps.items()
+    }
+    bundle_bottleneck_city = min(
+        endpoint_bundle_ampacity_amps, key=endpoint_bundle_ampacity_amps.get
+    )
+    return {
+        "status": "ok",
+        "endpoint_bundle_ampacity_amps": endpoint_bundle_ampacity_amps,
+        "corridor_bundle_ampacity_amps": endpoint_bundle_ampacity_amps[bundle_bottleneck_city],
+        "bundle_bottleneck_city": bundle_bottleneck_city,
+        "subconductors_per_phase": {
+            city: config.SUBCONDUCTORS_PER_PHASE[city] for city in per_city_ampacity_amps
+        },
+        "config_version": config.BUNDLE_CONFIG_VERSION,
+        "rating_basis": config.BUNDLE_RATING_BASIS,
+        "reason": None,
+    }
+
+
 @dataclass(frozen=True)
 class ShadowPrediction:
     """One method's output: the corrected ampacity, the method name, and whether a fallback was used."""
@@ -754,6 +830,14 @@ class ShadowPrediction:
     # no value exists this cycle when status is "unavailable" or "failed".
     status: str = "ok"
     reason: Optional[str] = None
+    # 2026-10-08 ("bundle-level ampacity"): a candidate's own per-conductor
+    # fields above (`ampacity_amps`, `input_provenance.per_city_ampacity_amps`)
+    # are NEVER modified by this field's presence -- bundle output is a
+    # strictly additive, separately-labeled reporting basis (see
+    # `compute_endpoint_bundle_ampacity`'s own docstring). `None` only for
+    # legacy/pre-feature call sites that never set it; every call site this
+    # phase touches sets an explicit dict (status "ok" or "unavailable").
+    bundle: Optional[dict] = None
 
 
 class CorrectionMethod(Protocol):
@@ -1095,6 +1179,11 @@ class Persistence24hShadowMethod:
                     f"{decision_ts.isoformat()} (cold start, or a gap in "
                     "this corridor's collection history)"
                 ),
+                bundle={
+                    "status": "unavailable",
+                    "reason": "no matched prior entry this cycle (see the candidate's own reason)",
+                    "config_version": config.BUNDLE_CONFIG_VERSION,
+                },
             )
 
         raw_candidate = (best_entry.get("candidates") or {}).get("raw_forecast") or {}
@@ -1107,6 +1196,11 @@ class Persistence24hShadowMethod:
                     "the matched prior entry's own raw_forecast candidate "
                     f"was itself {raw_status!r}"
                 ),
+                bundle={
+                    "status": "unavailable",
+                    "reason": "the matched prior entry's own raw_forecast candidate was itself not ok",
+                    "config_version": config.BUNDLE_CONFIG_VERSION,
+                },
             )
 
         provenance = None
@@ -1118,11 +1212,32 @@ class Persistence24hShadowMethod:
         elif isinstance(raw_candidate.get("input_provenance"), dict):
             provenance = raw_candidate.get("input_provenance")
 
+        # 2026-10-08 ("bundle-level ampacity"): D-05's own decision-time
+        # discipline, extended to bundle output -- persistence must persist
+        # the DECISION-TIME bundle rating the matched prior entry's own
+        # raw_forecast candidate already computed from the endpoint values
+        # available AT THAT TIME, never re-derive one now by re-scaling an
+        # already-corridor-reduced ampacity under TODAY's bundle config
+        # (which could silently diverge from what was true back then, and
+        # would double-apply a reduction `compute_endpoint_bundle_ampacity`
+        # already performed once). A matched entry logged before this
+        # feature existed carries no "bundle" key at all -- unavailable,
+        # never backfilled/invented.
+        matched_bundle = raw_candidate.get("bundle")
+        if isinstance(matched_bundle, dict):
+            bundle = dict(matched_bundle)
+        else:
+            bundle = {
+                "status": "unavailable",
+                "reason": "the matched prior entry predates bundle reporting (no 'bundle' key)",
+                "config_version": config.BUNDLE_CONFIG_VERSION,
+            }
+
         return ShadowPrediction(
             corridor=corridor, method=self.name,
             ampacity_amps=raw_candidate.get("ampacity_amps"),
             timestamps=None, fallback_used=False, status="ok",
-            input_provenance=provenance,
+            input_provenance=provenance, bundle=bundle,
         )
 
 
@@ -1556,6 +1671,24 @@ _PER_CITY_NOT_APPLICABLE_REASON = (
     "so there is no per-city ampacity to report here either."
 )
 
+# 2026-10-08 ("bundle-level ampacity"): reference_ml_refit_24h can NEVER
+# produce a bundle estimate, regardless of whether the prediction itself
+# succeeds this cycle -- a corridor-only prediction has no per-endpoint
+# value to scale by a (possibly different) per-city subconductor count, so
+# there is no honest way to derive one. Never invented, never silently
+# approximated from the corridor value under one assumed bundle count.
+_BUNDLE_NOT_APPLICABLE = {
+    "status": "unavailable",
+    "reason": (
+        "reference_ml_refit_24h produces only a corridor-level prediction "
+        "(see per_city_not_applicable_reason) -- a corridor-only value "
+        "cannot generally be converted to a bundle estimate when endpoint "
+        "cities carry different subconductors-per-phase counts, so no "
+        "bundle output is computed for this candidate."
+    ),
+    "config_version": config.BUNDLE_CONFIG_VERSION,
+}
+
 
 class ReferenceRefit24hShadowMethod:
     """
@@ -1580,7 +1713,7 @@ class ReferenceRefit24hShadowMethod:
             return ShadowPrediction(
                 corridor=corridor, method=self.name, ampacity_amps=None,
                 timestamps=None, fallback_used=False, status="unavailable",
-                reason=str(exc),
+                reason=str(exc), bundle=dict(_BUNDLE_NOT_APPLICABLE),
             )
 
         try:
@@ -1589,7 +1722,7 @@ class ReferenceRefit24hShadowMethod:
             return ShadowPrediction(
                 corridor=corridor, method=self.name, ampacity_amps=None,
                 timestamps=None, fallback_used=False, status="unavailable",
-                reason=str(exc),
+                reason=str(exc), bundle=dict(_BUNDLE_NOT_APPLICABLE),
             )
 
         indexed = truth_proxy_series.set_index("datetime_utc").sort_index()
@@ -1620,7 +1753,7 @@ class ReferenceRefit24hShadowMethod:
             corridor=corridor, method=self.name, ampacity_amps=prediction,
             timestamps=None, fallback_used=False, status="ok",
             model_version=model_version_for(corridor, self.name),
-            input_provenance=provenance,
+            input_provenance=provenance, bundle=dict(_BUNDLE_NOT_APPLICABLE),
         )
 
 
@@ -1788,6 +1921,10 @@ def log_cycle_predictions(
             "model_version": prediction.model_version,
             "input_provenance": prediction.input_provenance,
             "reason": prediction.reason,
+            # 2026-10-08: additive bundle-level reporting basis (D-01) --
+            # never a top-level mirror field, since it is new, not part of
+            # the pre-cutover schema any legacy reader depends on.
+            "bundle": prediction.bundle,
         }
 
     candidate_records = {

@@ -5,6 +5,8 @@ where explicitly noted; this module is never invoked by production code,
 so these tests exercise it directly.
 """
 
+import json
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -1288,7 +1290,7 @@ def test_log_cycle_predictions_writes_all_five_candidates_with_exact_schema(tmp_
     assert set(record["candidates"]) == set(shadow.CANDIDATE_METHOD_NAMES)
     for name, cand in record["candidates"].items():
         assert set(cand) == {"status", "ampacity_amps", "fallback_used", "fallback_reason",
-                              "model_version", "input_provenance", "reason"}
+                              "model_version", "input_provenance", "reason", "bundle"}
     mirror = record["candidates"]["ml_wind_corrected"]
     assert record["method"] == "ml_wind_corrected"
     assert record["ampacity_amps"] == mirror["ampacity_amps"]
@@ -1777,3 +1779,248 @@ def test_reference_refit_24h_compute_loads_and_predicts_from_the_real_persisted_
     assert result.status == "ok"
     assert isinstance(result.ampacity_amps, float)
     assert np.isfinite(result.ampacity_amps)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 2026-10-08 ("bundle-level ampacity"): compute_endpoint_bundle_ampacity
+# -- subconductors-per-phase scaling applied BEFORE corridor reduction,
+# a SEPARATE weakest-link minimum from the per-conductor one, never a
+# re-scaling of an already-reduced value.
+# ──────────────────────────────────────────────────────────────────────
+
+
+def test_compute_endpoint_bundle_ampacity_uniform_counts_scales_both_endpoints_equally():
+    """AUSTIN_CORPUS_CHRISTI: both endpoints carry the SAME subconductor
+    count (2). The bundle minimum must track whichever endpoint's
+    per-conductor value was already lower -- scaling by the same factor
+    never changes which endpoint is the bottleneck."""
+    per_city = {"AUSTIN": 1000.0, "CORPUS_CHRISTI": 1200.0}
+
+    result = shadow.compute_endpoint_bundle_ampacity(per_city)
+
+    assert result["status"] == "ok"
+    assert result["endpoint_bundle_ampacity_amps"] == {"AUSTIN": 2000.0, "CORPUS_CHRISTI": 2400.0}
+    assert result["corridor_bundle_ampacity_amps"] == 2000.0
+    assert result["bundle_bottleneck_city"] == "AUSTIN"
+    assert result["subconductors_per_phase"] == {"AUSTIN": 2, "CORPUS_CHRISTI": 2}
+    assert result["config_version"] == config.BUNDLE_CONFIG_VERSION
+    assert result["rating_basis"] == config.BUNDLE_RATING_BASIS
+    assert result["reason"] is None
+
+
+def test_compute_endpoint_bundle_ampacity_mixed_counts_can_flip_the_bottleneck():
+    """
+    MIDLAND_EL_PASO: MIDLAND=2 subconductors, EL_PASO=1 (config.py's own
+    provisional values). This is the exact case the user's own worked
+    example names: min(2*I_Midland, I_ElPaso). Construct per-conductor
+    values where EL_PASO's own per-conductor ampacity is HIGHER than
+    MIDLAND's (so the per-conductor/non-bundle bottleneck would be
+    MIDLAND), but EL_PASO's single-subconductor bundle ampacity still
+    ends up the bundle bottleneck once MIDLAND's is doubled -- proving
+    the mixed count can change (or, as constructed here, preserve for a
+    different reason) which city is the limiting one, and that the
+    function computes its own independent answer rather than assuming
+    the per-conductor bottleneck's identity carries over.
+    """
+    per_city = {"MIDLAND": 700.0, "EL_PASO": 900.0}  # per-conductor: EL_PASO is higher
+
+    result = shadow.compute_endpoint_bundle_ampacity(per_city)
+
+    assert result["endpoint_bundle_ampacity_amps"] == {"MIDLAND": 1400.0, "EL_PASO": 900.0}
+    # Bundle-scaled, EL_PASO (unscaled, 1 subconductor) is now the lower
+    # (bottleneck) value -- the OPPOSITE ordering from a naive "scale the
+    # higher per-conductor value" intuition would suggest, and exactly
+    # why bundle reduction must be computed independently per the user's
+    # own formula, not inferred from the per-conductor bottleneck.
+    assert result["corridor_bundle_ampacity_amps"] == 900.0
+    assert result["bundle_bottleneck_city"] == "EL_PASO"
+    assert result["subconductors_per_phase"] == {"MIDLAND": 2, "EL_PASO": 1}
+
+
+def test_compute_endpoint_bundle_ampacity_mixed_counts_true_flip_case():
+    """
+    A case where the PER-CONDUCTOR bottleneck and the BUNDLE bottleneck
+    are literally different cities -- MIDLAND's own per-conductor value
+    is lower (the per-conductor bottleneck), but once MIDLAND's 2x
+    subconductor count is applied, EL_PASO (1x) becomes the bundle
+    bottleneck instead. Pins "keep conductor and bundle bottleneck
+    identities separate because they may differ" directly.
+    """
+    per_city = {"MIDLAND": 500.0, "EL_PASO": 600.0}  # per-conductor bottleneck: MIDLAND (500 < 600)
+
+    result = shadow.compute_endpoint_bundle_ampacity(per_city)
+
+    # Per-conductor bottleneck would have been MIDLAND (500 < 600).
+    assert min(per_city, key=per_city.get) == "MIDLAND"
+    # Bundle bottleneck flips to EL_PASO: 2*500=1000 vs. 1*600=600.
+    assert result["bundle_bottleneck_city"] == "EL_PASO"
+    assert result["corridor_bundle_ampacity_amps"] == 600.0
+
+
+def test_compute_endpoint_bundle_ampacity_never_multiplies_by_phase_count():
+    """Explicit guard against the one error mode named directly in the
+    request: never multiply by 3 for three phases. A bundle count of 2
+    must scale by exactly 2, not 2*3 or 3."""
+    result = shadow.compute_endpoint_bundle_ampacity({"AUSTIN": 1000.0, "CORPUS_CHRISTI": 1000.0})
+
+    assert result["endpoint_bundle_ampacity_amps"]["AUSTIN"] == 2000.0  # NOT 3000.0, NOT 6000.0
+
+
+def test_compute_endpoint_bundle_ampacity_unavailable_when_per_city_is_none():
+    """The architectural case (reference_ml_refit_24h): no per-city value
+    at all -- never invents one, never raises."""
+    result = shadow.compute_endpoint_bundle_ampacity(None)
+
+    assert result["status"] == "unavailable"
+    assert "per-city" in result["reason"]
+    assert result["config_version"] == config.BUNDLE_CONFIG_VERSION
+    assert "endpoint_bundle_ampacity_amps" not in result
+
+
+def test_compute_endpoint_bundle_ampacity_unavailable_when_per_city_is_empty_dict():
+    result = shadow.compute_endpoint_bundle_ampacity({})
+
+    assert result["status"] == "unavailable"
+
+
+def test_compute_endpoint_bundle_ampacity_unavailable_for_unconfigured_city():
+    """A city with no SUBCONDUCTORS_PER_PHASE entry must report
+    unavailable, naming the specific missing city -- never silently
+    assume a count of 1 or skip that city."""
+    result = shadow.compute_endpoint_bundle_ampacity({"AUSTIN": 1000.0, "NOT_A_REAL_CITY": 1000.0})
+
+    assert result["status"] == "unavailable"
+    assert "NOT_A_REAL_CITY" in result["reason"]
+
+
+def test_compute_endpoint_bundle_ampacity_never_derived_from_corridor_reduced_value():
+    """
+    Double-scaling guard: calling `compute_endpoint_bundle_ampacity` on
+    the SAME per-city inputs `_corridor_reduce_per_city` already reduced
+    via its own weakest-link call must produce the SAME bundle answer
+    regardless of what `_corridor_reduce_per_city`'s own `dlr_amps`
+    return was -- proving bundle math is computed from the raw per-city
+    values, never by re-scaling the already-corridor-reduced minimum
+    (which would need only ONE multiply, not two independent endpoint
+    multiplies followed by a second reduction).
+    """
+    per_city_amps = {"AUSTIN": 1100.0, "CORPUS_CHRISTI": 1300.0}
+    geometry = corridor_discretization.corridor_geometry(_CORRIDOR)
+
+    class _StubMethod:
+        name = "stub"
+
+        def __init__(self, values):
+            self._values = values
+            self._i = 0
+
+        def predict(self, frame, geometry):
+            cities = sorted(per_city_amps)
+            value = self._values[cities[self._i]]
+            self._i += 1
+            return value
+
+    dlr_amps, returned_per_city, _ = shadow._corridor_reduce_per_city(
+        _StubMethod(per_city_amps), {"AUSTIN": object(), "CORPUS_CHRISTI": object()}, geometry,
+    )
+    assert dlr_amps == 1100.0  # the per-conductor corridor minimum
+
+    bundle_from_per_city = shadow.compute_endpoint_bundle_ampacity(returned_per_city)
+    # NEVER derived as dlr_amps * some_single_count -- would be
+    # 1100.0 * 2 = 2200.0 if AUSTIN's own count were (wrongly) applied to
+    # the already-reduced value, which happens to coincide with the
+    # correct answer ONLY because both endpoints here share count 2; the
+    # real proof is that this function's own math path never touches
+    # `dlr_amps` at all (not passed as an argument, not referenced).
+    assert bundle_from_per_city["corridor_bundle_ampacity_amps"] == 2200.0
+    assert bundle_from_per_city["endpoint_bundle_ampacity_amps"] == {
+        "AUSTIN": 2200.0, "CORPUS_CHRISTI": 2600.0,
+    }
+
+
+def test_reference_refit_24h_bundle_always_unavailable_even_when_prediction_is_ok(monkeypatch):
+    """A corridor-only prediction can never be converted to a bundle
+    estimate -- bundle must be unavailable even on the method's own
+    successful ("ok") path."""
+    fake_model = _FakeMLPEstimator(value=1555.0)
+    monkeypatch.setattr(shadow, "load_correction_model", lambda corridor, method_name: fake_model)
+    monkeypatch.setattr(shadow, "model_version_for", lambda corridor, method_name: "fake@test")
+    _install_fake_fetch_weather(monkeypatch, city_frames=_complete_truth_proxy_city_frames())
+
+    result = shadow.ReferenceRefit24hShadowMethod().compute(_CORRIDOR, _TRUTH_PROXY_ANCHOR)
+
+    assert result.status == "ok"
+    assert result.bundle["status"] == "unavailable"
+    assert "corridor-only" in result.bundle["reason"] or "corridor-level" in result.bundle["reason"]
+    assert result.bundle["config_version"] == config.BUNDLE_CONFIG_VERSION
+
+
+def test_reference_refit_24h_bundle_unavailable_on_missing_artifact(monkeypatch):
+    _install_fake_fetch_weather(monkeypatch, city_frames=_complete_truth_proxy_city_frames())
+
+    result = shadow.ReferenceRefit24hShadowMethod().compute("MIDLAND_EL_PASO_NONEXISTENT_CORRIDOR", _TRUTH_PROXY_ANCHOR)
+
+    assert result.status == "unavailable"
+    assert result.bundle["status"] == "unavailable"
+
+
+def test_persistence_24h_bundle_carries_forward_matched_entrys_own_bundle_verbatim(monkeypatch, tmp_path):
+    """D-05's decision-time discipline, extended to bundle: persistence
+    must read the MATCHED PRIOR entry's own already-computed bundle dict
+    verbatim, never re-derive one from today's config."""
+    monkeypatch.setattr(shadow, "SHADOW_PREDICTIONS_DIR", str(tmp_path))
+    path = tmp_path / f"{_CORRIDOR}.jsonl"
+    matched_valid_time = _TRUTH_PROXY_ANCHOR
+    stale_bundle = {
+        "status": "ok", "endpoint_bundle_ampacity_amps": {"AUSTIN": 1800.0, "CORPUS_CHRISTI": 2000.0},
+        "corridor_bundle_ampacity_amps": 1800.0, "bundle_bottleneck_city": "AUSTIN",
+        "subconductors_per_phase": {"AUSTIN": 2, "CORPUS_CHRISTI": 2},
+        "config_version": "v0-a-much-older-config-version", "rating_basis": "old basis text",
+        "reason": None,
+    }
+    entry = {
+        "schema_version": 2, "corridor": _CORRIDOR,
+        "decision_time": "2026-10-06T18:00:00+00:00",
+        "valid_time": matched_valid_time.isoformat(),
+        "candidates": {
+            "raw_forecast": {
+                "status": "ok", "ampacity_amps": 900.0, "fallback_used": False,
+                "fallback_reason": None, "model_version": None, "reason": None,
+                "input_provenance": {"per_city_ampacity_amps": {"AUSTIN": 900.0, "CORPUS_CHRISTI": 1000.0}},
+                "bundle": stale_bundle,
+            },
+        },
+    }
+    path.write_text(json.dumps(entry) + "\n")
+
+    result = shadow.Persistence24hShadowMethod().compute(_CORRIDOR, matched_valid_time)
+
+    assert result.status == "ok"
+    assert result.bundle == stale_bundle  # byte-identical carry-forward, never re-scaled
+    assert result.bundle["config_version"] == "v0-a-much-older-config-version"  # NOT today's
+
+
+def test_persistence_24h_bundle_unavailable_when_matched_entry_predates_bundle_feature(monkeypatch, tmp_path):
+    monkeypatch.setattr(shadow, "SHADOW_PREDICTIONS_DIR", str(tmp_path))
+    path = tmp_path / f"{_CORRIDOR}.jsonl"
+    matched_valid_time = _TRUTH_PROXY_ANCHOR
+    entry = {
+        "schema_version": 2, "corridor": _CORRIDOR,
+        "decision_time": "2026-10-06T18:00:00+00:00",
+        "valid_time": matched_valid_time.isoformat(),
+        "candidates": {
+            "raw_forecast": {
+                "status": "ok", "ampacity_amps": 900.0, "fallback_used": False,
+                "fallback_reason": None, "model_version": None, "reason": None,
+                "input_provenance": {"per_city_ampacity_amps": {"AUSTIN": 900.0, "CORPUS_CHRISTI": 1000.0}},
+                # No "bundle" key -- a pre-bundle-feature entry.
+            },
+        },
+    }
+    path.write_text(json.dumps(entry) + "\n")
+
+    result = shadow.Persistence24hShadowMethod().compute(_CORRIDOR, matched_valid_time)
+
+    assert result.status == "ok"  # the ampacity itself is still fine
+    assert result.bundle["status"] == "unavailable"
+    assert "predates bundle reporting" in result.bundle["reason"]

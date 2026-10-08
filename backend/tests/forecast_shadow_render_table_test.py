@@ -28,7 +28,19 @@ def test_render_markdown_with_no_files_reports_nothing_logged_yet(tmp_path):
     assert "Power Systems sub-team" in markdown
 
 
-def test_render_markdown_one_corridor_one_entry(tmp_path):
+# ──────────────────────────────────────────────────────────────────────
+# 2026-10-08 ("why does the readme still have the old table underneath
+# the new one -- remove that"): pre-cutover flat-shape entries no longer
+# render as their own table (or any per-row content) at all -- only a
+# one-line count-and-pointer summary. The detailed-row behaviors these
+# tests used to pin (pipe-escaping, null handling, truncation, per-row
+# sorting) no longer apply to old-shape data, since no old-shape row
+# content is rendered anymore; replaced below with tests pinning the
+# summary-line behavior itself.
+# ──────────────────────────────────────────────────────────────────────
+
+
+def test_render_markdown_one_corridor_one_old_shape_entry_shows_count_not_row_detail(tmp_path):
     _write_entry(str(tmp_path / "AUSTIN_CORPUS_CHRISTI.jsonl"), {
         "corridor": "AUSTIN_CORPUS_CHRISTI", "method": "ml_wind_corrected",
         "ampacity_amps": 1004.136, "fallback_used": False, "fallback_reason": None,
@@ -40,73 +52,40 @@ def test_render_markdown_one_corridor_one_entry(tmp_path):
 
     assert "## AUSTIN_CORPUS_CHRISTI" in markdown
     assert "1 logged prediction(s)" in markdown
-    assert "1004.1" in markdown
-    assert "ml_wind_corrected" in markdown
-    assert "| 2026-10-07T06:52:09+00:00 | 2026-10-07T18:00:00+00:00 |" in markdown
+    assert "1 pre-cutover (single-method) entries" in markdown
+    assert "data/shadow/predictions/AUSTIN_CORPUS_CHRISTI.jsonl" in markdown
+    # No per-row detail: the specific ampacity value is never rendered.
+    assert "1004.1" not in markdown
+    assert "2026-10-07T06:52:09+00:00" not in markdown
 
 
-def test_render_markdown_sorts_most_recent_first(tmp_path):
-    path = str(tmp_path / "MIDLAND_EL_PASO.jsonl")
+def test_render_markdown_old_shape_entries_never_render_a_table_at_all(tmp_path):
+    """
+    Pins the exact bug report ("the old table underneath the new one"):
+    even with multiple old-shape entries carrying every field the old
+    per-row renderer used to format (pipe characters, null fields, a very
+    long fallback_reason), NO pipe-table syntax for them appears anywhere
+    in the output -- only the one-line summary.
+    """
+    path = str(tmp_path / "AUSTIN_CORPUS_CHRISTI.jsonl")
     _write_entry(path, {
-        "corridor": "MIDLAND_EL_PASO", "method": "ml_wind_corrected", "ampacity_amps": 100.0,
-        "fallback_used": False, "decision_time": "2026-10-07T01:00:00+00:00", "valid_time": "x",
-    })
-    _write_entry(path, {
-        "corridor": "MIDLAND_EL_PASO", "method": "ml_wind_corrected", "ampacity_amps": 200.0,
-        "fallback_used": False, "decision_time": "2026-10-07T03:00:00+00:00", "valid_time": "x",
-    })
-    _write_entry(path, {
-        "corridor": "MIDLAND_EL_PASO", "method": "ml_wind_corrected", "ampacity_amps": 150.0,
-        "fallback_used": False, "decision_time": "2026-10-07T02:00:00+00:00", "valid_time": "x",
-    })
-
-    markdown = render_table.render_markdown(str(tmp_path))
-
-    idx_200 = markdown.index("200.0")
-    idx_150 = markdown.index("150.0")
-    idx_100 = markdown.index("100.0")
-    assert idx_200 < idx_150 < idx_100  # newest (03:00) first, oldest (01:00) last
-
-
-def test_render_markdown_escapes_pipe_characters_in_fallback_reason(tmp_path):
-    _write_entry(str(tmp_path / "AUSTIN_CORPUS_CHRISTI.jsonl"), {
         "corridor": "AUSTIN_CORPUS_CHRISTI", "method": "raw_forecast", "ampacity_amps": 500.0,
         "fallback_used": True,
         "fallback_reason": "provider A failed | provider B also failed",
-        "decision_time": "x", "valid_time": "x",
+        "decision_time": "2026-10-07T01:00:00+00:00", "valid_time": "x",
     })
-
-    markdown = render_table.render_markdown(str(tmp_path))
-
-    # An unescaped "|" inside a table cell would corrupt the Markdown
-    # table structure (it would be parsed as a new column boundary).
-    assert "provider A failed \\| provider B also failed" in markdown
-
-
-def test_render_markdown_handles_null_model_version_and_ampacity(tmp_path):
-    _write_entry(str(tmp_path / "AUSTIN_CORPUS_CHRISTI.jsonl"), {
+    _write_entry(path, {
         "corridor": "AUSTIN_CORPUS_CHRISTI", "method": "raw_forecast", "ampacity_amps": None,
-        "fallback_used": True, "model_version": None,
-        "fallback_reason": "total failure", "decision_time": "x", "valid_time": "x",
+        "fallback_used": True, "model_version": None, "fallback_reason": "x" * 500,
+        "decision_time": "2026-10-07T02:00:00+00:00", "valid_time": "x",
     })
 
     markdown = render_table.render_markdown(str(tmp_path))
 
-    assert "| — |" in markdown  # the em-dash placeholder, not "None" or a crash
-
-
-def test_render_markdown_truncates_a_very_long_fallback_reason(tmp_path):
-    long_reason = "x" * 500
-    _write_entry(str(tmp_path / "AUSTIN_CORPUS_CHRISTI.jsonl"), {
-        "corridor": "AUSTIN_CORPUS_CHRISTI", "method": "raw_forecast", "ampacity_amps": 1.0,
-        "fallback_used": True, "fallback_reason": long_reason,
-        "decision_time": "x", "valid_time": "x",
-    })
-
-    markdown = render_table.render_markdown(str(tmp_path))
-
-    assert long_reason not in markdown  # the full 500-char string must not appear verbatim
-    assert "x" * 100 in markdown  # but a truncated prefix should
+    assert "2 pre-cutover (single-method) entries" in markdown
+    assert "provider A failed" not in markdown
+    assert "x" * 100 not in markdown
+    assert "| Method | Fallback?" not in markdown  # the old header row is gone entirely
 
 
 def test_render_markdown_is_deterministic_for_unchanged_input(tmp_path):
@@ -196,15 +175,13 @@ def _new_shape_entry(**overrides) -> dict:
     return entry
 
 
-def test_render_markdown_old_shape_only_is_a_byte_identical_regression_pin(tmp_path):
+def test_render_markdown_old_shape_only_renders_summary_line_not_a_table(tmp_path):
     """
-    Regression pin: hand-reconstructs the exact row/table text this
-    module's rendering formula has always produced for old-shape (no
-    `schema_version`) entries -- captured BEFORE asserting against the
-    task 1 code change, so this proves the schema_version branch below
-    introduces zero behavior change for old-shape rows, per 05-01's
-    approved "no migration of historical rows" strategy (old rows render
-    forever, exactly as they always have).
+    2026-10-08 ("remove that"): superseded regression pin. The original
+    version of this test hand-reconstructed the exact row/table text the
+    legacy per-row renderer produced -- that renderer is now removed
+    entirely (old-shape rows render a one-line summary, never a table),
+    so this test pins the NEW behavior instead.
     """
     path = str(tmp_path / "AUSTIN_CORPUS_CHRISTI.jsonl")
     _write_entry(path, {
@@ -221,21 +198,20 @@ def test_render_markdown_old_shape_only_is_a_byte_identical_regression_pin(tmp_p
 
     markdown = render_table.render_markdown(str(tmp_path))
 
-    expected_table = (
+    expected = (
         "## AUSTIN_CORPUS_CHRISTI\n"
         "\n"
         "2 logged prediction(s), most recent first.\n"
         "\n"
-        "| Decision time (UTC) | Valid time (UTC) | Method | Fallback? | "
-        "Ampacity (A) | Model version | Notes |\n"
-        "|---|---|---|---|---|---|---|\n"
-        "| 2026-10-07T18:52:09+00:00 | 2026-10-08T06:00:00+00:00 | raw_forecast | "
-        "Yes | — | — | total failure |\n"
-        "| 2026-10-07T06:52:09+00:00 | 2026-10-07T18:00:00+00:00 | ml_wind_corrected | "
-        "No | 1004.1 | ml_wind_corrected_AUSTIN_CORPUS_CHRISTI@2026-10-07T06:51:38+00:00 |  |\n"
+        "_2 pre-cutover (single-method) entries exist in this corridor's raw "
+        "history and are not rendered here -- see "
+        "`data/shadow/predictions/AUSTIN_CORPUS_CHRISTI.jsonl` on this branch "
+        "for the full single-candidate record._\n"
         "\n"
     )
-    assert expected_table in markdown
+    assert expected in markdown
+    assert "ml_wind_corrected_AUSTIN_CORPUS_CHRISTI@2026-10-07T06:51:38" not in markdown
+    assert "total failure" not in markdown
 
 
 def test_render_markdown_new_shape_entry_renders_all_five_candidates(tmp_path):
@@ -352,11 +328,13 @@ def test_render_markdown_new_shape_under_cap_does_not_print_an_omission_note(tmp
     assert "omitted" not in markdown
 
 
-def test_render_markdown_mixed_old_and_new_shape_lines_both_render_in_one_document(tmp_path):
+def test_render_markdown_mixed_old_and_new_shape_lines_both_accounted_for_in_one_document(tmp_path):
     """
     The real situation this collector is in from the cutover forward: one
     corridor file with an old-shape line AND a new-shape line. Both must
-    render correctly in the same document with no exception.
+    render correctly in the same document with no exception -- the old
+    one as its one-line summary (2026-10-08: no longer a table), the new
+    one as its own compact row.
     """
     path = str(tmp_path / "AUSTIN_CORPUS_CHRISTI.jsonl")
     _write_entry(path, {
@@ -369,8 +347,9 @@ def test_render_markdown_mixed_old_and_new_shape_lines_both_render_in_one_docume
 
     markdown = render_table.render_markdown(str(tmp_path))
 
-    # Old-shape row still present with its own legacy table.
-    assert "| 2026-10-06T06:00:00+00:00 | 2026-10-06T18:00:00+00:00 | ml_wind_corrected |" in markdown
+    # Old-shape row accounted for by the one-line summary, never a table.
+    assert "1 pre-cutover (single-method) entries" in markdown
+    assert "| 2026-10-06T06:00:00+00:00 | 2026-10-06T18:00:00+00:00 | ml_wind_corrected |" not in markdown
     # New-shape block still present with all five candidates.
     for name in _NEW_SHAPE_CANDIDATE_NAMES:
         assert name in markdown

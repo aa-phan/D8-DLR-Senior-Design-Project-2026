@@ -189,6 +189,21 @@ def _resolve_next_valid_time(horizon_minutes: int) -> pd.Timestamp:
     return candidate
 
 
+def _bundle_unavailable(reason: str) -> dict:
+    """
+    2026-10-08 ("bundle-level ampacity"): the bundle-field shape for a
+    candidate that never reached real bundle math this cycle -- its own
+    per-conductor prediction was itself unavailable/failed, so there is no
+    endpoint ampacity to scale. `reason` mirrors the candidate's own
+    unavailable/failed reason, never a separately-invented one.
+    """
+    return {
+        "status": "unavailable",
+        "reason": reason,
+        "config_version": config.BUNDLE_CONFIG_VERSION,
+    }
+
+
 def run_once_all_methods(corridor: str, *, horizon_minutes: int = 1440) -> dict:
     """
     Plan 05-02 (D-01/D-02/D-04/D-07): the five-candidate orchestration
@@ -238,10 +253,11 @@ def run_once_all_methods(corridor: str, *, horizon_minutes: int = 1440) -> dict:
             missing_forecast = [c for c in cities if shared[c].forecast_frame is None]
             if missing_forecast:
                 reasons = "; ".join(f"{c}: {shared[c].forecast_error}" for c in missing_forecast)
+                reason = f"forecast unavailable for {missing_forecast}: {reasons}"
                 results[candidate_name] = shadow.ShadowPrediction(
                     corridor=corridor, method=candidate_name, ampacity_amps=None,
                     timestamps=timestamps, fallback_used=False, status="unavailable",
-                    reason=f"forecast unavailable for {missing_forecast}: {reasons}",
+                    reason=reason, bundle=_bundle_unavailable(reason),
                 )
                 continue
 
@@ -252,10 +268,11 @@ def run_once_all_methods(corridor: str, *, horizon_minutes: int = 1440) -> dict:
                 missing_anchor = [c for c in cities if shared[c].anchor is None]
                 if missing_anchor:
                     reasons = "; ".join(f"{c}: {shared[c].anchor_error}" for c in missing_anchor)
+                    reason = f"anchor unavailable for {missing_anchor}: {reasons}"
                     results[candidate_name] = shadow.ShadowPrediction(
                         corridor=corridor, method=candidate_name, ampacity_amps=None,
                         timestamps=timestamps, fallback_used=False, status="unavailable",
-                        reason=f"anchor unavailable for {missing_anchor}: {reasons}",
+                        reason=reason, bundle=_bundle_unavailable(reason),
                     )
                     continue
 
@@ -270,7 +287,7 @@ def run_once_all_methods(corridor: str, *, horizon_minutes: int = 1440) -> dict:
                     results[candidate_name] = shadow.ShadowPrediction(
                         corridor=corridor, method=candidate_name, ampacity_amps=None,
                         timestamps=timestamps, fallback_used=False, status="unavailable",
-                        reason=str(exc),
+                        reason=str(exc), bundle=_bundle_unavailable(str(exc)),
                     )
                     continue
                 model_version = shadow.model_version_for(corridor, candidate_name)
@@ -289,6 +306,15 @@ def run_once_all_methods(corridor: str, *, horizon_minutes: int = 1440) -> dict:
             dlr_amps, per_city_amps, bottleneck_city = shadow._corridor_reduce_per_city(
                 method, city_frames, geometry,
             )
+            # 2026-10-08 ("bundle-level ampacity", D-01): scaled from
+            # `per_city_amps` -- the PRE-corridor-reduction, per-conductor,
+            # per-endpoint values `_corridor_reduce_per_city` already
+            # computed above -- never from `dlr_amps` (the ALREADY-reduced
+            # per-conductor corridor minimum). Scaling `dlr_amps` by one
+            # bundle count would silently assume both endpoints share that
+            # count, which this project's own MIDLAND_EL_PASO corridor
+            # (2 vs. 1) falsifies.
+            bundle = shadow.compute_endpoint_bundle_ampacity(per_city_amps)
             results[candidate_name] = shadow.ShadowPrediction(
                 corridor=corridor, method=candidate_name, ampacity_amps=dlr_amps,
                 timestamps=timestamps, fallback_used=False, model_version=model_version,
@@ -296,7 +322,7 @@ def run_once_all_methods(corridor: str, *, horizon_minutes: int = 1440) -> dict:
                     "per_city_ampacity_amps": per_city_amps,
                     "bottleneck_city": bottleneck_city,
                 },
-                status="ok",
+                status="ok", bundle=bundle,
             )
         except Exception as exc:
             # D-07: a REAL code-level failure escaping this candidate's own
@@ -306,7 +332,7 @@ def run_once_all_methods(corridor: str, *, horizon_minutes: int = 1440) -> dict:
             results[candidate_name] = shadow.ShadowPrediction(
                 corridor=corridor, method=candidate_name, ampacity_amps=None,
                 timestamps=timestamps, fallback_used=False, status="failed",
-                reason=str(exc),
+                reason=str(exc), bundle=_bundle_unavailable(str(exc)),
             )
 
     try:
@@ -315,6 +341,7 @@ def run_once_all_methods(corridor: str, *, horizon_minutes: int = 1440) -> dict:
         results["persistence_24h"] = shadow.ShadowPrediction(
             corridor=corridor, method="persistence_24h", ampacity_amps=None,
             timestamps=timestamps, fallback_used=False, status="failed", reason=str(exc),
+            bundle=_bundle_unavailable(str(exc)),
         )
 
     try:
@@ -323,6 +350,7 @@ def run_once_all_methods(corridor: str, *, horizon_minutes: int = 1440) -> dict:
         results["reference_ml_refit_24h"] = shadow.ShadowPrediction(
             corridor=corridor, method="reference_ml_refit_24h", ampacity_amps=None,
             timestamps=timestamps, fallback_used=False, status="failed", reason=str(exc),
+            bundle=_bundle_unavailable(str(exc)),
         )
 
     shadow.log_cycle_predictions(corridor, results, timestamps)

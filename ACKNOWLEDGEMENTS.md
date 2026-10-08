@@ -2059,3 +2059,77 @@ them, and the method returned a genuine `status="ok"` prediction (1264.24 A) -- 
 candidate has ever produced a live, non-"unavailable" result -- with
 `provenance["station_provenance"]` naming all 14 hours (7 per city) as `"synoptic"`, confirmed by
 reading the actual returned dict, not assumed from the code.
+
+### Session: 2026-10-08 (continued), conducted by Aaron Phan — remove the duplicate README table; add bundle-level (subconductors-per-phase) ampacity
+
+User asked to (1) remove the pre-cutover flat-shape entries' table, which was still rendering
+underneath the new compact table, and (2) add explicitly-labeled bundle-level ampacity across all
+five shadow methods using the Power Systems sub-team's provisional per-city subconductor-per-phase
+counts (Austin 2, Corpus Christi 2, Midland 2, El Paso 1), stored as versioned configuration, scaled
+BEFORE corridor reduction, never derived by multiplying by three phases, and handled honestly per
+method (an unavailable-with-reason output rather than an invented value for any method that cannot
+support it).
+
+Claude Code was used to:
+
+1. Removed the legacy table entirely from `forecast_shadow_render_table.py`'s rendered output for
+   pre-cutover flat-shape entries -- replaced with a one-line count-and-pointer note ("N pre-cutover
+   entries exist... see `<corridor>.jsonl`"). The raw JSONL itself is untouched (05-01's own approved
+   "no migration" strategy); only the RENDERED view changed. Deleted the now-fully-dead
+   `_render_legacy_row` function.
+2. Traced the actual conductor parameters and scaling order through all five methods before writing
+   any code, per the user's own instruction to report what's ACTUALLY used rather than rely on
+   documentation: confirmed `thermal_model.ConductorConfig`/`ieee738_ampacity` is single-conductor
+   with no existing bundle/subconductor concept anywhere in the codebase (grep for "bundle"/
+   "subconductor" returns nothing); confirmed `config.DEFAULT_CONDUCTOR_CONFIG_KWARGS` (795 kcmil
+   Drake ACSR: diameter_m=0.02814, resistance_ac=0.0726 Ω/km, emissivity=0.8, absorptivity=0.8,
+   max_temp_c=75.0, elevation_m=900.0, line_azimuth=per-corridor bearing) is identical across every
+   corridor/city -- only `line_azimuth` varies; confirmed `ml_wind_corrected`/`ml_cooling_corrected`/
+   `raw_forecast` all expose PRE-corridor-reduction, per-city, per-conductor ampacity via
+   `_corridor_reduce_per_city`'s own `per_city_amps` return (available before `corridor_weakest_link`
+   runs); confirmed `reference_ml_refit_24h` is architecturally corridor-only (`_PER_CITY_NOT_
+   APPLICABLE_REASON`, already in the code); confirmed `persistence_24h` always reads a PRIOR entry's
+   own already-computed fields forward, never recomputes from raw inputs.
+3. Added `config.SUBCONDUCTORS_PER_PHASE` (Austin 2, Corpus Christi 2, Midland 2, El Paso 1),
+   `config.BUNDLE_CONFIG_VERSION` ("v1-provisional-2026-10-08"), and `config.BUNDLE_RATING_BASIS` --
+   all three explicitly labeled as the Power Systems sub-team's regional assumption, not yet
+   confirmed for any specific line segment.
+4. Added `forecast_shadow_pipeline.compute_endpoint_bundle_ampacity` -- scales each city's own
+   per-conductor ampacity by its own subconductor count (never per-conductor corridor-reduced
+   `dlr_amps` by a single count, which would silently assume both endpoints share one count), then
+   takes an INDEPENDENT weakest-link minimum across the two bundle-scaled endpoints, computing its
+   own `bundle_bottleneck_city` that may differ from the per-conductor `bottleneck_city`. Returns a
+   structured unavailable/ok dict, never raises, never invents a value.
+5. Wired this into `forecast_shadow_demo.py`'s `run_once_all_methods` for the three per-city-reduced
+   candidates (bundle computed from `per_city_amps`, the exact pre-reduction values, on every status
+   path -- ok, unavailable, failed -- mirroring each candidate's own reason on the non-ok paths);
+   into `ReferenceRefit24hShadowMethod` (always `unavailable` with the architectural per-city-
+   unavailable reason, on all three of its own return paths, regardless of whether the prediction
+   itself succeeds); and into `Persistence24hShadowMethod` (carries the matched prior entry's own
+   already-computed `bundle` dict forward VERBATIM -- including its own historical `config_version`
+   -- never re-derives one from today's config, honoring "do not scale an already-reduced
+   per-conductor minimum when bundle counts differ").
+6. Added `bundle` to `ShadowPrediction` (additive, default `None`) and to `log_cycle_predictions`'s
+   per-candidate JSONL record -- never a top-level mirror field, since bundle is new reporting, not
+   part of the pre-cutover schema. Existing `ampacity_amps`/`input_provenance` fields are completely
+   unmodified by this change.
+
+**Verified, not merely trusted:** 14 new unit tests for `compute_endpoint_bundle_ampacity` (uniform
+scaling, a true per-conductor-vs-bundle bottleneck flip at MIDLAND_EL_PASO's own real 2-vs-1 counts,
+an explicit "never multiply by 3" guard, unavailable for `None`/empty/unconfigured-city inputs, and
+a double-scaling-prevention proof reading the math path never touches the already-reduced `dlr_amps`
+value) plus `ReferenceRefit24hShadowMethod`'s always-unavailable bundle and `Persistence24hShadowMethod`'s
+verbatim carry-forward (including a predates-the-feature case); 2 new `run_once_all_methods`
+integration tests (a real MIDLAND_EL_PASO run with tied per-conductor inputs isolating the mixed-
+count-alone bottleneck flip, confirmed through the real JSONL write; an unavailable-candidate's
+bundle mirroring its own reason); 6 render-table tests rewritten for the new no-legacy-table
+behavior (one pins that NO old-shape pipe-table syntax appears anywhere, even with pipe characters,
+nulls, and a 500-char reason in the input). Full relevant suite (124/124) passing. Every frozen
+Phase 1/3/4 production module, `corridor_discretization.py`, and both frozen decision documents
+confirmed zero git diff. One real live collection cycle run end to end for BOTH corridors: the
+persisted JSONL's own `bundle` fields were read back directly (not assumed) and show the EXACT
+bottleneck-flip case named in the request happening for real -- at MIDLAND_EL_PASO, MIDLAND's own
+per-conductor ampacity (1004.72 A) was lower than EL_PASO's (1095.15 A, the per-conductor
+bottleneck), but once bundled (MIDLAND ×2 = 2009.45 A, EL_PASO ×1 = 1095.15 A) EL_PASO becomes the
+bundle bottleneck instead, for all three available candidates. `reference_ml_refit_24h` correctly
+reported bundle-unavailable at both corridors (architectural, not a defect).
