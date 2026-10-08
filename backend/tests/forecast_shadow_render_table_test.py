@@ -254,9 +254,10 @@ def test_render_markdown_new_shape_renders_one_row_not_a_subsection(tmp_path):
     assert "### Cycle" not in markdown  # the old per-cycle sub-section header is gone
     # One row: all five candidates' own cells appear on the SAME line as
     # the cycle's decision_time, not on five separate lines below it.
+    formatted = render_table._format_timestamp("2026-10-07T06:52:09+00:00")
     row_lines = [
         line for line in markdown.splitlines()
-        if "2026-10-07T06:52:09+00:00" in line and "|" in line
+        if formatted in line and "|" in line
     ]
     assert len(row_lines) == 1, row_lines
 
@@ -312,10 +313,15 @@ def test_render_markdown_new_shape_caps_rendered_cycles_and_says_so(tmp_path):
 
     # The oldest 5 decision_times (00..04) must be omitted from the render.
     for i in range(5):
-        assert f"2026-10-07T{i:02d}:00:00+00:00" not in markdown
-    # The newest RENDERED_CYCLE_CAP must all be present.
+        formatted = render_table._format_timestamp(f"2026-10-07T{i:02d}:00:00+00:00")
+        assert formatted not in markdown
+    # The newest RENDERED_CYCLE_CAP must all be present. i=24 would be an
+    # invalid hour ("24:00:00") -- _format_timestamp's own fallback path
+    # returns such a string unparsed/unchanged, so the raw literal is the
+    # correct thing to check for at that one value, same as every other.
     for i in range(5, total):
-        assert f"2026-10-07T{i:02d}:00:00+00:00" in markdown
+        formatted = render_table._format_timestamp(f"2026-10-07T{i:02d}:00:00+00:00")
+        assert formatted in markdown
     assert "5 older cycle(s) omitted" in markdown
     assert f"{total} logged prediction(s)" in markdown  # the TOTAL count is never understated
 
@@ -463,3 +469,66 @@ def test_render_markdown_main_table_omits_city_suffix_when_no_bottleneck_known(t
 
     assert "✓ 650.0 (" not in markdown  # ml_wind_corrected's own fixture has no provenance
     assert "(None)" not in markdown
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 2026-10-08 ("UTC is hard to interpret quickly" / "document that
+# explanation ... at the top of the readme"): timestamp formatting and
+# the methods-taxonomy explanation block.
+# ──────────────────────────────────────────────────────────────────────
+
+
+def test_format_timestamp_shows_utc_and_local_same_calendar_date():
+    # 06:52 UTC on Oct 7 2026 (CDT, UTC-5) -> 01:52 local, same date.
+    result = render_table._format_timestamp("2026-10-07T06:52:09.123456+00:00")
+
+    assert result == "2026-10-07 06:52 UTC (01:52 CDT)"
+
+
+def test_format_timestamp_shows_local_date_when_it_differs_from_utc():
+    # 02:00 UTC -> 21:00 CDT the PREVIOUS calendar day.
+    result = render_table._format_timestamp("2026-10-08T02:00:00+00:00")
+
+    assert result == "2026-10-08 02:00 UTC (2026-10-07 21:00 CDT)"
+
+
+def test_format_timestamp_drops_seconds_and_microseconds():
+    result = render_table._format_timestamp("2026-10-07T06:52:09.992257+00:00")
+
+    assert ":09" not in result
+    assert "992257" not in result
+
+
+def test_format_timestamp_returns_empty_string_for_falsy_input():
+    assert render_table._format_timestamp(None) == ""
+    assert render_table._format_timestamp("") == ""
+
+
+def test_format_timestamp_returns_unparseable_input_unchanged():
+    assert render_table._format_timestamp("x") == "x"
+    assert render_table._format_timestamp("not-a-timestamp") == "not-a-timestamp"
+
+
+def test_render_markdown_includes_methods_explanation_once_at_the_top_with_no_data(tmp_path):
+    markdown = render_table.render_markdown(str(tmp_path))
+
+    assert markdown.count("What the five candidates actually do") == 1
+    assert "Open-Meteo's own independent NWP model" in markdown
+    assert "no sensor-measured ground truth anywhere" in markdown
+    # Appears before the "no predictions logged yet" placeholder -- i.e.
+    # unconditionally in the header, never skipped on an empty directory.
+    assert markdown.index("What the five candidates actually do") < markdown.index(
+        "No predictions logged yet"
+    )
+
+
+def test_render_markdown_includes_methods_explanation_once_with_real_data(tmp_path):
+    """Pins that the explanation renders exactly once regardless of how
+    many corridors/entries exist -- never once per corridor."""
+    _write_entry(str(tmp_path / "AUSTIN_CORPUS_CHRISTI.jsonl"), _new_shape_entry())
+    _write_entry(str(tmp_path / "MIDLAND_EL_PASO.jsonl"), _new_shape_entry(corridor="MIDLAND_EL_PASO"))
+
+    markdown = render_table.render_markdown(str(tmp_path))
+
+    assert markdown.count("What the five candidates actually do") == 1
+    assert markdown.index("What the five candidates actually do") < markdown.index("## AUSTIN")

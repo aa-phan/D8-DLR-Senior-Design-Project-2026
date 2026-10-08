@@ -2190,3 +2190,44 @@ names one; no city suffix, and no `"(None)"`, when it doesn't). Full relevant su
 passing. Rendered the real already-collected live data through the actual entry point: the main
 table now shows `✓ 945.4 (AUSTIN)` for `ml_wind_corrected`/`ml_cooling_corrected`/`raw_forecast`,
 confirmed by reading the output file directly.
+
+### Session: 2026-10-08 (continued), conducted by Aaron Phan — document the five-method explanation in the README; standardize timestamp formatting
+
+User asked for a conversational explanation from earlier in the session (what each of the five
+candidates actually does, and the real distinction between them -- who performs the forward-in-time
+extrapolation, and on what) to be documented at the top of the live README, and separately asked for
+the tables' raw UTC timestamps to be reformatted for faster at-a-glance reading.
+
+Flagged before implementing: the README on `shadow-collection-data` cannot be hand-edited directly --
+`forecast_shadow_render_table.py` regenerates and overwrites it every single collection run, so any
+manual edit would be silently clobbered on the very next cycle. Added the explanation as a new
+module-level constant (`METHODS_EXPLANATION`), rendered by the function itself, the same pattern the
+existing `BASIS_CAVEAT`/`STATIC_RATINGS_CAVEAT` constants already use -- so it persists forever
+instead of being overwritten.
+
+Claude Code was used to:
+
+1. Added `METHODS_EXPLANATION`, inserted once at the top of every render (never per-corridor), stating
+   the three-way split verbatim from the chat explanation: external-forecast-plus-local-physics
+   (`ml_wind_corrected`/`ml_cooling_corrected`/`raw_forecast`) vs. self-contained statistical
+   extrapolation (`reference_ml_refit_24h`, including why it is corridor-only) vs. no extrapolation at
+   all (`persistence_24h`, including that what it reuses is itself a past forecast, never a
+   sensor-measured observation).
+2. Added `_format_timestamp`, rendering every logged UTC timestamp as `YYYY-MM-DD HH:MM UTC (HH:MM
+   CDT/CST)` -- seconds/microseconds dropped (this table is for scanning at a glance; the raw JSONL
+   still has full microsecond precision for anything needing exact reproduction), using
+   `zoneinfo.ZoneInfo("America/Chicago")` (stdlib, no new dependency) since every corridor this
+   collector covers sits in ERCOT's own home time zone. The local date is appended only when it
+   actually differs from the UTC date, to avoid a redundant date shown twice in the common case.
+   Wired into both the per-conductor and bundle tables' `decision_time`/`valid_time` cells; falls back
+   to returning the original string unchanged (never raises) for anything that isn't a parseable
+   timestamp.
+
+**Verified, not merely trusted:** 7 new tests (the explanation appears exactly once, before any
+corridor section, both with and without data; the timestamp format for same-date and cross-date
+local/UTC cases; seconds/microseconds dropped; empty and unparseable input handled without raising).
+2 pre-existing tests updated to check the formatted string rather than the raw ISO literal. Full
+relevant suite (137/137) passing. Every frozen Phase 1/3/4 module and both frozen decision docs
+confirmed zero diff. Rendered the real already-collected live data through the actual entry point and
+read the output directly: the explanation now appears once at the top, and a real logged cycle shows
+`2026-10-08 02:28 UTC (2026-10-07 21:28 CDT)` instead of the raw `2026-10-08T02:28:44.992257+00:00`.

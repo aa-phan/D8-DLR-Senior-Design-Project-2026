@@ -25,6 +25,8 @@ import glob
 import json
 import os
 import sys
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 # Mirrors `forecast_shadow_pipeline.CANDIDATE_METHOD_NAMES` (05-02's D-01
 # order, 05-01-SUMMARY.md's approved schema_version-2 shape) -- duplicated
@@ -74,6 +76,84 @@ BASIS_CAVEAT = (
     "caveat -- see `docs/data-science/decisions/forecast_correction_followup_audit.md` on "
     "`main` for the full technical record."
 )
+
+# 2026-10-08: added at the user's own request, to answer a question a
+# first-time reader of this table would otherwise have to go dig through
+# chat history or the full decision record to answer -- what each of the
+# five candidates is actually doing, and the one thing they genuinely
+# share (all five answer the SAME question, for the SAME future target
+# time) versus what actually differs between them (who does the
+# forward-in-time extrapolation, and on what variable). Written as a
+# Markdown block (not a single-line string) since it has its own internal
+# structure; inserted once per render, right after the two existing
+# caveats above, never per-corridor or per-cycle.
+METHODS_EXPLANATION = """\
+**What the five candidates actually do.** All five answer the exact same question -- what will \
+this corridor's ampacity be at the SAME future target time -- but differ in who does the \
+forward-in-time extrapolation, and on what:
+
+- **External-forecast-plus-local-physics** (`ml_wind_corrected`, `ml_cooling_corrected`, \
+`raw_forecast`): the extrapolation of future WEATHER is done entirely by Open-Meteo's own \
+independent NWP model. This project only transforms that already-future weather through IEEE \
+738 thermal physics (`raw_forecast`), or through that same physics plus a learned correction \
+layer trained to reduce IEEE 738's own known bias (`ml_wind_corrected`/`ml_cooling_corrected`). \
+This project does none of the weather extrapolation itself.
+- **Self-contained statistical extrapolation** (`reference_ml_refit_24h`): no external forecast \
+consulted at all. A model learns directly in ampacity-space, from this corridor's own recent \
+lagged ampacity history plus the MOST RECENTLY OBSERVED (not forecast) weather, to extrapolate \
+the next value. This project does 100% of the forward-looking work itself, with no outside NWP \
+input -- and because the model was trained on an already corridor-reduced series (weakest-link \
+`min()` applied BEFORE any feature was built), it can only ever produce one corridor-level \
+number, never a per-city breakdown (see `reference_ml_refit_24h`'s own `per_city_not_applicable_\
+reason` field whenever it predicts).
+- **No extrapolation at all** (`persistence_24h`): makes no new claim about how conditions \
+evolve. It reuses -- unmodified -- this SAME collector's own `raw_forecast` prediction from ~24 \
+hours ago for the matching target hour, betting only that today looks like yesterday at this \
+same hour. What it reuses is itself a past FORECAST, never a sensor-measured observation -- this \
+project has no sensor-measured ground truth anywhere in this pipeline.
+
+See `docs/data-science/decisions/forecast_correction_followup_audit.md` on `main` for the full \
+technical record this summary is drawn from.\
+"""
+
+
+# 2026-10-08 ("UTC is hard to interpret quickly"): every corridor this
+# collector covers (Austin, Corpus Christi, Midland, El Paso) is in
+# `America/Chicago` (ERCOT's own home time zone), so that -- not an
+# arbitrary third zone -- is the one local time shown alongside UTC.
+# `zoneinfo` is a Python 3.9+ stdlib module; no new dependency.
+_LOCAL_TZ = ZoneInfo("America/Chicago")
+
+
+def _format_timestamp(value) -> str:
+    """
+    Renders one ISO-8601 timestamp (as logged -- always UTC) as
+    `YYYY-MM-DD HH:MM UTC (HH:MM CDT/CST)`, seconds/microseconds dropped
+    (this table is for a human scanning cycles at a glance, never for
+    reproducing the exact logged instant -- the raw JSONL still has full
+    microsecond precision for that). The local date is appended too, but
+    ONLY when it actually differs from the UTC date (the common case --
+    most of the day -- would otherwise show a redundant date twice).
+    Returns the original string unchanged (never raises) if it cannot be
+    parsed as a timestamp -- the synthetic "x" placeholders this module's
+    own tests use, for instance, must still render as themselves.
+    """
+    if not value:
+        return ""
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return str(value)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    utc_dt = dt.astimezone(timezone.utc)
+    local_dt = dt.astimezone(_LOCAL_TZ)
+    utc_str = utc_dt.strftime("%Y-%m-%d %H:%M UTC")
+    if local_dt.date() == utc_dt.date():
+        local_str = local_dt.strftime("%H:%M %Z")
+    else:
+        local_str = local_dt.strftime("%Y-%m-%d %H:%M %Z")
+    return f"{utc_str} ({local_str})"
 
 
 def _load_entries(path: str) -> list[dict]:
@@ -154,7 +234,7 @@ def _render_new_shape_row(e: dict) -> str:
             notes_parts.append(f"{name}: {reason}")
     notes = _escape_note("; ".join(notes_parts), limit=200)
     return (
-        f"| {e.get('decision_time', '')} | {e.get('valid_time', '')} | " +
+        f"| {_format_timestamp(e.get('decision_time'))} | {_format_timestamp(e.get('valid_time'))} | " +
         " | ".join(cells) +
         f" | {notes} |"
     )
@@ -214,7 +294,7 @@ def _render_bundle_row(e: dict) -> str:
             notes_parts.append(f"{name}: {reason}")
     notes = _escape_note("; ".join(notes_parts), limit=200)
     return (
-        f"| {e.get('decision_time', '')} | {e.get('valid_time', '')} | " +
+        f"| {_format_timestamp(e.get('decision_time'))} | {_format_timestamp(e.get('valid_time'))} | " +
         " | ".join(cells) +
         f" | {notes} |"
     )
@@ -246,7 +326,7 @@ def _render_bundle_table(entries: list[dict]) -> list[str]:
         "Bundle-level (subconductors-per-phase) ampacity, same cycles as above, most recent "
         f"{len(shown)} of {len(entries)} shown:",
         "",
-        f"| Decision time (UTC) | Valid time (UTC) | {header_cells} | Notes |",
+        f"| Decision time | Valid time | {header_cells} | Notes |",
         "|---|---|" + "---|" * len(CANDIDATE_METHOD_NAMES) + "---|",
     ]
     block.extend(_render_bundle_row(e) for e in shown)
@@ -270,7 +350,7 @@ def _render_new_shape_table(entries: list[dict]) -> list[str]:
         "All five candidates per cycle (`schema_version: 2`), most recent "
         f"{len(shown)} of {len(entries)} shown:",
         "",
-        f"| Decision time (UTC) | Valid time (UTC) | {header_cells} | Notes |",
+        f"| Decision time | Valid time | {header_cells} | Notes |",
         "|---|---|" + "---|" * len(CANDIDATE_METHOD_NAMES) + "---|",
     ]
     block.extend(_render_new_shape_row(e) for e in shown)
@@ -310,6 +390,8 @@ def render_markdown(predictions_dir: str) -> str:
         BASIS_CAVEAT,
         "",
         f"> {STATIC_RATINGS_CAVEAT}",
+        "",
+        METHODS_EXPLANATION,
         "",
         "Regenerated automatically after every `shadow_collect.yml` run — do not hand-edit.",
         "",
