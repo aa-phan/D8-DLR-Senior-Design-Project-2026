@@ -40,6 +40,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from typing import Optional, Protocol
@@ -1284,6 +1285,18 @@ _TRUTH_PROXY_STATION_FIELDS = ("air_temp", "wind_speed", "wind_direction")
 # data and would spuriously reject a correct hourly match here.
 _TRUTH_PROXY_SOLAR_HOUR_TOLERANCE = pd.Timedelta(minutes=35)
 
+# 2026-10-08: how many total attempts `_fetch_solar_proxy_hours` makes
+# against Open-Meteo's historical-forecast endpoint, and how long it
+# waits between attempts, before giving up. See that function's own
+# comment for the live-data investigation that motivated this. Deliberately
+# only ONE retry (2 attempts total), not more: each attempt can itself take
+# up to `config.FORECAST_EXPERIMENT_HTTP_TIMEOUT_S` (60s) to time out, this
+# function is called once per endpoint city (2x per corridor), and the
+# scheduled workflow budgets 15 minutes for the ENTIRE two-corridor cycle --
+# a worse-case 3-attempt retry chain here could alone approach that ceiling.
+_SOLAR_PROXY_FETCH_ATTEMPTS = 2
+_SOLAR_PROXY_RETRY_DELAY_S = 3
+
 
 def _select_hour_row(frame: pd.DataFrame, target_ts: "pd.Timestamp", tolerance: "pd.Timedelta"):
     """
@@ -1316,16 +1329,42 @@ def _fetch_solar_proxy_hours(
     `target_times` entry, in the same order; never interpolates, pads, or
     backfills a missing/null hour (same discipline as the station path).
     """
-    try:
-        frame = open_meteo_forecast_provider.fetch_historical_forecast(
-            lat, lon, window_start.isoformat(), anchor_ts.isoformat(),
-        )
-    except Exception as exc:
+    # 2026-10-08 ("why does reference_ml_refit only ever produce a value
+    # once"): live investigation of the real `shadow-collection-data`
+    # history found this exact call timing out (`Read timed out
+    # (read_timeout=60)`) on 5 of 14 real cycles across both corridors --
+    # the single current majority failure mode, now that the station
+    # per-hour fallback (D-04/D-09's own fix) and the solar-source switch
+    # (away from TCEQ, which never had it) are both already live. A
+    # retry gets a FRESH connection attempt, which is the right response
+    # to a stuck/slow read -- simply raising `config.FORECAST_EXPERIMENT_
+    # HTTP_TIMEOUT_S` would not: that constant is also read by `fetch_
+    # single_run`/`fetch_previous_runs`, which the FROZEN Phase 3/4
+    # experiment harness still depends on for its own reproducibility, so
+    # it is deliberately left untouched here rather than bumped globally.
+    last_exc: Exception | None = None
+    frame = None
+    for attempt in range(_SOLAR_PROXY_FETCH_ATTEMPTS):
+        try:
+            frame = open_meteo_forecast_provider.fetch_historical_forecast(
+                lat, lon, window_start.isoformat(), anchor_ts.isoformat(),
+            )
+            break
+        except Exception as exc:
+            last_exc = exc
+            if attempt + 1 < _SOLAR_PROXY_FETCH_ATTEMPTS:
+                logger.info(
+                    "fetch_live_truth_proxy_series(%r, %r): solar-proxy fetch "
+                    "attempt %d/%d failed (%s) -- retrying",
+                    corridor, city, attempt + 1, _SOLAR_PROXY_FETCH_ATTEMPTS, exc,
+                )
+                time.sleep(_SOLAR_PROXY_RETRY_DELAY_S)
+    if frame is None:
         raise StaleOrMissingDataError(
             f"fetch_live_truth_proxy_series: corridor {corridor!r} city "
-            f"{city!r}: solar-proxy (Open-Meteo historical forecast) "
-            f"window fetch failed: {exc}"
-        ) from exc
+            f"{city!r}: solar-proxy (Open-Meteo historical forecast) window "
+            f"fetch failed after {_SOLAR_PROXY_FETCH_ATTEMPTS} attempt(s): {last_exc}"
+        ) from last_exc
 
     values = []
     for target_ts in target_times:

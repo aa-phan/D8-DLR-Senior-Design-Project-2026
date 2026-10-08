@@ -2231,3 +2231,42 @@ relevant suite (137/137) passing. Every frozen Phase 1/3/4 module and both froze
 confirmed zero diff. Rendered the real already-collected live data through the actual entry point and
 read the output directly: the explanation now appears once at the top, and a real logged cycle shows
 `2026-10-08 02:28 UTC (2026-10-07 21:28 CDT)` instead of the raw `2026-10-08T02:28:44.992257+00:00`.
+
+### Session: 2026-10-08 (continued), conducted by Aaron Phan — diagnose and fix reference_ml_refit_24h's low real-world success rate
+
+User asked to investigate why reference_ml_refit_24h only produced a value once on the latest
+MIDLAND_EL_PASO run. Pulled and read the FULL real history from `shadow-collection-data` (both
+corridors, every schema_version:2 cycle logged since the cutover -- 14 real cycles total) rather than
+guessing, and tabulated every failure's own `reason` string:
+
+- 4 cycles failed on "no usable station row" -- from BEFORE this session's own per-hour TCEQ-to-
+  Synoptic fallback fix (`de4e210`) was live on `origin/main`.
+- 2 cycles failed on "null 'solar_radiation'" -- from BEFORE this session's own solar-source switch
+  (`beb1d41`) was live.
+- 5 of the remaining cycles (all logged AFTER both of those fixes were already live) failed on the
+  SAME new error: `solar-proxy (Open-Meteo historical forecast) window fetch failed:
+  HTTPSConnectionPool(...): Read timed out (read_timeout=60)` -- a real, current, majority failure
+  mode this session's own earlier fixes had not yet addressed.
+- Exactly 1 cycle succeeded -- the one the user noticed.
+
+Investigated the shared `config.FORECAST_EXPERIMENT_HTTP_TIMEOUT_S` (60s) this failing call reads
+before proposing a fix: confirmed it is also read by `open_meteo_forecast_provider.fetch_single_run`/
+`fetch_previous_runs`, which the FROZEN Phase 3/4 experiment harness still depends on for its own
+reproducibility -- raising it globally was rejected specifically to avoid touching that. A targeted
+retry inside `_fetch_solar_proxy_hours` itself (a fresh connection attempt is the right response to a
+stuck/slow read, which a longer timeout on the SAME attempt is not) was judged the safer, more
+effective, and more surgical fix.
+
+Claude Code was used to add a 2-attempt retry (one retry, 3-second delay) around the solar-proxy
+fetch specifically -- capped at 2, not more, since each attempt can itself take up to 60s and this
+function runs once per endpoint city (4 times per two-corridor cycle) inside the scheduled workflow's
+15-minute total budget; a longer retry chain here could alone approach that ceiling.
+
+**Verified, not merely trusted:** 1 new test for the exhausted-retries path (both attempts fail,
+`time.sleep` patched to a no-op so the test doesn't incur the real delay) and 1 for the actual
+motivating scenario (first attempt times out, retry succeeds, the transient failure is never reported
+as this cycle's own error). Full relevant suite (138/138) passing. Every frozen Phase 1/3/4 module and
+decision doc confirmed zero diff -- `config.FORECAST_EXPERIMENT_HTTP_TIMEOUT_S` itself was NOT
+touched. Ran 4 real live trials against both corridors after the fix (8 calls total): all 8 succeeded
+with a genuine `status="ok"` prediction, including `AUSTIN_CORPUS_CHRISTI`, which had never produced a
+real value even once in the entire prior history before this fix.

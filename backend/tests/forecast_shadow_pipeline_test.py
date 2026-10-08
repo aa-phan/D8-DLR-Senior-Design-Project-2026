@@ -1647,6 +1647,11 @@ def test_fetch_live_truth_proxy_series_raises_when_no_synoptic_fallback_station_
 
 
 def test_fetch_live_truth_proxy_series_raises_when_solar_proxy_fetch_fails(monkeypatch):
+    """2026-10-08: the fake always raises, so BOTH retry attempts fail --
+    this test exercises (and times) the full exhausted-retries path.
+    `time.sleep` is patched to a no-op so the real inter-attempt delay
+    doesn't slow this test down."""
+    monkeypatch.setattr(shadow.time, "sleep", lambda seconds: None)
     _install_fake_fetch_weather(
         monkeypatch, city_frames=_complete_truth_proxy_city_frames(),
         solar_raise_exc=RuntimeError("Open-Meteo historical-forecast: 503"),
@@ -1656,6 +1661,45 @@ def test_fetch_live_truth_proxy_series_raises_when_solar_proxy_fetch_fails(monke
         shadow.fetch_live_truth_proxy_series(_CORRIDOR, _TRUTH_PROXY_ANCHOR)
 
     assert "solar-proxy" in str(exc_info.value)
+    assert f"after {shadow._SOLAR_PROXY_FETCH_ATTEMPTS} attempt(s)" in str(exc_info.value)
+
+
+def test_fetch_live_truth_proxy_series_solar_retries_once_then_succeeds(monkeypatch):
+    """2026-10-08 ("why does reference_ml_refit only ever produce a value
+    once") -- the real failure mode found in live data: a transient
+    timeout on the FIRST attempt, success on the retry. Must not raise,
+    and must not report the retried-past failure as this cycle's own
+    error."""
+    monkeypatch.setattr(shadow.time, "sleep", lambda seconds: None)
+    calls = {"n": 0}
+
+    def _flaky_fetch_historical_forecast(lat, lon, start, end):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("Read timed out (read_timeout=60)")
+        return _synthetic_solar_proxy_frame().copy()
+
+    monkeypatch.setattr(
+        shadow.open_meteo_forecast_provider, "fetch_historical_forecast",
+        _flaky_fetch_historical_forecast,
+    )
+    _install_fake_fetch_weather(monkeypatch, city_frames=_complete_truth_proxy_city_frames())
+    # _install_fake_fetch_weather's own default solar install would
+    # overwrite the flaky fake above -- reinstall it after, matching this
+    # test's own monkeypatch call order (monkeypatch LIFO-overrides, so
+    # the LAST setattr for the same target wins).
+    monkeypatch.setattr(
+        shadow.open_meteo_forecast_provider, "fetch_historical_forecast",
+        _flaky_fetch_historical_forecast,
+    )
+
+    series, _ = shadow.fetch_live_truth_proxy_series(_CORRIDOR, _TRUTH_PROXY_ANCHOR)
+
+    assert len(series) == 7
+    assert series["solar_radiation"].notna().all()
+    # Called at least twice for the first city it tried (one failure + one
+    # success); never silently gave up after the first attempt.
+    assert calls["n"] >= 2
 
 
 def test_fetch_live_truth_proxy_series_raises_naming_the_missing_solar_hour(monkeypatch):
