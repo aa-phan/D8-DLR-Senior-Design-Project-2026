@@ -149,6 +149,100 @@ def _render_new_shape_row(e: dict) -> str:
     )
 
 
+# 2026-10-08 ("is the bundled ampacity result being displayed in the
+# readme, i don't see it"): duplicated verbatim from `config.
+# BUNDLE_RATING_BASIS` rather than imported, same dependency-light
+# discipline `BASIS_CAVEAT`/`STATIC_RATINGS_CAVEAT` above already follow
+# (this module stays importable without pandas/scikit-learn/dotenv).
+BUNDLE_RATING_BASIS_CAVEAT = (
+    "Conductor-based bundle thermal estimate (equal-current-sharing assumption across "
+    "subconductors) -- NOT a verified equipment-limited circuit rating. Subconductor-per-phase "
+    "counts are the Power Systems sub-team's provisional, regional assumption, not yet confirmed "
+    "for any specific line segment."
+)
+
+
+def _render_bundle_cell(c: dict) -> str:
+    """
+    One candidate's bundle outcome for the bundle table -- a checkmark-
+    prefixed `corridor_bundle_ampacity_amps` with its OWN
+    `bundle_bottleneck_city` in parentheses (deliberately named
+    separately from whatever the per-conductor table's own bottleneck
+    was -- the two can differ, per the mixed-count case this feature
+    exists to surface), or the bundle's own status word when
+    unavailable.
+    """
+    bundle = c.get("bundle") or {}
+    status = bundle.get("status") or "—"
+    if status == "ok":
+        amps = bundle.get("corridor_bundle_ampacity_amps")
+        city = bundle.get("bundle_bottleneck_city") or "?"
+        if isinstance(amps, (int, float)):
+            return f"✓ {amps:.1f} ({city})"
+    return status
+
+
+def _render_bundle_row(e: dict) -> str:
+    """
+    One cycle's bundle-level row -- same shape as `_render_new_shape_row`
+    (one cell per candidate, a trailing aggregated Notes column for any
+    non-"ok" bundle), rendered as its OWN table rather than extra columns
+    on the per-conductor table, so the two bottleneck identities (per-
+    conductor vs. bundle) and the two rating bases stay visually distinct
+    rather than cramped into one already-wide row.
+    """
+    candidates = e.get("candidates") or {}
+    cells = [_render_bundle_cell(candidates.get(name) or {}) for name in CANDIDATE_METHOD_NAMES]
+    notes_parts = []
+    for name in CANDIDATE_METHOD_NAMES:
+        bundle = (candidates.get(name) or {}).get("bundle") or {}
+        if bundle.get("status") == "ok":
+            continue
+        reason = bundle.get("reason")
+        if reason:
+            notes_parts.append(f"{name}: {reason}")
+    notes = _escape_note("; ".join(notes_parts), limit=200)
+    return (
+        f"| {e.get('decision_time', '')} | {e.get('valid_time', '')} | " +
+        " | ".join(cells) +
+        f" | {notes} |"
+    )
+
+
+def _render_bundle_table(entries: list[dict]) -> list[str]:
+    """
+    The bundle-level companion to `_render_new_shape_table` -- same cap
+    (`RENDERED_CYCLE_CAP`), same cycles (the caller passes the identical
+    `entries` list), rendered as a SEPARATE table immediately below the
+    per-conductor one. Returns `[]` when no entry in `entries` carries a
+    `bundle` key at all (e.g. every entry predates this feature) -- never
+    an empty/useless table.
+    """
+    if not entries:
+        return []
+    has_any_bundle = any(
+        isinstance((c or {}).get("bundle"), dict)
+        for e in entries for c in (e.get("candidates") or {}).values()
+    )
+    if not has_any_bundle:
+        return []
+
+    shown = entries[:RENDERED_CYCLE_CAP]
+    header_cells = " | ".join(CANDIDATE_METHOD_NAMES)
+    block = [
+        f"> {BUNDLE_RATING_BASIS_CAVEAT}",
+        "",
+        "Bundle-level (subconductors-per-phase) ampacity, same cycles as above, most recent "
+        f"{len(shown)} of {len(entries)} shown:",
+        "",
+        f"| Decision time (UTC) | Valid time (UTC) | {header_cells} | Notes |",
+        "|---|---|" + "---|" * len(CANDIDATE_METHOD_NAMES) + "---|",
+    ]
+    block.extend(_render_bundle_row(e) for e in shown)
+    block.append("")
+    return block
+
+
 def _render_new_shape_table(entries: list[dict]) -> list[str]:
     """
     Renders every schema_version>=2 entry for one corridor as ONE compact
@@ -227,6 +321,7 @@ def render_markdown(predictions_dir: str) -> str:
         old_entries = [e for e in entries if e.get("schema_version", 1) < 2]
 
         lines.extend(_render_new_shape_table(new_entries))
+        lines.extend(_render_bundle_table(new_entries))
 
         if old_entries:
             # 2026-10-08 ("why does the readme still have the old table

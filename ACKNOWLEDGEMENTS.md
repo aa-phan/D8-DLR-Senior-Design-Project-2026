@@ -2133,3 +2133,35 @@ per-conductor ampacity (1004.72 A) was lower than EL_PASO's (1095.15 A, the per-
 bottleneck), but once bundled (MIDLAND ×2 = 2009.45 A, EL_PASO ×1 = 1095.15 A) EL_PASO becomes the
 bundle bottleneck instead, for all three available candidates. `reference_ml_refit_24h` correctly
 reported bundle-unavailable at both corridors (architectural, not a defect).
+
+### Session: 2026-10-08 (continued), conducted by Aaron Phan — display bundle-level ampacity in the rendered README
+
+User pointed out that the previous pass persisted bundle fields to the JSONL and verified them live,
+but never actually rendered them anywhere a reader of the README would see -- the bundle work was
+invisible in the one place this collector's output is meant to be read.
+
+Claude Code was used to add a SEPARATE bundle-level table to `forecast_shadow_render_table.py`,
+directly below the existing per-conductor table for each corridor (same cycles, same
+`RENDERED_CYCLE_CAP`), rather than cramming a second number into the per-conductor table's already-
+five-candidate-wide cells: each cell shows a checkmark-prefixed `corridor_bundle_ampacity_amps` with
+its OWN `bundle_bottleneck_city` in parentheses, or the bundle's own unavailable status, plus a
+trailing Notes column naming any unavailable candidate's bundle reason -- the same shape as the
+per-conductor table, deliberately kept as its own table so the two bottleneck identities (per-
+conductor vs. bundle, which the request's own design named as possibly differing) never visually
+collide in one cell. The table is omitted entirely when no entry in a corridor's rendered window
+carries any `bundle` data at all (a pre-bundle-feature corridor/window), rather than rendering an
+empty, useless table. The Power Systems sub-team's own provisional/regional-assumption caveat is
+printed once above the table, duplicated verbatim from `config.BUNDLE_RATING_BASIS` rather than
+imported (this renderer stays dependency-light by design, the same reason `BASIS_CAVEAT`/
+`STATIC_RATINGS_CAVEAT` are already duplicated constants in this file, not imports).
+
+**Verified, not merely trusted:** 4 new tests (the table appears and shows the correct bottleneck
+cell when bundle data exists; the per-conductor cell and the bundle cell for the SAME cycle show
+DIFFERENT bottleneck cities, proving the two tables render independently rather than one being
+derived from the other; the Notes column names which unavailable candidate and why; the table is
+correctly OMITTED, not emptily rendered, when no bundle data exists at all). Full relevant suite
+(128/128) passing. Rendered the real, already-collected live data (not a synthetic fixture) through
+the actual `forecast_shadow_render_table.main()` entry point and read the output file directly: the
+MIDLAND_EL_PASO corridor's bundle table shows `EL_PASO` as the bottleneck for all three available
+candidates, confirming the bottleneck-flip result the prior session's live run already measured is
+now actually visible in the rendered README, not just present in the raw JSONL.

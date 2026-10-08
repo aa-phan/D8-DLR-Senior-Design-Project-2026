@@ -354,3 +354,82 @@ def test_render_markdown_mixed_old_and_new_shape_lines_both_accounted_for_in_one
     for name in _NEW_SHAPE_CANDIDATE_NAMES:
         assert name in markdown
     assert "2 logged prediction(s)" in markdown
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 2026-10-08 ("is the bundled ampacity result being displayed in the
+# readme, i don't see it"): the bundle-level companion table.
+# ──────────────────────────────────────────────────────────────────────
+
+def _new_shape_entry_with_bundle(**overrides) -> dict:
+    """`_new_shape_entry` extended with a real `bundle` dict on each
+    candidate -- ml_wind_corrected/ml_cooling_corrected/raw_forecast "ok"
+    (a different bottleneck city than the per-conductor one, to prove the
+    two identities render independently), persistence_24h/
+    reference_ml_refit_24h bundle-unavailable."""
+    entry = _new_shape_entry(**overrides)
+    ok_bundle = {
+        "status": "ok", "endpoint_bundle_ampacity_amps": {"AUSTIN": 1300.0, "CORPUS_CHRISTI": 1250.0},
+        "corridor_bundle_ampacity_amps": 1250.0, "bundle_bottleneck_city": "CORPUS_CHRISTI",
+        "subconductors_per_phase": {"AUSTIN": 2, "CORPUS_CHRISTI": 2},
+        "config_version": "v1-provisional-2026-10-08",
+        "rating_basis": "Conductor-based bundle thermal estimate...", "reason": None,
+    }
+    entry["candidates"]["ml_wind_corrected"]["bundle"] = dict(ok_bundle)
+    entry["candidates"]["ml_cooling_corrected"]["bundle"] = dict(ok_bundle)
+    entry["candidates"]["raw_forecast"]["bundle"] = dict(ok_bundle)
+    entry["candidates"]["persistence_24h"]["bundle"] = {
+        "status": "unavailable", "reason": "no matched prior entry this cycle",
+        "config_version": "v1-provisional-2026-10-08",
+    }
+    entry["candidates"]["reference_ml_refit_24h"]["bundle"] = {
+        "status": "unavailable",
+        "reason": "reference_ml_refit_24h produces only a corridor-level prediction",
+        "config_version": "v1-provisional-2026-10-08",
+    }
+    return entry
+
+
+def test_render_markdown_shows_bundle_table_when_bundle_data_present(tmp_path):
+    _write_entry(str(tmp_path / "AUSTIN_CORPUS_CHRISTI.jsonl"), _new_shape_entry_with_bundle())
+
+    markdown = render_table.render_markdown(str(tmp_path))
+
+    assert "Bundle-level (subconductors-per-phase) ampacity" in markdown
+    assert "✓ 1250.0 (CORPUS_CHRISTI)" in markdown  # the bundle bottleneck
+    assert "Subconductor-per-phase counts are the Power Systems sub-team's provisional" in markdown
+
+
+def test_render_markdown_bundle_bottleneck_can_differ_from_per_conductor_row(tmp_path):
+    """
+    The per-conductor row's own candidate cells show ml_wind_corrected's
+    ampacity (650.0, no bottleneck city named at this table's own
+    granularity) while the bundle row for the SAME cycle shows
+    CORPUS_CHRISTI as the bundle bottleneck -- the two tables' bottleneck
+    concepts are visually separate, never conflated into one cell.
+    """
+    _write_entry(str(tmp_path / "AUSTIN_CORPUS_CHRISTI.jsonl"), _new_shape_entry_with_bundle())
+
+    markdown = render_table.render_markdown(str(tmp_path))
+
+    assert "✓ 650.0" in markdown  # per-conductor ml_wind_corrected cell
+    assert "✓ 1250.0 (CORPUS_CHRISTI)" in markdown  # bundle cell, same cycle
+
+
+def test_render_markdown_bundle_table_notes_column_names_unavailable_candidates(tmp_path):
+    _write_entry(str(tmp_path / "AUSTIN_CORPUS_CHRISTI.jsonl"), _new_shape_entry_with_bundle())
+
+    markdown = render_table.render_markdown(str(tmp_path))
+
+    assert "persistence_24h: no matched prior entry this cycle" in markdown
+    assert "reference_ml_refit_24h: reference_ml_refit_24h produces only a corridor-level prediction" in markdown
+
+
+def test_render_markdown_omits_bundle_table_when_no_entry_carries_bundle_data(tmp_path):
+    """Entries that predate the bundle feature (no 'bundle' key on any
+    candidate) must not produce an empty/useless bundle table."""
+    _write_entry(str(tmp_path / "AUSTIN_CORPUS_CHRISTI.jsonl"), _new_shape_entry())  # no bundle key
+
+    markdown = render_table.render_markdown(str(tmp_path))
+
+    assert "Bundle-level" not in markdown
