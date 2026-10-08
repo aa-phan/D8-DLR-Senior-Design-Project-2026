@@ -143,3 +143,141 @@ def test_main_writes_the_rendered_markdown_to_the_given_output_path(tmp_path, mo
 
     content = out_path.read_text()
     assert "AUSTIN_CORPUS_CHRISTI" in content
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Plan 05-05, Task 1: both shapes forever (05-01's approved schema_version-2
+# shape + no-migration-of-historical-rows strategy).
+# ──────────────────────────────────────────────────────────────────────
+
+_NEW_SHAPE_CANDIDATE_NAMES = (
+    "ml_wind_corrected", "ml_cooling_corrected", "raw_forecast",
+    "persistence_24h", "reference_ml_refit_24h",
+)
+
+
+def _new_shape_entry(**overrides) -> dict:
+    candidates = {
+        "ml_wind_corrected": {
+            "status": "ok", "ampacity_amps": 650.0, "fallback_used": False,
+            "fallback_reason": None, "model_version": "v2", "input_provenance": None,
+            "reason": None,
+        },
+        "ml_cooling_corrected": {
+            "status": "ok", "ampacity_amps": 640.0, "fallback_used": False,
+            "fallback_reason": None, "model_version": "v2", "input_provenance": None,
+            "reason": None,
+        },
+        "raw_forecast": {
+            "status": "ok", "ampacity_amps": 600.0, "fallback_used": False,
+            "fallback_reason": None, "model_version": None, "input_provenance": None,
+            "reason": None,
+        },
+        "persistence_24h": {
+            "status": "unavailable", "ampacity_amps": None, "fallback_used": False,
+            "fallback_reason": None, "model_version": None, "input_provenance": None,
+            "reason": "no prior entry within tolerance of decision_time",
+        },
+        "reference_ml_refit_24h": {
+            "status": "unavailable", "ampacity_amps": None, "fallback_used": False,
+            "fallback_reason": None, "model_version": None, "input_provenance": None,
+            "reason": "no persisted reference_ml_refit_24h model artifact",
+        },
+    }
+    entry = {
+        "schema_version": 2, "corridor": "AUSTIN_CORPUS_CHRISTI",
+        "decision_time": "2026-10-07T06:52:09+00:00", "valid_time": "2026-10-07T18:00:00+00:00",
+        "logged_at": "2026-10-07T06:52:10+00:00",
+        "candidates": candidates,
+        "method": "ml_wind_corrected", "ampacity_amps": 650.0, "fallback_used": False,
+        "fallback_reason": None, "model_version": "v2", "input_provenance": None,
+    }
+    entry.update(overrides)
+    return entry
+
+
+def test_render_markdown_old_shape_only_is_a_byte_identical_regression_pin(tmp_path):
+    """
+    Regression pin: hand-reconstructs the exact row/table text this
+    module's rendering formula has always produced for old-shape (no
+    `schema_version`) entries -- captured BEFORE asserting against the
+    task 1 code change, so this proves the schema_version branch below
+    introduces zero behavior change for old-shape rows, per 05-01's
+    approved "no migration of historical rows" strategy (old rows render
+    forever, exactly as they always have).
+    """
+    path = str(tmp_path / "AUSTIN_CORPUS_CHRISTI.jsonl")
+    _write_entry(path, {
+        "corridor": "AUSTIN_CORPUS_CHRISTI", "method": "ml_wind_corrected",
+        "ampacity_amps": 1004.136, "fallback_used": False, "fallback_reason": None,
+        "model_version": "ml_wind_corrected_AUSTIN_CORPUS_CHRISTI@2026-10-07T06:51:38+00:00",
+        "decision_time": "2026-10-07T06:52:09+00:00", "valid_time": "2026-10-07T18:00:00+00:00",
+    })
+    _write_entry(path, {
+        "corridor": "AUSTIN_CORPUS_CHRISTI", "method": "raw_forecast", "ampacity_amps": None,
+        "fallback_used": True, "fallback_reason": "total failure", "model_version": None,
+        "decision_time": "2026-10-07T18:52:09+00:00", "valid_time": "2026-10-08T06:00:00+00:00",
+    })
+
+    markdown = render_table.render_markdown(str(tmp_path))
+
+    expected_table = (
+        "## AUSTIN_CORPUS_CHRISTI\n"
+        "\n"
+        "2 logged prediction(s), most recent first.\n"
+        "\n"
+        "| Decision time (UTC) | Valid time (UTC) | Method | Fallback? | "
+        "Ampacity (A) | Model version | Notes |\n"
+        "|---|---|---|---|---|---|---|\n"
+        "| 2026-10-07T18:52:09+00:00 | 2026-10-08T06:00:00+00:00 | raw_forecast | "
+        "Yes | — | — | total failure |\n"
+        "| 2026-10-07T06:52:09+00:00 | 2026-10-07T18:00:00+00:00 | ml_wind_corrected | "
+        "No | 1004.1 | ml_wind_corrected_AUSTIN_CORPUS_CHRISTI@2026-10-07T06:51:38+00:00 |  |\n"
+        "\n"
+    )
+    assert expected_table in markdown
+
+
+def test_render_markdown_new_shape_entry_renders_all_five_candidates(tmp_path):
+    _write_entry(str(tmp_path / "AUSTIN_CORPUS_CHRISTI.jsonl"), _new_shape_entry())
+
+    markdown = render_table.render_markdown(str(tmp_path))
+
+    for name in _NEW_SHAPE_CANDIDATE_NAMES:
+        assert name in markdown
+    assert "schema_version: 2" in markdown
+
+
+def test_render_markdown_new_shape_unavailable_candidate_shows_its_reason(tmp_path):
+    _write_entry(str(tmp_path / "AUSTIN_CORPUS_CHRISTI.jsonl"), _new_shape_entry())
+
+    markdown = render_table.render_markdown(str(tmp_path))
+
+    assert "no prior entry within tolerance of decision_time" in markdown
+    assert "no persisted reference_ml_refit_24h model artifact" in markdown
+    assert "unavailable" in markdown
+
+
+def test_render_markdown_mixed_old_and_new_shape_lines_both_render_in_one_document(tmp_path):
+    """
+    The real situation this collector is in from the cutover forward: one
+    corridor file with an old-shape line AND a new-shape line. Both must
+    render correctly in the same document with no exception.
+    """
+    path = str(tmp_path / "AUSTIN_CORPUS_CHRISTI.jsonl")
+    _write_entry(path, {
+        "corridor": "AUSTIN_CORPUS_CHRISTI", "method": "ml_wind_corrected",
+        "ampacity_amps": 700.0, "fallback_used": False, "fallback_reason": None,
+        "model_version": "v1", "decision_time": "2026-10-06T06:00:00+00:00",
+        "valid_time": "2026-10-06T18:00:00+00:00",
+    })
+    _write_entry(path, _new_shape_entry())
+
+    markdown = render_table.render_markdown(str(tmp_path))
+
+    # Old-shape row still present with its own legacy table.
+    assert "| 2026-10-06T06:00:00+00:00 | 2026-10-06T18:00:00+00:00 | ml_wind_corrected |" in markdown
+    # New-shape block still present with all five candidates.
+    for name in _NEW_SHAPE_CANDIDATE_NAMES:
+        assert name in markdown
+    assert "2 logged prediction(s)" in markdown

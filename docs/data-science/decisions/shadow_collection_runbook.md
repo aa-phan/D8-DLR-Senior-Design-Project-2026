@@ -8,6 +8,62 @@ continuously. The full technical trace (input contract, failure-attribution desi
 evidence) lives in `forecast_correction_followup_audit.md`'s "Shadow prototype" section — this
 runbook is deliberately just the commands and host requirements, not the rationale.
 
+## Five-method collection (D-08)
+
+**Five-method collection began 2026-10-07.** From this date forward, every cycle's log entry
+records all five real (non-oracle) 24-hour-lead candidates side by side, not just one:
+`ml_wind_corrected` (unchanged provisional default — the six-field top-level mirror any legacy
+single-method reader, e.g. `forecast_shadow_healthcheck.py`, still sees unmodified),
+`ml_cooling_corrected`, `raw_forecast`, `persistence_24h`, and `reference_ml_refit_24h`. Each
+candidate carries its own `status`/`ampacity_amps`/`fallback_used`/`fallback_reason`/
+`model_version`/`input_provenance`/`reason`, nested under a `candidates` object in a
+`schema_version: 2` record (`forecast_shadow_pipeline.log_cycle_predictions`). Rows already
+committed to `shadow-collection-data` before this date keep their old flat, single-candidate
+shape forever — no migration, no backfill, no rewrite of historical rows (05-01-SUMMARY.md's
+approved historical-data strategy). Both `forecast_shadow_render_table.py` (the README table
+generator) and `forecast_shadow_healthcheck.py` read either shape correctly, per line, forever.
+
+**This is additional observational data. It is independent of, and is not a substitute for, the
+Nov 1/Nov 24 fresh-basis confirmation protocol in `forecast_correction_followup_audit.md`.** That
+protocol's own `_fresh_confirmation_report` harness scores FRESH-basis rows under its own
+pre-committed, fixed schedule (2026-11-01 freeze, 2026-11-24T00:00:00 UTC evaluation instant) and
+is untouched by this phase — no code, date, or harness there was changed to produce the five-method
+expansion above. Per that document's own explicit carve-out (quoted verbatim so both documents
+agree on exactly what counts as a permitted mechanical check): *"confirming the shadow pipeline's
+own logs exist, that its four timestamps (initialization/availability/decision/valid) are
+populated and sane, that FRESH-basis row counts are accruing, and that
+`data/shadow/predictions/*.jsonl` is being written to without errors"* is permitted at any time and
+is **not** outcome inspection. This runbook note, and every check this phase ran to confirm the
+collector works, stayed entirely inside that boundary — no FRESH-basis row's predicted-vs-truth
+outcome was inspected, or will be, before 2026-11-24T00:00:00 UTC.
+
+### Confirming the next SCHEDULED run (D-10)
+
+**What is confirmed today (2026-10-07, manual dispatch):** a real `gh workflow run "Shadow
+Collection"` dispatch ran the full pipeline end to end on the actual `ubuntu-latest` CI runner,
+completed successfully in ~1m2s (well under the 15-minute `timeout-minutes` budget — no headroom
+concern), and committed a new `schema_version: 2` entry for both corridors to
+`shadow-collection-data`, each carrying all five candidate names under `candidates`. This proves
+the pipeline runs correctly on the real CI runner with the expanded five-candidate shape.
+
+**What this does NOT prove, and remains an outstanding, dated follow-up:** a manual
+`workflow_dispatch` run is not the same trigger as the cron `schedule` trigger (`0 6,18 * * *`
+UTC) — D-10 explicitly requires confirming the *next scheduled* run, not just a manually-triggered
+one. The next cron boundary after this phase's own work is **2026-10-08T06:00:00 UTC**. After that
+boundary has actually passed, confirm it with:
+
+```bash
+git fetch origin shadow-collection-data
+git log -1 --format=%cI origin/shadow-collection-data
+gh run list --repo <owner>/<repo> --workflow="Shadow Collection" --limit 5 --json event,status,conclusion,createdAt
+```
+Look for an entry with `"event": "schedule"` and `createdAt` at or after `2026-10-08T06:00:00Z`,
+`"conclusion": "success"`, and confirm the newest commit on `shadow-collection-data` postdates it
+with a `schema_version: 2` entry (same per-field check as the manual-dispatch confirmation above).
+**Do not treat today's manual-dispatch confirmation as satisfying this check** — this phase's own
+SUMMARY records today's manual confirmation as done and names the scheduled-run confirmation as
+outstanding, to be checked after the boundary above passes, not fabricated as already-confirmed.
+
 ## Verified input contract (summary)
 
 | Variable | Source | Fallback |
@@ -20,6 +76,15 @@ Two distinct, never-conflated failure types in every log entry:
 - **Prediction-method fallback** (no provider anywhere supplied a usable value) — `fallback_used: true`, `fallback_reason` names exactly which provider(s) failed and how, `method` reads `raw_forecast`.
 
 Every log entry additionally preserves the issued ampacity, `model_version`, full `input_provenance`, and all four timestamps (`initialization_time`/`availability_time`/`decision_time`/`valid_time`) — enough to reproduce, after the fact, exactly what was actually available at the moment each prediction was made.
+
+**Since 2026-10-07, `ml_cooling_corrected`, `raw_forecast`, `persistence_24h`, and
+`reference_ml_refit_24h` also accrue in the same per-corridor `.jsonl` files, each with its own
+input footprint** (e.g. `persistence_24h` reads only this collector's own prior logged entry,
+never a forecast/anchor fetch; `reference_ml_refit_24h` loads a persisted, offline-fit MLP
+artifact under `data/shadow/models/`). This runbook stays a one-page command reference — see the
+`05-02-SUMMARY.md` through `05-05-SUMMARY.md` phase records under
+`.planning/workstreams/ml-modeling/phases/05-shadow-collector-five-method-side-by-side-challenger-recordi/`
+for each candidate's full input trace rather than duplicating it here.
 
 ## Host: GitHub Actions (chosen 2026-10-06)
 

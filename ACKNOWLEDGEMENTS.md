@@ -1900,3 +1900,54 @@ per this plan's own scope boundary. Every frozen Phase 1/3/4 module (`forecast_e
 offline fit and one real live predict call both run against live network endpoints, not mocked (see
 `.planning/workstreams/ml-modeling/phases/05-shadow-collector-five-method-side-by-side-challenger-recordi/05-04-SUMMARY.md`
 for the full outcome).
+
+### Session: 2026-10-07 (continued), conducted by Aaron Phan — render both JSONL shapes forever, D-08 runbook note, real GitHub Actions dispatch (Phase 05 Plan 05)
+
+User asked to execute Phase 05 Plan 05 (the phase's final plan): make `forecast_shadow_render_table.py`
+and `forecast_shadow_healthcheck.py` correctly handle both the pre-cutover flat JSONL shape and the
+new `schema_version: 2` nested shape forever, document D-08 (when five-method collection started
+and its relationship to the Nov 1/Nov 24 protocol) in the shadow runbook, and confirm via a real
+GitHub Actions dispatch that the expanded five-candidate record shape persists end to end through
+the deployed workflow.
+
+Claude Code was used to:
+
+1. Extend `forecast_shadow_render_table.py`'s `render_markdown` with a per-line shape check
+   (`entry.get("schema_version", 1) >= 2`): old-shape rows render via the exact, unchanged legacy
+   single-row logic (regression-pinned byte-identical in a new test); new-shape rows render a
+   dedicated all-five-candidate sub-section (status/ampacity/fallback/model_version/reason per
+   candidate, same pipe/newline/100-char escaping discipline). Added tests for old-shape-only,
+   new-shape-only, mixed-shape-in-one-file, and an unavailable candidate's reason string appearing
+   in the output. Added one new test to `forecast_shadow_healthcheck_test.py` proving (not merely
+   arguing) `forecast_shadow_healthcheck.py` needs zero code change against a new-shape row --
+   confirmed via `git diff --quiet` that file itself carries zero diff.
+2. Add a dated "Five-method collection (D-08)" section to `docs/data-science/decisions/
+   shadow_collection_runbook.md` naming the exact start date (2026-10-07), all five candidate
+   names, and quoting `forecast_correction_followup_audit.md`'s own mechanical-health-check
+   carve-out verbatim to state this shadow data is additional observational evidence, independent
+   of and not a substitute for the Nov 1/Nov 24 fresh-basis confirmation protocol -- confirmed via
+   `git diff --quiet` that the frozen audit document itself carries zero diff.
+3. Dispatch the real "Shadow Collection" GitHub Actions workflow via `gh workflow run`, watch it
+   complete (`gh run watch`), and verify via `git fetch origin shadow-collection-data` that the
+   newly committed JSONL lines for both corridors carry `schema_version: 2` with all five candidate
+   names. Added a "Confirming the next SCHEDULED run" runbook subsection naming the exact command
+   to check the next cron-triggered (06:00/18:00 UTC) run, explicitly distinguished from today's
+   manual-dispatch confirmation.
+
+**Verified, not merely trusted:** 20/20 tests pass across both touched test files (`pytest -q`);
+`HEALTHCHECK_UNCHANGED_OK`, `RENDER_BOTH_SHAPES_OK`, `RUNBOOK_D08_NOTE_OK`,
+`FROZEN_AUDIT_RECORD_UNTOUCHED_OK`, `WORKFLOW_DISPATCH_PRODUCED_NEW_SHAPE_OK`,
+`NEXT_SCHEDULED_RUN_DOC_OK` all printed by their respective verification commands. The real
+`gh workflow run "Shadow Collection"` dispatch (run `37693876732`) completed successfully in
+~1m2s on the actual `ubuntu-latest` CI runner, well under the 15-minute budget, and committed a
+real `schema_version: 2` entry with all five candidates for both `AUSTIN_CORPUS_CHRISTI` and
+`MIDLAND_EL_PASO` to `shadow-collection-data` -- fetched and parsed directly from
+`origin/shadow-collection-data`, not assumed. Per D-11, no claim is made about which candidate is
+more accurate, better-calibrated, or safer than another; this session reports only operational
+completeness (ran end to end, plausible positive ampacity values for `ml_wind_corrected`/
+`ml_cooling_corrected`/`raw_forecast`, honest `unavailable` reasons for `persistence_24h`/
+`reference_ml_refit_24h` at both corridors, zero failures). The NEXT cron-triggered (not manual)
+run's confirmation is explicitly left as an outstanding, dated follow-up for after the
+2026-10-08T06:00:00 UTC boundary -- not fabricated as already confirmed (see
+`.planning/workstreams/ml-modeling/phases/05-shadow-collector-five-method-side-by-side-challenger-recordi/05-05-SUMMARY.md`
+for the full outcome).
