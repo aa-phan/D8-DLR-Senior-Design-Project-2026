@@ -2012,3 +2012,50 @@ fix closed the SPECIFIC solar failure it targeted (the live error message change
 solar-radiation gap to an unrelated, pre-existing station-availability gap for AUSTIN's own
 wind/temp at one hour -- reported to the user as a separate, not-yet-fixed finding, not silently
 folded into this session's own claimed fix).
+
+### Session: 2026-10-08 (continued), conducted by Aaron Phan — per-hour TCEQ-to-Synoptic fallback for the truth-proxy's station fields
+
+User asked for a fix for the separately-reported finding above (the live-run error had moved from
+a solar-radiation gap to a TCEQ trailing-null-hour gap for AUSTIN's own station wind/temp), and
+asked that the fix also add an input-provenance marker, mirroring the shared-fetch anchor path's
+existing `anchor_provenance.<city>.anchor_source` convention.
+
+Claude Code was used to:
+
+1. Explained the fix's design before implementing it (at the user's prior "what would the fix for
+   that be" question): `weather_provider.fetch_weather`'s own `fallback=True` default only retries
+   Synoptic on a RAISED exception or an EMPTY response, never on a mechanically successful response
+   whose one specific row is unusable -- the exact TCEQ trailing-not-yet-reported-hour case
+   `fetch_live_anchor_observation` already has an explicit row-level retry for (its own
+   `_latest_usable_row` helper). The fix generalizes that same pattern from "the one latest row" to
+   "each of the 7 independent target hours" in `fetch_live_truth_proxy_series`.
+2. Implemented `_usable_station_row` (one hour's usability check, factored out of
+   `fetch_live_anchor_observation`'s own distinction between a raised exception, an empty response,
+   no row in the lookback window, and a mechanically-successful-but-null row) and
+   `_fetch_station_hours` (fetches TCEQ's window once, collects every gap hour, then makes ONE
+   explicit retry fetch against `config.SYNOPTIC_FALLBACK_STATIONS[city]` and re-checks ONLY the
+   gap hours against it -- never re-fetching hours that already resolved at TCEQ). A gap hour still
+   unusable after the retry raises `StaleOrMissingDataError` naming the hour and BOTH providers'
+   own specific failure reasons; a gap hour with no configured Synoptic station for that city raises
+   naming that specifically, rather than a generic "both providers failed" message when only one was
+   ever tried.
+3. Changed `fetch_live_truth_proxy_series`'s return shape from a bare DataFrame to a
+   `(series, provenance)` tuple -- `provenance["station_provenance"][city]` names, per city, a
+   7-element `sources` list (`"tceq"`/`"synoptic"`, aligned to the series' own rows) and a
+   `fallback_hours` list (ISO-8601 strings) naming EXACTLY which hours, if any, came from Synoptic --
+   never a single corridor-wide fallback flag, since a real window can be genuinely mixed. Updated
+   `ReferenceRefit24hShadowMethod.compute`'s own `input_provenance` to merge this directly rather
+   than hand-writing `solar_source` itself.
+
+**Verified, not merely trusted:** 3 new tests (a gap hour resolved by Synoptic, with the exact
+fallback hour and source index asserted, not just "it worked"; a gap hour unusable at both
+providers, asserting both providers' own reasons appear in the message; a gap hour with no
+Synoptic station configured, asserting the specific no-station-configured reason). Two pre-existing
+tests updated for the new `(series, provenance)` return shape. Full relevant suite (113/113 pass)
+run after the change. Every frozen Phase 1/3/4 production module confirmed to carry zero git diff.
+One real live call to `ReferenceRefit24hShadowMethod.compute` against live endpoints: TCEQ was
+fully gapped (all 7 hours, both cities) at call time, the Synoptic fallback resolved every one of
+them, and the method returned a genuine `status="ok"` prediction (1264.24 A) -- the first time this
+candidate has ever produced a live, non-"unavailable" result -- with
+`provenance["station_provenance"]` naming all 14 hours (7 per city) as `"synoptic"`, confirmed by
+reading the actual returned dict, not assumed from the code.

@@ -1149,11 +1149,6 @@ _TRUTH_PROXY_HOUR_TOLERANCE = pd.Timedelta(minutes=20)
 # through to the physics/weakest-link reduction below.
 _TRUTH_PROXY_STATION_FIELDS = ("air_temp", "wind_speed", "wind_direction")
 
-# All fields the assembled truth-proxy series ultimately carries, station
-# fields plus the separately-sourced `solar_radiation` below -- used only
-# for the final per-hour null re-check after both sources are merged.
-_TRUTH_PROXY_REQUIRED_FIELDS = _TRUTH_PROXY_STATION_FIELDS + ("solar_radiation",)
-
 # 2026-10-08: `solar_radiation`'s own source and matching tolerance.
 # `open_meteo_forecast_provider.fetch_historical_forecast` is a lat/lon
 # bulk NWP-model HINDCAST (never a station observation) for a recent,
@@ -1238,9 +1233,147 @@ def _fetch_solar_proxy_hours(
     return values
 
 
+def _usable_station_row(frame: pd.DataFrame, target_ts: "pd.Timestamp"):
+    """
+    One hour's worth of `_latest_usable_row`'s own usability check
+    (`fetch_live_anchor_observation`), generalized from "the latest row"
+    to "the row matching one specific target hour": returns `(row, None)`
+    if a row exists within `_TRUTH_PROXY_HOUR_TOLERANCE` of `target_ts`
+    with every `_TRUTH_PROXY_STATION_FIELDS` field non-null, else
+    `(None, reason)` naming which of the two failure shapes occurred
+    (no row in tolerance, vs. a matched row with a null field) -- same
+    "mechanically successful but unusable" distinction that function's
+    own docstring draws, reused here rather than re-invented.
+    """
+    row = _select_hour_row(frame, target_ts, _TRUTH_PROXY_HOUR_TOLERANCE)
+    if row is None:
+        return None, "no usable station row within tolerance"
+    for field in _TRUTH_PROXY_STATION_FIELDS:
+        if pd.isnull(row.get(field)):
+            return None, f"null {field!r}"
+    return row, None
+
+
+def _fetch_station_hours(
+    corridor: str, city: str, cams_id: str,
+    window_start: "pd.Timestamp", anchor_ts: "pd.Timestamp", target_times: list,
+):
+    """
+    2026-10-08 ("what would the fix for that be"): fetches this city's
+    TCEQ station window ONCE, matches each of `target_times` against it,
+    and -- ONLY for the specific hours whose matched TCEQ row is missing
+    or has a null required field (TCEQ's own trailing-not-yet-reported-
+    hour case, `fetch_live_anchor_observation`'s own confirmed-live
+    finding) -- makes ONE explicit retry fetch against this city's
+    `config.SYNOPTIC_FALLBACK_STATIONS` entry and re-checks only those
+    gap hours against it. This mirrors `fetch_live_anchor_observation`'s
+    own explicit-retry-at-the-row-level pattern, generalized from one row
+    to seven independent hours, rather than relying on `weather_
+    provider.fetch_weather`'s own `fallback=True` default -- which only
+    fires on a RAISED exception or an EMPTY response, never on a
+    mechanically successful response whose one specific row is unusable
+    (the exact gap this function exists to close).
+
+    Returns `(fields, sources)`: `fields` maps each of
+    `_TRUTH_PROXY_STATION_FIELDS` to a 7-element float list aligned to
+    `target_times`; `sources` is a same-length list of `"tceq"` or
+    `"synoptic"` naming which provider actually supplied each hour --
+    never a single corridor-wide summary, since a real window can be
+    genuinely mixed (some hours from each provider).
+
+    Raises:
+        StaleOrMissingDataError: the primary TCEQ window-fetch itself
+            failed, or any required hour is still unusable after the
+            Synoptic retry (naming the hour and BOTH providers' own
+            specific failure reasons), or no Synoptic fallback station
+            is configured for `city` at all and a gap hour exists.
+    """
+    try:
+        tceq_frame = weather_provider.fetch_weather(
+            [cams_id], window_start.isoformat(), anchor_ts.isoformat(), provider="tceq",
+        )
+    except Exception as exc:
+        raise StaleOrMissingDataError(
+            f"fetch_live_truth_proxy_series: corridor {corridor!r} city "
+            f"{city!r}: window fetch failed: {exc}"
+        ) from exc
+
+    if tceq_frame.empty:
+        tceq_frame = pd.DataFrame(columns=["datetime_utc", *_TRUTH_PROXY_STATION_FIELDS])
+    else:
+        tceq_frame = tceq_frame.reset_index()
+        tceq_frame["datetime_utc"] = pd.to_datetime(tceq_frame["datetime_utc"], utc=True)
+
+    resolved: dict = {}
+    gap_reasons: dict = {}
+    for target_ts in target_times:
+        row, reason = _usable_station_row(tceq_frame, target_ts)
+        if row is None:
+            gap_reasons[target_ts] = reason
+        else:
+            resolved[target_ts] = ("tceq", row)
+
+    synoptic_station = config.SYNOPTIC_FALLBACK_STATIONS.get(city)
+    synoptic_frame = None
+    if gap_reasons and synoptic_station is not None:
+        logger.info(
+            "fetch_live_truth_proxy_series(%r, %r): %d gap hour(s) at TCEQ CAMS "
+            "%r -- retrying those hours against Synoptic station %r",
+            corridor, city, len(gap_reasons), cams_id, synoptic_station,
+        )
+        try:
+            synoptic_frame = weather_provider.fetch_weather(
+                [synoptic_station], window_start.isoformat(), anchor_ts.isoformat(),
+                provider="synoptic",
+            )
+        except Exception as exc:
+            logger.info(
+                "fetch_live_truth_proxy_series(%r, %r): Synoptic retry fetch "
+                "raised (%s) -- gap hour(s) remain unresolved", corridor, city, exc,
+            )
+            synoptic_frame = pd.DataFrame(columns=["datetime_utc", *_TRUTH_PROXY_STATION_FIELDS])
+        else:
+            if synoptic_frame.empty:
+                synoptic_frame = pd.DataFrame(columns=["datetime_utc", *_TRUTH_PROXY_STATION_FIELDS])
+            else:
+                synoptic_frame = synoptic_frame.reset_index()
+                synoptic_frame["datetime_utc"] = pd.to_datetime(
+                    synoptic_frame["datetime_utc"], utc=True,
+                )
+
+    still_missing = []
+    for target_ts, tceq_reason in gap_reasons.items():
+        if synoptic_frame is None:
+            still_missing.append((target_ts, tceq_reason, "no Synoptic fallback station configured for this city"))
+            continue
+        row, synoptic_reason = _usable_station_row(synoptic_frame, target_ts)
+        if row is None:
+            still_missing.append((target_ts, tceq_reason, synoptic_reason))
+        else:
+            resolved[target_ts] = ("synoptic", row)
+
+    if still_missing:
+        target_ts, tceq_reason, synoptic_reason = sorted(still_missing, key=lambda t: t[0])[0]
+        raise StaleOrMissingDataError(
+            f"fetch_live_truth_proxy_series: corridor {corridor!r} city {city!r}: "
+            f"required hour {target_ts.isoformat()} unusable at both providers "
+            f"(tceq CAMS {cams_id!r}: {tceq_reason}; synoptic: {synoptic_reason})"
+        )
+
+    fields: dict = {field: [] for field in _TRUTH_PROXY_STATION_FIELDS}
+    sources: list = []
+    for target_ts in target_times:
+        source, row = resolved[target_ts]
+        sources.append(source)
+        for field in _TRUTH_PROXY_STATION_FIELDS:
+            fields[field].append(float(row[field]))
+
+    return fields, sources
+
+
 def fetch_live_truth_proxy_series(
     corridor: str, anchor_time, *, lookback_hours: float = None,
-) -> pd.DataFrame:
+):
     """
     Plan 05-04 (D-05's decision-time discipline, generalized for arm 5's
     own lagged/rolling feature needs): build a 7-row, hourly, corridor-
@@ -1253,18 +1386,24 @@ def fetch_live_truth_proxy_series(
     (`forecast_training.build_training_matrix`) already calls.
 
     For EACH endpoint city, fetches ONE window of `provider="tceq"`
-    station observations (the project's primary for wind/temp, WX-01;
-    `fetch_weather`'s own `fallback=True` default retries Synoptic
-    automatically on a primary failure -- never requested directly, same
-    discipline `fetch_live_anchor_observation` already uses) spanning
-    `[anchor_time - lookback_hours, anchor_time]`, then selects, for each
-    of the 7 target hourly timestamps, the closest row within
-    `_TRUTH_PROXY_HOUR_TOLERANCE` (20 minutes). A missing hour, or a
-    matched row with a null required field (`_TRUTH_PROXY_REQUIRED_
-    FIELDS`), raises `StaleOrMissingDataError` naming the corridor, city,
-    and the specific missing/null hour on the FIRST such gap found -- this
-    function never accumulates multiple gaps before raising, and never
-    interpolates, pads, or backfills a missing hour (D-04/T-05-04-01).
+    station observations spanning `[anchor_time - lookback_hours,
+    anchor_time]`, then selects, for each of the 7 target hourly
+    timestamps, the closest row within `_TRUTH_PROXY_HOUR_TOLERANCE` (20
+    minutes). 2026-10-08: a missing/null hour no longer raises
+    immediately -- `_fetch_station_hours` collects every such gap hour
+    first, then makes ONE explicit retry fetch against this city's
+    `config.SYNOPTIC_FALLBACK_STATIONS` entry and re-checks only those
+    gap hours against it (the same explicit-row-level-retry pattern
+    `fetch_live_anchor_observation` already uses for its own single-row
+    lookup, generalized to seven independent hours here, since `fetch_
+    weather`'s own `fallback=True` default only fires on a raised
+    exception/empty response, never on a mechanically successful
+    response whose one specific row is unusable -- TCEQ's own trailing
+    not-yet-reported-hour case). Only a gap hour still unusable after
+    that retry raises `StaleOrMissingDataError`, naming the hour and
+    BOTH providers' own specific failure reasons. Never interpolates,
+    pads, or backfills a missing hour at either provider (D-04/
+    T-05-04-01).
 
     Once both cities' 7-hour windows are fully validated, each city's own
     hourly ampacity is computed via the SAME `thermal_model.
@@ -1293,15 +1432,26 @@ def fetch_live_truth_proxy_series(
     `input_provenance` names this source explicitly as `solar_source`.
 
     Returns:
-        A `pd.DataFrame` with exactly 7 rows, columns `datetime_utc`,
-        `dlr_amps`, `air_temp`, `wind_speed`, `solar_radiation`, sorted
-        ascending by `datetime_utc`, whose LAST row's `datetime_utc`
-        equals `anchor_time`.
+        A `(series, provenance)` tuple. `series` is a `pd.DataFrame` with
+        exactly 7 rows, columns `datetime_utc`, `dlr_amps`, `air_temp`,
+        `wind_speed`, `solar_radiation`, sorted ascending by
+        `datetime_utc`, whose LAST row's `datetime_utc` equals
+        `anchor_time`. `provenance` is
+        `{"station_provenance": {city: {"sources": [...], "fallback_hours":
+        [...]}, ...}, "solar_source": "open_meteo_historical_forecast"}` --
+        `sources` is a 7-element list of `"tceq"`/`"synoptic"` aligned to
+        the series' own rows for that city, and `fallback_hours` names
+        (as ISO-8601 strings) exactly which hours, if any, came from
+        Synoptic rather than TCEQ -- never a single corridor-wide
+        fallback flag, since one city's window can be genuinely mixed.
+        Never silently omitted or defaulted: a caller that needs to know
+        exactly what supplied this series' inputs always can.
 
     Raises:
         StaleOrMissingDataError: on any window-fetch failure, or any
-            missing/null required hour for either endpoint city, from
-            either the station or the solar-proxy source.
+            required hour still unusable after the per-hour Synoptic
+            retry, for either endpoint city, from either the station or
+            the solar-proxy source.
     """
     if lookback_hours is None:
         lookback_hours = config.FORECAST_ML_ROLLING_WINDOW_HOURS
@@ -1318,6 +1468,7 @@ def fetch_live_truth_proxy_series(
     city_a, city_b = config.CORRIDOR_ENDPOINTS[corridor]
 
     per_city_fields: dict = {}
+    station_provenance: dict = {}
     for city in (city_a, city_b):
         cams_id = config.TCEQ_STATIONS.get(city)
         if cams_id is None:
@@ -1325,41 +1476,17 @@ def fetch_live_truth_proxy_series(
                 f"fetch_live_truth_proxy_series: corridor {corridor!r}: no "
                 f"known TCEQ CAMS site for city {city!r}"
             )
-        try:
-            frame = weather_provider.fetch_weather(
-                [cams_id], window_start.isoformat(), anchor_ts.isoformat(), provider="tceq",
-            )
-        except Exception as exc:
-            raise StaleOrMissingDataError(
-                f"fetch_live_truth_proxy_series: corridor {corridor!r} city "
-                f"{city!r}: window fetch failed: {exc}"
-            ) from exc
 
-        if frame.empty:
-            frame = pd.DataFrame(columns=["datetime_utc", *_TRUTH_PROXY_STATION_FIELDS])
-        else:
-            frame = frame.reset_index()
-            frame["datetime_utc"] = pd.to_datetime(frame["datetime_utc"], utc=True)
-
-        fields: dict = {field: [] for field in _TRUTH_PROXY_STATION_FIELDS}
-        for target_ts in target_times:
-            row = _select_hour_row(frame, target_ts, _TRUTH_PROXY_HOUR_TOLERANCE)
-            if row is None:
-                raise StaleOrMissingDataError(
-                    f"fetch_live_truth_proxy_series: corridor {corridor!r} "
-                    f"city {city!r}: no usable station row within "
-                    f"{_TRUTH_PROXY_HOUR_TOLERANCE} of required hour "
-                    f"{target_ts.isoformat()}"
-                )
-            for field in _TRUTH_PROXY_STATION_FIELDS:
-                value = row.get(field)
-                if pd.isnull(value):
-                    raise StaleOrMissingDataError(
-                        f"fetch_live_truth_proxy_series: corridor {corridor!r} "
-                        f"city {city!r}: null {field!r} at required hour "
-                        f"{target_ts.isoformat()}"
-                    )
-                fields[field].append(float(value))
+        fields, sources = _fetch_station_hours(
+            corridor, city, cams_id, window_start, anchor_ts, target_times,
+        )
+        station_provenance[city] = {
+            "sources": sources,
+            "fallback_hours": [
+                target_times[i].isoformat()
+                for i, source in enumerate(sources) if source == "synoptic"
+            ],
+        }
 
         lat, lon = config.CITY_COORDINATES[city]
         fields["solar_radiation"] = _fetch_solar_proxy_hours(
@@ -1406,13 +1533,19 @@ def fetch_live_truth_proxy_series(
         },
     )
 
-    return pd.DataFrame({
+    series = pd.DataFrame({
         "datetime_utc": target_times,
         "dlr_amps": dlr_amps,
         "air_temp": winning_columns["air_temp"],
         "wind_speed": winning_columns["wind_speed"],
         "solar_radiation": winning_columns["solar_radiation"],
     }).sort_values("datetime_utc").reset_index(drop=True)
+
+    provenance = {
+        "station_provenance": station_provenance,
+        "solar_source": "open_meteo_historical_forecast",
+    }
+    return series, provenance
 
 
 _PER_CITY_NOT_APPLICABLE_REASON = (
@@ -1451,7 +1584,7 @@ class ReferenceRefit24hShadowMethod:
             )
 
         try:
-            truth_proxy_series = fetch_live_truth_proxy_series(corridor, anchor_time)
+            truth_proxy_series, truth_provenance = fetch_live_truth_proxy_series(corridor, anchor_time)
         except StaleOrMissingDataError as exc:
             return ShadowPrediction(
                 corridor=corridor, method=self.name, ampacity_amps=None,
@@ -1481,7 +1614,7 @@ class ReferenceRefit24hShadowMethod:
             "truth_proxy_window_end": truth_proxy_series["datetime_utc"].iloc[-1].isoformat(),
             "per_city_ampacity_amps": None,
             "per_city_not_applicable_reason": _PER_CITY_NOT_APPLICABLE_REASON,
-            "solar_source": "open_meteo_historical_forecast",
+            **truth_provenance,
         }
         return ShadowPrediction(
             corridor=corridor, method=self.name, ampacity_amps=prediction,

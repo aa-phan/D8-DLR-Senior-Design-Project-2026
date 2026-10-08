@@ -1454,12 +1454,18 @@ def _complete_truth_proxy_city_frames():
 def test_fetch_live_truth_proxy_series_returns_seven_rows_ending_at_anchor_time(monkeypatch):
     _install_fake_fetch_weather(monkeypatch, city_frames=_complete_truth_proxy_city_frames())
 
-    series = shadow.fetch_live_truth_proxy_series(_CORRIDOR, _TRUTH_PROXY_ANCHOR)
+    series, provenance = shadow.fetch_live_truth_proxy_series(_CORRIDOR, _TRUTH_PROXY_ANCHOR)
 
     assert list(series.columns) == ["datetime_utc", "dlr_amps", "air_temp", "wind_speed", "solar_radiation"]
     assert len(series) == 7
     assert series["datetime_utc"].is_monotonic_increasing
     assert series["datetime_utc"].iloc[-1] == _TRUTH_PROXY_ANCHOR
+    # 2026-10-08: provenance names which provider supplied each hour, per
+    # city -- never a single corridor-wide summary.
+    assert provenance["solar_source"] == "open_meteo_historical_forecast"
+    for city in ("AUSTIN", "CORPUS_CHRISTI"):
+        assert provenance["station_provenance"][city]["sources"] == ["tceq"] * 7
+        assert provenance["station_provenance"][city]["fallback_hours"] == []
 
 
 def test_fetch_live_truth_proxy_series_raises_naming_the_missing_hour_and_city(monkeypatch):
@@ -1509,6 +1515,133 @@ def test_fetch_live_truth_proxy_series_treats_a_null_required_field_like_a_missi
 # required hour, a null value at a required hour), mirroring the
 # station-path tests above but against the new source.
 # ──────────────────────────────────────────────────────────────────────
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 2026-10-08 ("what would the fix for that be"): per-hour TCEQ -> Synoptic
+# retry for the station fields, mirroring fetch_live_anchor_observation's
+# own explicit-row-level-retry pattern, generalized to seven hours.
+# ──────────────────────────────────────────────────────────────────────
+
+
+def _install_fake_fetch_weather_with_synoptic(monkeypatch, *, tceq_frames: dict, synoptic_frames: dict):
+    """Dispatches on `provider` -- unlike `_install_fake_fetch_weather`
+    (which asserts `provider == "tceq"` and is unsuitable for these
+    fallback tests), this fake returns `tceq_frames[cams_id]` for a
+    `provider="tceq"` call and `synoptic_frames[station_id]` for a
+    `provider="synoptic"` call, each never issuing a real network call.
+    Also installs the default (complete) solar-proxy fake."""
+
+    def _fake_fetch_weather(location, start, end, provider="synoptic", **kwargs):
+        station_id = location[0]
+        frames = tceq_frames if provider == "tceq" else synoptic_frames
+        frame = frames.get(station_id)
+        if frame is None:
+            return pd.DataFrame(columns=["datetime_utc", "air_temp", "wind_speed", "wind_direction"])
+        return frame.copy()
+
+    monkeypatch.setattr(weather_provider, "fetch_weather", _fake_fetch_weather)
+    _install_fake_fetch_historical_forecast(monkeypatch)
+
+
+def test_fetch_live_truth_proxy_series_falls_back_to_synoptic_for_one_gap_hour(monkeypatch):
+    """
+    TCEQ's AUSTIN window has one null `air_temp` hour (its own documented
+    trailing-not-yet-reported-hour case); the SAME hour is fully usable
+    at AUSTIN's configured Synoptic fallback station. The series must
+    still come back complete, and the provenance must name EXACTLY that
+    one hour as a fallback -- never a corridor-wide flag, never silently
+    dropped.
+    """
+    gap_hour = _TRUTH_PROXY_ANCHOR - pd.Timedelta(hours=3)
+    austin_cams = config.TCEQ_STATIONS["AUSTIN"]
+    corpus_cams = config.TCEQ_STATIONS["CORPUS_CHRISTI"]
+    austin_synoptic = config.SYNOPTIC_FALLBACK_STATIONS["AUSTIN"]
+    tceq_frames = {
+        austin_cams: _synthetic_truth_proxy_city_frame(
+            null_field="air_temp", null_field_hour=gap_hour,
+        ),
+        corpus_cams: _synthetic_truth_proxy_city_frame(),
+    }
+    synoptic_frames = {
+        austin_synoptic: _synthetic_truth_proxy_city_frame(),  # fully usable at every hour
+    }
+    _install_fake_fetch_weather_with_synoptic(
+        monkeypatch, tceq_frames=tceq_frames, synoptic_frames=synoptic_frames,
+    )
+
+    series, provenance = shadow.fetch_live_truth_proxy_series(_CORRIDOR, _TRUTH_PROXY_ANCHOR)
+
+    assert len(series) == 7
+    assert series["air_temp"].notna().all()  # the gap hour was actually filled, not skipped
+    austin_prov = provenance["station_provenance"]["AUSTIN"]
+    assert austin_prov["fallback_hours"] == [gap_hour.isoformat()]
+    gap_index = sorted(
+        (_TRUTH_PROXY_ANCHOR - pd.Timedelta(hours=h) for h in range(_TRUTH_PROXY_LOOKBACK_HOURS, -1, -1))
+    ).index(gap_hour)
+    assert austin_prov["sources"][gap_index] == "synoptic"
+    # Every OTHER hour, and CORPUS_CHRISTI entirely, stayed on the primary.
+    assert austin_prov["sources"].count("synoptic") == 1
+    assert provenance["station_provenance"]["CORPUS_CHRISTI"]["sources"] == ["tceq"] * 7
+    assert provenance["station_provenance"]["CORPUS_CHRISTI"]["fallback_hours"] == []
+
+
+def test_fetch_live_truth_proxy_series_raises_naming_both_providers_when_synoptic_also_fails(monkeypatch):
+    """
+    The gap hour is unusable at BOTH TCEQ and its Synoptic fallback -- the
+    raised error must name the hour and BOTH providers' own specific
+    failure reasons, not a vague single-provider message.
+    """
+    gap_hour = _TRUTH_PROXY_ANCHOR - pd.Timedelta(hours=5)
+    austin_cams = config.TCEQ_STATIONS["AUSTIN"]
+    corpus_cams = config.TCEQ_STATIONS["CORPUS_CHRISTI"]
+    austin_synoptic = config.SYNOPTIC_FALLBACK_STATIONS["AUSTIN"]
+    tceq_frames = {
+        austin_cams: _synthetic_truth_proxy_city_frame(
+            null_field="wind_speed", null_field_hour=gap_hour,
+        ),
+        corpus_cams: _synthetic_truth_proxy_city_frame(),
+    }
+    synoptic_frames = {
+        austin_synoptic: _synthetic_truth_proxy_city_frame(skip_hour=gap_hour),  # no row at all
+    }
+    _install_fake_fetch_weather_with_synoptic(
+        monkeypatch, tceq_frames=tceq_frames, synoptic_frames=synoptic_frames,
+    )
+
+    with pytest.raises(shadow.StaleOrMissingDataError) as exc_info:
+        shadow.fetch_live_truth_proxy_series(_CORRIDOR, _TRUTH_PROXY_ANCHOR)
+
+    message = str(exc_info.value)
+    assert "AUSTIN" in message
+    assert gap_hour.isoformat() in message
+    assert "tceq" in message.lower() and "wind_speed" in message
+    assert "synoptic" in message.lower()
+
+
+def test_fetch_live_truth_proxy_series_raises_when_no_synoptic_fallback_station_configured(monkeypatch):
+    """
+    A gap hour with NO configured Synoptic fallback station for that city
+    must still raise (never silently pass an incomplete window through),
+    naming that specifically as the reason -- not a generic "both
+    providers failed" message when only one was ever actually tried.
+    """
+    gap_hour = _TRUTH_PROXY_ANCHOR - pd.Timedelta(hours=2)
+    austin_cams = config.TCEQ_STATIONS["AUSTIN"]
+    corpus_cams = config.TCEQ_STATIONS["CORPUS_CHRISTI"]
+    tceq_frames = {
+        austin_cams: _synthetic_truth_proxy_city_frame(
+            null_field="air_temp", null_field_hour=gap_hour,
+        ),
+        corpus_cams: _synthetic_truth_proxy_city_frame(),
+    }
+    _install_fake_fetch_weather_with_synoptic(monkeypatch, tceq_frames=tceq_frames, synoptic_frames={})
+    monkeypatch.setattr(config, "SYNOPTIC_FALLBACK_STATIONS", {})
+
+    with pytest.raises(shadow.StaleOrMissingDataError) as exc_info:
+        shadow.fetch_live_truth_proxy_series(_CORRIDOR, _TRUTH_PROXY_ANCHOR)
+
+    assert "no Synoptic fallback station configured" in str(exc_info.value)
 
 
 def test_fetch_live_truth_proxy_series_raises_when_solar_proxy_fetch_fails(monkeypatch):
@@ -1575,7 +1708,7 @@ def test_fetch_live_truth_proxy_series_solar_source_tolerates_off_the_hour_ancho
     solar_frame = _synthetic_solar_proxy_frame(anchor_time=_TRUTH_PROXY_ANCHOR + pd.Timedelta(hours=1))
     _install_fake_fetch_weather(monkeypatch, city_frames=city_frames, solar_frame=solar_frame)
 
-    series = shadow.fetch_live_truth_proxy_series(_CORRIDOR, off_hour_anchor)
+    series, _ = shadow.fetch_live_truth_proxy_series(_CORRIDOR, off_hour_anchor)
 
     assert len(series) == 7
     assert series["solar_radiation"].notna().all()
