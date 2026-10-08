@@ -433,3 +433,33 @@ def test_render_markdown_omits_bundle_table_when_no_entry_carries_bundle_data(tm
     markdown = render_table.render_markdown(str(tmp_path))
 
     assert "Bundle-level" not in markdown
+
+
+def test_render_markdown_main_table_shows_per_conductor_bottleneck_city(tmp_path):
+    """
+    2026-10-08 ("i don't see that on the first table anymore"):
+    bottleneck_city has always been computed and stored per candidate but
+    was never rendered in the main (per-conductor) table, in either this
+    format or the one before it. Pins that it now appears.
+    """
+    entry = _new_shape_entry()
+    entry["candidates"]["ml_wind_corrected"]["input_provenance"] = {
+        "per_city_ampacity_amps": {"AUSTIN": 650.0, "CORPUS_CHRISTI": 900.0},
+        "bottleneck_city": "AUSTIN",
+    }
+    _write_entry(str(tmp_path / "AUSTIN_CORPUS_CHRISTI.jsonl"), entry)
+
+    markdown = render_table.render_markdown(str(tmp_path))
+
+    assert "✓ 650.0 (AUSTIN)" in markdown
+
+
+def test_render_markdown_main_table_omits_city_suffix_when_no_bottleneck_known(tmp_path):
+    """reference_ml_refit_24h (and any candidate with no per-city
+    provenance) must render a bare ampacity, never a stray "(None)"."""
+    _write_entry(str(tmp_path / "AUSTIN_CORPUS_CHRISTI.jsonl"), _new_shape_entry())
+
+    markdown = render_table.render_markdown(str(tmp_path))
+
+    assert "✓ 650.0 (" not in markdown  # ml_wind_corrected's own fixture has no provenance
+    assert "(None)" not in markdown

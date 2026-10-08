@@ -105,8 +105,15 @@ def _escape_note(text, limit: int = 100) -> str:
 def _render_candidate_cell(c: dict) -> str:
     """
     One cell's worth of one candidate's outcome for the compact one-
-    row-per-cycle table: a checkmark-prefixed ampacity when it produced a
-    real value, or a short status word when it did not. Never embeds the
+    row-per-cycle table: a checkmark-prefixed ampacity, with its own
+    per-conductor `bottleneck_city` in parentheses when the candidate's
+    `input_provenance` names one (2026-10-08, "i don't see that on the
+    first table anymore" -- `bottleneck_city` has always been computed
+    and stored per candidate but was never actually rendered here, in
+    either this format or the one before it; this is the first time it
+    appears in the README at all, not a regression). `reference_ml_
+    refit_24h` has no per-city/bottleneck concept at all (architecturally
+    corridor-only) and so never gets a city suffix. Never embeds the
     candidate's own `reason`/`fallback_reason` text here -- those are
     long, free-form strings that would blow out a 5-candidate-wide row;
     `_render_new_shape_row` collects them into one trailing Notes column
@@ -115,6 +122,10 @@ def _render_candidate_cell(c: dict) -> str:
     status = c.get("status") or "—"
     ampacity = c.get("ampacity_amps")
     if status == "ok" and isinstance(ampacity, (int, float)):
+        provenance = c.get("input_provenance") or {}
+        city = provenance.get("bottleneck_city")
+        if city:
+            return f"✓ {ampacity:.1f} ({city})"
         return f"✓ {ampacity:.1f}"
     return status  # "unavailable" / "failed" / "—" -- never a bare ampacity without its status
 

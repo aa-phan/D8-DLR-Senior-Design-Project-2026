@@ -2165,3 +2165,28 @@ the actual `forecast_shadow_render_table.main()` entry point and read the output
 MIDLAND_EL_PASO corridor's bundle table shows `EL_PASO` as the bottleneck for all three available
 candidates, confirming the bottleneck-flip result the prior session's live run already measured is
 now actually visible in the rendered README, not just present in the raw JSONL.
+
+### Session: 2026-10-08 (continued), conducted by Aaron Phan — display the per-conductor bottleneck city in the main table
+
+User asked whether all five candidates' predictions are point inferences (confirmed: yes, every
+`ShadowPrediction` carries a single scalar `ampacity_amps`, never a confidence interval or
+distribution anywhere in this shadow module), then pointed out that the corridor's own bottleneck
+city -- which cities' weakest-link conductor value actually drove each candidate's own corridor
+ampacity -- wasn't visible in the main table.
+
+Investigated before changing anything: `bottleneck_city` has been computed and stored in
+`input_provenance.bottleneck_city` for every per-city candidate since this collector was first
+built, but the renderer had NEVER actually displayed it, in either the original one-sub-section-
+per-cycle format or this session's own compact-table rewrite -- a real, longstanding gap, not a
+regression introduced this session.
+
+Claude Code was used to extend `_render_candidate_cell` so an "ok" candidate's cell shows its own
+`bottleneck_city` in parentheses when its `input_provenance` names one (e.g. `✓ 945.4 (AUSTIN)`) --
+`reference_ml_refit_24h`, which has no per-city concept at all, correctly renders a bare ampacity
+with no city suffix, never a stray `(None)`.
+
+**Verified, not merely trusted:** 2 new tests (the bottleneck city appears when `input_provenance`
+names one; no city suffix, and no `"(None)"`, when it doesn't). Full relevant suite (113/113)
+passing. Rendered the real already-collected live data through the actual entry point: the main
+table now shows `✓ 945.4 (AUSTIN)` for `ml_wind_corrected`/`ml_cooling_corrected`/`raw_forecast`,
+confirmed by reading the output file directly.
