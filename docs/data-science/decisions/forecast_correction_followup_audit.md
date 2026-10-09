@@ -101,7 +101,7 @@ prior read — that the frozen record itself never discloses this. A direct `gre
 "sensor\|observational\|field-validated\|field validated"` against
 `docs/data-science/decisions/forecast_correction_experiment.md` returns zero matches anywhere in the
 file, including its `## Data provenance` section (`forecast_correction_experiment.md:67-100`) and its
-`## Limitations` section (`forecast_correction_experiment.md:382-438`) — the two sections a reader
+`## Limitations` section (`forecast_correction_experiment.md:387-444`) — the two sections a reader
 would expect this caveat to live in. `## Data provenance` states the truth source is "Open-Meteo's
 Archive API..., the same reanalysis source every other component of this project's weather ingestion
 already uses" (`forecast_correction_experiment.md:78-79`) but never draws the connection that this
@@ -222,7 +222,7 @@ any consumer could have received the forecast over the network at the claimed de
 (`backend/forecast_leadtime_calibration.py:390`) fetches exactly two products, both read directly
 this session, not assumed from either the module's own docstring or `04-RESEARCH.md`'s prior read:
 the Previous-Runs archive's `previous_day1` series, via
-`open_meteo_forecast_provider.fetch_previous_runs` (`backend/open_meteo_forecast_provider.py:513`,
+`open_meteo_forecast_provider.fetch_previous_runs` (`backend/open_meteo_forecast_provider.py:533`,
 endpoint `previous-runs-api.open-meteo.com`, `backend/open_meteo_forecast_provider.py:80`), and the
 Single-Runs archive's one exact named run, via `open_meteo_forecast_provider.fetch_single_run`
 (`backend/open_meteo_forecast_provider.py:374`, endpoint `single-runs-api.open-meteo.com`,
@@ -251,7 +251,7 @@ measurement path, both flagged as backward-looking archives, so the claim is che
 the enumeration rather than by trusting this paragraph.
 
 This is a DIFFERENT limitation from the one the frozen record's Limitations section already
-discloses (`docs/data-science/decisions/forecast_correction_experiment.md:392-401`, "the stitching
+discloses (`docs/data-science/decisions/forecast_correction_experiment.md:397-401`, "the stitching
 verification's reach is bounded, and the gap is not directly closed"). That existing disclosure is a
 **coverage** limitation: the Single-Runs archive for `gfs_seamless` only reaches back to roughly
 mid-2026, so the cross-check can only be *run* over a handful of recent dates, and its applicability
@@ -399,8 +399,8 @@ horizons.
 
 Reported alongside, with citations, so the record cannot be misread as claiming the experiment used
 the production default: the production default horizon is `config.FORECAST_HORIZON_MINUTES = 60.0`
-minutes (`backend/config.py:193`), and the horizon this experiment actually passes is
-`config.FORECAST_EXPERIMENT_PRIMARY_LEAD_HOURS * 60 = 1440` minutes (`backend/config.py:412`) — two
+minutes (`backend/config.py:231`), and the horizon this experiment actually passes is
+`config.FORECAST_EXPERIMENT_PRIMARY_LEAD_HOURS * 60 = 1440` minutes (`backend/config.py:450`) — two
 distinct values, both stated plainly.
 
 D-01's actual question is not "is the shift 24 hours" but "were the training labels available before
