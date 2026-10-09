@@ -16,12 +16,13 @@ Regenerated automatically after every `shadow_collect.yml` run — do not hand-e
 
 ## AUSTIN_CORPUS_CHRISTI
 
-14 logged prediction(s), most recent first.
+15 logged prediction(s), most recent first.
 
-All five candidates per cycle (`schema_version: 2`), most recent 10 of 10 shown:
+All five candidates per cycle (`schema_version: 2`), most recent 11 of 11 shown:
 
 | Decision time | Valid time | ml_wind_corrected | ml_cooling_corrected | raw_forecast | persistence_24h | reference_ml_refit_24h | Notes |
 |---|---|---|---|---|---|---|---|
+| 2026-10-09 22:08 UTC (17:08 CDT) | 2026-10-10 12:00 UTC (07:00 CDT) | ✓ 943.7 (AUSTIN) | ✓ 1244.1 (AUSTIN) | ✓ 1140.8 (AUSTIN) | unavailable | unavailable | persistence_24h: no prior entry within tolerance of decision_time 2026-10-09T22:08:44.933619+00:00 (cold start, or a gap in this corridor's collection history); reference_ml_refit_24h: fetch_live_trut… |
 | 2026-10-09 12:27 UTC (07:27 CDT) | 2026-10-10 00:00 UTC (2026-10-09 19:00 CDT) | ✓ 1061.9 (AUSTIN) | ✓ 1081.3 (AUSTIN) | ✓ 1144.4 (AUSTIN) | unavailable | ✓ 1186.5 | persistence_24h: no prior entry within tolerance of decision_time 2026-10-09T12:27:10.543176+00:00 (cold start, or a gap in this corridor's collection history) |
 | 2026-10-08 22:45 UTC (17:45 CDT) | 2026-10-09 12:00 UTC (07:00 CDT) | ✓ 1130.6 (AUSTIN) | ✓ 1247.3 (CORPUS_CHRISTI) | ✓ 1140.7 (AUSTIN) | unavailable | ✓ 1233.5 | persistence_24h: no prior entry within tolerance of decision_time 2026-10-08T22:45:55.320055+00:00 (cold start, or a gap in this corridor's collection history) |
 | 2026-10-08 12:40 UTC (07:40 CDT) | 2026-10-09 00:00 UTC (2026-10-08 19:00 CDT) | ✓ 963.7 (AUSTIN) | ✓ 1033.4 (AUSTIN) | ✓ 988.1 (AUSTIN) | unavailable | ✓ 1198.6 | persistence_24h: no prior entry within tolerance of decision_time 2026-10-08T12:40:06.416559+00:00 (cold start, or a gap in this corridor's collection history) |
@@ -35,10 +36,11 @@ All five candidates per cycle (`schema_version: 2`), most recent 10 of 10 shown:
 
 > Conductor-based bundle thermal estimate (equal-current-sharing assumption across subconductors) -- NOT a verified equipment-limited circuit rating. Subconductor-per-phase counts are the Power Systems sub-team's provisional, regional assumption, not yet confirmed for any specific line segment.
 
-Bundle-level (subconductors-per-phase) ampacity, same cycles as above, most recent 10 of 10 shown:
+Bundle-level (subconductors-per-phase) ampacity, same cycles as above, most recent 11 of 11 shown:
 
 | Decision time | Valid time | ml_wind_corrected | ml_cooling_corrected | raw_forecast | persistence_24h | reference_ml_refit_24h | Notes |
 |---|---|---|---|---|---|---|---|
+| 2026-10-09 22:08 UTC (17:08 CDT) | 2026-10-10 12:00 UTC (07:00 CDT) | ✓ 1887.4 (AUSTIN) | ✓ 2488.2 (AUSTIN) | ✓ 2281.6 (AUSTIN) | unavailable | unavailable | persistence_24h: no matched prior entry this cycle (see the candidate's own reason); reference_ml_refit_24h: reference_ml_refit_24h produces only a corridor-level prediction (see per_city_not_applicab… |
 | 2026-10-09 12:27 UTC (07:27 CDT) | 2026-10-10 00:00 UTC (2026-10-09 19:00 CDT) | ✓ 2123.8 (AUSTIN) | ✓ 2162.6 (AUSTIN) | ✓ 2288.7 (AUSTIN) | unavailable | unavailable | persistence_24h: no matched prior entry this cycle (see the candidate's own reason); reference_ml_refit_24h: reference_ml_refit_24h produces only a corridor-level prediction (see per_city_not_applicab… |
 | 2026-10-08 22:45 UTC (17:45 CDT) | 2026-10-09 12:00 UTC (07:00 CDT) | ✓ 2261.3 (AUSTIN) | ✓ 2494.6 (CORPUS_CHRISTI) | ✓ 2281.3 (AUSTIN) | unavailable | unavailable | persistence_24h: no matched prior entry this cycle (see the candidate's own reason); reference_ml_refit_24h: reference_ml_refit_24h produces only a corridor-level prediction (see per_city_not_applicab… |
 | 2026-10-08 12:40 UTC (07:40 CDT) | 2026-10-09 00:00 UTC (2026-10-08 19:00 CDT) | ✓ 1927.5 (AUSTIN) | ✓ 2066.7 (AUSTIN) | ✓ 1976.2 (AUSTIN) | unavailable | unavailable | persistence_24h: no matched prior entry this cycle (see the candidate's own reason); reference_ml_refit_24h: reference_ml_refit_24h produces only a corridor-level prediction (see per_city_not_applicab… |
@@ -55,12 +57,13 @@ _4 pre-cutover (single-method) entries exist in this corridor's raw history and 
 
 ## MIDLAND_EL_PASO
 
-14 logged prediction(s), most recent first.
+15 logged prediction(s), most recent first.
 
-All five candidates per cycle (`schema_version: 2`), most recent 10 of 10 shown:
+All five candidates per cycle (`schema_version: 2`), most recent 11 of 11 shown:
 
 | Decision time | Valid time | ml_wind_corrected | ml_cooling_corrected | raw_forecast | persistence_24h | reference_ml_refit_24h | Notes |
 |---|---|---|---|---|---|---|---|
+| 2026-10-09 22:10 UTC (17:10 CDT) | 2026-10-10 12:00 UTC (07:00 CDT) | unavailable | unavailable | unavailable | unavailable | ✓ 1229.3 | ml_wind_corrected: forecast unavailable for ['MIDLAND']: MIDLAND: fetch_live_forecast_for_valid_time: retrieval failed for corridor 'MIDLAND_EL_PASO', run 2026-10-09 12:00:00+00:00: HTTPSConnectionPoo… |
 | 2026-10-09 12:28 UTC (07:28 CDT) | 2026-10-10 00:00 UTC (2026-10-09 19:00 CDT) | unavailable | unavailable | unavailable | unavailable | ✓ 1205.7 | ml_wind_corrected: forecast unavailable for ['MIDLAND', 'EL_PASO']: MIDLAND: fetch_live_forecast_for_valid_time: retrieval failed for corridor 'MIDLAND_EL_PASO', run 2026-10-09 00:00:00+00:00: HTTPSCo… |
 | 2026-10-08 22:47 UTC (17:47 CDT) | 2026-10-09 12:00 UTC (07:00 CDT) | unavailable | unavailable | unavailable | unavailable | ✓ 1178.6 | ml_wind_corrected: forecast unavailable for ['MIDLAND', 'EL_PASO']: MIDLAND: fetch_live_forecast_for_valid_time: retrieval failed for corridor 'MIDLAND_EL_PASO', run 2026-10-08 12:00:00+00:00: HTTPSCo… |
 | 2026-10-08 12:41 UTC (07:41 CDT) | 2026-10-09 00:00 UTC (2026-10-08 19:00 CDT) | unavailable | unavailable | unavailable | unavailable | unavailable | ml_wind_corrected: forecast unavailable for ['MIDLAND']: MIDLAND: fetch_live_forecast_for_valid_time: retrieval failed for corridor 'MIDLAND_EL_PASO', run 2026-10-08 00:00:00+00:00: HTTPSConnectionPoo… |
@@ -74,10 +77,11 @@ All five candidates per cycle (`schema_version: 2`), most recent 10 of 10 shown:
 
 > Conductor-based bundle thermal estimate (equal-current-sharing assumption across subconductors) -- NOT a verified equipment-limited circuit rating. Subconductor-per-phase counts are the Power Systems sub-team's provisional, regional assumption, not yet confirmed for any specific line segment.
 
-Bundle-level (subconductors-per-phase) ampacity, same cycles as above, most recent 10 of 10 shown:
+Bundle-level (subconductors-per-phase) ampacity, same cycles as above, most recent 11 of 11 shown:
 
 | Decision time | Valid time | ml_wind_corrected | ml_cooling_corrected | raw_forecast | persistence_24h | reference_ml_refit_24h | Notes |
 |---|---|---|---|---|---|---|---|
+| 2026-10-09 22:10 UTC (17:10 CDT) | 2026-10-10 12:00 UTC (07:00 CDT) | unavailable | unavailable | unavailable | unavailable | unavailable | ml_wind_corrected: forecast unavailable for ['MIDLAND']: MIDLAND: fetch_live_forecast_for_valid_time: retrieval failed for corridor 'MIDLAND_EL_PASO', run 2026-10-09 12:00:00+00:00: HTTPSConnectionPoo… |
 | 2026-10-09 12:28 UTC (07:28 CDT) | 2026-10-10 00:00 UTC (2026-10-09 19:00 CDT) | unavailable | unavailable | unavailable | unavailable | unavailable | ml_wind_corrected: forecast unavailable for ['MIDLAND', 'EL_PASO']: MIDLAND: fetch_live_forecast_for_valid_time: retrieval failed for corridor 'MIDLAND_EL_PASO', run 2026-10-09 00:00:00+00:00: HTTPSCo… |
 | 2026-10-08 22:47 UTC (17:47 CDT) | 2026-10-09 12:00 UTC (07:00 CDT) | unavailable | unavailable | unavailable | unavailable | unavailable | ml_wind_corrected: forecast unavailable for ['MIDLAND', 'EL_PASO']: MIDLAND: fetch_live_forecast_for_valid_time: retrieval failed for corridor 'MIDLAND_EL_PASO', run 2026-10-08 12:00:00+00:00: HTTPSCo… |
 | 2026-10-08 12:41 UTC (07:41 CDT) | 2026-10-09 00:00 UTC (2026-10-08 19:00 CDT) | unavailable | unavailable | unavailable | unavailable | unavailable | ml_wind_corrected: forecast unavailable for ['MIDLAND']: MIDLAND: fetch_live_forecast_for_valid_time: retrieval failed for corridor 'MIDLAND_EL_PASO', run 2026-10-08 00:00:00+00:00: HTTPSConnectionPoo… |
