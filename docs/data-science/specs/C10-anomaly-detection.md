@@ -3,7 +3,7 @@
 **Phase:** 4 (Predictive) · **Effort:** L · **Status:** Implemented. Shipped in **v1.3 Phase 2**
 of the independent `ml-modeling` workstream (ANOM-01, ANOM-02). The System Design Report's claim
 that a model was "currently being trained and tuned" (§3.2, "Data Integrity") was **inaccurate at
-the time it was written** — `PRD.md` §9 Documentation Discrepancies records that discrepancy, and
+the time it was written** — `PRD.md` §10 Documentation Discrepancies records that discrepancy, and
 correcting this section's status now does not erase that earlier claim was wrong when made.
 
 ## Responsibility

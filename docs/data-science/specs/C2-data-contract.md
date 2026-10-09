@@ -10,18 +10,18 @@
 
 - `backend/dlr_pipeline.py::validate_pipeline_output(df, max_examples=10) -> int` — new helper, called automatically as the last step of `run_pipeline` before it returns. Validates every row via `validate_pipeline_row(row, strict=False)`, never mutates or filters `df`, and logs a summary (`INFO` if clean, `WARNING` with a deduped top-N violation breakdown otherwise). Returns the count of rows with at least one violation.
 
-- `PIPELINE_SCHEMA: Dict[str, Dict]` (`backend/units_def.py:324`) — the canonical schema. Per column: `unit`, `range` (lo, hi), `required`. Currently defines: `air_temp` (degC), `wind_speed` (m/s), `wind_direction` (deg), `wind_perp_ms` (m/s), `solar_radiation` (W/m²), `relative_humidity` (%), `dlr_amps` (A), `dlr_capacity_mw` (MW), `static_capacity_mw` (MW), `ercot_west_load_mw` (MW).
+- `PIPELINE_SCHEMA: Dict[str, Dict]` (`backend/units_def.py:347`) — the canonical schema. Per column: `unit`, `range` (lo, hi), `required`. Currently defines: `air_temp` (degC), `wind_speed` (m/s), `wind_direction` (deg), `wind_perp_ms` (m/s), `solar_radiation` (W/m²), `relative_humidity` (%), `dlr_amps` (A), `dlr_capacity_mw` (MW), `static_capacity_mw` (MW), `ercot_west_load_mw` (MW), plus the forecast and provenance columns added later: `forecast_horizon_min`, `forecast_amps`, `forecast_ci_lower_amps`, `forecast_ci_upper_amps`, `anomaly_score`, `wind_source`, `temp_source`, `humidity_source`, `solar_source`.
 - `Q(value, unit, label="")` — dataclass wrapping a value with a unit; validates against `UNIT_DIMENSIONS` at construction.
 - `Q.to(target_unit, **kwargs) -> Q` — same-dimension conversion via a canonical base unit; current↔power cross-dimension conversion requires `voltage_kv` kwarg (`P = sqrt(3) * V * I * pf`).
 - `Q.assert_unit`, `Q.assert_dimension`, `Q.assert_range` — chainable assertions, raise `UnitError`.
-- `validate_pipeline_row(row: dict, strict: bool = True) -> list[str]` (`backend/units_def.py:378`) — validates a plain dict against `PIPELINE_SCHEMA`. Strict mode raises on first failure; non-strict collects and returns all violations.
+- `validate_pipeline_row(row: dict, strict: bool = True) -> list[str]` (`backend/units_def.py:454`) — validates a plain dict against `PIPELINE_SCHEMA`. Strict mode raises on first failure; non-strict collects and returns all violations.
 - `@check_units(**expected_units)` — decorator enforcing `Q`-typed, specific-unit function arguments.
 
-**Nothing in `backend/dlr_pipeline.py`, `backend/DLRSafetyMonitor.py`, or `backend/ercot_dlr_merger.py` imports or calls any of this.** All inter-module data currently moves as plain floats/DataFrame columns with no enforcement.
+`backend/dlr_pipeline.py` imports and calls `validate_pipeline_row` (via `validate_pipeline_output`). Outside that one output boundary, inter-module data (e.g. `DLRSafetyMonitor.py`, `ercot_dlr_merger.py`) still moves as plain floats/DataFrame columns with no enforcement.
 
 ## Interface & Data Contract
 
-`PIPELINE_SCHEMA` (`backend/units_def.py:324`) **is** the data contract. Do not restate it in any other spec or doc — reference this file. Any new column added by any component (e.g. C8's per-point ampacity, C9's forecast columns) must be added here first.
+`PIPELINE_SCHEMA` (`backend/units_def.py:347`) **is** the data contract. Do not restate it in any other spec or doc — reference this file. Any new column added by any component (e.g. C8's per-point ampacity, C9's forecast columns) must be added here first.
 
 ## Blocked by
 
@@ -45,7 +45,7 @@ C1, C3 (all Phase 1). C2 and C3 will move fastest if done together by the same p
 
 ## Acceptance Criteria
 
-- ✅ 100% detection rate on a suite of intentionally injected unit errors — `backend/tests/units_def_test.py` (`31/31 passed`, confirmed unchanged after integration).
+- ✅ 100% detection rate on a suite of intentionally injected unit errors — `backend/tests/units_def_test.py` (11 tests in that file pass as of 2026-10-08).
 - ✅ A real pipeline boundary (`backend/dlr_pipeline.py::run_pipeline`'s output row, before `export_results`) calls `validate_pipeline_row` (via the new `validate_pipeline_output` helper) and the pipeline visibly logs on a schema violation rather than exporting bad data silently. Verified with a synthetic out-of-range row (`air_temp = 200.0`): correctly caught and logged at `WARNING` level, zero false positives on clean data.
 
 ## Open Questions

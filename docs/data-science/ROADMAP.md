@@ -23,7 +23,7 @@ That fact drives the whole roadmap: **formalizing the implicit contract is the c
 | C5 | Thermal Model (IEEE 738) | 2 | M | Implemented as `backend/thermal_model.py`; validated against IEEE 738's own published worked example. A real bug (erroneous π factor, ~69% ampacity overestimate) was found and fixed in the process — see `PRD.md` §9 |
 | C6 | Grid Load Integration (ERCOT) | 2 | M | Implemented, with new test coverage for the three previously-unverified acceptance criteria |
 | C7 | Safety Monitor & Fallback | 3 | M | Implemented (G1–G6; uses C5 ampacity) |
-| C8 | Corridor Spatial Discretization | 3 | L | Not started |
+| C8 | Corridor Spatial Discretization | 3 | L | Implemented (great-circle geometry) |
 | C9 | Ampacity Forecasting | 4 | L | Not started |
 | C10 | Learned Anomaly Detection | 4 | L | Not started |
 

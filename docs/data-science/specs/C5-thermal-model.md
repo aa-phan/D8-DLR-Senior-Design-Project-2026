@@ -2,7 +2,7 @@
 
 **Phase:** 2 (Core Consolidation) · **Effort:** M · **Status:** Implemented as an independently importable module (`backend/thermal_model.py`) and validated against IEEE 738's own published worked example. **A real correctness bug was found and fixed during that validation — see below.** Not merely "correct in structure" as previously believed; it was actually wrong until this pass.
 
-**Responsibility:** Compute steady-state IEEE 738 conductor ampacity from weather inputs and conductor properties. This is the physics core every other component (C7, C8, C9) should call rather than reimplement — the current biggest structural problem in the repo is that `backend/DLRSafetyMonitor.py` reimplements a *different, wrong* version of this instead of calling it.
+**Responsibility:** Compute steady-state IEEE 738 conductor ampacity from weather inputs and conductor properties. This is the physics core every other component (C7, C8, C9) should call rather than reimplement — `backend/DLRSafetyMonitor.py` (C7) now calls `thermal_model.ieee738_ampacity` rather than reimplementing it.
 
 ## Current Implementation
 
@@ -62,13 +62,13 @@ C4, C6 (all Phase 2) — the extraction work here touches only `backend/dlr_pipe
 
 - ~~Entangled with ingestion...~~ **Fixed** — `thermal_model.py` is now a standalone module with zero ingestion dependencies.
 - ~~No reference/regression test exists...~~ **Fixed, and it caught a real bug** — see "Critical Bug Fixed" above and `backend/tests/thermal_model_test.py`.
-- `backend/DLRSafetyMonitor.py` (C7) still has its own separate, wrong placeholder ampacity formula and was NOT touched this pass — it still does not call `thermal_model.ieee738_ampacity`. C7 unification remains Phase 3 scope. This means the safety monitor's plausibility gates are currently checking ratings against an even-more-wrong reference than before this pass fixed the real formula — worth prioritizing C7 sooner rather than later given this.
+- ~~`backend/DLRSafetyMonitor.py` (C7) has its own placeholder ampacity formula.~~ **Fixed** — `DLRSafetyMonitor._compute_ampacity` calls `thermal_model.ieee738_ampacity` (`DLRSafetyMonitor.py:105`).
 
 ## Acceptance Criteria
 
 - ✅ Ampacity output for a published IEEE 738 worked example falls within an agreed margin of the reference value. Per System Design Report §3.3 ("Known-value validation"). Reference: IEEE Std 738-2023 §4.6.1 (795 kcmil Drake ACSR) — expected 1025 A, this implementation now gives 1034.78 A (0.95% deviation). Tolerance (2%) is derived from a quantified resistance-model difference plus an observed residual, not guessed — full derivation in `backend/tests/thermal_model_test.py`.
 - ✅ `ieee738_ampacity` and `perpendicular_wind` are importable and callable without a `SYNOPTIC_TOKEN` set and without triggering any file I/O. Verified.
-- ❌ **Not met, and now known to be more wrong than before**: `DLRSafetyMonitor` (C7) and `thermal_model` (this component) do NOT return the same ampacity for the same inputs — C7 was out of scope this pass. Since this pass fixed a ~69%-overestimate bug in the real formula, C7's still-unfixed placeholder is now further from correct than it was assumed to be. Recommend prioritizing C7 in the next pass.
+- ✅ `DLRSafetyMonitor` (C7) and `thermal_model` return the same ampacity for the same inputs, because C7 delegates to `thermal_model.ieee738_ampacity`.
 
 ## Open Questions
 

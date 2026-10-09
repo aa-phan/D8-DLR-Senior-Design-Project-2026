@@ -7,7 +7,7 @@
 ## Current Implementation
 
 - `backend/dlr_pipeline.py::export_results(df, output_path, file_prefix)` — writes one CSV per station to `outputs/station_data/`, columns: `stid, datetime_utc, air_temp, wind_speed, wind_direction, wind_perp_ms, solar_radiation, relative_humidity, dlr_amps, dlr_headroom_pct, dlr_uplift_flag`.
-- `backend/dlr_pipeline.py::plot_dlr_summary(df, static_rating, output_dir, file_prefix)` — one 4-panel PNG per station to `outputs/station_plots/`: DLR vs. static time series, wind (total + perpendicular), ambient temp, headroom histogram.
+- `backend/dlr_pipeline.py::plot_dlr_summary(df, city=None, output_dir='.', file_prefix='dlr')` — one 4-panel PNG per station to `outputs/station_plots/`: DLR vs. static time series, wind (total + perpendicular), ambient temp, headroom histogram.
 - `backend/ercot_dlr_merger.py::plot_holistic_grid_view(merged_df, stid)` — two-panel PNG (`holistic_view_{stid}.png`): MW capacity vs. ERCOT load, and a derived "stress %" panel.
 
 ## Interface & Data Contract
