@@ -49,7 +49,7 @@ Behavior rules:
 ## Known Issues
 
 - **Status is not in any exported file** — the single biggest gap (PRD §8, G2).
-- **Fallback targets** (verified in `DLRSafetyMonitor.py`): G1–G4 and G6 → `static_rating`; G5 → `min(computed, static_rating)`. DS C7's Known Issues claims G1/G2 use `last_good_rating`, which the code does not do (stale spec — confirm with DS). The course documents say "default back to … static" without distinction (OD-6).
+- **Fallback targets** (verified in `DLRSafetyMonitor.py`): G1–G4 and G6 → `static_rating`; G5 → `min(computed, static_rating)`. (`docs/data-science/specs/C7-safety-monitor.md` now matches.) The course documents say "default back to … static" without distinction (OD-6).
 - **DS test contradiction (not confirmed):** DS C7 Known Issues says `test_gate_2_fails_when_link_status_not_ok` asserts `status == "ok"` while fallback is True. The test actually asserts `status == "fallback"`, so no such contradiction exists in the code; `_fallback()` sets `status` to `"fallback"`.
 - **False positives are nonzero in the learned detector** (DS C10: 3.77% and 0.53% on clean held-out data) — so the UI will occasionally show an anomaly on good data; wording should not overclaim a sensor fault.
 - **Learned-model artifacts are gitignored**; without them the model branch is absent and heuristics carry G6 alone (DS C10) — an "anomaly detector degraded" condition DS does not export either.
