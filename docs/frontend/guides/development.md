@@ -48,7 +48,7 @@ You do not need a Synoptic token or an NREL key to start frontend or API work. T
 | `data/` | Checked-in reference inputs and fixtures. Generated subfolders are git-ignored; see [configuration.md](configuration.md). |
 | `outputs/` | Generated pipeline output. Git-ignored as a whole, so it is absent from a fresh clone. |
 | `docs/data-science/` | DS requirements, roadmap, specs, schema, and decision records. The model for your docs. |
-| `docs/frontend/` | Your docs: `README.md` (convention), `specs/` (per-component specs, currently empty), `guides/` (these how-to guides). `PRD.md` and `ROADMAP.md` are not yet written. |
+| `docs/frontend/` | Your docs: `README.md` (convention), `PRD.md`, `ROADMAP.md`, `specs/` (F1–F8 component specs and `api-contract.md`), `guides/` (these how-to guides). |
 
 Other conventions worth following:
 
@@ -172,9 +172,9 @@ Specs are how the DS team made work splittable without idle time, and `docs/fron
 
 The planned structure for `docs/frontend/`, per its `README.md`:
 
-- `PRD.md` for requirements. Not yet written.
-- `ROADMAP.md` for phased order and the dependency graph. Not yet written.
-- `specs/` with one file per component. Currently empty.
+- `PRD.md` for requirements.
+- `ROADMAP.md` for phased order and the dependency graph.
+- `specs/` with one file per component (F1–F8, plus `api-contract.md`).
 
 `docs/frontend/README.md` says not to invent requirements ahead of time. Write the PRD first, then the roadmap, then the specs it implies. The DS PRD's section outline (purpose and scope, users and consumers, functional and non-functional requirements, open decisions) is a good model. Starting points for what the dashboard should do are `docs/Project Definition.md` and WBS 4.1 and 4.2 in `docs/System Design Report.md`.
 

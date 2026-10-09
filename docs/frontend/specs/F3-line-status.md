@@ -52,7 +52,7 @@ Upstream-data concerns the view must tolerate (PRD §9):
 - **The static rating is not exported**, only headroom against it. In committed outputs and the fixture it equals 900 A (`DEFAULT_STATIC_RATING`), not the per-city values in `backend/config.py::STATIC_RATINGS`.
 - **`solar_radiation` is a constant 1000.0** in five of six committed station files; showing it as a measured value could mislead. Whether it is a fill value is a question for DS.
 - **Headroom of 200%+** and **DLR below static** both occur in committed outputs; neither fits the "30–50%" framing in the course documents. Display faithfully and report to DS.
-- **Fallback rating basis** (OD-6) means "static rating in effect" can't be asserted for G1/G2 fallbacks, which use `last_good_rating`.
+- **Fallback rating basis** (OD-6) means "static rating in effect" shouldn't be asserted blindly: G5 reports `min(computed, static_rating)`, and DS must export which basis applied.
 
 ## Acceptance Criteria
 

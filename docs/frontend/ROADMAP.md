@@ -124,7 +124,7 @@ Read alongside each component's **Parallel-safe with** field in its spec.
 | F1 routes before OD-1 | Route shape depends on what a location is |
 | F3–F7 before F1 + F2 | No data layer or shell to build on; panels would each invent their own parsing and layout |
 | F5, F6 production code before DS agrees the columns | Would hard-code guessed field names (PRD §8) |
-| F6's "rating basis" wording before OD-6 | The UI must not claim "static rating in effect" when DS's gate fell back to `last_good_rating` |
+| F6's "rating basis" wording before OD-6 | The UI must not claim "static rating in effect" when DS's gate fell back to a different basis (G5 reports `min(computed, static)`) |
 | F7 before OD-9 | Nothing to integrate against |
 | F8 before F1–F6 | Needs every view to exist; its PSS/E leg additionally waits on F7 |
 

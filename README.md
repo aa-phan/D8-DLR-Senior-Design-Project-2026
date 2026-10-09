@@ -59,7 +59,7 @@ export NREL_API_EMAIL=your_registered_email@example.com
 
 ```bash
 python backend/station_explorer.py
-# → writes data/wtm_stations_austin.csv with nearest-corridor ranking
+# → writes data/tx_stations_unrestricted.csv
 ```
 
 ### 5 — Run the DLR pipeline
@@ -138,7 +138,7 @@ Solve for I:
 |---|---|
 | `outputs/station_data/*.csv` | Per-timestamp DLR, headroom %, uplift flag for each station |
 | `outputs/station_plots/*.png` | 4-panel summary: DLR vs static, wind, temp, headroom histogram |
-| `data/wtm_stations_austin.csv` | Station metadata ranked by corridor proximity |
+| `data/tx_stations_unrestricted.csv` | Station metadata written by `station_explorer.py` (`data/wtm_stations_austin.csv` is the checked-in default source) |
 
 ---
 

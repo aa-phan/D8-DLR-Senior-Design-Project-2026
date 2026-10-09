@@ -78,7 +78,7 @@ All paths below are relative to the process working directory, so run backend sc
 
 | Path | Tracked in git | Written by | Purpose |
 |------|----------------|-----------|---------|
-| `data/wtm_stations.csv`, `data/wtm_stations_austin.csv` | Yes | `backend/station_explorer.py` | Weather station lists with nearest-corridor ranking. `data/wtm_stations_austin.csv` is `config.DEFAULT_STATION_SOURCE`. |
+| `data/wtm_stations.csv`, `data/wtm_stations_austin.csv` | Yes | checked in (read, not written, by `backend/station_explorer.py`, which writes `data/tx_stations_unrestricted.csv`) | Weather station lists. `data/wtm_stations_austin.csv` is `config.DEFAULT_STATION_SOURCE`. |
 | `data/fixtures/sample_pipeline_output.csv` | Yes | n/a | Sample pipeline output, usable as frontend mock data. |
 | `data/shadow/predictions/<corridor>.jsonl` | No (git-ignored) | `backend/forecast_shadow_pipeline.py`, `backend/forecast_shadow_collect.py` | Append-only shadow prediction log, one JSON line per cycle, one file per corridor (`AUSTIN_CORPUS_CHRISTI`, `MIDLAND_EL_PASO`). |
 | `data/shadow/models/*.joblib` | Yes (deliberately not ignored) | `backend/forecast_shadow_pipeline.py` (model persistence at `SHADOW_MODEL_DIR`) | Trained shadow-model artifacts. They are committed so the GitHub Actions runner can load them. |

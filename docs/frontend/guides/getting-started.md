@@ -38,7 +38,7 @@ You do not need any token to start building. The checked-in fixture (see [Start 
    python -m pip install -r requirements.txt
    ```
 
-`requirements.txt` is the source of truth for dependencies (pandas, numpy, scipy, pytest, beautifulsoup4, scikit-learn, python-dotenv, requests, matplotlib). The `pip install requests pandas numpy scipy matplotlib rich` line in the root `README.md` Setup section is older, and `requirements.txt` says it supersedes that line.
+`requirements.txt` is the source of truth for dependencies (pandas, numpy, scipy, pytest, beautifulsoup4, scikit-learn, python-dotenv, requests, matplotlib). The older `pip install requests pandas numpy scipy matplotlib rich` line (still in the `backend/dlr_pipeline.py` docstring) is superseded by `requirements.txt`.
 
 Run every backend command from the repo root. Paths such as `data/` and `outputs/` are relative to the working directory.
 

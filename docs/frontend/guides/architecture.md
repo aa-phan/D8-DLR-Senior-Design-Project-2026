@@ -124,7 +124,7 @@ data/       Checked-in reference inputs: station metadata, shadow models
             (historical/, models/, experiment/, shadow/predictions/) are gitignored.
 outputs/    Generated pipeline output (gitignored). Not available in a fresh clone.
 docs/       data-science/ (PRD, roadmap, specs, schema, decisions) and
-            frontend/ (this guide set; PRD, roadmap, and specs are not yet written).
+            frontend/ (see `docs/frontend/PRD.md`, `ROADMAP.md`, and `specs/`).
 .github/    workflows/shadow_collect.yml, the only CI workflow.
 ```
 

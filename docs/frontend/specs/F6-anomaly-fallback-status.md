@@ -9,7 +9,7 @@
 
 None. DS's producers exist but only in memory, not in any exported file:
 
-- `backend/DLRSafetyMonitor.py::DLRSafetyMonitor.run_check(raw_data)` (DS C7) returns `{"status", "rating", "fallback", "alerts"}`. Gates G1 (sensor availability), G2 (communication link), G3 (range), G4 (ampacity plausibility) cause a fallback; G5 (delta check) appends an alert without a fallback; G6 is the learned anomaly check (`backend/anomaly_detector.py::AnomalyDetector.check(raw_data, rating) -> (is_anomalous, reason)`, DS C10).
+- `backend/DLRSafetyMonitor.py::DLRSafetyMonitor.run_check(raw_data)` (DS C7) returns `{"status", "rating", "fallback", "alerts"}`. Gates G1 (sensor availability), G2 (communication link), G3 (range), G4 (ampacity plausibility) and G5 (delta check) all cause a fallback (G5 reports `min(computed, static_rating)`); G6 is the learned anomaly check (`backend/anomaly_detector.py::AnomalyDetector.check(raw_data, rating) -> (is_anomalous, reason)`, DS C10).
 - `anomaly_score` (unit `pu`, range 0–1000) is defined in `PIPELINE_SCHEMA` v2 but is not in the v1 export.
 - `PIPELINE_SCHEMA` v3's `wind_source`, `temp_source`, `humidity_source`, `solar_source` record per-field provider provenance, including `synoptic` as automatic fallback; also not in the v1 export.
 
@@ -21,7 +21,7 @@ Inputs the view needs — **none are in the v1 export today** (PRD §8, G2, G7):
 |---|---|---|
 | Fallback active? | a boolean per row (analogue of `fallback`) | In-memory only |
 | Reason | which gate/branch tripped and a human-readable message (analogue of `alerts`, `reason`) | In-memory only |
-| Rating basis in effect | `static_rating` vs. `last_good_rating` (OD-6) | In-memory only, and differs by gate |
+| Rating basis in effect | `static_rating` vs. `min(computed, static_rating)` for G5 (OD-6) | In-memory only |
 | Anomaly score | `anomaly_score` | In `PIPELINE_SCHEMA` v2, not exported |
 | Data provenance (optional) | `*_source` | In `PIPELINE_SCHEMA` v3, not exported |
 
@@ -29,7 +29,7 @@ Behavior rules:
 
 - **Status is never hidden.** Fallback and anomaly states appear in a persistent location in the shell (F2's status-banner slot), visible regardless of which panel is focused, and F3's headline limit reflects the basis (SW-NF1).
 - **Three states are distinct, not one:** *normal*, *warning (alert without fallback, e.g. G5 delta)*, and *fallback active*; plus *data unavailable/stale* (F1) which is a UI-detected condition rather than a DS-detected one. Wording and color convention is the one defined in F2 and shared with F3.
-- **State the basis honestly.** If DS's gate fell back to `last_good_rating` (G1/G2) the UI must not say "static rating in effect"; wording depends on OD-6 and what DS exports.
+- **State the basis honestly.** For G5 the reported rating is `min(computed, static_rating)`, so the UI must not always say "static rating in effect"; wording depends on OD-6 and what DS exports.
 - **Reason and time:** show when the status began and the DS-provided reason so the operator can start sensor troubleshooting.
 - **Alert history** (a list of recent events) is useful but not stated in the source documents; treat as optional until the team decides (Open Questions).
 - The UI never infers fallback from a drop in `dlr_amps`, and never *suppresses* a DS fallback. It displays what DS exports (SW-NF4).
@@ -49,8 +49,8 @@ Behavior rules:
 ## Known Issues
 
 - **Status is not in any exported file** — the single biggest gap (PRD §8, G2).
-- **Fallback targets differ by gate** (DS C7 Known Issues): G1/G2 → `last_good_rating`; G3/G4 → `static_rating`. Marked by DS as possibly intentional but unconfirmed. The course documents say "default back to … static" without distinction (OD-6).
-- **DS test contradiction:** `backend/tests/SafetyMonitor_TestSuite.py::test_gate_2_fails_when_link_status_not_ok` asserts `status == "ok"` while `fallback is True`; `_fallback()` always sets `status` to `"fallback"` (DS C7 Known Issues). Which representation DS exports for "fallback" is therefore unsettled — do not assume `status == "ok"` means no fallback.
+- **Fallback targets** (verified in `DLRSafetyMonitor.py`): G1–G4 and G6 → `static_rating`; G5 → `min(computed, static_rating)`. DS C7's Known Issues claims G1/G2 use `last_good_rating`, which the code does not do (stale spec — confirm with DS). The course documents say "default back to … static" without distinction (OD-6).
+- **DS test contradiction (not confirmed):** DS C7 Known Issues says `test_gate_2_fails_when_link_status_not_ok` asserts `status == "ok"` while fallback is True. The test actually asserts `status == "fallback"`, so no such contradiction exists in the code; `_fallback()` sets `status` to `"fallback"`.
 - **False positives are nonzero in the learned detector** (DS C10: 3.77% and 0.53% on clean held-out data) — so the UI will occasionally show an anomaly on good data; wording should not overclaim a sensor fault.
 - **Learned-model artifacts are gitignored**; without them the model branch is absent and heuristics carry G6 alone (DS C10) — an "anomaly detector degraded" condition DS does not export either.
 - **Shadow stream** (`data/shadow/predictions/*.jsonl`) carries `fallback_used` / `fallback_reason` for forecasts — a different meaning from C7's gate fallback (OD-12).
