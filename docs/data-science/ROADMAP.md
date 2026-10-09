@@ -24,8 +24,8 @@ That fact drives the whole roadmap: **formalizing the implicit contract is the c
 | C6 | Grid Load Integration (ERCOT) | 2 | M | Implemented, with new test coverage for the three previously-unverified acceptance criteria |
 | C7 | Safety Monitor & Fallback | 3 | M | Implemented (G1–G6; uses C5 ampacity) |
 | C8 | Corridor Spatial Discretization | 3 | L | Implemented (great-circle geometry) |
-| C9 | Ampacity Forecasting | 4 | L | Not started |
-| C10 | Learned Anomaly Detection | 4 | L | Not started |
+| C9 | Ampacity Forecasting | 4 | L | Implemented (naive, ewm, ml) |
+| C10 | Learned Anomaly Detection | 4 | L | Implemented (G6, optional) |
 
 Full detail per component: `specs/C1-configuration.md` through `specs/C10-anomaly-detection.md`.
 
@@ -77,7 +77,7 @@ Three genuinely independent tracks — **can run fully in parallel** once Phase 
 
 Highest complexity and most dependent on everything before them — deliberately last.
 
-- **C9** needs both weather ingestion (C4) and the thermal model (C5) to generate training features, plus accumulated historical data (see Finding 5).
+- **C9** needs both weather ingestion (C4) and the thermal model (C5) to generate training features, plus accumulated historical data (see §5 Blocker Analysis).
 - **C10** builds on C7's gating framework, replacing/augmenting its deterministic thresholds with a trained model.
 
 ## 5. Blocker Analysis

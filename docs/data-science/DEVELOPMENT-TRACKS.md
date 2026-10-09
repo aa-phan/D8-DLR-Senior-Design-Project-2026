@@ -55,11 +55,14 @@ and should hand a clean integration point to whichever model Track 2 produces.
 today's code satisfies the naming and the test contracts but is not ML.
 
 **Current state:**
-- `ampacity_forecast.py` ("Ampacity Forecasting") implements exactly two methods:
-  `"naive"` (last observed value) and `"ewm"` (exponentially-weighted moving average). No
-  regression or neural-network model exists.
-- `anomaly_detector.py` ("Learned Anomaly Detection") is a rolling `mean ± k·std` threshold
-  check plus a forecast-residual check. No trained model exists.
+- **Update (2026-10-08):** the state below predates the `ml-modeling` workstream. `ampacity_forecast.py`
+  now has three methods (`FORECAST_METHODS = ("naive", "ewm", "ml")`), and C10 is marked Implemented;
+  see `specs/C9-ampacity-forecasting.md`, `specs/C10-anomaly-detection.md` and
+  `workstreams/ml-modeling/`. The remaining bullets in this section describe the earlier state.
+- `ampacity_forecast.py` ("Ampacity Forecasting") originally implemented two methods:
+  `"naive"` (last observed value) and `"ewm"` (exponentially-weighted moving average).
+- `anomaly_detector.py` ("Learned Anomaly Detection") originally was a rolling `mean ± k·std` threshold
+  check plus a forecast-residual check.
 - Both are tested exclusively against deterministically-generated synthetic fixtures
   (`_synthetic_history`, seeded). Whether either is well-calibrated against real data is
   unknown — this has never been checked.
@@ -67,7 +70,7 @@ today's code satisfies the naming and the test contracts but is not ML.
 **Scope:**
 - Design and train an actual forecasting model (regression or neural network, per the PRD's
   own §8 language and the IEEE Trans. Smart Grid prior art already cited in
-  `Prior Art Report.md`) to replace/extend the naive/EWM methods behind the same
+  `docs/Prior Art Report.md`) to replace/extend the naive/EWM methods behind the same
   `forecast_ampacity` signature.
 - Design and train an actual anomaly-detection model on historical per-variable baselines
   (wind, temp, solar, load) to replace/extend the `mean ± k·std` gate, behind the same

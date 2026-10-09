@@ -1,6 +1,6 @@
 # Geographic / Corridor Scope Decision Log
 
-**Status:** Open — recommendation drafted below, awaiting team ratification. Answers the geographic/corridor scope conflict flagged in `.planning/PROJECT.md` Key Decisions, `.planning/INGEST-CONFLICTS.md`, and `PRD.md` §10 Documentation Discrepancies (row 5).
+**Status:** Resolved in code (2026-10-08) — `backend/config.py::STATIC_RATINGS` is keyed to the four Project Definition cities (Austin, Corpus Christi, Midland, El Paso), `config.CORRIDOR_ENDPOINTS` defines `AUSTIN_CORPUS_CHRISTI` and `MIDLAND_EL_PASO`, and per-city lookup is wired. The sections below are the original working log and describe the state when it was written; the recommendation was adopted. Answers the geographic/corridor scope conflict flagged in `.planning/PROJECT.md` Key Decisions, `.planning/INGEST-CONFLICTS.md`, and `PRD.md` §10 Documentation Discrepancies (row 5).
 
 **Purpose:** Same working-log format as `data_provider.md` — lay out the evidence for each of the three conflicting location sets found in this repo, then propose one authoritative scope for the team to confirm or override. Unlike `data_provider.md`, this one has a strong enough evidentiary trail to recommend an answer rather than leave it fully open — but the recommendation is a proposal, not a unilateral decision; the team should ratify or override it before it's treated as settled in `PROJECT.md`.
 

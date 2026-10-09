@@ -173,7 +173,7 @@ This means the likely outcome of this vetting pass is **per-variable sourcing** 
 
 **Evidence checked:** **Confirmed live** via a direct API call this pass (see above) — the strongest evidence tier of any candidate in this document.
 
-**Decision rationale:** Not real sensor data — it's model/reanalysis output, which is a real accuracy caveat worth stating explicitly in the research paper if used, especially since it competes with TCEQ/ASOS's real-station wind. But as a bulk historical-training-data source for C9/C10 (ROADMAP Finding 5's "start accumulating now" problem), this is the strongest option: zero setup, all four cities, all five needed variables, confirmed live, decades of depth.
+**Decision rationale:** Not real sensor data — it's model/reanalysis output, which is a real accuracy caveat worth stating explicitly in the research paper if used, especially since it competes with TCEQ/ASOS's real-station wind. But as a bulk historical-training-data source for C9/C10 (ROADMAP §5 (Blocker Analysis)'s "start accumulating now" problem), this is the strongest option: zero setup, all four cities, all five needed variables, confirmed live, decades of depth.
 
 ---
 
@@ -216,7 +216,7 @@ Based on the vetting above, the adopted path is **per-variable sourcing**, not a
 
 - **Wind (speed + direction) and temperature:** TCEQ CAMS as primary (best spatial density + longest history of any real-station network for these four cities), with ASOS 1-minute as a higher-temporal-density supplement where sub-hourly wind matters (e.g. C9 feature engineering).
 - **Solar irradiance:** NSRDB PSM v4 as primary (purpose-built, complete, 5-minute option) — this is also the piece that makes the System Design Report's existing NOAA+NSRDB claim (`PRD.md` §10) substantially correct for its solar half.
-- **Bulk historical backfill for C9/C10 training volume:** Open-Meteo, given it's the only candidate confirmed live to return the complete variable set from a single, zero-auth request — the fastest way to accumulate the historical corpus ROADMAP Finding 5 flagged as missing, without waiting on NSRDB API-key provisioning or a TCEQ scraper being built.
+- **Bulk historical backfill for C9/C10 training volume:** Open-Meteo, given it's the only candidate confirmed live to return the complete variable set from a single, zero-auth request — the fastest way to accumulate the historical corpus ROADMAP §5 (Blocker Analysis) flagged as missing, without waiting on NSRDB API-key provisioning or a TCEQ scraper being built.
 - **Automatic fallback, added Phase 10 (WX-06):** Synoptic is retained as the automatic fallback for a failing or empty TCEQ or NSRDB result, across all four cities and both the station and grid adapter paths, via `config.SYNOPTIC_FALLBACK_STATIONS`. The fallback deliberately excludes `open_meteo` (a standalone historical-backfill source Synoptic cannot serve — substituting it would be a silent downgrade, not a rescue) and never fires for a caller-shaped error or for an `EnvironmentError` (a misconfigured machine stays visible rather than being quietly served from the fallback). When Synoptic also fails, the adapter raises an error naming both providers rather than fabricating a row.
 
 **A real design consequence this surfaced:** `backend/weather_provider.py::fetch_weather(stids, start, end, provider)` was station-ID-based. NSRDB and Open-Meteo are lat/lon-based. Combining a station-based primary (TCEQ/ASOS) with a grid-based supplement (NSRDB/Open-Meteo) needed either a station→lat/lon mapping layer or a signature change to `fetch_weather` — Phase 6 made the deliberate signature change (type-dispatched `location`: a `list[str]` selects the station path, a `(lat, lon)` tuple selects the grid path), rather than building a separate station-to-lat/lon mapping layer. That alternative mapping-layer approach is tracked as v2 requirement WX-10, not pursued here.
@@ -228,5 +228,5 @@ Based on the vetting above, the adopted path is **per-variable sourcing**, not a
 ## References
 
 - `PRD.md` §7.1 — Open Decisions: Weather data provider
-- `ROADMAP.md` Finding 3 — the weather-provider decision must not gate C8
+- `ROADMAP.md` §5 Blocker Analysis — the weather-provider decision must not gate C8
 - `specs/C4-weather-ingestion.md` — current implementation and live-verification findings (account-tier failure, missing solar on working stations)

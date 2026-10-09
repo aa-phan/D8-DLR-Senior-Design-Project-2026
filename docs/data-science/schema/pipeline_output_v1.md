@@ -45,8 +45,8 @@ document to `pipeline_output_v2.md`.
   are intentionally excluded from `PIPELINE_SCHEMA` — there's no numeric unit
   or range to check them against.
 - `dlr_headroom_pct` and `dlr_uplift_flag` are derived, not measured, and
-  depend on whichever `static_rating` was passed into `run_pipeline` (default
-  900.0 A). They're excluded from `PIPELINE_SCHEMA` for that reason: a fixed
+  depend on the static rating `run_pipeline` looks up for its `city` argument
+  (`config.STATIC_RATINGS.get(city, DEFAULT_STATIC_RATING)`; fallback 900.0 A). They're excluded from `PIPELINE_SCHEMA` for that reason: a fixed
   valid range wouldn't be meaningful across different static-rating configs.
 - A sample fixture matching this exact schema (one station, 10 rows at
   5-minute cadence, all schema-validated columns passing
