@@ -30,7 +30,7 @@ backend/dlr_pipeline.py
 ### 1 — Install dependencies
 
 ```bash
-pip install requests pandas numpy scipy matplotlib rich
+pip install -r requirements.txt
 ```
 
 ### 2 — Get a Synoptic API token
@@ -87,7 +87,7 @@ frontend/   UI dashboard — not started, see frontend/README.md
 api/        Backend-for-frontend layer — not started, see api/README.md
 data/       Checked-in reference inputs (station metadata)
 outputs/    Generated pipeline output (gitignored)
-docs/       data-science/ (PRD, roadmap, component specs) and frontend/ (placeholder)
+docs/       data-science/ (PRD, roadmap, component specs) and frontend/ (PRD, roadmap, component specs F1–F8, developer guides)
 ```
 
 ---

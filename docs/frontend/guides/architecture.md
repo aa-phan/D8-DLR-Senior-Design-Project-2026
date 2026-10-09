@@ -76,7 +76,7 @@ This is the path closest to what the dashboard is meant to show (fallback status
 
 The forecast (`ampacity_forecast.forecast_ampacity`, then `forecast_columns`) produces `forecast_horizon_min`, `forecast_amps`, `forecast_ci_lower_amps`, and `forecast_ci_upper_amps`. `run_corridor_pipeline` uses the forecast only to build the anomaly detector. The forecast does not appear in the returned dict or in any exported file. `run_pipeline` (the station path) never calls forecasting, corridor rating, or anomaly detection. `docs/data-science/PROJECT-STATUS.md` tracks this integration as open work.
 
-### 3. Shadow forecast collector: 24-hour-ahead predictions to JSONL (built, experimental)
+### 3. Shadow forecast collector: day-ahead predictions to JSONL (built, experimental)
 
 This is the only path that runs unattended and produces a continuously growing feed. It is explicitly experimental and is never invoked by the production pipeline; see [`docs/data-science/decisions/shadow_collection_runbook.md`](../../data-science/decisions/shadow_collection_runbook.md).
 
@@ -166,7 +166,7 @@ These follow from reading the code and specs. Confirm each with the DS team befo
 
 - **No trusted-duration value.** The Project Definition and `PRD.md` list a "trusted-duration window" as a dashboard output. Nothing in `backend/` computes one.
 - **Corridor results are not exported.** Per-point status, alerts, and the bottleneck index exist only in the dict returned by `rate_corridor`. There is no file or endpoint carrying them. This is the main decision for `api/`: call Python in-process, or ask DS to add an exporter.
-- **Forecast is not in any file feed.** The four `forecast_*` columns exist in `PIPELINE_SCHEMA` but `export_results` does not write them. The shadow JSONL carries 24-hour-ahead `ampacity_amps` per candidate, which is a separate experimental forecast.
+- **Forecast is not in any file feed.** The four `forecast_*` columns exist in `PIPELINE_SCHEMA` but `export_results` does not write them. The shadow JSONL carries day-ahead (`horizon_minutes` = 1440, but actual decision-to-valid lead is about 11–17 h; see api-contract.md) `ampacity_amps` per candidate, which is a separate experimental forecast.
 - **No scheduler for the station or corridor pipelines.** Only the shadow collector runs on a schedule. A "live" dashboard on `outputs/` needs someone to run `run_pipeline` or `run_corridor_pipeline` periodically.
 - **Silently dropped stations.** A requested station that returns zero rows is absent from the output with no warning (see Known Issues in `docs/data-science/specs/C3-export-visualization.md`).
 - **Schema versioning.** The export has no `schema_version` column or versioned filename. The open question is tracked in the C3 spec.
