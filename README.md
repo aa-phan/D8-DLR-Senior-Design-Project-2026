@@ -158,3 +158,45 @@ Solve for I:
 - CIGRE TB 601: *Guide for Thermal Rating of Overhead Lines*
 - Synoptic Data API docs: https://docs.synopticdata.com/
 - WTM station info: https://www.mesonet.ttu.edu/
+
+---
+
+## For the Software Sub-Team (`frontend/` and `api/`)
+
+`frontend/` (React) and `api/` (Flask) are structural placeholders with no code yet. This section orients you to what the Data Science backend already produces and where the software-side docs live.
+
+### What the backend gives you
+
+| Artifact | Location | Notes |
+|---|---|---|
+| Per-station DLR CSVs | `outputs/station_data/{file_prefix}_{stid}.csv` | Written by `backend/dlr_pipeline.py::export_results`. Gitignored, so you must run the pipeline (see Setup above) to generate them. |
+| Output schema (v1) | `docs/data-science/schema/pipeline_output_v1.md` | Column names, units, valid ranges, and which columns are derived. Treat as the contract: any column change bumps it to `pipeline_output_v2.md`. |
+| Sample fixture | `data/fixtures/sample_pipeline_output.csv` | One station (`AP140`), 10 rows at 5-minute cadence, matching the v1 schema exactly. Checked in, so you can build against it without a Synoptic or NREL key. |
+| Station metadata | `data/wtm_stations_austin.csv`, `data/wtm_stations.csv` | Checked-in station reference data. |
+| Merged ERCOT + DLR output | `outputs/ercot_data/merged_ercot_dlr_*.csv` | Adds MW capacity and ERCOT load columns on top of the v1 CSV (produced by `backend/ercot_dlr_merger.py`, see `docs/data-science/specs/C6-grid-load-integration.md`). Not part of the v1 schema. |
+| Shadow forecast records | `data/shadow/predictions/*.jsonl` | Per-corridor forecast prediction logs from the shadow-mode forecast pipeline (`backend/forecast_shadow_pipeline.py`). Check the Data Science docs before depending on their shape. |
+
+### Suggested way to start
+
+1. Build against `data/fixtures/sample_pipeline_output.csv` first. Its column set is exactly what the pipeline exports, so no backend run is needed.
+2. Read `docs/data-science/schema/pipeline_output_v1.md` for the meaning, units, and ranges of each of the 11 columns. In particular, `dlr_headroom_pct` and `dlr_uplift_flag` depend on the static rating the pipeline was run with (`backend/config.py`).
+3. Decide with the team whether `api/` is a thin file-serving layer or a live-polling service (an open question noted in `api/README.md`), then document it in the PRD below before writing code.
+4. Swap the fixture for real `outputs/station_data/*.csv` files once you have API keys and have run the pipeline.
+
+Timestamps in the CSVs are UTC ISO-8601 strings (`datetime_utc`); convert to local time in the UI layer.
+
+### Software-side documentation
+
+- `docs/frontend/README.md` — documentation convention for the Software sub-team (PRD, roadmap, specs)
+- `docs/frontend/PRD.md` — frontend and API requirements
+- `docs/frontend/ROADMAP.md` — phased implementation order and dependencies
+- `docs/frontend/specs/` — per-component specs
+- `docs/frontend/guides/` — how-to guides (see the individual `*.md` files)
+- `frontend/README.md` and `api/README.md` — code-side status of each subsystem
+
+### Related project documents
+
+- `docs/Project Definition.md` — what the dashboard is meant to accomplish
+- `docs/System Design Report.md` — system design and Bill of Materials (Appendix E lists React and Flask)
+- `docs/data-science/PRD.md` and `docs/data-science/ROADMAP.md` — the backend's requirements and plan
+- `docs/data-science/specs/` — component specs (C1 to C10) for each backend module, including `C3-export-visualization.md` for the export this layer reads
