@@ -25,6 +25,7 @@ def run_corridor_pipeline(
     archive_path: str = None,
     forecast_method: str = "naive",
     archive: bool = True,
+    fetch_weather=None,
 ) -> dict:
     """
     Full Track 1 integration for one corridor, one run:
@@ -82,6 +83,7 @@ def run_corridor_pipeline(
         archive=archive,
         archive_path=archive_path,
         provider=provider,
+        fetch_weather=fetch_weather,
     )
 
     result["pipeline"] = {
