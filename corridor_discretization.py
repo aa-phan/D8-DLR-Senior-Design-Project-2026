@@ -285,6 +285,41 @@ _OBSERVATION_FIELD_MAP = {
 }
 
 
+def _read_wind_direction(row):
+    """
+    The row's meteorological wind direction (degrees, direction the wind
+    comes FROM) as a float, or `None` when the column is absent or null.
+    A reading with no direction cannot be projected onto the line, so
+    callers treat `None` as an unusable observation.
+    """
+    if "wind_direction" not in row.index:
+        return None
+    value = row["wind_direction"]
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return None
+    return float(value)
+
+
+def _project_wind(observation: dict, bearing_deg: float) -> dict:
+    """
+    Return a copy of `observation` whose `wind` is the component of the
+    measured wind perpendicular to the corridor (via
+    `thermal_model.perpendicular_wind`, with the corridor's own bearing) --
+    the quantity `ieee738_ampacity` expects as `wind_perp_ms`. The measured
+    speed is kept as `wind_raw`. Because `wind` is replaced, the archived
+    `wind_speed` and the detector's `raw_data["wind"]` are the projected
+    value too, as `historical_archive` documents.
+    """
+    projected = dict(observation)
+    projected["wind_raw"] = observation["wind"]
+    projected["wind"] = float(
+        thermal_model.perpendicular_wind(
+            observation["wind"], observation["wind_direction"], bearing_deg
+        )
+    )
+    return projected
+
+
 def _usable_observation(frame, stid: str) -> dict | None:
     """
     Extract the reading dict `DLRSafetyMonitor.run_check` needs for one
@@ -292,8 +327,8 @@ def _usable_observation(frame, stid: str) -> dict | None:
     `weather_provider.fetch_weather` returns).
 
     Returns `None` when the frame is empty, the station is absent, or any
-    of `air_temp`/`wind_speed`/`solar_radiation` is null for that station's
-    row(s) -- a partially-null reading is not usable, and forcing it
+    of `air_temp`/`wind_speed`/`solar_radiation`/`wind_direction` is null
+    for that station's row(s) -- a partially-null reading is not usable, and forcing it
     through the monitor as `None` would trip G1 (sensor availability)
     anyway. When usable, returns a dict with `sensor_status` and
     `link_status` both set to `"ok"` (G1/G2 pass), plus `temp`/`wind`/
@@ -322,6 +357,11 @@ def _usable_observation(frame, stid: str) -> dict | None:
             return None
         reading[target_key] = value
 
+    direction = _read_wind_direction(row)
+    if direction is None:
+        return None
+    reading["wind_direction"] = direction
+
     return reading
 
 def _usable_observation_grid(frame) -> dict | None:
@@ -343,6 +383,11 @@ def _usable_observation_grid(frame) -> dict | None:
         if value is None or (isinstance(value, float) and math.isnan(value)):
             return None
         reading[target_key] = value
+
+    direction = _read_wind_direction(row)
+    if direction is None:
+        return None
+    reading["wind_direction"] = direction
 
     return reading
 
@@ -668,6 +713,10 @@ def rate_corridor(
                 }
             )
             continue
+
+        # Project the measured wind onto this corridor's bearing before
+        # the monitor sees it (IEEE 738 uses the perpendicular component).
+        observation = _project_wind(observation, geometry.bearing_deg)
 
         monitor = DLRSafetyMonitor(
                 static_rating=geometry.static_rating,
