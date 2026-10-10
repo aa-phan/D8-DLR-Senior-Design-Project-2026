@@ -11,7 +11,7 @@ imports dlr_pipeline, and corridor_discretization imports weather_provider;
 importing the corridor stack from dlr_pipeline would be circular.
 
 CLI:
-    python dlr_orchestrator.py                      # all corridors, last hour, synoptic
+    python dlr_orchestrator.py                      # all corridors, last hour, composed providers
     python dlr_orchestrator.py --corridors MIDLAND_EL_PASO --window-hours 2
     python dlr_orchestrator.py --provider open_meteo --start 2025-07-01 --end 2025-07-02
     python dlr_orchestrator.py --forecast-method ewm --output outputs/run.json
@@ -31,10 +31,11 @@ import config
 import corridor_discretization
 import station_explorer
 from corridor_pipeline import run_corridor_pipeline
+import observation_composer
 
 log = logging.getLogger(__name__)
 
-PROVIDERS = ("synoptic", "open_meteo", "nsrdb")
+PROVIDERS = ("composed", "synoptic", "open_meteo", "nsrdb")
 _TS_FMT = "%Y-%m-%dT%H:%M:%SZ"
 
 
@@ -54,7 +55,7 @@ def _default_window(window_hours: float, end: str = None, start: str = None):
 
 def _discover_stations(provider: str, token: str = None) -> pd.DataFrame:
     """Station metadata for the station path; grid providers need none."""
-    if provider != "synoptic":
+    if provider not in ("synoptic", "composed"):
         return pd.DataFrame(columns=["stid", "name", "lat", "lon"])
     token = token or os.getenv("SYNOPTIC_TOKEN", "")
     if not token:
@@ -90,12 +91,13 @@ def run_dlr_pipeline(
     start: str = None,
     end: str = None,
     window_hours: float = 1.0,
-    provider: str = "synoptic",
+    provider: str = "composed",
     forecast_method: str = "naive",
     archive: bool = True,
     archive_path: str = None,
     stations: pd.DataFrame = None,
     token: str = None,
+    fetcher=None,
 ) -> dict:
     """
     Run the integrated pipeline for each corridor (default: every key of
@@ -122,6 +124,19 @@ def run_dlr_pipeline(
     if stations is None:
         stations = _discover_stations(provider, token)
 
+    # "composed": each input comes from its best provider (see
+    # observation_composer.FIELD_PRIORITY); rate_corridor runs its station
+    # path with the composed fetcher in place of weather_provider.fetch_weather.
+    # A caller running many windows (backfill_archive.py) passes one `fetcher`
+    # so its request cache and provenance persist across runs.
+    rate_provider = provider
+    if provider == "composed":
+        if fetcher is None:
+            fetcher = observation_composer.make_composed_fetcher(stations)
+        rate_provider = "synoptic"
+    else:
+        fetcher = None
+
     out = {
         "start": start, "end": end, "provider": provider,
         "forecast_method": forecast_method,
@@ -131,10 +146,11 @@ def run_dlr_pipeline(
         try:
             result = run_corridor_pipeline(
                 name, start, end, stations,
-                provider=provider,
+                provider=rate_provider,
                 archive_path=archive_path,
                 forecast_method=forecast_method,
                 archive=archive,
+                fetch_weather=fetcher,
             )
             out["results"].append(result)
             out["summary"].append(summarize(result))
@@ -143,6 +159,9 @@ def run_dlr_pipeline(
         except Exception as exc:
             log.error("corridor %s failed: %s", name, exc)
             out["errors"][name] = str(exc)
+    if fetcher is not None:
+        out["sources"] = observation_composer.summarize_sources(fetcher.provenance)
+        out["provider_errors"] = dict(fetcher.errors)
     return out
 
 
@@ -154,6 +173,10 @@ def _print_report(run: dict) -> None:
         cols = ["corridor", "rating_a", "static_rating_a", "bottleneck_index", "fallback",
                 "exhausted_points", "archived", "history_rows", "forecast_amps", "detector_signal"]
         print(df[cols].round(1).to_string(index=False))
+    for field, counts in run.get("sources", {}).items():
+        print(f"  sources[{field}]: {counts}")
+    for what, n in run.get("provider_errors", {}).items():
+        print(f"  provider issue: {what} x{n}")
     for name, msg in run["errors"].items():
         print(f"  ERROR {name}: {msg}")
 
@@ -164,7 +187,7 @@ def main(argv=None) -> int:
     p.add_argument("--start", help="ISO start (default: end - window-hours)")
     p.add_argument("--end", help="ISO end (default: now, UTC)")
     p.add_argument("--window-hours", type=float, default=1.0)
-    p.add_argument("--provider", choices=PROVIDERS, default="synoptic")
+    p.add_argument("--provider", choices=PROVIDERS, default="composed")
     p.add_argument("--forecast-method", choices=ampacity_forecast.FORECAST_METHODS, default="naive")
     p.add_argument("--archive-path", help=f"default: {config.HISTORICAL_ARCHIVE_PATH}")
     p.add_argument("--no-archive", action="store_true", help="Do not append to the archive")
@@ -182,8 +205,9 @@ def main(argv=None) -> int:
     if args.output:
         os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)
         with open(args.output, "w") as fh:
-            json.dump({k: run[k] for k in ("start", "end", "provider", "forecast_method",
-                                           "summary", "errors")}, fh, indent=2, default=str)
+            json.dump({k: run.get(k) for k in ("start", "end", "provider", "forecast_method",
+                                                "summary", "errors", "sources", "provider_errors")},
+                      fh, indent=2, default=str)
         print(f"Summary written to {args.output}")
     return 1 if run["errors"] and not run["summary"] else 0
 
