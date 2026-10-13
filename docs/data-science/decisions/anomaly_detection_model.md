@@ -401,7 +401,7 @@ per D-02). All four cities report `available: true`:
   deterministically with `Bad CRC-32` for `Native_Load_2026.xlsx` (recorded in
   `docs/data-science/specs/C6-grid-load-integration.md`). This run fetched calendar year 2025 only
   (`config.ANOMALY_ML_LOAD_YEARS`, 1 year); the 2026 archive file that failed was not requested, so
-  this success does not show that the earlier failure is resolved.
+  this success does not show that the earlier failure is resolved. (A separate retest on 2026-10-13 pulled 2026-06-01..03 successfully, so the 2026 file now downloads; see C6.)
 - **Reproducibility caveat.** `gridstatus` 0.35.0 is installed in `.venv` but is **not listed in
   `requirements.txt`**, so a fresh environment built from `requirements.txt` alone would not run
   `--characterize-load` until `gridstatus` is installed. `requirements.txt` was deliberately not

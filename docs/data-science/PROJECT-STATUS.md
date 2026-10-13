@@ -118,9 +118,9 @@ file GSD maintains under `.planning/`:
   feasibility) but no file format, cadence, or exact field set has ever been agreed. See
   [`decisions/pss_e_handoff.md`](decisions/pss_e_handoff.md) for the full note — deliberately
   deferred until an actual cross-team conversation happens.
-- **ERCOT live-pull bug (carried, unrelated to weather work)** — `ercot_data_retriever.py::pull_ercot_data`'s
-  live path fails with a deterministic `Bad CRC-32` error inside the third-party `gridstatus`
-  library, blocking live ERCOT pulls until upstream fixes it.
+- **ERCOT live pull (watch item)** — `ercot_data_retriever.py::pull_ercot_data` failed with `Bad CRC-32`
+  inside the third-party `gridstatus` library on 2026-08-25. A retest on 2026-10-13 (2025 and 2026
+  windows, `gridstatus` 0.35.0) completed without error, so it is not reproduced; cause unknown.
 - **Line orientation per city is an assumption** — `config.CITY_LINE_BEARING_DEG` carries over the
   retired corridor bearings (Austin and Corpus Christi 173.15°, Midland and El Paso 267.54°) so
   perpendicular-wind behavior is unchanged. It is not a measurement; replace it when each city's
