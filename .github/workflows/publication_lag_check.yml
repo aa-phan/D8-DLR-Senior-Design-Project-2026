@@ -1,0 +1,54 @@
+name: Publication Lag Check
+
+# One-off measurement (2026-10-13): when does a gfs_seamless single run first become
+# fetchable after its init time? Weather fetches only; touches no predictions, no data
+# branch and no secrets. Manual dispatch only, so it never affects the Shadow Collection
+# schedule. Result = the polls_*.jsonl artifact and the job log.
+# Dispatch shortly BEFORE the init time, e.g.:
+#   gh workflow run publication_lag_check.yml -f inits=2026-10-14T00:00
+# A job lasts at most ~5.5 h, so it covers inits up to about 5 h after it starts.
+
+on:
+  workflow_dispatch:
+    inputs:
+      inits:
+        description: 'Space-separated run init times (UTC, e.g. 2026-10-14T00:00 2026-10-14T06:00)'
+        required: true
+      city:
+        description: 'City key from config.CITY_COORDINATES'
+        required: false
+        default: 'AUSTIN'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publication-lag-check
+  cancel-in-progress: false
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+      - name: Poll single-runs endpoint
+        env:
+          INITS: ${{ inputs.inits }}
+          CITY: ${{ inputs.city }}
+        run: |
+          mkdir -p out
+          timeout 335m python -I data/publication_lag_check/poll_lag.py out/polls_${CITY}.jsonl "$CITY" $INITS || true
+          cat out/polls_${CITY}.jsonl
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: publication-lag-polls
+          path: out/
