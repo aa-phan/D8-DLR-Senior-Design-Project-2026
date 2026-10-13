@@ -52,7 +52,9 @@ import numpy as np
 import pandas as pd
 
 import config
+import forecast_shadow_decision as decision
 import forecast_shadow_eval_core as core
+import forecast_shadow_score_stats as stats
 
 ROW_SOURCE = core.LIVE_ROW_SOURCE
 
@@ -693,7 +695,17 @@ def score(predictions_dir: str, *, cities, guard_cfg: core.GuardConfig, evidence
 
 
 def _attach_family_and_decision(report: dict, error_frames: dict, params: dict, protocol_status: str) -> dict:
-    """Task 2 fills the 9-test family and the ship rule; a placeholder before then."""
+    """The 9-test pooled Holm family, the sample-size block and the ship rule
+    (live-system check: this report never changes the headline decision)."""
+    family = stats.build_family_report(error_frames, row_source=ROW_SOURCE, params=params)
+    report["family"] = family
+    report["sample_size"]["pairs"] = family["sample_size"]["pairs"]
+    report["sample_size"]["targets_met"] = family["sample_size"]["targets_met"]
+    report["sample_size"]["nominal_vs_effective"] = (
+        "n is nominal; effective sample sizes (ACF per city, bootstrap pooled) are in `pairs` and are smaller")
+    report["decision"] = decision.apply_ship_rule(
+        family, protocol_status=protocol_status, margin=params["decision_margin_amps"],
+        min_cities=params["consistency_min_cities"])
     return report
 
 
@@ -714,6 +726,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--valid-time-cutoff", default=None)
     p.add_argument("--override-reason", default=None)
     p.add_argument("--protocol-status", choices=("signed", "unsigned"), default="unsigned")
+    # Pre-registered statistical parameters. Any non-default value in a FRESH run needs --override-reason.
+    # There is deliberately no --row-gate and no --family-size (decisions 2 and 3).
+    p.add_argument("--block-lengths", type=int, nargs="+", default=None, help="six-hourly slot block lengths (default 1 4 8 28)")
+    p.add_argument("--n-resamples", type=int, default=None)
+    p.add_argument("--decision-margin-amps", type=float, default=None)
+    p.add_argument("--consistency-min-cities", type=int, default=None)
+    p.add_argument("--min-paired-rows", type=int, default=None)
+    p.add_argument("--power", type=float, default=None)
+    p.add_argument("--seed", type=int, default=None)
     return p
 
 
@@ -727,7 +748,11 @@ def _guard_from_args(args) -> core.GuardConfig:
 
 
 def _params_from_args(args) -> Optional[dict]:
-    return None
+    mapping = {"block_lengths": args.block_lengths, "n_resamples": args.n_resamples,
+               "decision_margin_amps": args.decision_margin_amps, "consistency_min_cities": args.consistency_min_cities,
+               "min_paired_rows": args.min_paired_rows, "power": args.power, "seed": args.seed}
+    given = {k: (tuple(v) if k == "block_lengths" else v) for k, v in mapping.items() if v is not None}
+    return given or None
 
 
 def main(argv=None) -> int:

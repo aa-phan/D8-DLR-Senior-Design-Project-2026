@@ -664,3 +664,77 @@ def test_cli_rejects_unknown_city_and_exposes_no_clock(capsys):
     assert parser.parse_args([]).protocol_status == "unsigned"
     with pytest.raises(SystemExit):
         parser.parse_args(["--protocol-status", "maybe"])
+
+
+# --------------------------------------------------------------------------
+# Task 2 wiring: the 9-test family, the sample-size block and the ship rule
+# --------------------------------------------------------------------------
+
+def test_score_attaches_the_nine_test_family_and_the_live_system_decision(tmp_path, monkeypatch):
+    cities = list(config.LOCATIONS)
+    d = tmp_path / "logs"
+    _write_dev_logs(d, cities, n=10)
+    install_archive(monkeypatch)
+    report = score_mod.score(str(d), cities=cities, guard_cfg=guard_cfg(), evidence_root=str(tmp_path / "ev"),
+                             protocol_status="unsigned", now=pd.Timestamp("2026-10-13T12:00:00Z"),
+                             params={"n_resamples": 300})
+    fam = report["family"]
+    assert len(fam["comparisons"]) == 9 and fam["family_size"] == 9 and fam["row_source"] == "shadow_logs"
+    assert [(c["a"], c["b"]) for c in fam["comparisons"]] == list(core.HEADLINE_FAMILY)
+    by = {(c["a"], c["b"]): c for c in fam["comparisons"]}
+    # constant offsets: wind vs raw margin = 20 - 10; reference (own target hour) vs raw = 20 - 7
+    assert by[("ml_wind_corrected", "raw_forecast")]["point_margin"] == pytest.approx(10.0, abs=1e-9)
+    assert by[("reference_ml_refit_24h", "raw_forecast")]["point_margin"] == pytest.approx(13.0, abs=1e-9)
+    assert by[("ml_cooling_corrected", "reference_ml_refit_24h")]["point_margin"] == pytest.approx(7.0 - 5.0, abs=1e-9)
+    assert by[("ml_wind_corrected", "raw_forecast")]["n_paired"] == 40 and by[("ml_wind_corrected", "raw_forecast")]["cities_with_data"] == 4
+    assert core.FLAG_V2 in by[("reference_ml_refit_24h", "raw_forecast")]["flags"]
+    assert core.FLAG_V3 in by[("ml_wind_corrected", "persistence_24h")]["flags"]
+    dec = report["decision"]
+    assert dec["row_source"] == "shadow_logs" and dec["label"] == "live-system check" and dec["protocol_status"] == "unsigned"
+    assert dec["levels"]["ml_wind_corrected"]["benefit_amps"] == pytest.approx(10.0, abs=1e-9)
+    assert dec["working_choice"] in core.CANDIDATES and core.NOT_MEASURED_STATEMENT in dec["statements"]
+    ss = report["sample_size"]
+    assert len(ss["pairs"]) == 9 and ss["pooled_nominal"]["label"] == "nominal, not effective"
+    assert all(not p["targets"]["tail_rate_target_met"] and not p["targets"]["mdd_target_met"] for p in ss["pairs"])
+    assert report["planner_defaults"]["PD-09"]["non_default"] is True
+    saved = json.loads(open(os.path.join(report["evidence_dir"], "report.json")).read())
+    assert len(saved["family"]["comparisons"]) == 9 and saved["decision"]["row_source"] == "shadow_logs"
+    md = open(os.path.join(report["evidence_dir"], "report.md")).read()
+    assert (md.index("## Sample size") < md.index("## Headline family") < md.index("## Decision (live-system check)")
+            < md.index("## Per-city descriptive metrics"))
+    assert "descriptive, uncorrected" in md and core.FLAG_V2 in md and "NON-DEFAULT" in md
+
+
+def test_fresh_run_with_a_nondefault_parameter_needs_an_override_and_creates_nothing(tmp_path):
+    d = tmp_path / "logs"
+    d.mkdir()
+    write_log(d / "AUSTIN.jsonl", [make_row("AUSTIN", "2026-10-20T00:00:00Z")])
+    with pytest.raises(ValueError, match="override"):
+        score_mod.score(str(d), cities=["AUSTIN"], guard_cfg=guard_cfg(), evidence_root=str(tmp_path / "ev"), now=INSTANT,
+                        params={"decision_margin_amps": 7.0})
+    assert not (tmp_path / "ev").exists()
+
+
+def test_cli_exposes_the_preregistered_parameters_and_no_row_gate_or_family_size(tmp_path, monkeypatch):
+    parser = score_mod.build_parser()
+    for flag in ("--row-gate", "--family-size"):
+        with pytest.raises(SystemExit):
+            parser.parse_args([flag, "5"])
+    help_text = parser.format_help()
+    assert "--row-gate" not in help_text and "--family-size" not in help_text
+    args = parser.parse_args(["--block-lengths", "1", "4", "--n-resamples", "500", "--decision-margin-amps", "6",
+                              "--consistency-min-cities", "2", "--min-paired-rows", "5", "--power", "0.9", "--seed", "7"])
+    assert score_mod._params_from_args(args) == {"block_lengths": (1, 4), "n_resamples": 500, "decision_margin_amps": 6.0,
+                                                 "consistency_min_cities": 2, "min_paired_rows": 5, "power": 0.9, "seed": 7}
+    assert score_mod._params_from_args(parser.parse_args([])) is None
+    # end to end on development data: a non-default parameter is recorded, not refused
+    cities = ["AUSTIN", "MIDLAND"]
+    d = tmp_path / "logs"
+    _write_dev_logs(d, cities, n=10)
+    install_archive(monkeypatch)
+    rc = score_mod.main(["--predictions-dir", str(d), "--cities", *cities, "--evidence-root", str(tmp_path / "ev"),
+                         "--n-resamples", "300"])
+    assert rc == 0
+    (run,) = os.listdir(tmp_path / "ev")
+    saved = json.loads(open(tmp_path / "ev" / run / "report.json").read())
+    assert saved["config"]["params"]["n_resamples"] == 300 and saved["guard"]["nondefault_params"] == {"n_resamples": 300}

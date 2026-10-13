@@ -938,7 +938,7 @@ def render_sample_size(report: dict) -> str:
                      f"{'met' if t.get('mdd_target_met') else 'not met'}.")
     pairs = ss.get("pairs") or []
     if pairs:
-        lines += ["", "| pair (A vs B) | n paired (pooled) | n_eff (bootstrap) | n_eff (ACF, per city) | MDD (A) | rows needed for 5 A | ~590 | ~1,575 |",
+        lines += ["", "| pair (A vs B) | n paired (pooled) | n_eff (bootstrap) | n_eff (ACF, per city) | MDD (amps) | rows needed for 5 A | ~590 | ~1,575 |",
                   "|---|---|---|---|---|---|---|---|"]
         for p in pairs:
             lines.append(
