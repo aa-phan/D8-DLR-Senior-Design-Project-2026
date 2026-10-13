@@ -4,11 +4,12 @@
 > (`AUSTIN`, `CORPUS_CHRISTI`, `MIDLAND`, `EL_PASO`, i.e. `config.LOCATIONS`) is an independent
 > rating point (see `point_scope.md`). The anomaly model is now **per city**: one artifact
 > `anomaly_{city}.joblib` per city, fitted on that city's own rows only, with no two-city
-> pooling. **Every measurement below (selected estimators and contaminations, rates, verdicts,
-> load correlations) is corridor-era (retired 2026-10-12)**: it was produced by pooled
-> two-endpoint-city corridor models, is kept unchanged as history, and has not been re-measured
-> per city. Per-city refit has not been run (it needs live Open-Meteo and ERCOT data); until it
-> is, no per-city artifact exists and the model branch is absent (see Limitations).
+> pooling. **The per-city models were fitted and measured on 2026-10-13** with
+> `--validate --years 1`, then `--bakeoff --years 1`, then `--characterize-load`, and the per-city
+> results appear in the sections labeled **per-city refit (2026-10-13)**. **The corridor-era
+> measurements further below (selected estimators and contaminations, rates, verdicts, load
+> correlations) are labeled corridor-era (retired 2026-10-12)**: they were produced by pooled
+> two-endpoint-city corridor models, remain as history, and do not describe the per-city models.
 
 **Status:** Ratified as a record of measured fact — the numbers below are settled (a direct
 transcription of a completed, reproducible run against real historical data). Both measured corridors' (corridor-era, retired 2026-10-12)
@@ -17,7 +18,8 @@ plainly, per D-07, exactly as it came out — it is not a foregone conclusion ju
 pass: three of the five candidate/contamination combinations measured here (`EllipticEnvelope`,
 and `IsolationForest` at low contamination) would have read NOT MET on the second half of the
 bar had they been selected instead, and the model's false-positive rate, while under the ceiling,
-is not zero the way the existing rolling baseline's structurally is. Whether the selected
+is not zero the way the existing rolling baseline's structurally is. The 2026-10-13 per-city
+refit also reads **MET** in all four cities (see Verdict), with the caveats recorded there. Whether the selected
 `OneClassSVM` artifact should be trusted as a general-purpose anomaly detector beyond the two
 measured injection categories, and whether the pooled two-city training envelope generalizes
 past this one-year real window, remain open — see Open Questions.
@@ -49,8 +51,17 @@ absent artifact resolves to `model=None` with one logged warning, leaving behavi
 the pre-Phase-2 two-branch detector, rather than raising. `backend/anomaly_training.py` is the
 offline entry point that assembled the real training/measurement series, ran the
 D-03 bake-off across three candidates and five contamination points, and persisted each
-corridor's evidence-selected winner. The table is the **corridor-era (retired 2026-10-12)**
-result; no per-city selection has been made yet:
+city's (in the corridor-era run, each corridor's) evidence-selected winner. The per-city
+selections (2026-10-13), persisted to `data/models/anomaly_{CITY}.joblib`:
+
+| City | Selected estimator | Selected contamination | `ceiling_met` |
+|---|---|---|---|
+| `AUSTIN` | `OneClassSVM` | 0.01 | true |
+| `CORPUS_CHRISTI` | `OneClassSVM` | 0.005 | true |
+| `MIDLAND` | `OneClassSVM` | 0.001 | true |
+| `EL_PASO` | `OneClassSVM` | 0.001 | true |
+
+The **corridor-era (retired 2026-10-12)** result, kept as history:
 
 | Corridor (retired) | Selected estimator | Selected contamination |
 |---|---|---|
@@ -71,6 +82,14 @@ rating exactly as the two pre-existing branches already do. Neither `_check_agai
 below were produced. The per-city procedure fits each city's own hourly rows (one complete
 calendar year per city per `--years`, default `config.ANOMALY_ML_TRAINING_YEARS`) into that
 city's own artifact; no pooling across cities.*
+
+**Per-city run (2026-10-13).** Each city's own Open-Meteo rows for one complete calendar year (`--years 1`,
+2025), fitted and measured per city with no pooling: **8,760 hourly rows per city** (365 days x 24
+hours, so the G3-bounds and finite-value filters dropped no row in any of `AUSTIN`, `CORPUS_CHRISTI`, `MIDLAND`, `EL_PASO`),
+spanning **2025-01-01T00:00:00+00:00 through 2025-12-31T23:00:00+00:00**. After the chronological fit/holdout split: **6,570 fit rows**
+and **2,190 holdout rows** per city, with **44 injected rows per category** (`round(2,190 * 0.02)`).
+The corridor-era figures above (17,520 pooled rows, 13,140 fit, 4,380 holdout, 88 injected per
+category) describe the retired pooled corridor frames and stay labeled as such.
 
 The training and measurement series is **not** the live `historical_archive.py` CSV — that file
 has zero rows today because Track 1 (Pipeline Integration) has not executed yet, mirroring Phase
@@ -96,8 +115,8 @@ has zero rows today because Track 1 (Pipeline Integration) has not executed yet,
    `raw_data` carries no timestamp at the `check()` call site; a feature the inference path
    cannot compute would leave the model branch permanently unable to run.
 
-**Actual assembled window (both corridor-era corridors, from the fresh run behind this document — see
-Configuration measured for the exact command):** 17,520 pooled hourly rows per corridor,
+**Actual assembled window (both corridor-era corridors, from the corridor-era run — see
+Configuration measured for the exact command; the per-city counts are in the paragraph above):** 17,520 pooled hourly rows per corridor,
 spanning **2025-01-01T00:00:00+00:00 through 2025-12-31T23:00:00+00:00**. After the chronological
 fit/holdout split (never shuffled — the estimator is measured only against rows strictly later
 than anything it was fitted on): **13,140 fit rows** and **4,380 holdout rows** per corridor.
@@ -105,20 +124,29 @@ than anything it was fitted on): **13,140 fit rows** and **4,380 holdout rows** 
 ## Configuration measured
 
 A reader should be able to reproduce this run from the values below alone. All are the actual
-landed `backend/config.py` constants at the time of this run. The reproduction commands are:
+landed `backend/config.py` constants at the time of this run. The corridor-era run used the last
+two commands below. The per-city run (2026-10-13) used the full sequence, in this order — `--validate`
+first and `--bakeoff` second, because both write the same report and the later writer replaces each
+city's entry wholesale, so this order leaves the winner-bearing bake-off entries — with all
+tunables unchanged, on scikit-learn 1.9.1:
 
 ```
+.venv/bin/python3 backend/anomaly_training.py --validate --years 1
 .venv/bin/python3 backend/anomaly_training.py --bakeoff --years 1
 .venv/bin/python3 backend/anomaly_training.py --characterize-load
 ```
 
 | Parameter | Value | Source |
 |---|---|---|
-| Backfill depth (this run) | 1 complete calendar year (2025) per endpoint city | CLI `--years 1`, overriding `config.ANOMALY_ML_TRAINING_YEARS` (3 years) for this measurement run |
+| Backfill depth (this run) | 1 complete calendar year (2025) per city (per endpoint city in the corridor-era run) | CLI `--years 1`, overriding `config.ANOMALY_ML_TRAINING_YEARS` (3 years) for this measurement run |
 | Holdout fraction | 0.25 | `config.ANOMALY_ML_VALIDATION_HOLDOUT_FRACTION` |
 | Contamination grid | (0.001, 0.005, 0.01, 0.02, 0.05) | `config.ANOMALY_ML_CONTAMINATION_GRID` |
-| Selected contamination (corridor-era `AUSTIN_CORPUS_CHRISTI`) | 0.001 | `data/models/anomaly_validation_report.json` |
-| Selected contamination (corridor-era `MIDLAND_EL_PASO`) | 0.005 | `data/models/anomaly_validation_report.json` |
+| Selected contamination (per-city, 2026-10-13, `AUSTIN`) | 0.01 | `data/models/anomaly_validation_report.json` |
+| Selected contamination (per-city, 2026-10-13, `CORPUS_CHRISTI`) | 0.005 | `data/models/anomaly_validation_report.json` |
+| Selected contamination (per-city, 2026-10-13, `MIDLAND`) | 0.001 | `data/models/anomaly_validation_report.json` |
+| Selected contamination (per-city, 2026-10-13, `EL_PASO`) | 0.001 | `data/models/anomaly_validation_report.json` |
+| Selected contamination (corridor-era, retired 2026-10-12, `AUSTIN_CORPUS_CHRISTI`) | 0.001 | `data/models/legacy_corridor_era/anomaly_validation_report.json` |
+| Selected contamination (corridor-era, retired 2026-10-12, `MIDLAND_EL_PASO`) | 0.005 | `data/models/legacy_corridor_era/anomaly_validation_report.json` |
 | Injection rate | 0.02 | `config.ANOMALY_ML_INJECTION_RATE` |
 | False-positive ceiling | 0.05 | `config.ANOMALY_ML_MAX_FALSE_POSITIVE_RATE` |
 | Kernel-candidate (`OneClassSVM`) training-row cap (bake-off sweep only) | 5,000 | `config.ANOMALY_ML_SVM_MAX_TRAIN_ROWS` |
@@ -151,12 +179,14 @@ problem.** No historical weather archive in this project carries a "this reading
 anomalous sensor fault" label: Open-Meteo backfill and ERCOT settlements record what actually
 happened, not injected sensor faults. That means:
 
-- **False-positive rate** is directly measurable on real, clean, held-out data: the 4,380-row
-  chronological holdout slice, strictly later than every row the estimator fitted on.
+- **False-positive rate** is directly measurable on real, clean, held-out data: the chronological
+  holdout slice (4,380 rows per corridor in the corridor-era run; 2,190 rows per city in the
+  2026-10-13 per-city run), strictly later than every row the estimator fitted on.
 - **False-negative rate (recall)** only exists against **deliberately injected synthetic
   corruption**, since no real labelled anomaly exists to measure recall against. Two categories
   were injected into the holdout slice, each at `config.ANOMALY_ML_INJECTION_RATE` (0.02) — 88
-  rows per category per corridor (`round(4380 * 0.02)`):
+  rows per category per corridor in the corridor-era run (`round(4380 * 0.02)`) and 44 rows per
+  category per city in the 2026-10-13 per-city run (`round(2190 * 0.02)`):
   - **`out_of_range`** — exactly one of the three feature columns is replaced by a value
     comfortably beyond `DLRSafetyMonitor`'s own G3 physical bound for that column (30 m/s beyond
     the wind bound, 35 °C beyond the temperature bound, 600 W/m² beyond the solar bound). **This
@@ -196,12 +226,107 @@ inventing one with no citation would be a fabricated baseline, exactly the reaso
 
 ## Measured results
 
-Every figure below is transcribed directly from `data/models/anomaly_validation_report.json`,
-produced by the reproduction command above. All three D-03 candidates are shown at all five
-contamination grid points — the losing candidates included, per D-03's no-default-lean
-discipline — not only the selected winner's row. Baseline figures are identical across every row
-within a corridor (the baseline does not depend on candidate/contamination) and are repeated per
-row for direct comparison.
+The per-city figures below are transcribed directly from `data/models/anomaly_validation_report.json`
+(the 2026-10-13 run; every entry has `produced_by: bakeoff`), produced by the reproduction commands
+above. All three D-03 candidates are shown at all five contamination grid points (15 rows per city)
+— the losing candidates included, per D-03's no-default-lean discipline — not only the selected
+winner's row. Baseline figures are identical across every row within a city (the baseline does not
+depend on candidate/contamination) and are repeated per row for direct comparison. The earlier
+`--validate` sweep of the same run (an `IsolationForest` sweep) reproduced the bake-off's
+`IsolationForest` rows exactly in every city.
+
+### AUSTIN — per-city refit (2026-10-13) (8,760 assembled rows; window 2025-01-01 → 2025-12-31; fit 6,570 rows, holdout 2,190 rows; 44 injected rows per category)
+
+| Candidate | Contam. | FP rate | Baseline FP | Recall (out_of_range) | Baseline recall (o-o-r) | Recall (in_range_implausible) | Baseline recall (i-r-i) | Pooled recall | Baseline pooled recall |
+|---|---|---|---|---|---|---|---|---|---|
+| IsolationForest | 0.001 | 0.00% | 0.00% | 0.00% | 27.27% | 100.00% | 0.00% | 50.00% | 13.64% |
+| IsolationForest | 0.005 | 0.00% | 0.00% | 6.82% | 27.27% | 100.00% | 0.00% | 53.41% | 13.64% |
+| IsolationForest | 0.01 | 0.23% | 0.00% | 9.09% | 27.27% | 100.00% | 0.00% | 54.55% | 13.64% |
+| IsolationForest | 0.02 | 0.55% | 0.00% | 22.73% | 27.27% | 100.00% | 0.00% | 61.36% | 13.64% |
+| IsolationForest | 0.05 | 1.83% | 0.00% | 38.64% | 27.27% | 100.00% | 0.00% | 69.32% | 13.64% |
+| EllipticEnvelope | 0.001 | 0.00% | 0.00% | 25.00% | 27.27% | 0.00% | 0.00% | 12.50% | 13.64% |
+| EllipticEnvelope | 0.005 | 0.00% | 0.00% | 25.00% | 27.27% | 0.00% | 0.00% | 12.50% | 13.64% |
+| EllipticEnvelope | 0.01 | 0.00% | 0.00% | 25.00% | 27.27% | 0.00% | 0.00% | 12.50% | 13.64% |
+| EllipticEnvelope | 0.02 | 0.00% | 0.00% | 25.00% | 27.27% | 0.00% | 0.00% | 12.50% | 13.64% |
+| EllipticEnvelope | 0.05 | 0.00% | 0.00% | 25.00% | 27.27% | 100.00% | 0.00% | 62.50% | 13.64% |
+| OneClassSVM | 0.001 | 1.14% | 0.00% | 100.00% | 27.27% | 100.00% | 0.00% | 100.00% | 13.64% |
+| OneClassSVM | 0.005 | 1.05% | 0.00% | 100.00% | 27.27% | 100.00% | 0.00% | 100.00% | 13.64% |
+| **OneClassSVM (selected)** | **0.01** | **1.00%** | **0.00%** | **100.00%** | **27.27%** | **100.00%** | **0.00%** | **100.00%** | **13.64%** |
+| OneClassSVM | 0.02 | 1.83% | 0.00% | 100.00% | 27.27% | 100.00% | 0.00% | 100.00% | 13.64% |
+| OneClassSVM | 0.05 | 4.52% | 0.00% | 100.00% | 27.27% | 100.00% | 0.00% | 100.00% | 13.64% |
+
+Winner selection: 15 of the 15 pairs have a false-positive rate at or below the 5.00% ceiling; the highest pooled recall among them is 100.00%, reached by 5 `OneClassSVM` contamination points (`contamination=0.001`, `contamination=0.005`, `contamination=0.01`, `contamination=0.02`, `contamination=0.05`); no other candidate exceeds 69.32% pooled recall. The tie was broken by the lowest false-positive rate, which is `contamination=0.01` (1.00%) — the selected pair. `ceiling_met: true` in the report (1.00% ≤ 5.00%).
+
+### CORPUS_CHRISTI — per-city refit (2026-10-13) (8,760 assembled rows; window 2025-01-01 → 2025-12-31; fit 6,570 rows, holdout 2,190 rows; 44 injected rows per category)
+
+| Candidate | Contam. | FP rate | Baseline FP | Recall (out_of_range) | Baseline recall (o-o-r) | Recall (in_range_implausible) | Baseline recall (i-r-i) | Pooled recall | Baseline pooled recall |
+|---|---|---|---|---|---|---|---|---|---|
+| IsolationForest | 0.001 | 0.00% | 0.00% | 0.00% | 27.27% | 100.00% | 0.00% | 50.00% | 13.64% |
+| IsolationForest | 0.005 | 0.00% | 0.00% | 2.27% | 27.27% | 100.00% | 0.00% | 51.14% | 13.64% |
+| IsolationForest | 0.01 | 0.09% | 0.00% | 4.55% | 27.27% | 100.00% | 0.00% | 52.27% | 13.64% |
+| IsolationForest | 0.02 | 1.00% | 0.00% | 13.64% | 27.27% | 100.00% | 0.00% | 56.82% | 13.64% |
+| IsolationForest | 0.05 | 3.29% | 0.00% | 31.82% | 27.27% | 100.00% | 0.00% | 65.91% | 13.64% |
+| EllipticEnvelope | 0.001 | 0.00% | 0.00% | 25.00% | 27.27% | 0.00% | 0.00% | 12.50% | 13.64% |
+| EllipticEnvelope | 0.005 | 0.00% | 0.00% | 25.00% | 27.27% | 0.00% | 0.00% | 12.50% | 13.64% |
+| EllipticEnvelope | 0.01 | 0.00% | 0.00% | 25.00% | 27.27% | 0.00% | 0.00% | 12.50% | 13.64% |
+| EllipticEnvelope | 0.02 | 0.00% | 0.00% | 25.00% | 27.27% | 0.00% | 0.00% | 12.50% | 13.64% |
+| EllipticEnvelope | 0.05 | 0.00% | 0.00% | 25.00% | 27.27% | 100.00% | 0.00% | 62.50% | 13.64% |
+| OneClassSVM | 0.001 | 0.32% | 0.00% | 100.00% | 27.27% | 100.00% | 0.00% | 100.00% | 13.64% |
+| **OneClassSVM (selected)** | **0.005** | **0.27%** | **0.00%** | **100.00%** | **27.27%** | **100.00%** | **0.00%** | **100.00%** | **13.64%** |
+| OneClassSVM | 0.01 | 0.64% | 0.00% | 100.00% | 27.27% | 100.00% | 0.00% | 100.00% | 13.64% |
+| OneClassSVM | 0.02 | 1.46% | 0.00% | 100.00% | 27.27% | 100.00% | 0.00% | 100.00% | 13.64% |
+| OneClassSVM | 0.05 | 3.84% | 0.00% | 100.00% | 27.27% | 100.00% | 0.00% | 100.00% | 13.64% |
+
+Winner selection: 15 of the 15 pairs have a false-positive rate at or below the 5.00% ceiling; the highest pooled recall among them is 100.00%, reached by 5 `OneClassSVM` contamination points (`contamination=0.001`, `contamination=0.005`, `contamination=0.01`, `contamination=0.02`, `contamination=0.05`); no other candidate exceeds 65.91% pooled recall. The tie was broken by the lowest false-positive rate, which is `contamination=0.005` (0.27%) — the selected pair. `ceiling_met: true` in the report (0.27% ≤ 5.00%).
+
+### MIDLAND — per-city refit (2026-10-13) (8,760 assembled rows; window 2025-01-01 → 2025-12-31; fit 6,570 rows, holdout 2,190 rows; 44 injected rows per category)
+
+| Candidate | Contam. | FP rate | Baseline FP | Recall (out_of_range) | Baseline recall (o-o-r) | Recall (in_range_implausible) | Baseline recall (i-r-i) | Pooled recall | Baseline pooled recall |
+|---|---|---|---|---|---|---|---|---|---|
+| IsolationForest | 0.001 | 0.00% | 0.00% | 0.00% | 27.27% | 100.00% | 0.00% | 50.00% | 13.64% |
+| IsolationForest | 0.005 | 0.00% | 0.00% | 15.91% | 27.27% | 100.00% | 0.00% | 57.95% | 13.64% |
+| IsolationForest | 0.01 | 0.00% | 0.00% | 29.55% | 27.27% | 100.00% | 0.00% | 64.77% | 13.64% |
+| IsolationForest | 0.02 | 0.00% | 0.00% | 34.09% | 27.27% | 100.00% | 0.00% | 67.05% | 13.64% |
+| IsolationForest | 0.05 | 0.55% | 0.00% | 59.09% | 27.27% | 100.00% | 0.00% | 79.55% | 13.64% |
+| EllipticEnvelope | 0.001 | 0.00% | 0.00% | 25.00% | 27.27% | 0.00% | 0.00% | 12.50% | 13.64% |
+| EllipticEnvelope | 0.005 | 0.00% | 0.00% | 25.00% | 27.27% | 0.00% | 0.00% | 12.50% | 13.64% |
+| EllipticEnvelope | 0.01 | 0.00% | 0.00% | 25.00% | 27.27% | 0.00% | 0.00% | 12.50% | 13.64% |
+| EllipticEnvelope | 0.02 | 0.00% | 0.00% | 25.00% | 27.27% | 0.00% | 0.00% | 12.50% | 13.64% |
+| EllipticEnvelope | 0.05 | 0.00% | 0.00% | 25.00% | 27.27% | 100.00% | 0.00% | 62.50% | 13.64% |
+| **OneClassSVM (selected)** | **0.001** | **0.00%** | **0.00%** | **100.00%** | **27.27%** | **100.00%** | **0.00%** | **100.00%** | **13.64%** |
+| OneClassSVM | 0.005 | 0.23% | 0.00% | 100.00% | 27.27% | 100.00% | 0.00% | 100.00% | 13.64% |
+| OneClassSVM | 0.01 | 0.27% | 0.00% | 100.00% | 27.27% | 100.00% | 0.00% | 100.00% | 13.64% |
+| OneClassSVM | 0.02 | 0.37% | 0.00% | 100.00% | 27.27% | 100.00% | 0.00% | 100.00% | 13.64% |
+| OneClassSVM | 0.05 | 1.05% | 0.00% | 100.00% | 27.27% | 100.00% | 0.00% | 100.00% | 13.64% |
+
+Winner selection: 15 of the 15 pairs have a false-positive rate at or below the 5.00% ceiling; the highest pooled recall among them is 100.00%, reached by 5 `OneClassSVM` contamination points (`contamination=0.001`, `contamination=0.005`, `contamination=0.01`, `contamination=0.02`, `contamination=0.05`); no other candidate exceeds 79.55% pooled recall. The tie was broken by the lowest false-positive rate, which is `contamination=0.001` (0.00%) — the selected pair. `ceiling_met: true` in the report (0.00% ≤ 5.00%).
+
+### EL_PASO — per-city refit (2026-10-13) (8,760 assembled rows; window 2025-01-01 → 2025-12-31; fit 6,570 rows, holdout 2,190 rows; 44 injected rows per category)
+
+| Candidate | Contam. | FP rate | Baseline FP | Recall (out_of_range) | Baseline recall (o-o-r) | Recall (in_range_implausible) | Baseline recall (i-r-i) | Pooled recall | Baseline pooled recall |
+|---|---|---|---|---|---|---|---|---|---|
+| IsolationForest | 0.001 | 0.00% | 0.00% | 4.55% | 27.27% | 100.00% | 0.00% | 52.27% | 13.64% |
+| IsolationForest | 0.005 | 0.00% | 0.00% | 13.64% | 27.27% | 100.00% | 0.00% | 56.82% | 13.64% |
+| IsolationForest | 0.01 | 0.00% | 0.00% | 27.27% | 27.27% | 100.00% | 0.00% | 63.64% | 13.64% |
+| IsolationForest | 0.02 | 0.00% | 0.00% | 31.82% | 27.27% | 100.00% | 0.00% | 65.91% | 13.64% |
+| IsolationForest | 0.05 | 0.18% | 0.00% | 50.00% | 27.27% | 100.00% | 0.00% | 75.00% | 13.64% |
+| EllipticEnvelope | 0.001 | 0.00% | 0.00% | 25.00% | 27.27% | 0.00% | 0.00% | 12.50% | 13.64% |
+| EllipticEnvelope | 0.005 | 0.00% | 0.00% | 25.00% | 27.27% | 0.00% | 0.00% | 12.50% | 13.64% |
+| EllipticEnvelope | 0.01 | 0.00% | 0.00% | 25.00% | 27.27% | 0.00% | 0.00% | 12.50% | 13.64% |
+| EllipticEnvelope | 0.02 | 0.00% | 0.00% | 25.00% | 27.27% | 0.00% | 0.00% | 12.50% | 13.64% |
+| EllipticEnvelope | 0.05 | 0.00% | 0.00% | 25.00% | 27.27% | 100.00% | 0.00% | 62.50% | 13.64% |
+| **OneClassSVM (selected)** | **0.001** | **0.37%** | **0.00%** | **100.00%** | **27.27%** | **100.00%** | **0.00%** | **100.00%** | **13.64%** |
+| OneClassSVM | 0.005 | 0.37% | 0.00% | 100.00% | 27.27% | 100.00% | 0.00% | 100.00% | 13.64% |
+| OneClassSVM | 0.01 | 0.59% | 0.00% | 100.00% | 27.27% | 100.00% | 0.00% | 100.00% | 13.64% |
+| OneClassSVM | 0.02 | 0.82% | 0.00% | 100.00% | 27.27% | 100.00% | 0.00% | 100.00% | 13.64% |
+| OneClassSVM | 0.05 | 1.51% | 0.00% | 100.00% | 27.27% | 100.00% | 0.00% | 100.00% | 13.64% |
+
+Winner selection: 15 of the 15 pairs have a false-positive rate at or below the 5.00% ceiling; the highest pooled recall among them is 100.00%, reached by 5 `OneClassSVM` contamination points (`contamination=0.001`, `contamination=0.005`, `contamination=0.01`, `contamination=0.02`, `contamination=0.05`); no other candidate exceeds 75.00% pooled recall. The tie was broken by the lowest false-positive rate, which is `contamination=0.001` (0.37%), tied with `contamination=0.005` at the same rate, so `select_winner` resolved the remaining tie by candidate order, then lowest contamination — the selected pair. `ceiling_met: true` in the report (0.37% ≤ 5.00%).
+
+The corridor-era subsections below are the history of the retired pooled corridor models. Their
+source report is preserved at `data/models/legacy_corridor_era/anomaly_validation_report.json`
+(backed up before the per-city run, because the per-city report merge drops non-city keys from
+`data/models/anomaly_validation_report.json`).
 
 ### AUSTIN_CORPUS_CHRISTI — corridor-era (retired 2026-10-12) (17,520 assembled rows; window 2025-01-01 → 2025-12-31; fit 13,140 rows, holdout 4,380 rows; 88 injected rows per category)
 
@@ -255,15 +380,48 @@ selected pair has `ceiling_met: true` in the report (0.53% ≤ 5.00%).
 
 ## Load characterization (D-02)
 
+### Per-city load characterization (2026-10-13)
+
+Transcribed from `data/models/anomaly_load_characterization.json`, produced on 2026-10-13 by
+`.venv/bin/python3 backend/anomaly_training.py --characterize-load` (run after the fits, best-effort,
+per D-02). All four cities report `available: true`:
+
+| City | Zone substrings | Matched ERCOT zone columns | Retrieved window | Load rows | Joined rows | Correlation: `air_temp` | Correlation: `wind_speed` | Correlation: `solar_radiation` |
+|---|---|---|---|---|---|---|---|---|
+| `AUSTIN` | `("SOUTH",)` | `South`, `South Central` | 2025-01-01T06:00:00+00:00 → 2025-12-31T00:00:00+00:00 | 8,731 | 8,731 | 0.54 | 0.03 | 0.47 |
+| `CORPUS_CHRISTI` | `("SOUTH",)` | `South`, `South Central` | 2025-01-01T06:00:00+00:00 → 2025-12-31T00:00:00+00:00 | 8,731 | 8,731 | 0.42 | 0.20 | 0.46 |
+| `MIDLAND` | `("WEST",)` | `Far West`, `West` | 2025-01-01T06:00:00+00:00 → 2025-12-31T00:00:00+00:00 | 8,731 | 8,731 | 0.48 | -0.09 | 0.48 |
+| `EL_PASO` | `("WEST",)` | `Far West`, `West` | 2025-01-01T06:00:00+00:00 → 2025-12-31T00:00:00+00:00 | 8,731 | 8,731 | 0.51 | -0.10 | 0.47 |
+
+- **Two load series, not four.** The zone group is `SOUTH` for `AUSTIN` and `CORPUS_CHRISTI` and
+  `WEST` for `MIDLAND` and `EL_PASO`, so `AUSTIN` and `CORPUS_CHRISTI` were joined against one shared
+  ERCOT load series (8,731 rows), and `MIDLAND` and `EL_PASO` against another (also 8,731 rows). The
+  correlations differ per city only because each is computed against that city's own weather.
+- **This run succeeded where the 2026-08-25 live pull did not.** That earlier pull failed
+  deterministically with `Bad CRC-32` for `Native_Load_2026.xlsx` (recorded in
+  `docs/data-science/specs/C6-grid-load-integration.md`). This run fetched calendar year 2025 only
+  (`config.ANOMALY_ML_LOAD_YEARS`, 1 year); the 2026 archive file that failed was not requested, so
+  this success does not show that the earlier failure is resolved.
+- **Reproducibility caveat.** `gridstatus` 0.35.0 is installed in `.venv` but is **not listed in
+  `requirements.txt`**, so a fresh environment built from `requirements.txt` alone would not run
+  `--characterize-load` until `gridstatus` is installed. `requirements.txt` was deliberately not
+  changed by this run.
+
+### Corridor-era load characterization (retired 2026-10-12)
+
 *Corridor-era (retired 2026-10-12) measurement; the zone-substring mapping is now per city (`AUSTIN`/`CORPUS_CHRISTI` use `SOUTH`, `MIDLAND`/`EL_PASO` use `WEST`).*
 
-Transcribed from `data/models/anomaly_load_characterization.json`, produced by
-`.venv/bin/python3 backend/anomaly_training.py --characterize-load`:
+Transcribed from the corridor-era report, preserved at
+`data/models/legacy_corridor_era/anomaly_load_characterization.json` (the per-city
+`--characterize-load` run replaced `data/models/anomaly_load_characterization.json`), produced by
+the same `--characterize-load` command:
 
 | Corridor | Zone substrings | Matched ERCOT zone columns | Retrieved window | Load rows | Joined rows | Correlation: `air_temp` | Correlation: `wind_speed` | Correlation: `solar_radiation` |
 |---|---|---|---|---|---|---|---|---|
 | `AUSTIN_CORPUS_CHRISTI` | `("SOUTH",)` | `South`, `South Central` | 2025-01-01T06:00:00+00:00 → 2025-12-31T00:00:00+00:00 | 8,731 | 8,731 | 0.49 | 0.14 | 0.47 |
 | `MIDLAND_EL_PASO` | `("WEST",)` | `Far West`, `West` | 2025-01-01T06:00:00+00:00 → 2025-12-31T00:00:00+00:00 | 8,731 | 8,731 | 0.51 | -0.11 | 0.48 |
+
+### D-02 boundary and interpretation
 
 Per **D-02**, ERCOT historical load is a **training-time-only signal**: `raw_data` does not carry
 load at the live `check()` call site, and wiring it in would touch Track 1's pipeline-wiring
@@ -275,19 +433,34 @@ config tuple; a fresh import of `anomaly_detector` leaves `gridstatus` out of `s
 `check()` still succeeds on a `raw_data` carrying exactly `wind`/`temp`/`solar`.
 
 A **Pearson correlation measures linear association only** — the moderate positive correlations
-against `air_temp`/`solar_radiation` (~0.47–0.51, physically sensible: hotter/sunnier conditions
-drive higher grid load) and the much weaker `wind_speed` correlations (0.14 and -0.11) are
-evidence of a *weak linear* relationship for wind specifically, not evidence that load is
-irrelevant to wind — a nonlinear relationship could exist that Pearson's coefficient cannot see.
-ERCOT's weather zones (`South`/`South Central`, `Far West`/`West`) are also a **regional proxy**
-far larger than either transmission corridor: the zone-aware selection (verified genuinely
-distinct per corridor, per Plan 02-03) is a sanity check against a plausible regional demand
-pattern, not a claim that either zone's load figure represents the corridor's own local demand
-precisely.
+against `air_temp`/`solar_radiation` (corridor-era ~0.47–0.51; per-city 0.42–0.54 for `air_temp`
+and 0.46–0.48 for `solar_radiation`; physically sensible: hotter/sunnier conditions drive
+higher grid load) and the much weaker `wind_speed` correlations (corridor-era 0.14 and -0.11;
+per-city -0.10 to 0.20) are evidence of a *weak linear* relationship for wind specifically, not
+evidence that load is irrelevant to wind — a nonlinear relationship could exist that Pearson's
+coefficient cannot see. ERCOT's weather zones (`South`/`South Central`, `Far West`/`West`) are also
+a **regional proxy** far larger than any single city's service area: the zone-aware selection
+(verified genuinely distinct per zone group, per Plan 02-03) is a sanity check against a plausible
+regional demand pattern, not a claim that either zone's load figure represents a city's own local
+demand precisely.
 
 ## Verdict
 
-*Corridor-era (retired 2026-10-12) verdicts, kept as history; not re-measured per city.*
+**Per-city verdicts (2026-10-13 refit)**, each against both halves of the unchanged Expectation above:
+
+**AUSTIN: MET.** The selected `OneClassSVM` (`contamination=0.01`) measured a false-positive rate of **1.00%**, at or below the 5.00% ceiling — half 1 met. Its recall on the `in_range_implausible` category is **100.00%**, strictly higher than the baseline's **0.00%** on the identical rows — half 2 met. Both halves of the Expectation are met.
+
+**CORPUS_CHRISTI: MET.** The selected `OneClassSVM` (`contamination=0.005`) measured a false-positive rate of **0.27%**, at or below the 5.00% ceiling — half 1 met. Its recall on the `in_range_implausible` category is **100.00%**, strictly higher than the baseline's **0.00%** on the identical rows — half 2 met. Both halves of the Expectation are met.
+
+**MIDLAND: MET.** The selected `OneClassSVM` (`contamination=0.001`) measured a false-positive rate of **0.00%**, at or below the 5.00% ceiling — half 1 met. Its recall on the `in_range_implausible` category is **100.00%**, strictly higher than the baseline's **0.00%** on the identical rows — half 2 met. Both halves of the Expectation are met.
+
+**EL_PASO: MET.** The selected `OneClassSVM` (`contamination=0.001`) measured a false-positive rate of **0.37%**, at or below the 5.00% ceiling — half 1 met. Its recall on the `in_range_implausible` category is **100.00%**, strictly higher than the baseline's **0.00%** on the identical rows — half 2 met. Both halves of the Expectation are met.
+
+**What this means per city (2026-10-13), beyond the raw MET/NOT MET label:** all four per-city selections are `OneClassSVM`, and all four read MET. The mean-and-standard-deviation baseline caught **zero** `in_range_implausible` rows in every city (0.00% recall, the same structural blind spot recorded for the corridor-era models), while each selected model caught all 44 injected rows in that category. The selected models' false-positive rates on clean held-out rows are 1.00% (AUSTIN), 0.27% (CORPUS_CHRISTI), 0.00% (MIDLAND), 0.37% (EL_PASO), all under the 5.00% ceiling; every selection except the zero-false-positive `MIDLAND` one is nonzero, as in the corridor-era run, against a baseline that is structurally 0.00%. Two caveats belong next to the MET labels. First, the `in_range_implausible` half of the Expectation is not discriminating between candidates in this data: `IsolationForest` also reaches 100.00% recall on that category at every contamination in all four cities (with a false-positive rate of at most 3.29% across the whole contamination grid), so `OneClassSVM` was selected on pooled recall, which is driven by the `out_of_range` category (the selected models' recall on it is 100.00% in all four cities). Per the Measurement method section, `out_of_range` rows are already rejected by G3 upstream in the live pipeline, so that part of the margin is redundant with an existing gate rather than new protection. Second, the per-city measurements use a 2,190-row holdout and 44 injected rows per category, a smaller sample than the corridor-era 4,380 / 88, so a single injected row is worth 2.27 percentage points of category recall.
+
+**Next step:** the per-city contaminations (AUSTIN 0.01, CORPUS_CHRISTI 0.005, MIDLAND 0.001, EL_PASO 0.001) were each selected against exactly one calendar year (2025) of that city's real weather and one fixed injection methodology, and the `OneClassSVM` points within a city differ by small false-positive margins. In EL_PASO the lowest false-positive rate was shared by more than one `OneClassSVM` contamination point, and the selection rule broke that tie by grid order rather than by evidence. Re-running this bake-off once more historical data accrues (or once Track 1's live pipeline history is available) would be the natural next step before treating the per-city selections as final; the corridor-era `0.001`/`0.005` selections do not carry over to them — see Open Questions.
+
+*The corridor-era (retired 2026-10-12) verdicts below are kept as history; the per-city verdicts are above.*
 
 **AUSTIN_CORPUS_CHRISTI: MET.** The selected `OneClassSVM` (`contamination=0.001`) measured a
 false-positive rate of **3.77%**, at or below the 5.00% ceiling — half 1 met. Its recall on the
@@ -301,7 +474,7 @@ false-positive rate of **0.53%**, at or below the 5.00% ceiling — half 1 met. 
 `in_range_implausible` category is **100.00%**, strictly higher than the baseline's **0.00%** on
 the identical rows — half 2 met. Both halves of the Expectation are met.
 
-**What this means, honestly, beyond the raw MET/NOT MET label:** the `in_range_implausible`
+**Corridor-era (retired 2026-10-12) reading, kept as history: what this meant, honestly, beyond the raw MET/NOT MET label:** the `in_range_implausible`
 category's rows are the ones this Expectation is actually built to test, and the mean-and-
 standard-deviation baseline caught **zero** of them on either corridor (0.00% recall) — the
 baseline is univariate over `dlr_amps` and has no mechanism to see a jointly-implausible-but-
@@ -327,7 +500,7 @@ this phase's real measurement happened to read MET for both corridors does not c
 would have been the outcome either way; it changes only whether "MET" or "NOT MET" is the honest
 word written above.
 
-**Next step:** given the winning candidate's `contamination` was selected against exactly one
+**Corridor-era next step:** given the winning candidate's `contamination` was selected against exactly one
 calendar year of real weather and one fixed injection methodology, re-running this bake-off once
 more historical data accrues (or once Track 1's live pipeline history is available) would be the
 natural next step before treating the current `contamination=0.001`/`0.005` selections as final —
@@ -337,8 +510,8 @@ see Open Questions.
 
 - **Corridor-era pooled two-city envelope (retired 2026-10-12).** The measured models pooled
   both endpoint cities' raw readings into one corridor frame. Per-city models replace that
-  design, so the measured rates above do not transfer to them, and the per-city false-positive/
-  recall tradeoff has not been measured. The live `check()` call site selects a city's model via
+  design, so the corridor-era rates do not transfer to them; the per-city false-positive/recall
+  tradeoff is in the per-city refit (2026-10-13) sections above. The live `check()` call site selects a city's model via
   `AnomalyDetector.for_city`, not via a field in `raw_data`.
 - **No time-of-day feature.** `raw_data` carries no timestamp at the `check()` call site, so the
   fitted model cannot condition on hour-of-day or season the way the forecasting model's
@@ -355,10 +528,12 @@ see Open Questions.
   not values drawn from an external anomaly taxonomy or a labeled real-world dataset — no such
   dataset exists for this problem (see Measurement method).
 - **The persisted artifact is a full-frame refit, not byte-identical to the measured model.** The
-  numbers in Measured results come from an estimator fitted on the 13,140-row **fit slice only**
-  and scored against the 4,380-row holdout it never saw. The artifact actually persisted to
-  `data/models/anomaly_{city}.joblib` is refit on the **full assembled frame** (fit + holdout
-  combined, 17,520 rows), per the Plan 02-02 decision that the shipped model should use every
+  numbers in Measured results come from an estimator fitted on the **fit slice only** (13,140 rows
+  per corridor in the corridor-era run; 6,570 rows per city in the per-city run) and scored against
+  the holdout it never saw (4,380 rows per corridor; 2,190 rows per city). The artifact actually
+  persisted to `data/models/anomaly_{city}.joblib` is refit on the **full assembled frame** (fit +
+  holdout combined: 17,520 rows per corridor in the corridor-era run; 8,760 rows per city in the
+  per-city run), per the Plan 02-02 decision that the shipped model should use every
   real row available rather than withholding 25% of it in production. This means the shipped
   artifact's exact decision boundary is not byte-identical to the one that produced the reported
   rates, though it is the same estimator type and configuration.
@@ -370,10 +545,13 @@ see Open Questions.
   **uncapped** assembled frame (see previous bullet), so the winning artifact's fit used more
   rows than the measurement that selected it — the cap's effect on `OneClassSVM`'s comparability
   against the other two (uncapped) candidates during the sweep is a real caveat on the bake-off
-  itself, even though it did not block a full-data final refit.
+  itself, even though it did not block a full-data final refit. In the per-city run the cap still
+  binds: `OneClassSVM` was fitted on 5,000 of each city's 6,570 fit rows during the sweep
+  (`train_rows_used: 5000` in every `OneClassSVM` measurement), while the other two candidates used
+  all 6,570.
 - **Model artifacts are git-ignored generated data.** `data/models/` is not committed. A clean
   checkout has no trained model until `.venv/bin/python3 backend/anomaly_training.py --bakeoff`
-  (or `--city <name>`) <!-- VERIFY: CLI flag name after the per-city migration; the corridor-era flag was `--corridor` --> is run; until then, the model branch is simply **absent** (one logged
+  (or `--city <CITY>`; the corridor-era flag was `--corridor`) is run; until then, the model branch is simply **absent** (one logged
   `logger.warning`, `model=None`) rather than raising — `AnomalyDetector.check` continues to
   function on its two pre-existing heuristic branches alone, exactly as it did before Phase 2.
 - **ERCOT weather zones are a regional proxy**, not a city-local load figure — see Load
@@ -381,15 +559,14 @@ see Open Questions.
 
 ## Open Questions
 
-- Per-city refit and re-measurement: the per-city models (replacing the corridor-era pooled
-  two-city envelope) have not been fitted, so the false-positive/recall tradeoff per city is
-  unmeasured.
+- ~~Per-city refit and re-measurement of the per-city models (replacing the corridor-era pooled
+  two-city envelope)~~ — **answered, 2026-10-13.** All four cities were fitted and measured on 2026-10-13; see the per-city refit (2026-10-13) sections under Measured results. Selected: `AUSTIN` `OneClassSVM` at 0.01, `CORPUS_CHRISTI` `OneClassSVM` at 0.005, `MIDLAND` `OneClassSVM` at 0.001, `EL_PASO` `OneClassSVM` at 0.001; all four read MET.
 - Whether a richer, more varied synthetic-injection taxonomy (beyond the two categories measured
   here) would change the measured recall picture — particularly whether a wider range of
   "plausible-but-wrong" in-range combinations, not just the single "clear cold night" triple,
   would surface a different recall figure.
 - Whether the selected contamination (corridor-era: `0.001` for `AUSTIN_CORPUS_CHRISTI`, `0.005` for
-  `MIDLAND_EL_PASO`) should be re-swept per city once Track 1's live pipeline archive accrues real,
+  `MIDLAND_EL_PASO`; per city (2026-10-13): AUSTIN 0.01, CORPUS_CHRISTI 0.005, MIDLAND 0.001, EL_PASO 0.001) should be re-swept per city once Track 1's live pipeline archive accrues real,
   multi-year historical data, rather than continuing to rely on this one-calendar-year
   Open-Meteo-backfill measurement.
 
@@ -398,11 +575,12 @@ see Open Questions.
 - `backend/anomaly_detector.py` — `AnomalyDetector.check`, `_check_against_model`,
   `_check_against_forecast`, `_check_against_rolling_baseline`, `for_city`,
   `_load_city_model_or_none`, `_model_path_for`.
-- `backend/anomaly_training.py` — `corridor_observation_frame`, `chronological_split`,
-  `inject_anomalies`, `_out_of_range_value`, `_implausible_combination`, `score_model`,
-  `score_rolling_baseline`, `validate_candidate`, `CANDIDATE_ESTIMATORS`, `corridor_report`,
-  `select_winner`, `characterize_load`; <!-- VERIFY: corridor-era function names; the per-city migration of this module was in progress when this note was written --> `--bakeoff`, `--validate`, `--characterize-load` CLI
-  entry points.
+- `backend/anomaly_training.py` — `city_observation_frame`, `fit_city_model`,
+  `persist_city_model`, `chronological_split`, `inject_anomalies`, `_out_of_range_value`,
+  `_implausible_combination`, `score_model`, `score_rolling_baseline`, `validate_candidate`,
+  `CANDIDATE_ESTIMATORS`, `city_report`, `merge_city_report`, `select_winner`,
+  `characterize_load`; `--bakeoff`, `--validate`, `--characterize-load` CLI entry points (and
+  `--city` to scope a run to one city).
 - `backend/ercot_data_retriever.py` — `pull_ercot_data`, the zone-aware ERCOT load
   retriever used by `characterize_load`.
 - `backend/config.py` — every `ANOMALY_ML_*` tunable named in Configuration measured above.
@@ -410,11 +588,16 @@ see Open Questions.
   `out_of_range` injection category is pushed past), `run_check`'s G6 call site and its
   `except Exception -> _fallback` fail-safe wiring (unchanged by this phase).
 - `data/models/anomaly_validation_report.json` — the machine-readable bake-off report this
-  document transcribes (git-ignored; reproduce via
-  `.venv/bin/python3 backend/anomaly_training.py --bakeoff --years 1`).
+  document transcribes for the per-city run (git-ignored; reproduce via
+  `.venv/bin/python3 backend/anomaly_training.py --validate --years 1` then `--bakeoff --years 1`).
 - `data/models/anomaly_load_characterization.json` — the machine-readable load characterization
-  report this document transcribes (git-ignored; reproduce via
+  report this document transcribes for the per-city run (git-ignored; reproduce via
   `.venv/bin/python3 backend/anomaly_training.py --characterize-load`).
+- `data/models/legacy_corridor_era/anomaly_validation_report.json` and
+  `data/models/legacy_corridor_era/anomaly_load_characterization.json` — backups of the
+  corridor-era reports, taken before the per-city run (git-ignored); the source of the corridor-era
+  numbers kept as history above.
+- `data/models/retrain_logs/` — console logs of the 2026-10-13 per-city run (git-ignored).
 - `docs/data-science/specs/C10-anomaly-detection.md` — the corrected spec this record backs.
 - `docs/data-science/decisions/forecasting_model.md` — Phase 1's precedent for this record's
   shape and D-07's honesty standard.

@@ -45,7 +45,11 @@ a per-city model `forecast_{city}.joblib`, and (via `--bakeoff`) runs the two-ca
 documented in `docs/data-science/decisions/forecasting_model.md`. `--city <CITY>` selects one city
 (default: every city in `config.LOCATIONS`). Model artifacts are git-ignored generated data
 (`config.FORECAST_ML_MODEL_DIR`, `/data/models/`) — a clean checkout has no trained model until
-this script is run. **The per-city refit has not been run yet**; no corridor-named `forecast_*.joblib` artifact is
+this script is run. **The per-city refit ran on 2026-10-13** (`--bakeoff`, all four cities in one
+invocation), persisting `HistGradientBoostingRegressor` for `AUSTIN` and `EL_PASO` and
+`MLPRegressor` for `CORPUS_CHRISTI` and `MIDLAND`; the evidence is in
+`docs/data-science/decisions/forecasting_model.md`. Those artifacts are git-ignored, so a clean
+checkout has none until the command is run. No corridor-named `forecast_*.joblib` artifact is
 present in this checkout, and any such file would be legacy and is not loaded.
 
 ## Interface & Data Contract
@@ -105,14 +109,19 @@ shared code beyond both consuming C4/C5 outputs. Workable by different people si
 
 Sourced from `docs/data-science/decisions/forecasting_model.md`'s Limitations section:
 
-- **No per-city model exists yet.** The per-city refit (one city's own rows, that city's own
-  ampacity as the target) needs live Open-Meteo data and has not been run. Until it is, `"ml"`
-  raises `FileNotFoundError` for every city, and the shadow-pipeline ML candidates report
-  `status="unavailable"` with a named reason (`decisions/point_scope.md`).
-- The accuracy evidence in `decisions/forecasting_model.md` was measured on the retired
-  corridor-level series (a two-endpoint-city proxy whose target was the weaker of two cities'
-  ampacities). It is a corridor-era record and does not describe per-city model accuracy; a
-  per-city bake-off would have to be re-run to produce that.
+- **Per-city models exist locally, and none of them beats `"naive"`.** The per-city refit
+  (2026-10-13; one city's own rows, that city's own ampacity as the target) produced a model for
+  each of `AUSTIN`, `CORPUS_CHRISTI`, `MIDLAND` and `EL_PASO`, and `decisions/forecasting_model.md`
+  carries per-city accuracy with a per-city MET/NOT MET verdict. All four cities read **NOT MET**:
+  the winning ML candidate beats `"ewm"` in every city but beats `"naive"` in none of the four, so
+  the `"ml"` method is not an improvement over `"naive"` at the 60-minute horizon in any city. The
+  model files are git-ignored generated data: until they are produced in an environment (see the
+  clean-checkout bullet below), `"ml"` raises `FileNotFoundError` there, and the shadow-pipeline
+  ML candidates' status is as recorded in `decisions/point_scope.md`.
+- The corridor-era accuracy evidence in `decisions/forecasting_model.md` (a two-endpoint-city proxy
+  whose target was the weaker of two cities' ampacities) is kept as history. It showed the same
+  naive-wins pattern, but it does not describe the per-city models; the per-city figures are the
+  2026-10-13 sections of that record.
 - The Open-Meteo backfill depth (`config.FORECAST_ML_TRAINING_YEARS`, currently 3 years) is a
   fixed choice inside a proposed band, not a value tuned against measured accuracy.
 - A clean checkout has **no model artifact** until
@@ -132,7 +141,7 @@ Implementation-testable, replacing the pre-implementation placeholder:
   every method, never a second/parallel band implementation; and per-city model artifacts
   are isolated (`_MODEL_CACHE` never serves city A's model for a city B request).
 - `docs/data-science/decisions/forecasting_model.md` is the out-of-sample accuracy evidence:
-  measured MAE/RMSE per candidate per corridor (corridor-era; per-city numbers do not exist yet), an expectation stated before the verdict, and an
+  measured MAE/RMSE per candidate per city (the 2026-10-13 per-city refit; the corridor-era per-corridor numbers are kept as history), an expectation stated before the verdict, and an
   explicit met/not-met verdict — replacing "looks reasonable" with the record's stated
   expectation (the chosen candidate's held-out MAE beating both `"naive"` and `"ewm"` on the
   identical series) as the explicit, agreed error margin this section originally called for.
@@ -142,11 +151,14 @@ Implementation-testable, replacing the pre-implementation placeholder:
 - ~~Regression vs. neural network~~ — **answered, on measured evidence.** Per
   `docs/data-science/decisions/forecasting_model.md`, `MLPRegressor` (the neural-network
   candidate) was selected over `HistGradientBoostingRegressor` (the regression candidate) for
-  both retired corridors, by comparing measured out-of-sample MAE between the two. That same record
+  both retired corridors (corridor-era), by comparing measured out-of-sample MAE between the two.
+  The per-city refit (2026-10-13) answered it per city: `HistGradientBoostingRegressor` won for
+  `AUSTIN` and `EL_PASO` and `MLPRegressor` for `CORPUS_CHRISTI` and `MIDLAND`, by margins between
+  the two arms of 0.02 A to 0.80 A of MAE, so neither family is clearly better. That same record
   also states, and does not soften, that neither candidate currently beats the existing `"naive"`
-  baseline at the current 60-minute horizon — the estimator-selection question and the
-  overall-improvement-over-naive question are answered separately, and only the first reads as a
-  clean win.
+  baseline at the current 60-minute horizon, in the corridor-era run or in any of the four cities
+  — the estimator-selection question and the overall-improvement-over-naive question are answered
+  separately, and only the first reads as a clean win.
 - What forecast horizon matters for the dashboard's "trusted duration" feature — minutes, hours?
   Still genuinely open; no dashboard requirement has been specified yet.
 - Does this feed C10 (e.g. using forecast/actual divergence as an anomaly signal), or are they

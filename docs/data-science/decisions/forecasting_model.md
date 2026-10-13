@@ -3,12 +3,12 @@
 > **Scope change 2026-10-12.** The project no longer rates corridors; each of the four cities
 > (`AUSTIN`, `CORPUS_CHRISTI`, `MIDLAND`, `EL_PASO`, i.e. `config.LOCATIONS`) is an independent
 > rating point with no `min()` reduction across cities (see `point_scope.md`). The `"ml"` method
-> is now a per-city model (`forecast_{city}.joblib`). **Every measurement below (assembled rows,
-> MAE/RMSE, the two verdicts) is corridor-era (retired 2026-10-12)**: it was produced by pooled
-> two-endpoint-city, `min()`-reduced corridor models, is kept unchanged as history, and has not
-> been re-measured for per-city models. Per-city refit has not been run (it needs live Open-Meteo
-> data), so until it is, `method="ml"` finds no per-city artifact and raises the
-> `FileNotFoundError` described under Limitations.
+> is now a per-city model (`forecast_{city}.joblib`). **The per-city models were refit on
+> 2026-10-13** with `--bakeoff`, all four cities in one invocation, and the per-city results appear
+> in the sections labeled **per-city refit (2026-10-13)**. **The corridor-era measurements further
+> below (assembled rows, MAE/RMSE, the two corridor verdicts) are labeled corridor-era (retired
+> 2026-10-12)**: they were produced by pooled two-endpoint-city, `min()`-reduced corridor models,
+> remain as history, and do not describe the per-city models.
 
 **Status:** Ratified as a record of measured fact — the numbers below are settled (they are a
 direct transcription of a completed, reproducible run). The *recommendation* implied by those
@@ -36,11 +36,23 @@ forecast comes from that model's `.predict()` call on a lagged-`dlr_amps` + weat
 `"naive"`/`"ewm"`, comes from the existing `backtest_residuals` expanding-window walk-forward
 machinery — `"ml"` does not introduce a second, parallel band implementation.
 
-The estimator persisted per city is `MLPRegressor` (wrapped in
-`make_pipeline(StandardScaler(), MLPRegressor(...))`), chosen over the alternative
-`HistGradientBoostingRegressor` candidate by comparing measured out-of-sample MAE between the two
-— see Verdict below for the full reasoning, including that this choice is a comparison between
-the two ML candidates only, not evidence that either beats the existing baselines.
+The estimator persisted per city is the bake-off winner among the two ML arms, chosen by comparing
+measured out-of-sample MAE between them (2026-10-13 per-city refit):
+
+| City | Persisted estimator (bake-off winner among the ML arms) | Artifact |
+|---|---|---|
+| `AUSTIN` | `HistGradientBoostingRegressor` | `data/models/forecast_AUSTIN.joblib` |
+| `CORPUS_CHRISTI` | `MLPRegressor` (inside `make_pipeline(StandardScaler(), MLPRegressor(...))`) | `data/models/forecast_CORPUS_CHRISTI.joblib` |
+| `MIDLAND` | `MLPRegressor` (inside `make_pipeline(StandardScaler(), MLPRegressor(...))`) | `data/models/forecast_MIDLAND.joblib` |
+| `EL_PASO` | `HistGradientBoostingRegressor` | `data/models/forecast_EL_PASO.joblib` |
+
+The corridor-era winner was `MLPRegressor` for both corridors, chosen on MAE between the two ML
+arms only. See Verdict below for the full reasoning, including that each choice is a comparison
+between the two ML candidates only, not evidence that either beats the existing baselines.
+
+Each of the four artifacts was also loaded through `forecast_ampacity(history, method="ml")` on the
+last 168 rows of its own city's training frame and returned a forecast; that is an in-sample
+load-and-predict check that the artifacts are servable, not an accuracy measurement.
 
 ## Data provenance
 
@@ -49,6 +61,15 @@ below were produced. The per-city procedure is the same except that steps 2 and 
 city only: the target is that city's own computed ampacity (its `config.CITY_LINE_BEARING_DEG`
 bearing and static rating from `config.STATIC_RATINGS`), with no `min()` and no winning-city
 selection.*
+
+**Per-city run (2026-10-13).** All four cities were assembled and scored in one `--bakeoff`
+invocation with the default `--years` (3 complete calendar years). Each city's own Open-Meteo series
+(`AUSTIN`, `CORPUS_CHRISTI`, `MIDLAND`, `EL_PASO`) assembled to **26,304 rows**, spanning
+**2023-01-01T00:00:00+00:00 through 2025-12-31T23:00:00+00:00**. 26,304 is exactly 1,096 days x 24 hours, so
+`units_def.validate_pipeline_row` dropped no row in any city, and the run log
+(`data/models/retrain_logs/forecast_bakeoff_2026-10-13.log`, git-ignored) carries no dropped-row
+warning. After feature engineering and the fold-holdout split, **21,910 rows** were scored per ML
+candidate and **26,292 rows** per baseline candidate in every city (see Measured results).
 
 The training and validation series is **not** the live `historical_archive.py` CSV
 (`config.HISTORICAL_ARCHIVE_PATH`) — that file has zero rows today because Track 1 (Pipeline
@@ -90,6 +111,8 @@ candidate and 26,292 rows were scored per baseline candidate, per corridor (see 
 
 *Corridor-era (retired 2026-10-12) run: the command and per-corridor row counts below describe the corridor models measured then; the tunables themselves are unchanged.*
 
+The per-city run (2026-10-13) used the same command, `.venv/bin/python3 backend/forecast_training.py --bakeoff`, with every tunable below unchanged, on scikit-learn 1.9.1. Its per-city rows and window are the "per city" lines at the bottom of the table; the "per corridor" lines are the corridor-era run.
+
 A reader should be able to reproduce this run from the values below alone. All are the actual
 landed `backend/config.py` constants at the time of this run, and the reproduction command is:
 
@@ -110,14 +133,17 @@ landed `backend/config.py` constants at the time of this run, and the reproducti
 | Full ordered feature list | `dlr_amps_lag_1h`, `dlr_amps_lag_2h`, `dlr_amps_lag_3h`, `dlr_amps_lag_6h`, `dlr_amps_roll_mean_6h`, `air_temp`, `wind_speed`, `solar_radiation`, `hour_sin`, `hour_cos` | `ampacity_forecast.ML_FEATURE_COLUMNS` |
 | Regression candidate | `HistGradientBoostingRegressor(random_state=20260924)` | `forecast_training._make_regression_candidate` |
 | Neural-network candidate | `make_pipeline(StandardScaler(), MLPRegressor(hidden_layer_sizes=(32,16), max_iter=2000, random_state=20260924, early_stopping=False))` | `forecast_training._make_neural_network_candidate` |
-| Assembled rows per corridor | 26,304 | `bakeoff_report.json` (this run) |
-| Window (both corridors) | 2023-01-01T00:00:00+00:00 → 2025-12-31T23:00:00+00:00 | `bakeoff_report.json` (this run) |
+| Assembled rows per corridor (corridor-era, retired 2026-10-12) | 26,304 | `bakeoff_report.json` (corridor-era run) |
+| Window, both corridors (corridor-era, retired 2026-10-12) | 2023-01-01T00:00:00+00:00 → 2025-12-31T23:00:00+00:00 | `bakeoff_report.json` (corridor-era run) |
+| Assembled rows per city (2026-10-13 per-city run) | 26,304 in each of the four cities | `bakeoff_report.json` (2026-10-13 run) |
+| Window per city (2026-10-13 per-city run) | 2023-01-01T00:00:00+00:00 → 2025-12-31T23:00:00+00:00 | `bakeoff_report.json` (2026-10-13 run) |
+| scikit-learn version (2026-10-13 per-city run) | 1.9.1 | installed in `.venv` |
 
 ## Expectation
 
 The bar this model is judged against, **stated here before any verdict below**: the chosen ML
 candidate's held-out MAE must be **lower than BOTH `naive`'s and `ewm`'s** on the identical
-series for that corridor. Beating only one of the two baselines does not count as meeting the
+series for that city (that corridor, in the corridor-era run). Beating only one of the two baselines does not count as meeting the
 bar — the model has to actually outperform the statistical methods it was built to replace, not
 just one of them.
 
@@ -129,9 +155,59 @@ most defensible, non-fabricated bar available from what actually exists in this 
 
 ## Measured results
 
-Every figure below is transcribed directly from `data/models/bakeoff_report.json`, produced by
-the reproduction command above. Both ML candidates are shown regardless of which one lost, per
-D-01's no-default-lean mandate — a reader can see both arms' numbers, not just the winner's.
+The per-city figures below are transcribed directly from `data/models/bakeoff_report.json` (the
+2026-10-13 run), produced by the reproduction command above. Both ML candidates are shown
+regardless of which one lost, per D-01's no-default-lean mandate — a reader can see both arms'
+numbers, not just the winner's.
+
+### AUSTIN — per-city refit (2026-10-13) (26,304 assembled rows; window 2023-01-01 → 2025-12-31)
+
+| Candidate | Held-out MAE (A) | Held-out RMSE (A) | Rows scored |
+|---|---|---|---|
+| HistGradientBoostingRegressor (persisted winner among ML arms) | **85.22** | 113.06 | 21,910 |
+| MLPRegressor | 85.73 | 113.52 | 21,910 |
+| naive | **71.17** | 105.94 | 26,292 |
+| ewm | 96.50 | 127.66 | 26,292 |
+
+`naive`'s held-out MAE is 14.05 A lower than the persisted winner's (71.17 vs. 85.22); the two ML arms differ by 0.51 A.
+
+### CORPUS_CHRISTI — per-city refit (2026-10-13) (26,304 assembled rows; window 2023-01-01 → 2025-12-31)
+
+| Candidate | Held-out MAE (A) | Held-out RMSE (A) | Rows scored |
+|---|---|---|---|
+| HistGradientBoostingRegressor | 79.74 | 108.43 | 21,910 |
+| MLPRegressor (persisted winner among ML arms) | **78.93** | 108.14 | 21,910 |
+| naive | **62.41** | 92.74 | 26,292 |
+| ewm | 106.77 | 136.71 | 26,292 |
+
+`naive`'s held-out MAE is 16.52 A lower than the persisted winner's (62.41 vs. 78.93); the two ML arms differ by 0.80 A.
+
+### MIDLAND — per-city refit (2026-10-13) (26,304 assembled rows; window 2023-01-01 → 2025-12-31)
+
+| Candidate | Held-out MAE (A) | Held-out RMSE (A) | Rows scored |
+|---|---|---|---|
+| HistGradientBoostingRegressor | 103.71 | 138.45 | 21,910 |
+| MLPRegressor (persisted winner among ML arms) | **103.13** | 137.59 | 21,910 |
+| naive | **79.36** | 118.93 | 26,292 |
+| ewm | 131.45 | 170.81 | 26,292 |
+
+`naive`'s held-out MAE is 23.77 A lower than the persisted winner's (79.36 vs. 103.13); the two ML arms differ by 0.58 A.
+
+### EL_PASO — per-city refit (2026-10-13) (26,304 assembled rows; window 2023-01-01 → 2025-12-31)
+
+| Candidate | Held-out MAE (A) | Held-out RMSE (A) | Rows scored |
+|---|---|---|---|
+| HistGradientBoostingRegressor (persisted winner among ML arms) | **90.60** | 118.04 | 21,910 |
+| MLPRegressor | 90.61 | 118.25 | 21,910 |
+| naive | **78.26** | 113.29 | 26,292 |
+| ewm | 100.96 | 132.51 | 26,292 |
+
+`naive`'s held-out MAE is 12.33 A lower than the persisted winner's (78.26 vs. 90.60); the two ML arms differ by 0.02 A.
+
+The corridor-era subsections below are the history of the retired corridor models. Their source
+report is no longer on disk (it was absent when the per-city refit began, and
+`data/models/legacy_corridor_era/` holds only the anomaly reports), so those numbers survive only in
+this record.
 
 ### AUSTIN_CORPUS_CHRISTI — corridor-era (retired 2026-10-12) (26,304 assembled rows; window 2023-01-01 → 2025-12-31)
 
@@ -153,7 +229,17 @@ D-01's no-default-lean mandate — a reader can see both arms' numbers, not just
 
 ## Verdict
 
-*Corridor-era (retired 2026-10-12) verdicts, kept as history; not re-measured per city.*
+**Per-city verdicts (2026-10-13 refit)**, each against the unchanged Expectation above:
+
+**AUSTIN: NOT MET.** HistGradientBoostingRegressor (MAE 85.22) is lower than MLPRegressor (MAE 85.73) and lower than ewm (MAE 96.50), but it is **not** lower than naive (MAE 71.17) — 85.22 > 71.17. The expectation required beating BOTH baselines; naive was not beaten.
+
+**CORPUS_CHRISTI: NOT MET.** MLPRegressor (MAE 78.93) is lower than HistGradientBoostingRegressor (MAE 79.74) and lower than ewm (MAE 106.77), but it is **not** lower than naive (MAE 62.41) — 78.93 > 62.41. The expectation required beating BOTH baselines; naive was not beaten.
+
+**MIDLAND: NOT MET.** MLPRegressor (MAE 103.13) is lower than HistGradientBoostingRegressor (MAE 103.71) and lower than ewm (MAE 131.45), but it is **not** lower than naive (MAE 79.36) — 103.13 > 79.36. The expectation required beating BOTH baselines; naive was not beaten.
+
+**EL_PASO: NOT MET.** HistGradientBoostingRegressor (MAE 90.60) is lower than MLPRegressor (MAE 90.61) and lower than ewm (MAE 100.96), but it is **not** lower than naive (MAE 78.26) — 90.60 > 78.26. The expectation required beating BOTH baselines; naive was not beaten.
+
+*The corridor-era (retired 2026-10-12) verdicts below are kept as history; the per-city verdicts are above.*
 
 **AUSTIN_CORPUS_CHRISTI: NOT MET.** MLPRegressor (MAE 77.70) is lower than
 HistGradientBoostingRegressor (MAE 79.09) and lower than ewm (MAE 88.32), but it is **not** lower
@@ -175,6 +261,8 @@ narrower question than "does the ML method as a whole outperform naive/ewm," whi
 question the Expectation section above actually judges, and on which both corridors read
 **not met**.
 
+**Per-city (2026-10-13):** the estimator chosen per city was HistGradientBoostingRegressor for AUSTIN (85.22 vs. 85.73), MLPRegressor for CORPUS_CHRISTI (78.93 vs. 79.74), MLPRegressor for MIDLAND (103.13 vs. 103.71), and HistGradientBoostingRegressor for EL_PASO (90.60 vs. 90.61), again by comparing the two ML arms' measured MAE only. The margins between the arms are small (0.02 A to 0.80 A of MAE; 0.02 A for `EL_PASO`), so the per-city choice of arm rests on thin evidence, and unlike the corridor-era result the winning arm is not the same in every city.
+
 **What this means and what the next step would be:** at the currently configured 60-minute
 horizon, with the currently configured lag/rolling-window feature set, the persisted `"ml"`
 method does not currently outperform the naive last-value method it was built to replace, on
@@ -188,12 +276,15 @@ weaker predictor), a richer feature set, or a different lag structure would be t
 steps to investigate before recommending `"ml"` as the production-preferred method over `"naive"`
 at this specific horizon.
 
+On the 2026-10-13 per-city refit the same shortfall holds in all four cities: the persisted winner beats `ewm` everywhere but is beaten by `naive` everywhere, by 14.05 A (AUSTIN), 16.52 A (CORPUS_CHRISTI), 23.77 A (MIDLAND), 12.33 A (EL_PASO) of MAE (and `naive` also has the lower RMSE in every city). None of the four per-city `"ml"` models meets the Expectation, so the per-city numbers reinforce rather than change the corridor-era finding, and the recommendation question in Open Questions stays unresolved.
+
 ## Limitations
 
 - **Corridor-era two-endpoint-city bottleneck proxy (retired 2026-10-12).** The measured
   models' target was a `min()` reduction over exactly two endpoint cities' computed ampacity. That
-  construction is gone: per-city models target one city's own ampacity, so the measured numbers
-  above do not transfer to them and no per-city accuracy has been measured yet.
+  construction is gone: per-city models target one city's own ampacity, so the corridor-era
+  numbers do not transfer to them; the per-city accuracy is the per-city refit (2026-10-13)
+  section above.
 - **Fixed backfill depth.** Three years of Open-Meteo history per city was a fixed choice inside
   a proposed 2–5 year band (RESEARCH.md Assumption A3), not a value tuned or swept against
   accuracy — a different depth was not evaluated in this run.
@@ -208,14 +299,14 @@ at this specific horizon.
   pattern), so a partially-written model artifact can never be loaded.
 - **Model artifacts are git-ignored generated data.** `data/models/` is not committed. A clean
   checkout has no trained model until `.venv/bin/python3 backend/forecast_training.py --bakeoff`
-  (or `--city <name>`) <!-- VERIFY: CLI flag name after the per-city migration; the corridor-era flag was `--corridor` --> is run; until then, `forecast_ampacity(history, method="ml")` raises a
+  (or `--city <CITY>`; the corridor-era flag was `--corridor`) is run; until then, `forecast_ampacity(history, method="ml")` raises a
   `FileNotFoundError` naming the exact training command to run — it does not silently fall back
   to `"naive"` or `"ewm"`.
 
 ## Open Questions
 
-- Per-city refit: `"ml"` has to be refit for each of the four cities (not yet run), and the
-  corridor-era verdicts re-checked per city before any accuracy claim carries over.
+- ~~Per-city refit and re-check of the corridor-era verdicts~~ — **answered, 2026-10-13.**
+  All four cities were refit on 2026-10-13 (`--bakeoff`, one invocation). The persisted winners are `HistGradientBoostingRegressor` (AUSTIN), `MLPRegressor` (CORPUS_CHRISTI), `MLPRegressor` (MIDLAND), `HistGradientBoostingRegressor` (EL_PASO). All four cities read **NOT MET**: each winner beats `ewm` but not `naive`.
 - Whether a deeper or purpose-built time-series architecture (beyond `MLPRegressor`) is worth a
   second ML dependency, given that the current neural-network arm did not close the gap to
   naive at this horizon.
@@ -237,16 +328,19 @@ at this specific horizon.
 
 - `backend/ampacity_forecast.py` — the runtime `"ml"` method, `ML_FEATURE_COLUMNS`,
   `build_ml_features`, `backtest_residuals`, `forecast_columns`.
-- `backend/forecast_training.py` — offline assembly (`corridor_training_frame`,
-  `build_training_matrix`), the bake-off (`CANDIDATE_ESTIMATORS`, `bakeoff_corridor`,
-  `baseline_scores`, `corridor_report`, `select_winner`), and persistence
-  (`fit_corridor_model`, `persist_corridor_model`). <!-- VERIFY: function names are the corridor-era names; the per-city migration of this module was in progress when this note was written -->
+- `backend/forecast_training.py` — offline assembly (`city_training_frame`,
+  `build_training_matrix`), the bake-off (`CANDIDATE_ESTIMATORS`, `bakeoff_city`,
+  `baseline_scores`, `city_report`, `select_winner`), and persistence
+  (`fit_model`, `persist_model`).
 - `backend/config.py` — every tunable named in Configuration measured above.
 - `backend/thermal_model.py` — `perpendicular_wind`, `ieee738_ampacity`, the physics behind
   every `dlr_amps` figure in this record.
 - `backend/open_meteo_provider.py` — the Open-Meteo Archive API client used for backfill.
-- `data/models/bakeoff_report.json` — the machine-readable report this document transcribes
-  (git-ignored; reproduce via `.venv/bin/python3 backend/forecast_training.py --bakeoff`).
+- `data/models/bakeoff_report.json` — the machine-readable report this document transcribes; it
+  now holds the per-city run (2026-10-13), not the corridor-era run (git-ignored; reproduce via
+  `.venv/bin/python3 backend/forecast_training.py --bakeoff`).
+- `data/models/retrain_logs/forecast_bakeoff_2026-10-13.log` — the console log of the per-city run
+  (git-ignored).
 - `.planning/workstreams/ml-modeling/ROADMAP.md` — Phase 1 Success Criteria 3 and 4, and the
   Overview paragraph defining "real historical data" for this workstream.
 - `.planning/workstreams/ml-modeling/REQUIREMENTS.md` — FCST-01, FCST-02 full text.

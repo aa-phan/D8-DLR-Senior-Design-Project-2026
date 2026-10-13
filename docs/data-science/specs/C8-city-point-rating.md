@@ -61,7 +61,7 @@ C9 (ampacity forecasting), C10 (anomaly detection) and the shadow-forecast pipel
 ## Known Issues
 
 - **Line bearing is an assumption.** The per-city bearings are carried over from the retired corridors, not measured. Replace them with real line orientation when known (`point_scope.md`, Open Questions).
-- **Per-city model refit has not been run.** Retraining the "ml" forecaster, the anomaly model and the shadow correction models per city needs live Open-Meteo/ERCOT data. Until then, ML shadow candidates report `status="unavailable"` with a named reason (the existing `FileNotFoundError` path).
+- **Per-city model refit status.** The "ml" forecaster and the anomaly models were refit per city on 2026-10-13 (`docs/data-science/decisions/forecasting_model.md`, `docs/data-science/decisions/anomaly_detection_model.md`); those artifacts are git-ignored (`data/models/`), so a clean checkout or CI still has none and `method="ml"` raises the existing `FileNotFoundError`. The shadow correction models' refit status is as recorded in `docs/data-science/decisions/point_scope.md` (2026-10-12).
 - **Legacy corridor-named artifacts and logs are retained, not loaded.** `data/models/anomaly_{CORRIDOR}.joblib` (no corridor-named `forecast_*.joblib` is present), `data/shadow/models/*_{CORRIDOR}.joblib` and the two corridor-named shadow logs remain on disk as history.
 - **Shadow-evidence baseline.** Per-city logs start empty. The 2026-11-24 evaluation date was set against corridor-level collection; whether it moves is a team decision.
 - No real transmission-line geometry is used or needed by the per-city model. The 2026-10-12 retirement also retires the `corridor-geometry` workstream documents.
