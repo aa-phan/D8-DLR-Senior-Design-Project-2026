@@ -14,14 +14,14 @@ None. `frontend/README.md` states the planned stack is React (`System Design Rep
 Not yet designed. It should minimally provide:
 
 - **Design deliverables (no code):** an operator-workflow description (who the operator is, what decisions they make from the dashboard, what an alert must let them do within a time-sensitive situation), a wireframe set (default view, a fallback-active view, a data-unavailable view), and a display-requirements list traceable to ISO 9241's "clarity, consistency, and readability" (`Project Definition.md` Appendix A, item 11).
-- **Location selector:** a control populated from F1's location list, restricted to preset entries (no free-text), with a visible selected state and a sensible empty state if the list fails to load. What a "location" is depends on OD-1; the four cities in the I/O table (Austin, Corpus Christi, Midland, El Paso) are the only locations the source documents name.
+- **Location selector:** a control populated from F1's location list, restricted to preset entries (no free-text), with a visible selected state and a sensible empty state if the list fails to load. The entries are the four rating points: the cities in the I/O table (Austin, Corpus Christi, Midland, El Paso), which DS now rates as independent points (`config.LOCATIONS`). The selector has no corridor entries and no "all cities" aggregate; any combined view is a layout of four separate per-city results, never a computed minimum. Whether a per-station selector also exists is still open (OD-1).
 - **Layout slots** for F3 (status), F4 (chart), F5 (forecast), F6 (status banner and alerts), F7 (PSS/E), so panels are built independently without editing each other's files.
 - **Shared presentation rules every panel reuses:** unit labels from `PIPELINE_SCHEMA` (SW-NF2); timezone label and default (OD-7, SW-NF7); a shared time-series chart wrapper (axes, units, null-gap handling, limit line, optional band) that F4 and F5 both use (ROADMAP Finding 8); null/"unavailable" rendering that is visibly different from zero; and the alert/status color-and-text conventions F6 and F3 share.
 - **Stack decision record** (OD-11): language, build tool, charting library, data-fetching approach, test frameworks. A short decision note is the deliverable; the choice itself is the team's.
 
 ## Blocked by
 
-None internal. Wants **OD-1** (so the selector knows what it selects) and **OD-11** (so scaffolding isn't redone). The wireframe and ISO 9241 analysis work needs neither and can start immediately.
+None internal. Wants the remainder of **OD-1** (so the selector knows whether stations are selectable too) and **OD-11** (so scaffolding isn't redone). The wireframe and ISO 9241 analysis work needs neither and can start immediately.
 
 ## Blocks
 
@@ -53,6 +53,7 @@ Concerns inherited from the source documents rather than from existing code:
 
 ## Open Questions
 
-- OD-1, OD-7, OD-10, OD-11 (see PRD §7).
+- OD-1 (remainder: station-to-city mapping, per-station view), OD-7, OD-10, OD-11 (see PRD §7).
+- Should the shell show all four cities at once (a four-point overview) or one at a time? Not stated in the sources; either way, no cross-city reduction is shown.
 - Does the dashboard need to be responsive/mobile, or desktop control-room only? Not stated anywhere in the sources.
 - Accessibility targets beyond ISO 9241 (e.g. WCAG)? Not stated.

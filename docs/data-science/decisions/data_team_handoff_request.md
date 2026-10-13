@@ -19,11 +19,13 @@ accommodate late data.
 
 ## What's being requested
 
-The smallest useful handoff to unblock an eventual sensor-grounded validation of the two corridors
-already in scope (AUSTIN_CORPUS_CHRISTI, MIDLAND_EL_PASO):
+The smallest useful handoff to unblock an eventual sensor-grounded validation of the four per-city rating
+points now in scope (AUSTIN, CORPUS_CHRISTI, MIDLAND, EL_PASO; see `point_scope.md`. This request
+was drafted 2026-10-05 against the corridor-era scope of AUSTIN_CORPUS_CHRISTI and MIDLAND_EL_PASO,
+retired 2026-10-12):
 
 1. **Cleaned local weather observations** — station-level wind speed/direction, temperature, and
-   (if available) solar irradiance at each corridor's endpoint cities (Austin, Corpus Christi,
+   (if available) solar irradiance at each of the four cities (Austin, Corpus Christi,
    Midland, El Paso), post quality-control.
 2. **Timestamps and availability semantics, kept distinct** — the observation's own valid time,
    AND separately the time the cleaned record actually became queryable (its own
@@ -45,8 +47,8 @@ already in scope (AUSTIN_CORPUS_CHRISTI, MIDLAND_EL_PASO):
 
 - No request for real-time/streaming delivery — a batch historical pull covering whatever window
   the data team already has clean is sufficient to start.
-- No request for new sensor installation or new corridors — this is scoped to the two corridors
-  already in the existing analysis.
+- No request for new sensor installation or new locations — this is scoped to the four city
+  points already in scope.
 
 ## Contingency if the data arrives late or incompletely
 

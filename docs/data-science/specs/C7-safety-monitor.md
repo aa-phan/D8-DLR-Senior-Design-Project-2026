@@ -40,7 +40,7 @@ Input `raw_data` dict keys map loosely to `PIPELINE_SCHEMA` fields (`wind` ≈ `
 
 ## Parallel-safe with
 
-**C8** — independent dependency chains (C7 ← C5; C8 ← C4 + C5), no shared files. 
+**C8** — independent dependency chains (C7 ← C5; C8 ← C4 + C5), no shared files. (C8's per-city rating constructs one `DLRSafetyMonitor` per city and calls `run_check` on it; it does not modify this module.)
 
 ## Known Issues
 
@@ -54,4 +54,4 @@ Input `raw_data` dict keys map loosely to `PIPELINE_SCHEMA` fields (`wind` ≈ `
 
 ## Open Questions
 
-- Where does the monitor get a `ConductorConfig` for each check cycle — one global default, or per-location like C1's open question on conductor properties?
+- Where does the monitor get a `ConductorConfig` for each check cycle — one global default, or per-location like C1's open question on conductor properties? **Partly answered**: for per-city ratings, C8's `city_point.city_point(city)` supplies a `ConductorConfig` carrying that city's line bearing (`config.CITY_LINE_BEARING_DEG`, an assumed value carried over from the retired corridor bearings), along with the city's own `static_rating` and `rating_bounds`. Other conductor properties remain a single global default.

@@ -63,7 +63,7 @@ No document in this repo — searched across `docs/`, `.planning/`, and `backend
 - Cadence (per pipeline run? per hour? on-demand?).
 - Whether Power Systems wants Amps, MW, or both, and whether they want the confidence band or
   just the point forecast.
-- Granularity (per-corridor, per-station, or per-city).
+- Granularity (per-station or per-city; the project now rates each of its four cities as an independent point, so per-city is the natural unit, but this is not agreed with Power Systems; corridor granularity was retired 2026-10-12, see `point_scope.md`).
 
 **This is deliberately not resolved here.** Defining the actual contract requires a conversation
 with the Power Systems sub-team, not a unilateral DS-side decision — flag it again when Track 1

@@ -6,7 +6,7 @@
 
 ## Current Implementation
 
-- `backend/ercot_data_retriever.py::pull_ercot_data(start, end)` — pulls via the `gridstatus` library, sums ERCOT zone columns matching `"WEST"` (case-insensitive) as a western-corridor load proxy (falls back to total-ERCOT if no match), writes `outputs/ercot_data/ercot_west_load_{start_tag}_{end_tag}.csv`.
+- `backend/ercot_data_retriever.py::pull_ercot_data(start, end)` — pulls via the `gridstatus` library, sums ERCOT zone columns matching `"WEST"` (case-insensitive) as a West-zone load proxy (falls back to total-ERCOT if no match; the `zone_substrings` parameter defaults to `("WEST",)`, and the per-city selection used for training-time characterization is `config.ANOMALY_ML_ERCOT_ZONE_SUBSTRINGS_BY_CITY` — Austin and Corpus Christi `SOUTH`, Midland and El Paso `WEST`), writes `outputs/ercot_data/ercot_west_load_{start_tag}_{end_tag}.csv`.
 - `backend/ercot_dlr_merger.py::amps_to_mw(amps, voltage_kv, pf) -> float` — `P = sqrt(3) * V * I * pf / 1000`. Module defaults: `LINE_VOLTAGE_KV = 345.0`, `POWER_FACTOR = 0.95`.
 - `backend/ercot_dlr_merger.py::process_dlr_to_hourly(dlr_csv_path) -> pd.DataFrame` — resamples 5-minute DLR data to 1-hour bins, `.min()` for `dlr_amps` (worst-case-within-hour: "if wind dies for 15 minutes, the hourly rating must reflect the weakest link"), `.mean()` for wind/temp context. Converts to `dlr_capacity_mw` and `static_capacity_mw`.
 - `backend/ercot_dlr_merger.py::load_ercot_west_data(start, end, csv_path) -> pd.DataFrame` — loads and time-filters the retriever's output.

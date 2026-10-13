@@ -3,7 +3,7 @@
 
 **Status:** Internal engineering reference. Not a course deliverable — does not replace or get submitted alongside `Project Definition.md`, `Prior Art Report.md`, or `System Design Report.md`. Written to define what the Software sub-team's subsystem (`frontend/` React dashboard and `api/` Flask backend-for-frontend) must do, grounded in those course documents and in what the Data Science (DS) subsystem actually produces today. **Nothing described here has been built** — `frontend/` and `api/` each contain only a placeholder README.
 
-**Last reviewed against repo state:** 2026-10-08
+**Last reviewed against repo state:** 2026-10-12 (per-city scope change; the backend migration is complete in the working tree, see §1.1)
 
 ---
 
@@ -26,6 +26,15 @@ The Software subsystem turns the DS pipeline's output into an operator-facing da
 
 Note: WBS 4.3.1–4.3.3 (known-value validation, synthetic stress testing, dimensional-analysis validation) sit under the Software sub-team heading in Appendix B/C but are verification of the DS pipeline's numerical behavior; this PRD treats them as owned by DS's own test suites and only covers the dashboard-facing parts (F8).
 
+### 1.1 Rating unit: one point per city
+
+As of 2026-10-12 the Data Science side no longer rates transmission corridors. Each of four cities (`AUSTIN`, `CORPUS_CHRISTI`, `MIDLAND`, `EL_PASO`) is one independent rating **point** with its own static rating, plausibility bounds, location and result. There is no pairing of cities, no weakest-link `min()`, and no bottleneck point. The contract is `docs/data-science/decisions/point_scope.md`. Consequences for this subsystem:
+
+- The dashboard consumes **per-city** results: four points, each shown on its own. It never shows, computes or implies a corridor rating, a corridor minimum or a bottleneck.
+- A city's static limit is its own `config.STATIC_RATINGS` entry, no longer the `min()` of a corridor's two endpoint cities. Per `point_scope.md`, Corpus Christi now uses 3000 A (was 1900 A as the minimum of the Austin / Corpus Christi pair) and El Paso 1450 A. Applying the same old minimum rule to the current table, Austin (1900 A) and El Paso (1450 A) are numerically unchanged and Midland moves from 1450 A to its own 1800 A (derived here from `config.STATIC_RATINGS`, not stated in `point_scope.md`). These remain placeholder midpoints, not confirmed line ratings.
+- The shadow-forecast logs are one file per city with `schema_version: 3`. The two corridor-named files are legacy and must be tolerated (OD-12).
+- Backend status: the point model is adopted and the backend migration is merged in the working tree: `backend/city_point.py`, `backend/city_rating.py` (`rate_city`) and the per-city shadow pipeline (`schema_version: 3`, `forecast_shadow_pipeline.log_cycle_predictions`) exist, and the `rate_city` keys and shadow v3 fields below were read from that code on 2026-10-12. Open points are marked as such in the specs.
+
 ## 2. Problem Statement
 
 Static Line Ratings hide the 30–50% of extra capacity that exists most of the time (`Project Definition.md`, "Background Information"). The DS pipeline can compute that capacity, but a rating that only exists in CSV files is not usable by an operator, and a dynamic rating is only safe to act on when the operator can tell, at a glance, (a) what the number is, (b) how long it can be trusted, and (c) whether the system has already fallen back to the static rating because inputs became unreliable. The dashboard's job is to make the capacity visible **without ever making an untrustworthy dynamic rating look trustworthy** — the same fail-safe commitment as `Project Definition.md` "Ethical Considerations" ("If the data cuts out, the system must default back to the conservative static rating immediately").
@@ -41,7 +50,7 @@ Static Line Ratings hide the 30–50% of extra capacity that exists most of the 
 
 | Producer | What the Software subsystem needs from it |
 |---|---|
-| DS pipeline (via C3 export, `docs/data-science/schema/pipeline_output_v1.md`) | Per-location DLR value, headroom, weather inputs; **also** forecast, trusted-duration, and fallback/alert status — most of which the v1 export does not yet carry (§8) |
+| DS pipeline (via C3 export, `docs/data-science/schema/pipeline_output_v1.md`) | Per-location DLR value, headroom, weather inputs; **also** forecast, trusted-duration, and fallback/alert status — most of which the v1 export does not yet carry (§8). Per-city rating results (`city_rating.rate_city`) are in-process only today |
 | DS fixture (`data/fixtures/sample_pipeline_output.csv`) | The only dashboard-development data guaranteed to exist on a fresh clone — `outputs/` is gitignored (`.gitignore: /outputs`) |
 
 ## 4. How This PRD Relates to the Roadmap
@@ -63,7 +72,7 @@ Status reflects what exists in the repo: **all Not started**. "Source" cites the
 
 | ID | Requirement | Source | Status | Owning Component |
 |---|---|---|---|---|
-| SW-F1 | Operator can select a location from a preset list of locations in the project's data (not free-form entry) | `Project Definition.md` UI Specifications ("users to only be able to select from a preset amount of locations") | Not started | F2 |
+| SW-F1 | Operator can select a location from a preset list of locations in the project's data (not free-form entry). The list is the four rating points (cities) | `Project Definition.md` UI Specifications ("users to only be able to select from a preset amount of locations") | Not started | F2 |
 | SW-F2 | Display the current dynamic thermal limit (A) for the selected location alongside its static limit | `Project Definition.md` (mock-up: "calculate a new dynamic thermal limit"); I/O table outputs | Not started | F3 |
 | SW-F3 | Display current weather conditions driving the rating: ambient temperature, wind speed, solar irradiance | `Project Definition.md` (mock-up: "current weather condition"); I/O table inputs | Not started | F3 |
 | SW-F4 | Display the current sag of the line | `Project Definition.md` (mock-up: "current sag of the line") | Not started — **no data producer exists** (OD-4) | F3 |
@@ -94,7 +103,7 @@ None of these is decided by the source documents. Each is listed with the compon
 
 | ID | Decision | Why it is open (evidence) | Blocks |
 |---|---|---|---|
-| OD-1 | **Unit of selection.** Is a "location" a city (Austin, Corpus Christi, Midland, El Paso — the four in the I/O table), a corridor (`config.CORRIDOR_ENDPOINTS`: two corridors), or a weather station (`stid`, the only identifier in the v1 export)? | `Project Definition.md` says "preset locations ... in our database" and tabulates four cities; the v1 export and fixture are keyed by `stid` only, with no city/corridor column; `docs/data-science/decisions/geographic_scope.md` leaves city→corridor mapping open. No "database" exists in the repo — only flat files. | F1 route shape, F2 selector |
+| OD-1 | **Unit of selection.** *Narrowed on 2026-10-12.* DS now rates four independent city points (`config.LOCATIONS`), and corridors are retired (`point_scope.md`), so a "location" is a city, not a corridor. Still open: (a) the v1 export and fixture are keyed by `stid` with no city column, so how a station file maps to a city is undefined (G1); (b) whether the dashboard also exposes a per-station view, since a city's observation comes from its nearest usable station and the station can differ between runs. | `Project Definition.md` says "preset locations ... in our database" and tabulates four cities, which now matches DS's rating points. The v1 export and fixture carry only `stid`. No "database" exists in the repo — only flat files. | F1 route shape, F2 selector |
 | OD-2 | **Data-feed mechanism.** Thin file-serving layer, live-polling service, or one that also proxies PSS/E? Push (WebSocket/SSE) or poll? Refresh cadence? | `api/README.md`: "Not yet decided". `System Design Report.md` §3.3 says the dashboard must update "in real time" and "within the trusted duration refresh window", but nothing produces live data today — the pipeline writes batch CSVs. | F1, F5, F8 |
 | OD-3 | **Meaning and units of "trusted duration".** | `Project Definition.md` I/O table gives 10 or 20 **seconds** ("window ... before the system requires a data refresh"), yet DS data cadence is 5-minute (schema) to hourly (committed outputs) and DS's forecast horizon is 60 minutes (`C9`, `config.FORECAST_HORIZON_MINUTES`). `C9` Open Questions: "What forecast horizon matters for the dashboard's 'trusted duration' feature — minutes, hours? Still genuinely open; no dashboard requirement has been specified yet." No column named for it exists. | F5 (SW-F5), F8 |
 | OD-4 | **Source and owner of line sag.** | The mock-up shows "current sag of the line"; the ethical section cites sag as the safety risk. No sag computation exists anywhere in `backend/` (searched), no WBS task (Appendix B 4.1.x) names a sag display, and IEEE 738 ampacity does not output sag. | F3 (SW-F4) |
@@ -105,7 +114,7 @@ None of these is decided by the source documents. Each is listed with the compon
 | OD-9 | **PSS/E → dashboard interface** (format, cadence, fields, granularity). | `docs/data-science/decisions/pss_e_handoff.md`: the DS→PSS/E handoff is "informal", never confirmed; there is no document describing PSS/E → dashboard at all. WBS 4.2.2 exists, with Power Systems and others as support. | F7 |
 | OD-10 | **Which standards constrain the UI beyond ISO 9241**, and how. | `Project Definition.md` says the UI should align with IEEE 2030.2 (energy storage interoperability), IEEE 1815 (DNP3, "between the dashboard and telemetry devices"), and IEEE C37.118 (synchrophasors). `System Design Report.md` Appendix A keeps 1815 and C37.118 but drops 2030.2, and no telemetry device or synchrophasor feed exists in the repo. | F2, F8 |
 | OD-11 | **Front-end stack beyond "React" and "Flask".** Language (JS/TS), build tool, charting library, state/data-fetching approach, test frameworks, styling approach; Flask dependency management (Flask is not in `requirements.txt`; no `package.json` exists). | `System Design Report.md` Appendix E names only React and Flask. | F1, F2 (decide first) |
-| OD-12 | **Whether the dashboard also consumes DS's shadow-forecast stream.** | Not in this PRD's grounding set, but `data/shadow/predictions/*.jsonl` is a separate DS output (fields include `corridor`, `method`, `ampacity_amps`, `fallback_used`, `fallback_reason`, `valid_time`, `horizon_minutes`) with its own status owned by DS. Whether it is a dashboard input or a DS-internal experiment is a DS call. | F5, F6 |
+| OD-12 | **Whether the dashboard also consumes DS's shadow-forecast stream.** | Not in this PRD's grounding set, but `data/shadow/predictions/{CITY}.jsonl` is a separate DS output (v3 records carry `city`, `candidates`, `valid_time`, `horizon_minutes`, `fallback_used`, `fallback_reason`) with its own status owned by DS. Whether it is a dashboard input or a DS-internal experiment is a DS call. If consumed, readers must tolerate the legacy corridor files (`AUSTIN_CORPUS_CHRISTI.jsonl`, `MIDLAND_EL_PASO.jsonl`; v1 flat and v2 rows) and must not mix them into per-city views. Per-city logs start empty and the per-city ML candidates report `unavailable` until the models are refit (`point_scope.md` Open Questions), so a v3 view will be sparse for some time. | F5, F6 |
 | OD-13 | **Authentication / access control for an operator tool.** | Nothing in the source documents mentions operator login or roles. Likely out of scope for a course prototype, but unstated. | F1 |
 
 ## 8. Data Contract Requests to Data Science
@@ -114,11 +123,11 @@ The Software subsystem's most important external dependency, following the patte
 
 | Gap | Need | Current state | Needed by |
 |---|---|---|---|
-| G1 | A location/corridor identifier (OD-1) | Only `stid`; no `stid`→city/corridor mapping in the export | F1, F2 |
-| G2 | Per-row fallback/anomaly status: whether fallback is active, which gate/reason, which rating basis (OD-6), and any alert text | Exists only in memory as `DLRSafetyMonitor.run_check`'s `{status, rating, fallback, alerts}` and `AnomalyDetector.check`'s `(is_anomalous, reason)`; `anomaly_score` is in `PIPELINE_SCHEMA` v2 but **not** in the v1 export | F6, F3 |
+| G1 | A city identifier (OD-1) | Only `stid`; no `stid`→city mapping in the export. The per-city rating result and v3 shadow records do carry `city` | F1, F2 |
+| G2 | Per-row fallback/anomaly status: whether fallback is active, which gate/reason, which rating basis (OD-6), and any alert text | Exists only in memory: `DLRSafetyMonitor.run_check`'s `{status, rating, fallback, alerts}`, surfaced per city by `city_rating.rate_city` (keys `status`, `fallback`, `alerts`, `exhausted`, `station_id`), and `AnomalyDetector.check`'s `(is_anomalous, reason)`; `anomaly_score` is in `PIPELINE_SCHEMA` v2 but **not** in the v1 export. No file or HTTP form of the per-city result exists | F6, F3 |
 | G3 | Forecast columns in the export | `forecast_horizon_min`, `forecast_amps`, `forecast_ci_lower_amps`, `forecast_ci_upper_amps` are in `PIPELINE_SCHEMA` v2, but not in the v1 export. Per `C9`, cold start emits no forecast columns at all | F5 |
 | G4 | A trusted-duration value or a definition from which the UI can show one (OD-3) | None | F5 |
-| G5 | The static rating in effect, as a column | Not exported; only derivable as `dlr_amps / (1 + dlr_headroom_pct/100)` (equals 900 A in the committed outputs and fixture). Deriving it in the UI would be rating math (SW-NF4) | F3, F4 |
+| G5 | The static rating in effect, as a column | Not exported; only derivable as `dlr_amps / (1 + dlr_headroom_pct/100)` (equals 900 A in the committed outputs and fixture). Deriving it in the UI would be rating math (SW-NF4). The per-city value is `config.STATIC_RATINGS[city]` (backend constant); whether the `rate_city` result carries it is not stated in the contract (open) | F3, F4 |
 | G6 | One timestamp format | Fixture: `2026-07-15T18:00:00Z`. Committed outputs: `2025-07-01 00:00:00+00:00`. Both are UTC; formats differ | F1 |
 | G7 | Provenance / data-quality flags the UI can surface | `wind_source`, `temp_source`, `humidity_source`, `solar_source` exist in `PIPELINE_SCHEMA` v3; not in the v1 export. Also see §9 on constant/missing columns | F6 (optional) |
 | G8 | Sag (OD-4) | Not produced | F3 |
@@ -136,7 +145,7 @@ Facts read directly from `data/fixtures/sample_pipeline_output.csv` and the loca
 - **`relative_humidity` is entirely empty** in `AN489` and `AN490`.
 - **Headroom is far above the stated 30–50%:** `dlr_headroom_pct` peaks at 209–274% across the six committed stations (against the default 900 A static rating; `dlr_amps` up to 3363 A). The `Project Definition.md` I/O table bounds the new limit at 1.5x the static maximum (e.g. Austin 800–4500 A vs 800–3000 A static).
 - **DLR below static occurs:** `F2876`, `F9684`, `KSWW` have negative headroom (down to −32.8%) and `dlr_uplift_flag = False` for 41, 65 and 41 rows respectively.
-- **Static line in plots is 900 A** (`DEFAULT_STATIC_RATING`), not the per-city values in `backend/config.py::STATIC_RATINGS` (e.g. Austin 1900 A) — so the existing PNGs and committed CSVs do not use the four-city static ratings.
+- **Static line in plots is 900 A** (`DEFAULT_STATIC_RATING`), not the per-city values in `backend/config.py::STATIC_RATINGS` (e.g. Austin 1900 A) — so the existing PNGs and committed CSVs do not use the four-city static ratings. Under the per-city model a city uses its own entry (Austin 1900 A, Corpus Christi 3000 A, Midland 1800 A, El Paso 1450 A), not the minimum of a corridor pair.
 - **MW file (`merged_ercot_dlr_AN489.csv`)** is hourly, 96 rows, with `datetime_local` (US/Central); `static_capacity_mw` is a constant 510.9 MW (900 A at 345 kV, power factor 0.95). The "stress %" panel in `holistic_view_AN489.png` reaches ~1750% (load ÷ single-line capacity) and is, per DS C6, illustrative only.
 - **Existing visualizations the dashboard can take cues from (not copy as spec):** `outputs/station_plots/*.png` — DLR vs. static with shaded headroom, total vs. perpendicular wind, ambient temperature, headroom histogram; `holistic_view_*.png` — MW capacity vs. load.
 
@@ -163,5 +172,6 @@ Places where the course deliverables disagree with each other or with the repo, 
 - `docs/System Design Report.md` — §3.1 (layers), §3.2 (Data Integrity), §3.3 (Test Plan: UI Dashboard, Full System Integration), Appendix B (WBS 4.0), Appendix C (LRC), Appendix E (BOM)
 - `docs/data-science/specs/C3-export-visualization.md` and `docs/data-science/schema/pipeline_output_v1.md` — the DS→dashboard contract
 - `docs/data-science/specs/C7-safety-monitor.md`, `C9-ampacity-forecasting.md`, `C10-anomaly-detection.md` — producers of the status, forecast, and anomaly data F5/F6 display
-- `docs/data-science/decisions/pss_e_handoff.md`, `geographic_scope.md` — related open DS-side decisions
+- `docs/data-science/decisions/point_scope.md` — the per-city (point) scope contract; supersedes the corridor model in `geographic_scope.md` (C8). Read it first
+- `docs/data-science/decisions/pss_e_handoff.md`, `geographic_scope.md` — related open DS-side decisions (`geographic_scope.md` is partly superseded by `point_scope.md`)
 - `data/fixtures/sample_pipeline_output.csv` — the only guaranteed dev data

@@ -50,5 +50,6 @@ External blockers (not components in this repo) — F5, F6: DS contract extensio
 ## Shared Conventions Across Specs
 
 - Reference `docs/data-science/schema/pipeline_output_v1.md` and `backend/units_def.py::PIPELINE_SCHEMA` for column names, units and ranges. Do not restate or fork them here.
+- Per-city, not per-corridor: the rating unit is one of four cities (`config.LOCATIONS`), per `docs/data-science/decisions/point_scope.md`. No spec shows or computes a corridor rating, a minimum across cities, or a bottleneck. Result names (`city_rating.rate_city` dict, shadow `schema_version: 3`) follow that contract and must be confirmed against the backend code when it lands.
 - Fixture-first: every spec's acceptance criteria that can be met against `data/fixtures/sample_pipeline_output.csv` should be.
 - Every spec is "Not started"; update this table and the spec header together when status changes.

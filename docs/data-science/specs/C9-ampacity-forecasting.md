@@ -24,11 +24,13 @@ static window.
 - **`method="ewm"`** — a time-aware exponentially-weighted moving average
   (`config.FORECAST_EWM_HALFLIFE_MIN` half-life), using `series.ewm(times=...)` when a real
   `datetime_utc` index is available.
-- **`method="ml"`** (v1.3 Phase 1, `ml-modeling` workstream) — a per-corridor fitted
+- **`method="ml"`** (v1.3 Phase 1, `ml-modeling` workstream) — a per-city fitted
   `scikit-learn` estimator over lagged `dlr_amps` plus multivariate weather features
   (`ampacity_forecast.ML_FEATURE_COLUMNS`, built by `build_ml_features`), loaded from a
-  persisted artifact keyed purely off `history["corridor"]` — no new parameter was added to the
-  function signature to support this.
+  persisted artifact keyed purely off `history["city"]` — no new parameter was added to the
+  function signature to support this. The city must be a key of `config.LOCATIONS`; it is
+  validated against that closed set before any artifact path is built. (Until 2026-10-12 this
+  was a per-corridor model keyed off `history["corridor"]`; see `decisions/point_scope.md`.)
 
 All three share the same downstream machinery: `backtest_residuals`'s expanding-window
 walk-forward backtest is the **single source** of the confidence band's width for every method —
@@ -37,11 +39,14 @@ from a `ForecastResult` to pipeline output, mapping onto the four `PIPELINE_SCHE
 columns.
 
 `backend/forecast_training.py` is the offline training/bake-off entry point for the `"ml"`
-method: it assembles a real, Open-Meteo-backfill-derived per-corridor training series, fits and
-persists a per-corridor model, and (via `--bakeoff`) runs the two-candidate comparison documented
-in `docs/data-science/decisions/forecasting_model.md`. Model artifacts are git-ignored generated
-data (`config.FORECAST_ML_MODEL_DIR`, `/data/models/`) — a clean checkout has no trained model
-until this script is run.
+method: it assembles a real, Open-Meteo-backfill-derived per-city training series (one city's own
+rows and that city's own ampacity as the target — not a minimum across cities), fits and persists
+a per-city model `forecast_{city}.joblib`, and (via `--bakeoff`) runs the two-candidate comparison
+documented in `docs/data-science/decisions/forecasting_model.md`. `--city <CITY>` selects one city
+(default: every city in `config.LOCATIONS`). Model artifacts are git-ignored generated data
+(`config.FORECAST_ML_MODEL_DIR`, `/data/models/`) — a clean checkout has no trained model until
+this script is run. **The per-city refit has not been run yet**; no corridor-named `forecast_*.joblib` artifact is
+present in this checkout, and any such file would be legacy and is not loaded.
 
 ## Interface & Data Contract
 
@@ -49,7 +54,7 @@ The shipped contract, read off `backend/ampacity_forecast.py`:
 
 - **Function:** `forecast_ampacity(history: pd.DataFrame, horizon_min=None, method="naive", quantiles=None, min_rows=None) -> ForecastResult | None`.
   - `history` — an archive-shaped frame (`historical_archive.read_history`'s output shape for
-    `"naive"`/`"ewm"`; additionally requires `corridor` and the weather columns in
+    `"naive"`/`"ewm"`; additionally requires `city` and the weather columns in
     `config.FORECAST_ML_FEATURE_WEATHER_COLUMNS` for `"ml"`).
   - `method` — one of `FORECAST_METHODS` (`"naive"`, `"ewm"`, `"ml"`); raises `ValueError` naming
     the tuple for anything else, checked before any history is read.
@@ -70,9 +75,9 @@ The shipped contract, read off `backend/ampacity_forecast.py`:
 - **Target:** `dlr_amps` shifted forward by `config.FORECAST_HORIZON_MINUTES` worth of rows
   (offline, `forecast_training.build_training_matrix`); at inference, the point forecast is the
   fitted model's `.predict()` call on the current feature row.
-- **Failure mode:** `method="ml"` **raises** `FileNotFoundError` (naming the corridor, the
+- **Failure mode:** `method="ml"` **raises** `FileNotFoundError` (naming the city, the
   expected artifact path, and the exact training command to run) when no trained artifact
-  exists for the requested corridor — it never silently degrades to `"naive"` or `"ewm"`.
+  exists for the requested city — it never silently degrades to `"naive"` or `"ewm"`.
 
 ## Blocked by
 
@@ -100,14 +105,18 @@ shared code beyond both consuming C4/C5 outputs. Workable by different people si
 
 Sourced from `docs/data-science/decisions/forecasting_model.md`'s Limitations section:
 
-- The corridor-level training/validation target is a **two-endpoint-city proxy** for the
-  bottleneck the pipeline's corridor discretization (C8) will eventually measure at more points,
-  once Track 1 accrues real per-point history — the `"ml"` method's feature distribution may not
-  exactly match live bottleneck-point weather statistics until then.
+- **No per-city model exists yet.** The per-city refit (one city's own rows, that city's own
+  ampacity as the target) needs live Open-Meteo data and has not been run. Until it is, `"ml"`
+  raises `FileNotFoundError` for every city, and the shadow-pipeline ML candidates report
+  `status="unavailable"` with a named reason (`decisions/point_scope.md`).
+- The accuracy evidence in `decisions/forecasting_model.md` was measured on the retired
+  corridor-level series (a two-endpoint-city proxy whose target was the weaker of two cities'
+  ampacities). It is a corridor-era record and does not describe per-city model accuracy; a
+  per-city bake-off would have to be re-run to produce that.
 - The Open-Meteo backfill depth (`config.FORECAST_ML_TRAINING_YEARS`, currently 3 years) is a
   fixed choice inside a proposed band, not a value tuned against measured accuracy.
 - A clean checkout has **no model artifact** until
-  `.venv/bin/python3 backend/forecast_training.py --bakeoff` (or `--corridor <name>`) is run —
+  `.venv/bin/python3 backend/forecast_training.py --bakeoff` (or `--city <CITY>`) is run —
   `data/models/` is git-ignored, generated data, not part of the repository checkout.
 
 ## Acceptance Criteria
@@ -120,10 +129,10 @@ Implementation-testable, replacing the pre-implementation placeholder:
   feature may see its own or a later row); the `"ml"` point forecast is genuinely sensitive to
   its weather inputs while `"naive"`/`"ewm"` are provably unaffected by the same edit; the
   confidence band's width comes from `backtest_residuals`'s walk-forward machinery alone, for
-  every method, never a second/parallel band implementation; and per-corridor model artifacts
-  are isolated (`_MODEL_CACHE` never serves corridor A's model for a corridor B request).
+  every method, never a second/parallel band implementation; and per-city model artifacts
+  are isolated (`_MODEL_CACHE` never serves city A's model for a city B request).
 - `docs/data-science/decisions/forecasting_model.md` is the out-of-sample accuracy evidence:
-  measured MAE/RMSE per candidate per corridor, an expectation stated before the verdict, and an
+  measured MAE/RMSE per candidate per corridor (corridor-era; per-city numbers do not exist yet), an expectation stated before the verdict, and an
   explicit met/not-met verdict — replacing "looks reasonable" with the record's stated
   expectation (the chosen candidate's held-out MAE beating both `"naive"` and `"ewm"` on the
   identical series) as the explicit, agreed error margin this section originally called for.
@@ -133,7 +142,7 @@ Implementation-testable, replacing the pre-implementation placeholder:
 - ~~Regression vs. neural network~~ — **answered, on measured evidence.** Per
   `docs/data-science/decisions/forecasting_model.md`, `MLPRegressor` (the neural-network
   candidate) was selected over `HistGradientBoostingRegressor` (the regression candidate) for
-  both corridors, by comparing measured out-of-sample MAE between the two. That same record
+  both retired corridors, by comparing measured out-of-sample MAE between the two. That same record
   also states, and does not soften, that neither candidate currently beats the existing `"naive"`
   baseline at the current 60-minute horizon — the estimator-selection question and the
   overall-improvement-over-naive question are answered separately, and only the first reads as a

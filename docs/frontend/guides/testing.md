@@ -65,8 +65,8 @@ pytest -x --tb=short
 
 Notes on what to expect:
 
-- The suite is large: `pytest --collect-only -q` reports 923 tests. A full run takes more than two minutes on a development laptop, so run a single file while iterating.
-- **Known failures at the time of writing:** a full run reported 900 passed and 23 failed. All 23 failures are in `backend/tests/corridor_discretization_test.py` (for example, `test_rate_corridor_archives_one_row_per_call`, where the injected `fake_fetch` is never called). The cause was not investigated here. If you see exactly these failures on a clean checkout, they are not caused by your change; confirm with the DS team before relying on that file. <!-- VERIFY: whether the corridor_discretization_test.py failures are known to the DS team and still present -->
+- The suite is large (923 tests were collected before the per-city migration; the count has changed and was not re-measured). A full run takes more than two minutes on a development laptop, so run a single file while iterating.
+- **Current result (2026-10-12):** the full suite reports 947 passed, 0 failed (`.venv/bin/python -m pytest -q` from the repo root). Before the per-city migration it reported 900 passed and 23 failed, all in `backend/tests/corridor_discretization_test.py`, which was deleted with the corridor modules (`docs/data-science/decisions/point_scope.md`).
 - There is no watch-mode script. The repo has no `pytest-watch` or similar dependency.
 - There is no coverage tool in `requirements.txt` and no coverage configuration. **No coverage threshold is configured.**
 
@@ -79,7 +79,7 @@ Tests live flat in `backend/tests/`, one file per backend module, named `{module
 Most tests avoid network access, the real filesystem layout, and shared state by using built-in pytest fixtures:
 
 - `monkeypatch.setattr(module, "fetch_timeseries", ...)` replaces a network fetch with a function returning synthetic data. `dlr_pipeline_test.py` builds a synthetic observation frame this way, then runs `run_pipeline` end to end with no Synoptic token.
-- `monkeypatch.setattr(config, "SOME_DIR", str(tmp_path))` redirects cache, model, and archive directories into a temporary directory. `corridor_discretization_test.py` has an autouse fixture that points the historical archive at `tmp_path` so tests never touch `data/historical/`.
+- `monkeypatch.setattr(config, "SOME_DIR", str(tmp_path))` redirects cache, model, and archive directories into a temporary directory. The corridor-era `corridor_discretization_test.py` had an autouse fixture that pointed the historical archive at `tmp_path` so tests never touched `data/historical/`; per-city rating tests are expected to do the same.
 - `monkeypatch.setenv(...)` supplies fake API keys.
 - `monkeypatch.chdir(tmp_path)` isolates tests that write to the current directory.
 
@@ -88,7 +88,7 @@ Most tests avoid network access, the real filesystem layout, and shared state by
 | Fixture | File | Purpose |
 |---|---|---|
 | `monitor`, `valid_data` | `SafetyMonitor_TestSuite.py` | A `DLRSafetyMonitor` with a quiet logger and a known-good sensor reading. |
-| `synthetic_corridor`, `fake_stations`, `probe_stations` | `corridor_discretization_test.py` | Stand-in station tables and a patched corridor for `rate_corridor` tests. |
+| `synthetic_corridor`, `fake_stations`, `probe_stations` | `corridor_discretization_test.py` (corridor era; the file is slated for removal) | Stand-in station tables and a patched corridor for the retired `rate_corridor`. The per-city equivalents are not documented here yet. |
 | `dlr_csv` | `ercot_dlr_merger_test.py` | Writes a small station CSV to `tmp_path` for the merger tests. |
 | `default_conductor` | `thermal_model_test.py` | The default `ConductorConfig` built from `config.DEFAULT_CONDUCTOR_CONFIG_KWARGS`. |
 | `predictions_dir` | `forecast_shadow_healthcheck_test.py` | A temporary shadow predictions directory. |
@@ -185,13 +185,13 @@ The consumer tests should read the fixture from its checked-in path rather than 
 
 ### Test data for contract extensions
 
-The v1 contract does not carry forecast, trusted duration, fallback or anomaly status, sag, location, or the static rating (see the gaps listed in [architecture.md](architecture.md) and `docs/frontend/ROADMAP.md`). For panels that need those fields, `docs/frontend/ROADMAP.md` recommends an agreed mock extension of the fixture. Keep any such mock clearly labeled as a mock, and do not invent column names in production code until DS confirms them.
+The v1 contract does not carry forecast, trusted duration, fallback or anomaly status, sag, a city identifier, or the static rating (see the gaps listed in [architecture.md](architecture.md) and `docs/frontend/ROADMAP.md`). For panels that need those fields, `docs/frontend/ROADMAP.md` recommends an agreed mock extension of the fixture. Keep any such mock clearly labeled as a mock, and do not invent column names in production code until DS confirms them.
 
 ### Keeping the contract honest
 
 - When `pipeline_output_v1.md` changes, update the consumer-side column list and fixtures in the same PR.
 - A schema bump to `pipeline_output_v2.md` should keep the v1 tests as a regression check until the v1 export is retired.
-- The shadow forecast JSONL feed (`data/shadow/predictions/*.jsonl` on the `shadow-collection-data` branch) has no published contract and is marked experimental. Do not write contract tests against it yet.
+- The shadow forecast JSONL feed (`data/shadow/predictions/{CITY}.jsonl` on the `shadow-collection-data` branch; `schema_version: 3`, records carry `city`) has no published, final contract and is marked experimental. Do not write contract tests against its v3 field list yet. A tolerance test is reasonable: a reader must accept the legacy corridor files (`AUSTIN_CORPUS_CHRISTI.jsonl`, `MIDLAND_EL_PASO.jsonl`; v1 flat and v2 rows) without error and never mix them into per-city results.
 
 ## Related docs
 

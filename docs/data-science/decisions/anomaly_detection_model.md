@@ -1,7 +1,17 @@
 # Anomaly Detection Model Validation Record
 
+> **Scope change 2026-10-12.** The project no longer rates corridors; each of the four cities
+> (`AUSTIN`, `CORPUS_CHRISTI`, `MIDLAND`, `EL_PASO`, i.e. `config.LOCATIONS`) is an independent
+> rating point (see `point_scope.md`). The anomaly model is now **per city**: one artifact
+> `anomaly_{city}.joblib` per city, fitted on that city's own rows only, with no two-city
+> pooling. **Every measurement below (selected estimators and contaminations, rates, verdicts,
+> load correlations) is corridor-era (retired 2026-10-12)**: it was produced by pooled
+> two-endpoint-city corridor models, is kept unchanged as history, and has not been re-measured
+> per city. Per-city refit has not been run (it needs live Open-Meteo and ERCOT data); until it
+> is, no per-city artifact exists and the model branch is absent (see Limitations).
+
 **Status:** Ratified as a record of measured fact — the numbers below are settled (a direct
-transcription of a completed, reproducible run against real historical data). Both corridors'
+transcription of a completed, reproducible run against real historical data). Both measured corridors' (corridor-era, retired 2026-10-12)
 Verdicts read **MET** against both halves of the stated Expectation. That result is reported
 plainly, per D-07, exactly as it came out — it is not a foregone conclusion just because it is a
 pass: three of the five candidate/contamination combinations measured here (`EllipticEnvelope`,
@@ -33,15 +43,16 @@ model branch runs *alongside* whichever of the two existing branches also ran (n
 either), and the combined verdict is the logical OR of every branch that ran — the model can only
 ever add a trip on top of an existing branch's verdict, it can never suppress one.
 
-The persisted per-corridor artifact is selected through `AnomalyDetector.for_corridor`, which
-lazily loads (and caches) the corridor's fitted estimator via `_load_corridor_model_or_none` — an
+The persisted per-city artifact is selected through `AnomalyDetector.for_city`, which
+lazily loads (and caches) the city's fitted estimator via `_load_city_model_or_none` — an
 absent artifact resolves to `model=None` with one logged warning, leaving behavior identical to
 the pre-Phase-2 two-branch detector, rather than raising. `backend/anomaly_training.py` is the
-offline entry point that assembled the real per-corridor training/measurement series, ran the
+offline entry point that assembled the real training/measurement series, ran the
 D-03 bake-off across three candidates and five contamination points, and persisted each
-corridor's evidence-selected winner:
+corridor's evidence-selected winner. The table is the **corridor-era (retired 2026-10-12)**
+result; no per-city selection has been made yet:
 
-| Corridor | Selected estimator | Selected contamination |
+| Corridor (retired) | Selected estimator | Selected contamination |
 |---|---|---|
 | `AUSTIN_CORPUS_CHRISTI` | `OneClassSVM` | 0.001 |
 | `MIDLAND_EL_PASO` | `OneClassSVM` | 0.005 |
@@ -50,11 +61,16 @@ corridor's evidence-selected winner:
 G6 call site and its `except Exception -> _fallback` fail-safe wiring carry **zero diff** — no
 exception handler of any kind was added anywhere in `anomaly_detector.py`, so a broken model (a
 raising prediction entry point, a corrupt artifact, a feature-count mismatch) still propagates
-uncaught, all the way to G6's existing fail-safe boundary, resolving to the corridor's static
+uncaught, all the way to G6's existing fail-safe boundary, resolving to the city's static
 rating exactly as the two pre-existing branches already do. Neither `_check_against_forecast` nor
 `_check_against_rolling_baseline` was modified.
 
 ## Data provenance
+
+*Corridor-era (retired 2026-10-12) procedure, kept as the record of how the measured numbers
+below were produced. The per-city procedure fits each city's own hourly rows (one complete
+calendar year per city per `--years`, default `config.ANOMALY_ML_TRAINING_YEARS`) into that
+city's own artifact; no pooling across cities.*
 
 The training and measurement series is **not** the live `historical_archive.py` CSV — that file
 has zero rows today because Track 1 (Pipeline Integration) has not executed yet, mirroring Phase
@@ -80,7 +96,7 @@ has zero rows today because Track 1 (Pipeline Integration) has not executed yet,
    `raw_data` carries no timestamp at the `check()` call site; a feature the inference path
    cannot compute would leave the model branch permanently unable to run.
 
-**Actual assembled window (both corridors, from the fresh run behind this document — see
+**Actual assembled window (both corridor-era corridors, from the fresh run behind this document — see
 Configuration measured for the exact command):** 17,520 pooled hourly rows per corridor,
 spanning **2025-01-01T00:00:00+00:00 through 2025-12-31T23:00:00+00:00**. After the chronological
 fit/holdout split (never shuffled — the estimator is measured only against rows strictly later
@@ -101,8 +117,8 @@ landed `backend/config.py` constants at the time of this run. The reproduction c
 | Backfill depth (this run) | 1 complete calendar year (2025) per endpoint city | CLI `--years 1`, overriding `config.ANOMALY_ML_TRAINING_YEARS` (3 years) for this measurement run |
 | Holdout fraction | 0.25 | `config.ANOMALY_ML_VALIDATION_HOLDOUT_FRACTION` |
 | Contamination grid | (0.001, 0.005, 0.01, 0.02, 0.05) | `config.ANOMALY_ML_CONTAMINATION_GRID` |
-| Selected contamination (`AUSTIN_CORPUS_CHRISTI`) | 0.001 | `data/models/anomaly_validation_report.json` |
-| Selected contamination (`MIDLAND_EL_PASO`) | 0.005 | `data/models/anomaly_validation_report.json` |
+| Selected contamination (corridor-era `AUSTIN_CORPUS_CHRISTI`) | 0.001 | `data/models/anomaly_validation_report.json` |
+| Selected contamination (corridor-era `MIDLAND_EL_PASO`) | 0.005 | `data/models/anomaly_validation_report.json` |
 | Injection rate | 0.02 | `config.ANOMALY_ML_INJECTION_RATE` |
 | False-positive ceiling | 0.05 | `config.ANOMALY_ML_MAX_FALSE_POSITIVE_RATE` |
 | Kernel-candidate (`OneClassSVM`) training-row cap (bake-off sweep only) | 5,000 | `config.ANOMALY_ML_SVM_MAX_TRAIN_ROWS` |
@@ -111,11 +127,11 @@ landed `backend/config.py` constants at the time of this run. The reproduction c
 | Live `raw_data` keys (positional match to feature columns) | `temp`, `wind`, `solar` | `config.ANOMALY_ML_RAW_DATA_KEYS` |
 | Untuned tracer contamination (Plan 02-01, superseded by the grid above) | 0.01 | `config.ANOMALY_ML_CONTAMINATION` |
 | Model artifact directory | `data/models` (git-ignored) | `config.ANOMALY_ML_MODEL_DIR` |
-| Model filename template | `anomaly_{corridor}.joblib` | `config.ANOMALY_ML_MODEL_FILENAME_TEMPLATE` |
-| Observation-frame filename template | `anomaly_observations_{corridor}.csv` | `config.ANOMALY_ML_OBSERVATION_FRAME_TEMPLATE` |
+| Model filename template | `anomaly_{city}.joblib` | `config.ANOMALY_ML_MODEL_FILENAME_TEMPLATE` |
+| Observation-frame filename template | `anomaly_observations_{city}.csv` | `config.ANOMALY_ML_OBSERVATION_FRAME_TEMPLATE` |
 | Validation report filename | `anomaly_validation_report.json` | `config.ANOMALY_ML_VALIDATION_REPORT_NAME` |
-| ERCOT zone substrings (`AUSTIN_CORPUS_CHRISTI`) | `("SOUTH",)` → matched `["South", "South Central"]` | `config.ANOMALY_ML_ERCOT_ZONE_SUBSTRINGS_BY_CORRIDOR` |
-| ERCOT zone substrings (`MIDLAND_EL_PASO`) | `("WEST",)` → matched `["Far West", "West"]` | `config.ANOMALY_ML_ERCOT_ZONE_SUBSTRINGS_BY_CORRIDOR` |
+| ERCOT zone substrings (`AUSTIN`, `CORPUS_CHRISTI`; corridor-era run used `AUSTIN_CORPUS_CHRISTI`) | `("SOUTH",)` → matched `["South", "South Central"]` | `config.ANOMALY_ML_ERCOT_ZONE_SUBSTRINGS_BY_CITY` |
+| ERCOT zone substrings (`MIDLAND`, `EL_PASO`; corridor-era run used `MIDLAND_EL_PASO`) | `("WEST",)` → matched `["Far West", "West"]` | `config.ANOMALY_ML_ERCOT_ZONE_SUBSTRINGS_BY_CITY` |
 | Load characterization window depth | 1 complete calendar year | `config.ANOMALY_ML_LOAD_YEARS` |
 | Load characterization report filename | `anomaly_load_characterization.json` | `config.ANOMALY_ML_LOAD_REPORT_NAME` |
 
@@ -187,7 +203,7 @@ discipline — not only the selected winner's row. Baseline figures are identica
 within a corridor (the baseline does not depend on candidate/contamination) and are repeated per
 row for direct comparison.
 
-### AUSTIN_CORPUS_CHRISTI (17,520 assembled rows; window 2025-01-01 → 2025-12-31; fit 13,140 rows, holdout 4,380 rows; 88 injected rows per category)
+### AUSTIN_CORPUS_CHRISTI — corridor-era (retired 2026-10-12) (17,520 assembled rows; window 2025-01-01 → 2025-12-31; fit 13,140 rows, holdout 4,380 rows; 88 injected rows per category)
 
 | Candidate | Contam. | FP rate | Baseline FP | Recall (out_of_range) | Baseline recall (o-o-r) | Recall (in_range_implausible) | Baseline recall (i-r-i) | Pooled recall | Baseline pooled recall |
 |---|---|---|---|---|---|---|---|---|---|
@@ -211,7 +227,7 @@ Winner selection: among the 5 `OneClassSVM` points, pooled recall ties at 100.00
 broken by the lowest false-positive rate, which is `contamination=0.001` (3.77%) — the selected
 pair. `ceiling_met: true` in the report (3.77% ≤ 5.00%).
 
-### MIDLAND_EL_PASO (17,520 assembled rows; window 2025-01-01 → 2025-12-31; fit 13,140 rows, holdout 4,380 rows; 88 injected rows per category)
+### MIDLAND_EL_PASO — corridor-era (retired 2026-10-12) (17,520 assembled rows; window 2025-01-01 → 2025-12-31; fit 13,140 rows, holdout 4,380 rows; 88 injected rows per category)
 
 | Candidate | Contam. | FP rate | Baseline FP | Recall (out_of_range) | Baseline recall (o-o-r) | Recall (in_range_implausible) | Baseline recall (i-r-i) | Pooled recall | Baseline pooled recall |
 |---|---|---|---|---|---|---|---|---|---|
@@ -238,6 +254,8 @@ worth noting honestly rather than assuming FP rate always increases with contami
 selected pair has `ceiling_met: true` in the report (0.53% ≤ 5.00%).
 
 ## Load characterization (D-02)
+
+*Corridor-era (retired 2026-10-12) measurement; the zone-substring mapping is now per city (`AUSTIN`/`CORPUS_CHRISTI` use `SOUTH`, `MIDLAND`/`EL_PASO` use `WEST`).*
 
 Transcribed from `data/models/anomaly_load_characterization.json`, produced by
 `.venv/bin/python3 backend/anomaly_training.py --characterize-load`:
@@ -268,6 +286,8 @@ pattern, not a claim that either zone's load figure represents the corridor's ow
 precisely.
 
 ## Verdict
+
+*Corridor-era (retired 2026-10-12) verdicts, kept as history; not re-measured per city.*
 
 **AUSTIN_CORPUS_CHRISTI: MET.** The selected `OneClassSVM` (`contamination=0.001`) measured a
 false-positive rate of **3.77%**, at or below the 5.00% ceiling — half 1 met. Its recall on the
@@ -315,10 +335,11 @@ see Open Questions.
 
 ## Limitations
 
-- **Pooled two-city envelope, not per-city models.** Both endpoint cities' raw readings are
-  pooled into one per-corridor training frame rather than trained as separate per-city models —
-  `raw_data` carries no location identifier at the live `check()` call site that could key a
-  per-city selector, which is the practical reason pooling was chosen (see Data provenance).
+- **Corridor-era pooled two-city envelope (retired 2026-10-12).** The measured models pooled
+  both endpoint cities' raw readings into one corridor frame. Per-city models replace that
+  design, so the measured rates above do not transfer to them, and the per-city false-positive/
+  recall tradeoff has not been measured. The live `check()` call site selects a city's model via
+  `AnomalyDetector.for_city`, not via a field in `raw_data`.
 - **No time-of-day feature.** `raw_data` carries no timestamp at the `check()` call site, so the
   fitted model cannot condition on hour-of-day or season the way the forecasting model's
   `hour_sin`/`hour_cos` features do — a reading that would be implausible at 2am but normal at
@@ -336,7 +357,7 @@ see Open Questions.
 - **The persisted artifact is a full-frame refit, not byte-identical to the measured model.** The
   numbers in Measured results come from an estimator fitted on the 13,140-row **fit slice only**
   and scored against the 4,380-row holdout it never saw. The artifact actually persisted to
-  `data/models/anomaly_{corridor}.joblib` is refit on the **full assembled frame** (fit + holdout
+  `data/models/anomaly_{city}.joblib` is refit on the **full assembled frame** (fit + holdout
   combined, 17,520 rows), per the Plan 02-02 decision that the shipped model should use every
   real row available rather than withholding 25% of it in production. This means the shipped
   artifact's exact decision boundary is not byte-identical to the one that produced the reported
@@ -352,37 +373,37 @@ see Open Questions.
   itself, even though it did not block a full-data final refit.
 - **Model artifacts are git-ignored generated data.** `data/models/` is not committed. A clean
   checkout has no trained model until `.venv/bin/python3 backend/anomaly_training.py --bakeoff`
-  (or `--corridor <name>`) is run; until then, the model branch is simply **absent** (one logged
+  (or `--city <name>`) <!-- VERIFY: CLI flag name after the per-city migration; the corridor-era flag was `--corridor` --> is run; until then, the model branch is simply **absent** (one logged
   `logger.warning`, `model=None`) rather than raising — `AnomalyDetector.check` continues to
   function on its two pre-existing heuristic branches alone, exactly as it did before Phase 2.
-- **ERCOT weather zones are a regional proxy**, not a corridor-local load figure — see Load
+- **ERCOT weather zones are a regional proxy**, not a city-local load figure — see Load
   characterization above.
 
 ## Open Questions
 
-- Whether per-city models (rather than the pooled two-city envelope) would tighten the false-
-  positive/recall tradeoff, if `raw_data` ever gains a location identifier the live `check()` call
-  site could use to key a per-city selector.
+- Per-city refit and re-measurement: the per-city models (replacing the corridor-era pooled
+  two-city envelope) have not been fitted, so the false-positive/recall tradeoff per city is
+  unmeasured.
 - Whether a richer, more varied synthetic-injection taxonomy (beyond the two categories measured
   here) would change the measured recall picture — particularly whether a wider range of
   "plausible-but-wrong" in-range combinations, not just the single "clear cold night" triple,
   would surface a different recall figure.
-- Whether the selected contamination (`0.001` for `AUSTIN_CORPUS_CHRISTI`, `0.005` for
-  `MIDLAND_EL_PASO`) should be re-swept once Track 1's live pipeline archive accrues real,
+- Whether the selected contamination (corridor-era: `0.001` for `AUSTIN_CORPUS_CHRISTI`, `0.005` for
+  `MIDLAND_EL_PASO`) should be re-swept per city once Track 1's live pipeline archive accrues real,
   multi-year historical data, rather than continuing to rely on this one-calendar-year
   Open-Meteo-backfill measurement.
 
 ## References
 
 - `backend/anomaly_detector.py` — `AnomalyDetector.check`, `_check_against_model`,
-  `_check_against_forecast`, `_check_against_rolling_baseline`, `for_corridor`,
-  `_load_corridor_model_or_none`, `_model_path_for`.
+  `_check_against_forecast`, `_check_against_rolling_baseline`, `for_city`,
+  `_load_city_model_or_none`, `_model_path_for`.
 - `backend/anomaly_training.py` — `corridor_observation_frame`, `chronological_split`,
   `inject_anomalies`, `_out_of_range_value`, `_implausible_combination`, `score_model`,
   `score_rolling_baseline`, `validate_candidate`, `CANDIDATE_ESTIMATORS`, `corridor_report`,
-  `select_winner`, `characterize_load`; `--bakeoff`, `--validate`, `--characterize-load` CLI
+  `select_winner`, `characterize_load`; <!-- VERIFY: corridor-era function names; the per-city migration of this module was in progress when this note was written --> `--bakeoff`, `--validate`, `--characterize-load` CLI
   entry points.
-- `backend/ercot_data_retriever.py` — `pull_ercot_data`, the per-corridor zone-aware ERCOT load
+- `backend/ercot_data_retriever.py` — `pull_ercot_data`, the zone-aware ERCOT load
   retriever used by `characterize_load`.
 - `backend/config.py` — every `ANOMALY_ML_*` tunable named in Configuration measured above.
 - `backend/DLRSafetyMonitor.py` — `WIND_BOUNDS`/`TEMP_BOUNDS`/`SOLAR_BOUNDS` (the G3 bounds the

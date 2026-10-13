@@ -1,5 +1,10 @@
 # Data Science Subsystem — Post-v1.1 Development Tracks
 
+> **Update 2026-10-12:** the corridor model was retired — each of the four cities is now an
+> independent rating point (`decisions/point_scope.md`). **Track 3 below is retired**, and Track 1
+> text that mentions corridors has been updated to per-city terms. Track 3's section is kept as
+> history.
+
 Three independent workstreams for dividing remaining DS-subsystem work across developers.
 Each is scoped to have no file/function overlap with the others at the level of "who owns
 the PR," so they can run in parallel. Story-level planning for each track happens separately
@@ -20,7 +25,7 @@ what's actually landed since this document was written — see [`PROJECT-STATUS.
 result is trustworthy — not just that each piece passes its own tests in isolation.
 
 **Current state:** `dlr_pipeline.py::run_pipeline` — the pipeline's real entry point — never
-calls `corridor_discretization.py::rate_corridor`, `anomaly_detector.py::AnomalyDetector`, or
+calls `city_rating.py::rate_city` (formerly `corridor_discretization.py::rate_corridor`), `anomaly_detector.py::AnomalyDetector`, or
 `ampacity_forecast.py::forecast_ampacity`. All three are fully implemented and individually
 tested, but only ever invoked from their own test suites. They are three disconnected code
 paths, not one pipeline. Separately, everything that has been validated so far was validated
@@ -30,22 +35,21 @@ against published static line ratings, which is the validation bar the System De
 itself sets.
 
 **Scope:**
-- Wire `run_pipeline` (or a new orchestrating entry point) to call corridor discretization →
-  anomaly check → forecast in sequence, against a real accumulating `historical_archive.py`
+- Wire `run_pipeline` (or a new orchestrating entry point) to call per-city rating
+  (`rate_city`) → anomaly check → forecast in sequence, against a real accumulating `historical_archive.py`
   history rather than one-shot test fixtures.
 - Finish out the current v1.1 milestone (Synoptic fallback wiring, provider-composition doc
   ratification in `PRD.md`/`data_provider.md`) — this is pipeline-completion work of the same
   kind, not a separate concern.
-- Re-run the integrated pipeline against real historical ERCOT data for the existing corridors
+- Re-run the integrated pipeline against real historical ERCOT data for the four cities
   and sanity-check results against published SLR values, per the System Design Report's stated
   validation plan (§ Full System Integration / weather-corridor validation).
 
-**Not in scope:** building new models (Track 2), sourcing real transmission-line geometry
-(Track 3), the Software sub-team's `api/`/`frontend/` layer.
+**Not in scope:** building new models (Track 2), the Software sub-team's `api/`/`frontend/` layer.
 
-**Depends on:** nothing new from the other two tracks to start; benefits from Track 3's real
-corridor geometry once available (re-run the real-data validation again once geometry changes),
-and should hand a clean integration point to whichever model Track 2 produces.
+**Depends on:** nothing new from Track 2 to start; it should hand a clean integration point to
+whichever model Track 2 produces. (It previously also benefited from Track 3's real corridor
+geometry; that track is retired.)
 
 ---
 
@@ -80,7 +84,7 @@ today's code satisfies the naming and the test contracts but is not ML.
   `docs/data-science/ROADMAP.md` §5, finding 5, on historical-data lead time), not just
   synthetic fixtures.
 
-**Not in scope:** pipeline wiring/orchestration (Track 1), corridor geometry (Track 3). The
+**Not in scope:** pipeline wiring/orchestration (Track 1). The
 existing `forecast_ampacity`/`AnomalyDetector` signatures and `PIPELINE_SCHEMA` columns are the
 interface contract this track must preserve — Track 1's integration work depends on that
 contract holding, not on knowing what's inside it.
@@ -91,15 +95,25 @@ first or in parallel, not necessarily blocking on it for design/prototyping work
 
 ---
 
-## Track 3: Real Transmission-Line Corridor Geometry
+## Track 3: Real Transmission-Line Corridor Geometry — RETIRED 2026-10-12
 
-**Goal:** Replace the two placeholder corridors with real transmission-line geometry.
+**Retired.** The corridor model this track would have improved no longer exists: each of the four
+cities is an independent rating point (`config.LOCATIONS`, `city_point.city_point`,
+`city_rating.rate_city`), with no pairing of cities and no spatial discretization. See
+`decisions/point_scope.md`. What remains of this track's intent is a single open item — replacing
+the assumed per-city line bearings (`config.CITY_LINE_BEARING_DEG`, carried over from the retired
+corridor bearings) with real line orientation when known. The text below is the original track
+description, kept as history; it describes the corridor-era state (`config.CORRIDOR_ENDPOINTS` is
+now `config.LEGACY_CORRIDOR_ENDPOINTS`, used only by the frozen forecast-correction experiment).
 
-**Current state:** `backend/config.py::CORRIDOR_ENDPOINTS` defines exactly two corridors —
+**Goal (original):** Replace the two placeholder corridors with real transmission-line geometry.
+
+**State when written:** `backend/config.py::CORRIDOR_ENDPOINTS` defined exactly two corridors —
 Austin↔Corpus Christi and Midland↔El Paso — as straight city-centroid-to-city-centroid pairs.
 This was always known to be a placeholder: the System Design Report states explicitly that
 "during the implementation phase, this will be replaced with actual transmission line geometry
-that traces the true conductor path." That replacement has not happened.
+that traces the true conductor path." That replacement did not happen before the corridor model
+was retired.
 
 **Scope:**
 - Source real substation-to-substation transmission-line route geometry for the corridors this
@@ -122,10 +136,8 @@ otherwise independent.
 
 ## Parallelization Notes
 
-- Tracks 2 and 3 have zero file overlap with each other and with Track 1's early wiring work.
-- Track 1 and Track 3 both eventually touch `corridor_discretization.py`, but at different
-  layers (Track 1: how it's called; Track 3: what geometry it's given) — a quick sync between
-  those two owners avoids merge friction, not a scheduling blocker.
-- All three tracks should treat `PIPELINE_SCHEMA` (`backend/units_def.py`) as the fixed
+- Tracks 1 and 2 have no file overlap in their early work. (Track 3 is retired; its former
+  overlap with Track 1 on `corridor_discretization.py` no longer applies.)
+- All active tracks should treat `PIPELINE_SCHEMA` (`backend/units_def.py`) as the fixed
   contract between them, per the project's existing constraint that no new component may
   create a parallel schema.

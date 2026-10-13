@@ -4,6 +4,8 @@
 
 **Purpose:** One section per candidate data provider, vetted individually against this project's actual requirements before a decision is made. Not a final recommendation document — a working log of what was checked and why each provider was accepted, rejected, or kept as a supplement.
 
+**Scope note (2026-10-12):** The four cities are each an independent rating point (`config.LOCATIONS`; see `point_scope.md`), not endpoints of transmission corridors, so provider coverage is judged per city. Nothing in this log's provider verdicts depended on corridor pairing; the per-city fetch and fallback behavior below applies to each city independently.
+
 **Requirements each candidate is vetted against** (see conversation history / `PRD.md` §5–7, §10 for full derivation):
 
 1. **Temporal density** — ideally 5-minute cadence to match the current WTM/Synoptic pipeline; hourly is acceptable for historical-training use but not for live operation.

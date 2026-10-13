@@ -21,16 +21,20 @@ branch can suppress another):
   outside it.
 - **`_check_against_rolling_baseline`** — the cold-start fallback when no forecast is available
   yet: a rolling mean ± k·standard-deviation band over archived `dlr_amps` history.
-- **`_check_against_model`** (v1.3 Phase 2, ANOM-01) — a genuinely trained, per-corridor
-  `scikit-learn` outlier estimator (`OneClassSVM`, selected via a three-candidate bake-off) that
+- **`_check_against_model`** (v1.3 Phase 2, ANOM-01) — a genuinely trained, per-city
+  `scikit-learn` outlier estimator (`OneClassSVM`, selected via a three-candidate bake-off on the retired corridor-level data) that
   judges the **raw** `wind`/`temp`/`solar` readings in `raw_data` — never the derived `rating`
   the two branches above judge — against a learned per-variable envelope.
 
 `backend/anomaly_training.py` is the offline training/measurement entry point: it assembles a
-real, pooled per-corridor Open-Meteo backfill series, runs the bake-off, measures false-positive
-and recall rates against synthetically injected corruption, and persists each corridor's
-evidence-selected winner to `data/models/anomaly_{corridor}.joblib` (git-ignored generated data —
-a clean checkout has no model until this script is run). See
+real Open-Meteo backfill series for one city (no pooling across cities), runs the bake-off,
+measures false-positive and recall rates against synthetically injected corruption, and persists
+each city's evidence-selected winner to `data/models/anomaly_{city}.joblib` (git-ignored generated
+data — a clean checkout has no model until this script is run). `--city <CITY>` selects one city
+(default: every city in `config.LOCATIONS`). **The per-city refit has not been run yet**; the
+corridor-named artifacts (`anomaly_AUSTIN_CORPUS_CHRISTI.joblib`, `anomaly_MIDLAND_EL_PASO.joblib`)
+are legacy and are not loaded, so the model branch is absent until per-city models are fit
+(`decisions/point_scope.md`). See
 `docs/data-science/decisions/anomaly_detection_model.md` for the measured false-positive/recall
 evidence — this section does not restate those numbers.
 
@@ -45,7 +49,7 @@ The settled contract, read off `backend/anomaly_detector.py`:
   returns `(is_anomalous, reason)`, unchanged since before this phase.
 - **Fail-safe resolution:** `DLRSafetyMonitor` resolves both a detected trip and any exception
   raised anywhere inside `check` (a broken model, a corrupt artifact, a feature-count mismatch)
-  through its own existing G6 `except Exception -> _fallback` path, to the corridor's static
+  through its own existing G6 `except Exception -> _fallback` path, to the city's static
   rating. `AnomalyDetector` never builds `DLRSafetyMonitor`'s own `{status, rating, fallback,
   alerts}` result mapping and never imports `DLRSafetyMonitor` — the coupling runs one direction
   only.
@@ -79,16 +83,22 @@ Nothing else in this roadmap depends on C10 — it's the last component in the d
 
 Sourced from `docs/data-science/decisions/anomaly_detection_model.md`'s Limitations section:
 
-- The corridor-level training set is a **pooled two-city envelope** (both endpoint cities'
-  readings concatenated), not per-city models — `raw_data` carries no location identifier at the
-  live `check()` call site that could key a per-city selector.
+- **Per-city models are specified but not yet fit.** The corridor-era model was trained on a
+  pooled two-city envelope (both endpoint cities' readings concatenated); the point-scope change
+  replaces that with one model per city trained on that city's own rows. The per-city refit needs
+  live Open-Meteo/ERCOT data and has not been run. All measured false-positive/recall numbers in
+  `decisions/anomaly_detection_model.md` are from the retired pooled corridor models and do not
+  describe per-city models.
+- A detector gets its city's model at construction (`AnomalyDetector.for_city(city, ...)`, with the
+  city validated against `config.LOCATIONS` before an artifact path is built); `raw_data` itself
+  carries no location identifier at the `check()` call site.
 - **No time-of-day feature** — `raw_data` carries no timestamp at the `check()` call site, so a
   reading implausible at 2am but normal at 2pm is judged by the same learned envelope either way.
 - Per **D-02**, ERCOT historical load is a **training-time-only** signal — a real, executed
-  characterization exists (per-corridor zone-matched correlations), but it never reaches the live
+  characterization exists (zone-matched correlations, characterized per corridor in the retired model; the per-city zone mapping is `config.ANOMALY_ML_ERCOT_ZONE_SUBSTRINGS_BY_CITY`), but it never reaches the live
   `check()` call, and wiring it in is Track 1's scope, not this component's.
 - A clean checkout has **no persisted model artifact** until
-  `.venv/bin/python3 backend/anomaly_training.py --bakeoff` (or `--corridor <name>`) is run —
+  `.venv/bin/python3 backend/anomaly_training.py --bakeoff` (or `--city <CITY>`) is run —
   `data/models/` is git-ignored, generated data. Until then, the model branch is simply **absent**
   (one logged warning, `model=None`), and the two heuristic branches (`_check_against_forecast`/
   `_check_against_rolling_baseline`) carry G6 alone, exactly as they did before this phase.
@@ -102,12 +112,12 @@ evidenced by `docs/data-science/decisions/anomaly_detection_model.md`:
   temperature spikes, impossible wind speeds) is correctly identified as anomalous. **Evidenced**
   by the record's two labelled injection categories (`out_of_range`, `in_range_implausible`): the
   selected `OneClassSVM` model caught 100.00% of both categories on real held-out data, for both
-  corridors. Note the record's own caveat — `out_of_range` values are already rejected by C7's G3
+  retired corridor models. Note the record's own caveat — `out_of_range` values are already rejected by C7's G3
   range gate upstream in the live pipeline, so `in_range_implausible` (a value each component
   passes G3 with, but whose joint combination is implausible) is the category that actually
   demonstrates this model's unique multivariate contribution.
-- Zero false positives on clean historical data. **Not fully met** by the measurement: the
-  selected model's false-positive rate on real, clean, held-out data is 3.77%
+- Zero false positives on clean historical data. **Not fully met** by the measurement (corridor-era; not yet re-measured per city): the
+  selected model's false-positive rate on real, clean, held-out data was 3.77%
   (`AUSTIN_CORPUS_CHRISTI`) and 0.53% (`MIDLAND_EL_PASO`) — nonzero, though at or below the
   configured ceiling (`config.ANOMALY_ML_MAX_FALSE_POSITIVE_RATE`, 5.00%). The record's Verdict
   states this plainly as the real cost of the added caution the model buys, rather than reporting
@@ -124,7 +134,7 @@ evidenced by `docs/data-science/decisions/anomaly_detection_model.md`:
 
 - ~~Model type~~ — **answered, on measured evidence.** Per
   `docs/data-science/decisions/anomaly_detection_model.md`, `OneClassSVM` was selected over
-  `IsolationForest`/`EllipticEnvelope` for both corridors via a three-candidate, five-contamination-
+  `IsolationForest`/`EllipticEnvelope` for both retired corridor models via a three-candidate, five-contamination-
   point bake-off — see the record's Measured results for every candidate's numbers, losers
   included.
 - ~~Does this run instead of C7's deterministic gates, alongside them, or only for anomaly types

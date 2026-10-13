@@ -4,7 +4,10 @@
 
 This pipeline fetches 5-minute weather data from the **West Texas Mesonet (WTM)**
 via the Synoptic Data API and computes **IEEE 738** conductor ampacity (dynamic line
-ratings) for ERCOT transmission corridors.
+ratings) for four ERCOT cities: `AUSTIN`, `CORPUS_CHRISTI`, `MIDLAND` and `EL_PASO`.
+Each city is one independent rating **point**. The project no longer rates
+transmission corridors and nothing is reduced across cities (see
+`docs/data-science/decisions/point_scope.md`, adopted 2026-10-12).
 
 ---
 
@@ -55,7 +58,7 @@ export NREL_API_KEY=your_key_here
 export NREL_API_EMAIL=your_registered_email@example.com
 ```
 
-### 4 — Discover stations near your corridors
+### 4 — Discover stations near your cities
 
 ```bash
 python backend/station_explorer.py
@@ -96,7 +99,7 @@ docs/       data-science/ (PRD, roadmap, component specs) and frontend/ (PRD, ro
 
 | Parameter | Where | Notes |
 |---|---|---|
-| `line_azimuth` | `ConductorConfig` | Compass bearing of your line — critical for perpendicular wind |
+| `line_azimuth` | `ConductorConfig` | Compass bearing of your line — critical for perpendicular wind. Per-city defaults are `config.CITY_LINE_BEARING_DEG`, an **assumption** carried over from the retired corridor bearings, not a measured line orientation |
 | `max_temp_c` | `ConductorConfig` | ERCOT emergency rating limit (often 75–100°C for ACSR) |
 | `resistance_ac` | `ConductorConfig` | From ACSR table at 25°C; look up by conductor code name |
 | `city` | `run_pipeline()`, `plot_dlr_summary()` | Selects the per-city static rating from `config.STATIC_RATINGS` (e.g. `"AUSTIN"` at 1900 A); an omitted or unrecognised city falls back to `config.DEFAULT_STATIC_RATING` at 900 A |
@@ -120,9 +123,12 @@ Solve for I:
 
 ---
 
-## West Texas DLR Corridor Targets
+## West Texas DLR Target Regions
 
-| Corridor | Counties | Expected DLR Uplift |
+These are regions used for station discovery (`backend/station_explorer.py`), not rating
+points. The rating points are the four cities above; the project does not rate corridors.
+
+| Region | Counties | Expected DLR Uplift |
 |---|---|---|
 | Panhandle Export | Lubbock, Crosby, Garza | High — persistent S/SW winds |
 | Permian Basin 345 kV | Ector, Midland, Andrews | High — nightly thermal + wind |
@@ -144,8 +150,8 @@ Solve for I:
 
 ## Next Steps
 
-1. **Spatial interpolation**: Kriging or IDW between stations along a line segment
-2. **Line segment mapping**: Assign stations to specific spans using GIS shapefiles
+1. **Spatial interpolation**: Kriging or IDW between stations (not planned while each city is a single independent point)
+2. **Line segment mapping**: Assign stations to specific spans using GIS shapefiles (would only matter if the project moves back from city points to line segments)
 3. **Real-time mode**: Schedule hourly pulls → feed into SCADA or ADMS
 4. **Probabilistic DLR**: Use wind direction uncertainty to compute 10th/50th/90th percentile ratings
 5. **ERCOT integration**: Compare DLR headroom against day-ahead congestion reports
@@ -174,7 +180,8 @@ Solve for I:
 | Sample fixture | `data/fixtures/sample_pipeline_output.csv` | One station (`AP140`), 10 rows at 5-minute cadence, matching the v1 schema exactly. Checked in, so you can build against it without a Synoptic or NREL key. |
 | Station metadata | `data/wtm_stations_austin.csv`, `data/wtm_stations.csv` | Checked-in station reference data. |
 | Merged ERCOT + DLR output | `outputs/ercot_data/merged_ercot_dlr_*.csv` | Adds MW capacity and ERCOT load columns on top of the v1 CSV (produced by `backend/ercot_dlr_merger.py`, see `docs/data-science/specs/C6-grid-load-integration.md`). Not part of the v1 schema. |
-| Shadow forecast records | `data/shadow/predictions/*.jsonl` | Per-corridor forecast prediction logs from the shadow-mode forecast pipeline (`backend/forecast_shadow_pipeline.py`). Check the Data Science docs before depending on their shape. |
+| Shadow forecast records | `data/shadow/predictions/{CITY}.jsonl` | Per-city forecast prediction logs (`schema_version: 3`, records carry `city`) from the shadow-mode forecast pipeline (`backend/forecast_shadow_pipeline.py`). The older `AUSTIN_CORPUS_CHRISTI.jsonl` and `MIDLAND_EL_PASO.jsonl` are **legacy** corridor-era files (v1 flat rows and v2) and must be tolerated, not mixed into per-city views. Per-city logs start empty. Check the Data Science docs before depending on their shape. |
+| Per-city rating result | `city_rating.rate_city(...)` (in-process dict, no file) | Rating, status, fallback and alerts for one city. See `docs/frontend/specs/api-contract.md`. |
 
 ### Suggested way to start
 
@@ -188,6 +195,7 @@ Timestamps in the CSVs are UTC ISO-8601 strings (`datetime_utc`); convert to loc
 ### Software-side documentation
 
 - `docs/frontend/README.md` — documentation convention for the Software sub-team (PRD, roadmap, specs)
+- `docs/data-science/decisions/point_scope.md` — the per-city (point) scope contract the software docs follow
 - `docs/frontend/PRD.md` — frontend and API requirements
 - `docs/frontend/ROADMAP.md` — phased implementation order and dependencies
 - `docs/frontend/specs/` — per-component specs

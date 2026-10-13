@@ -11,7 +11,7 @@
 The DS subsystem is responsible for turning raw weather and grid telemetry into a trustworthy Dynamic Line Rating (DLR), and for guaranteeing that when the inputs can't be trusted, the system falls back to the conservative Static Line Rating (SLR). This corresponds to WBS §2.0 (Data Science Sub-Team) in the System Design Report.
 
 **In scope:**
-- Weather data ingestion for target stations/corridors
+- Weather data ingestion for the target stations/cities
 - IEEE 738 thermal ampacity modeling
 - Dimensional analysis / unit validation across the pipeline
 - Anomaly detection and fail-safe fallback to SLR
@@ -45,7 +45,7 @@ Work is organized into ten components (`specs/README.md` has the full index), gr
 |---|---|---|
 | 1 — Foundation | C1 Configuration, C2 Data Contract, C3 Export & Visualization | Make the implicit file-based contract explicit; remove hardcoded values |
 | 2 — Core Consolidation | C4 Weather Ingestion, C5 Thermal Model, C6 Grid Load Integration | Package the existing working logic into importable, provider-agnostic modules |
-| 3 — Safety & Spatial | C7 Safety Monitor, C8 Corridor Discretization | Unify the safety monitor with the real thermal model; build the not-yet-started spatial pipeline |
+| 3 — Safety & Spatial | C7 Safety Monitor, C8 City Point Rating | Unify the safety monitor with the real thermal model; rate each of the four cities as an independent point (C8 was originally a corridor discretization, retired 2026-10-12) |
 | 4 — Predictive | C9 Ampacity Forecasting, C10 Learned Anomaly Detection | Highest complexity, most dependencies — deliberately last |
 
 Full dependency graph, phase rationale, and blocker analysis live in `ROADMAP.md`.
@@ -56,7 +56,7 @@ Status reflects what's actually implemented in this repo, not what's planned. Ea
 
 | ID | Requirement | Status | Owning Component |
 |---|---|---|---|
-| DS-F1 | Discover weather stations near defined transmission corridors | Implemented | C4 |
+| DS-F1 | Discover weather stations near the defined rating locations (the four cities) | Implemented | C4 |
 | DS-F2 | Fetch time-series weather observations (temp, wind speed/direction, solar, humidity) for target stations | Implemented — behind a provider-agnostic adapter (`backend/weather_provider.py`) implementing the ratified multi-provider composition (§7.1): TCEQ CAMS + ASOS primary/supplement, NSRDB solar, Open-Meteo historical backfill, Synoptic as automatic fallback | C4 |
 | DS-F3 | Compute wind component perpendicular to the line for forced-convection cooling | Implemented — extracted to `backend/thermal_model.py` | C5 |
 | DS-F4 | Compute steady-state IEEE 738 ampacity from weather + conductor properties | Implemented and now validated against a published reference — see §9 below for a real bug found and fixed during that validation | C5 |
@@ -65,7 +65,7 @@ Status reflects what's actually implemented in this repo, not what's planned. Ea
 | DS-F7 | Detect unreliable/anomalous inputs and fall back to SLR | Partial — deterministic threshold gates only, disagrees with the real thermal model | C7 |
 | DS-F8 | Merge DLR output with real ERCOT grid load for a holistic capacity-vs-demand view | Implemented | C6 |
 | DS-F9 | Export results to CSV and produce summary plots | Implemented | C3 |
-| DS-F10 | Discretize a transmission corridor into multiple geographic points and take the minimum ampacity as the corridor-level rating | Implemented (great-circle geometry) | C8 |
+| DS-F10 | Rate each of the four cities (`config.LOCATIONS`) as an independent point from its nearest usable station observation, gated through the safety monitor, with no pairing of cities and no `min()` across points | Implemented as `city_point.city_point` + `city_rating.rate_city`; replaces the original "discretize a corridor and take the minimum" requirement, retired 2026-10-12 (`decisions/point_scope.md`). Per-city model refit not yet run | C8 |
 | DS-F11 | Forecast ampacity ahead of real time (regression/ML) | Implemented (naive, ewm, ml) | C9 |
 | DS-F12 | Anomaly detection via a trained model on historical baselines | Implemented (optional G6 gate) | C10 |
 
@@ -132,9 +132,11 @@ C8/C9/C10 as having "no corresponding code today" — true when written, not tru
 shipped (2026-09-10). All three now have implemented, tested code. What actually remains open
 is documented in `DEVELOPMENT-TRACKS.md`, not here:
 
-- **Corridor spatial discretization** (C8) is implemented (`corridor_discretization.py`) but
-  runs on placeholder city-centroid corridor geometry, not real transmission-line paths, and is
-  never called from the pipeline's actual entry point — see Track 1 and Track 3.
+- **Corridor spatial discretization** (C8) was implemented (`corridor_discretization.py`) on
+  placeholder city-centroid corridor geometry, then **retired 2026-10-12**: each city is now an
+  independent rating point (`city_point.py`, `city_rating.py`; see `decisions/point_scope.md`).
+  It is still not called from the pipeline's actual entry point — see Track 1. Track 3 (real
+  corridor geometry) is retired with it.
 - **Ampacity forecasting** (C9) is implemented (`ampacity_forecast.py`) but as classical
   statistical methods (naive last-value, EWM), not the regression/neural-network model this
   section originally called for — see Track 2.
@@ -161,10 +163,10 @@ Places where `System Design Report.md` (or, for the row below, `Project Definiti
 | Course Deliverable Claim | Location | Actual Repo State |
 |---|---|---|
 | ~~Team evaluated and selected NOAA + NSRDB over Synoptic for weather ingestion~~ **RESOLVED** | SDR §3.1 Design Concept | Ratified in `PRD.md` §7.1 (2026-09-15): the shipped composition sources solar from NREL NSRDB (Phase 8) — making the SDR's NSRDB half substantially correct — but wind, temperature, and RH come from TCEQ CAMS (Phase 9), not NOAA; no NOAA integration was ever built. Synoptic is retained as the automatic fallback (Phase 10, WX-06), not retired. The next System Design Report submission should restate this claim precisely: NSRDB for solar, TCEQ CAMS (not NOAA) for wind/temperature/RH. |
-| A spatial pipeline discretizes transmission corridors into multiple points, computes ampacity at each, and takes the corridor-level minimum as the true bottleneck | SDR §3.2 Risk Reduction ("Weather Data and Transmission Corridor Mapping") | A pipeline now exists (`backend/corridor_discretization.py`, `backend/corridor_pipeline.py`; C8, great-circle geometry between city endpoints) — this row describes the state when the discrepancy was first recorded. `backend/station_explorer.py::CORRIDORS` is five hardcoded lat/lon pairs used to rank station proximity, not to discretize a line for per-point ampacity. |
+| A spatial pipeline discretizes transmission corridors into multiple points, computes ampacity at each, and takes the corridor-level minimum as the true bottleneck | SDR §3.2 Risk Reduction ("Weather Data and Transmission Corridor Mapping") | A corridor pipeline was built (`backend/corridor_discretization.py`, `backend/corridor_pipeline.py`; great-circle geometry between city endpoints) and then **retired 2026-10-12** in favor of independent per-city rating points (`backend/city_point.py`, `backend/city_rating.py`; `decisions/point_scope.md`) — so the SDR claim describes a design the project no longer follows, and the next SDR submission should say so. `backend/station_explorer.py::CORRIDORS` is five hardcoded lat/lon pairs used to rank station proximity, not to discretize a line for per-point ampacity. |
 | An ML anomaly-detection model is "currently being trained and tuned on historical ambient weather and operating datasets" | SDR §3.2 Risk Reduction ("Data Integrity") | When first recorded, no model or training script existed; `backend/anomaly_detector.py` and `backend/anomaly_training.py` now do (C10, Implemented). `backend/DLRSafetyMonitor.py` is entirely deterministic threshold/range gating (G1–G5, plus an optional G6 gate for the injected C10 detector). |
 | ~~Solar irradiance sourced from NSRDB~~ **RESOLVED** | SDR §3.2 Risk Reduction | NSRDB PSM v4 is now the solar-irradiance primary (Phase 8, ratified `PRD.md` §7.1), reached via `nsrdb_provider.fetch_nsrdb`. Synoptic is retained only as the automatic fallback when NSRDB fails or returns nothing usable (Phase 10, WX-06), never as the primary. |
-| ~~The system targets **four** specific cities — Austin, Corpus Christi, Midland, El Paso — each with its own documented input-range and static-rating bounds~~ **RESOLVED** | Project Definition.md §"Input/Output Specifications" (lines 79-86) | Previously, no code implemented this four-city list, and three different, mutually inconsistent location sets existed instead (`config.py`'s old 5-city table, `station_explorer.py`'s 5 West-Texas corridors, and a dead-code stub in `dlr_pipeline.py`). Resolved per `docs/data-science/decisions/geographic_scope.md`: `config.py::STATIC_RATINGS` is now re-keyed to the real four-city scope (Austin, Corpus Christi, Midland, El Paso), and the dead-code stub was deleted. `station_explorer.py::CORRIDORS`' West-Texas corridors remain unchanged — the open question of how these four cities map to actual corridor endpoints for C8 is tracked separately in `geographic_scope.md`'s Open Questions, not yet resolved. |
+| ~~The system targets **four** specific cities — Austin, Corpus Christi, Midland, El Paso — each with its own documented input-range and static-rating bounds~~ **RESOLVED** | Project Definition.md §"Input/Output Specifications" (lines 79-86) | Previously, no code implemented this four-city list, and three different, mutually inconsistent location sets existed instead (`config.py`'s old 5-city table, `station_explorer.py`'s 5 West-Texas corridors, and a dead-code stub in `dlr_pipeline.py`). Resolved per `docs/data-science/decisions/geographic_scope.md`: `config.py::STATIC_RATINGS` is now re-keyed to the real four-city scope (Austin, Corpus Christi, Midland, El Paso), and the dead-code stub was deleted. `station_explorer.py::CORRIDORS`' West-Texas corridors remain unchanged. The open question of how the four cities map to corridor endpoints is moot: corridors were retired 2026-10-12 and each city is its own rating point (`decisions/point_scope.md`). |
 
 ## 11. References
 

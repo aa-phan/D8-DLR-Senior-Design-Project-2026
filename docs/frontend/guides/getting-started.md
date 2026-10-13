@@ -115,7 +115,7 @@ NSRDB solar data additionally needs `NREL_API_KEY` and `NREL_API_EMAIL`. You do 
 python -m pytest -q
 ```
 
-The suite takes a couple of minutes. At the time this guide was written it reported 900 passed and 23 failed, with the failures seen in `backend/tests/corridor_discretization_test.py`. The cause was not investigated. Check with the Data Science sub-team before treating a failure there as something you broke. <!-- VERIFY: whether the corridor_discretization_test.py failures are a known issue or specific to this checkout -->
+The suite takes a couple of minutes. Counts previously recorded here (900 passed, 23 failed, all failures in `backend/tests/corridor_discretization_test.py`) predate the move to per-city scope: that test file and the corridor modules it covered are slated for removal (`docs/data-science/decisions/point_scope.md`), and the counts have not been re-measured. While the backend migration is in progress, failures in or around corridor, shadow or training tests may be expected. Check with the Data Science sub-team before treating a failure as something you broke. <!-- VERIFY: current pytest pass/fail counts after the per-city migration -->
 
 ## Common setup issues
 

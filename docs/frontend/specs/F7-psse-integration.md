@@ -15,7 +15,7 @@ Not designed, and should not be guessed. A contract must minimally state, in agr
 
 - **Which PSS/E outputs reach the dashboard** — candidates the source documents mention: N-1 contingency thermal/voltage violations (`System Design Report.md` §3.2, §3.3 Power Systems Subsystem), the minimum dispatch rule's result (DLR thermal vs. voltage-stability limit), PV-curve / voltage-stability margin outcomes, reactive-power exhaustion results. None is stated as a dashboard requirement.
 - **Format and transport** — file drop, shared directory, PSS/E Python API (`System Design Report.md` §3.1 chose PSS/E for its Python API), or something else.
-- **Granularity and cadence** — per line, corridor, or bus; per run, hourly, or on demand; and how it lines up with F1's location model (OD-1).
+- **Granularity and cadence** — per line, city, or bus; per run, hourly, or on demand; and how it lines up with F1's location model (OD-1).
 - **Units** — all values must come with explicit units per SW-NF2; the dashboard cannot assume DS's `PIPELINE_SCHEMA` covers PSS/E quantities.
 - **Ownership of the safety logic** — PSS/E feasibility judgment belongs to Power Systems (per the DS handoff note); the dashboard displays it, like all else, without recomputing (SW-NF4).
 
@@ -38,7 +38,7 @@ If the team decides the dashboard has no PSS/E view, this component is closed as
 - **No contract exists** for any PSS/E-related handoff, in either direction (`pss_e_handoff.md`).
 - **WBS/LRC assigns 4.2.2** with Power Systems members in support (Appendix C) but names no deliverable format.
 - **Unclear whether PSS/E consumes DS output at runtime or in batch** — which determines whether there is a live feed to display at all.
-- **Possible mismatch with the dashboard's location model:** PSS/E outputs are per network element, while F1's location is a city/station/corridor (OD-1).
+- **Possible mismatch with the dashboard's location model:** PSS/E outputs are per network element, while F1's location is a city (a single rating point per city; station-level views still open, OD-1). There is no corridor to map PSS/E results onto.
 
 ## Acceptance Criteria
 

@@ -14,8 +14,10 @@ This page is written and updated by hand at milestone boundaries — it does not
 
 The full pipeline exists end to end: weather ingestion → IEEE 738 thermal modeling →
 per-location static-rating comparison → fail-safe safety monitoring (gates G1–G5) → corridor
-spatial discretization (two corridors, five points each, worst-point rating) → ampacity
-forecasting (naive/EWM, walk-forward backtested) → learned anomaly detection (gate G6). See
+spatial discretization (as shipped: two corridors, five points each, worst-point rating;
+**retired 2026-10-12** and replaced by one independent rating point per city, see
+"Point-scope change" below) → ampacity forecasting (naive/EWM, walk-forward backtested) →
+learned anomaly detection (gate G6). See
 [`v1.0-summary.md`](milestones/v1.0-summary.md) for the full accomplishment list.
 
 ### v1.1 Multi-Provider Weather — shipped 2026-09-15
@@ -36,6 +38,31 @@ ratified decision — see [`v1.1-summary.md`](milestones/v1.1-summary.md) for th
 accomplishment list, or [`decisions/data_provider.md`](decisions/data_provider.md) for the
 ratified decision record itself.
 
+### Point-scope change — 2026-10-12
+
+The corridor model is retired. Each of the four project cities (`AUSTIN`, `CORPUS_CHRISTI`,
+`MIDLAND`, `EL_PASO`) is now one independent rating point: `config.LOCATIONS` replaces
+`config.CORRIDOR_ENDPOINTS`, `city_point.city_point` and `city_rating.rate_city` replace
+`corridor_discretization.corridor_geometry` and `rate_corridor`, and nothing reduces across
+cities. Models, logs and record fields formerly keyed by corridor are keyed by city. The contract
+is [`decisions/point_scope.md`](decisions/point_scope.md); the component is
+[`specs/C8-city-point-rating.md`](specs/C8-city-point-rating.md).
+
+**Not done yet:**
+
+- **Per-city model refit.** The "ml" forecaster, the anomaly model and the shadow correction
+  models have not been retrained per city (needs live Open-Meteo/ERCOT data). Until they are, the
+  ML shadow candidates report `status="unavailable"` with a named reason, and the per-city
+  `forecast_{city}.joblib` / `anomaly_{city}.joblib` artifacts do not exist.
+- **Legacy corridor-named artifacts and logs are retained, not loaded** — the corridor-named
+  model files and the shadow logs `AUSTIN_CORPUS_CHRISTI.jsonl` / `MIDLAND_EL_PASO.jsonl` stay on
+  disk as the corridor-era record. Per-city shadow logs (`data/shadow/predictions/{CITY}.jsonl`)
+  start empty.
+- **Shadow-evidence baseline.** The 2026-11-24 evaluation date was set against corridor-level
+  collection; whether it moves is a team decision.
+- **Line bearing is an assumption** — carried over from the retired corridor bearings, to be
+  replaced with real line orientation when known.
+
 ---
 
 ## What's in flight now
@@ -47,9 +74,9 @@ GSD workstream:
 
 | Track | Milestone | Workstream | Status | Goal |
 |---|---|---|---|---|
-| 1 — Pipeline Integration & Real-Data Verification | v1.2 | `pipeline-integration` | Scoped (4 phases), not started | Wire `run_pipeline` to actually call corridor discretization → anomaly detection → forecasting as one connected sequence, then validate against real historical ERCOT data |
+| 1 — Pipeline Integration & Real-Data Verification | v1.2 | `pipeline-integration` | Scoped (4 phases), not started | Wire `run_pipeline` to actually call per-city rating (`city_rating.rate_city`) → anomaly detection → forecasting as one connected sequence, then validate against real historical ERCOT data |
 | 2 — ML Model Development | v1.3 | `ml-modeling` | Scoped (2 phases), not started | Replace the naive/EWM forecaster and the mean±k·std anomaly gate with real trained models, behind the same interfaces |
-| 3 — Real Transmission-Line Corridor Geometry | v1.4 | `corridor-geometry` | Scoped (2 phases); Phase 2 blocked on the Power Systems sub-team | Replace the two placeholder straight-line corridors with real substation-to-substation route geometry |
+| 3 — Real Transmission-Line Corridor Geometry | v1.4 | `corridor-geometry` | **Retired 2026-10-12** — corridors no longer exist (`decisions/point_scope.md`) | Was: replace the two placeholder straight-line corridors with real substation-to-substation route geometry. No longer applicable; the only remaining geometry-like item is a real per-city line orientation (see Known open items) |
 
 Each workstream's live roadmap and requirements are the actual source of truth — this table is a
 summary, not a substitute. The links below are one click through a redirect page into the real
@@ -57,7 +84,7 @@ file GSD maintains under `.planning/`:
 
 - Track 1: [`ROADMAP.md`](workstreams/pipeline-integration/ROADMAP.md) · [`REQUIREMENTS.md`](workstreams/pipeline-integration/REQUIREMENTS.md)
 - Track 2: [`ROADMAP.md`](workstreams/ml-modeling/ROADMAP.md) · [`REQUIREMENTS.md`](workstreams/ml-modeling/REQUIREMENTS.md)
-- Track 3: [`ROADMAP.md`](workstreams/corridor-geometry/ROADMAP.md) · [`REQUIREMENTS.md`](workstreams/corridor-geometry/REQUIREMENTS.md)
+- Track 3 (retired): [`ROADMAP.md`](workstreams/corridor-geometry/ROADMAP.md) · [`REQUIREMENTS.md`](workstreams/corridor-geometry/REQUIREMENTS.md) — kept as history only
 
 ---
 
@@ -78,10 +105,11 @@ file GSD maintains under `.planning/`:
 - **ERCOT live-pull bug (carried, unrelated to weather work)** — `ercot_data_retriever.py::pull_ercot_data`'s
   live path fails with a deterministic `Bad CRC-32` error inside the third-party `gridstatus`
   library, blocking live ERCOT pulls until upstream fixes it.
-- **Corridor geometry is still a placeholder** — the two corridors (Austin↔Corpus Christi,
-  Midland↔El Paso) are straight city-centroid-to-city-centroid lines, not real transmission-line
-  routes. Track 3 (v1.4) Phase 1 is scoped to request real geometry from the Power Systems
-  sub-team; Phase 2 (actually wiring it in) is blocked until that data arrives.
+- **Line orientation per city is an assumption** — `config.CITY_LINE_BEARING_DEG` carries over the
+  retired corridor bearings (Austin and Corpus Christi 173.15°, Midland and El Paso 267.54°) so
+  perpendicular-wind behavior is unchanged. It is not a measurement; replace it when each city's
+  real line orientation is known. The former
+  "corridor geometry is a placeholder" item no longer applies — corridors were retired.
 
 ---
 
@@ -97,8 +125,8 @@ source instead of trusting a stale copy here:
 | Cross-milestone lessons learned | [`.planning/RETROSPECTIVE.md`](../../.planning/RETROSPECTIVE.md) |
 | Track 1 roadmap/requirements/state | `.planning/workstreams/pipeline-integration/` |
 | Track 2 roadmap/requirements/state | `.planning/workstreams/ml-modeling/` |
-| Track 3 roadmap/requirements/state | `.planning/workstreams/corridor-geometry/` |
+| Track 3 roadmap/requirements/state (retired) | `.planning/workstreams/corridor-geometry/` |
 | Shipped v1.1 archive (phases, roadmap, requirements) | `.planning/workstreams/multi-provider-weather/milestones/v1.1-*` |
 | Shipped v1.0 archive (phases, roadmap, requirements) | `.planning/milestones/v1.0-*` |
 
-*Last updated: 2026-09-23, after v1.1 shipped and v1.2/v1.3/v1.4 were scoped.*
+*Last updated: 2026-10-12, after the corridor model was retired in favor of per-city rating points (previously: 2026-09-23, after v1.1 shipped and v1.2/v1.3/v1.4 were scoped).*

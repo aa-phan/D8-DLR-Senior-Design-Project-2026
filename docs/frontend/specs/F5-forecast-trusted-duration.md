@@ -45,8 +45,8 @@ Behavior rules:
 
 - **Trusted duration is contradictory in the sources.** `Project Definition.md` gives 10 or 20 **seconds**; DS cadence is minutes–hours and forecast horizon 60 minutes; DS C9 says no dashboard requirement for horizon has been specified (OD-3).
 - **Forecast columns not exported**, and cold-start omits them entirely (DS C9); the view must handle both "no columns" and "columns present".
-- **Model artifacts for `ml` are gitignored** (`/data/models/`); a clean checkout has none and `method="ml"` raises rather than degrading (DS C9). Not the UI's problem to hide, but a source of "forecast unavailable".
-- **A separate shadow-forecast stream exists** (`data/shadow/predictions/*.jsonl`) with a different shape and fields (e.g. `valid_time`, `horizon_minutes`, `fallback_used`); whether the dashboard reads it is OD-12 and DS's call.
+- **Model artifacts for `ml` are gitignored** (`/data/models/`); a clean checkout has none and `method="ml"` raises rather than degrading (DS C9). Not the UI's problem to hide, but a source of "forecast unavailable". Model artifacts are per city (`forecast_{city}.joblib`); existing corridor-named artifacts are legacy and not loaded, and the per-city refit has not been run (`point_scope.md`).
+- **A separate shadow-forecast stream exists** (`data/shadow/predictions/{CITY}.jsonl`, one file per city, `schema_version: 3`, records carry `city`) with a different shape and fields (e.g. `valid_time`, `horizon_minutes`, `fallback_used`); whether the dashboard reads it is OD-12 and DS's call. The corridor-named files (`AUSTIN_CORPUS_CHRISTI.jsonl`, `MIDLAND_EL_PASO.jsonl`; v1 flat and v2) are legacy and must be tolerated, not mixed into a city's series. Per-city logs start empty, and until the per-city models are refit the ML shadow candidates report `status="unavailable"` with a named reason, so expect sparse or missing candidates (`point_scope.md`).
 - **Forecast horizon the dashboard needs is unspecified** (DS C9 Open Questions).
 
 ## Acceptance Criteria
@@ -62,5 +62,7 @@ Behavior rules:
 ## Open Questions
 
 - OD-3 (trusted duration), OD-12 (shadow-forecast stream), OD-2 (refresh cadence).
+- If the v3 shadow stream is shown, the shape of its per-candidate `bundle` and `input_provenance` objects under the per-city model is not stated in the scope contract (the corridor-era `corridor_bundle_ampacity_amps`, `bundle_bottleneck_city` and `per_city_ampacity_amps` are among the things it removes). Do not code against the v2 shapes; wait for DS to document v3.
+- The forecast shown is per city. Nothing is reduced across cities.
 - What forecast horizon(s) should the panel show — a single horizon (DS default 60 minutes) or a range of lead times?
 - Should forecast/actual divergence be shown (C10 uses forecast residuals as an anomaly signal)? Not required by the source documents.

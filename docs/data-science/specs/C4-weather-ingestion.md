@@ -2,12 +2,12 @@
 
 **Phase:** 2 (Core Consolidation), extended in Phase 7 (Trivial-Integration Providers), Phase 8 (NSRDB Solar Integration), Phase 9 (TCEQ CAMS Integration), and Phase 10 (Fallback Wiring) · **Effort:** M · **Status:** Implemented — the provider-agnostic adapter (`backend/weather_provider.py`) now carries five real providers behind it (Synoptic station primary, ASOS 1-minute station supplement, TCEQ CAMS second station-path provider, Open-Meteo grid backfill, NSRDB grid solar) plus a Synoptic automatic fallback behind the two providers most exposed to a live data gap (TCEQ, NSRDB).
 
-**Responsibility:** Discover weather stations near target corridors and fetch time-series observations (temp, wind speed/direction, solar, humidity) for them, behind an interface that doesn't hardcode which provider is behind it. The ratified provider composition is recorded in `PRD.md` §7.1.
+**Responsibility:** Discover weather stations near the target cities and fetch time-series observations (temp, wind speed/direction, solar, humidity) for them, behind an interface that doesn't hardcode which provider is behind it. The ratified provider composition is recorded in `PRD.md` §7.1.
 
 ## Current Implementation
 
-- `backend/station_explorer.py::get_network_id(token, shortname) -> str`, `get_all_stations(token, network_id=None) -> pd.DataFrame`, `haversine_km`, `rank_by_corridor` — Synoptic station discovery and corridor-proximity ranking.
-- `backend/dlr_pipeline.py::get_wtm_stations(bbox=None) -> pd.DataFrame` — a second, overlapping station-metadata fetch (bbox-based rather than corridor-proximity-based).
+- `backend/station_explorer.py::get_network_id(token, shortname) -> str`, `get_all_stations(token, network_id=None) -> pd.DataFrame`, `haversine_km`, `rank_by_corridor` — Synoptic station discovery and proximity ranking against its own five hardcoded West-Texas reference points (`station_explorer.CORRIDORS`, unrelated to the retired two-corridor model; C8 now resolves each city's nearest usable station per `decisions/point_scope.md`).
+- `backend/dlr_pipeline.py::get_wtm_stations(bbox=None) -> pd.DataFrame` — a second, overlapping station-metadata fetch (bbox-based rather than proximity-ranked).
 - `backend/dlr_pipeline.py::fetch_timeseries(stids, start, end) -> pd.DataFrame` — 5-minute observations via Synoptic `/stations/timeseries`, long-form indexed by `(stid, datetime_utc)`, now also carrying null-tolerant `lat`/`lon` columns parsed from each station's `LATITUDE`/`LONGITUDE` (Phase 6). Requires `SYNOPTIC_TOKEN` env var (`backend/dlr_pipeline.py::_token()`).
 - `backend/dlr_pipeline.py::profile_missing_data(df)` — logs per-station, per-variable missing-data percentages and flags fully-dead sensors.
 
@@ -31,7 +31,7 @@ Output rows conform to the weather-observation subset of `PIPELINE_SCHEMA` (C2):
 
 ## Blocks
 
-- **C8** — corridor discretization needs weather at multiple points, which means calling this component's fetch logic repeatedly per corridor point.
+- **C8** — per-city point rating needs one nearest-usable-station observation per city (`config.LOCATIONS`, four cities), which means calling this component's fetch logic once per city per run. (Before 2026-10-12 this was five points per corridor; see `decisions/point_scope.md`.)
 - **C9** — forecasting needs both live and historical weather as features.
 
 **Related, not blocking:** C5's ampacity math takes weather values as plain parameters and has no ingestion dependency — it's blocked only by C1, not by this component. C5 needs *some* weather values to be called meaningfully end-to-end, but not this specific ingestion path; a test fixture with hand-set values is enough to develop and test C5 independent of C4 landing.
@@ -42,9 +42,9 @@ C5, C6 (all Phase 2) — no shared files or functions.
 
 ## Known Issues
 
-- `backend/station_explorer.py` and `backend/dlr_pipeline.py` each implement their own station-metadata fetch (`get_all_stations` vs. `get_wtm_stations`) with different filtering (corridor-proximity vs. bounding box) and different output columns (`elev_ft` vs. `elevation_m`) — duplicated logic that should consolidate into one.
+- `backend/station_explorer.py` and `backend/dlr_pipeline.py` each implement their own station-metadata fetch (`get_all_stations` vs. `get_wtm_stations`) with different filtering (proximity ranking vs. bounding box) and different output columns (`elev_ft` vs. `elevation_m`) — duplicated logic that should consolidate into one.
 - ~~`network_id = 152` hardcoded in `backend/station_explorer.py`.~~ **Fixed** — `station_explorer.py` now uses an unrestricted network (see the comment near line 123 replacing the prior WTM-only `network_id=152`).
-- ~~Output file/log-message mismatch...~~ **Fixed** — `station_explorer.py`'s log line now correctly reports `data/wtm_stations_austin.csv`.
+- ~~Output file/log-message mismatch...~~ **Fixed** — `station_explorer.py` writes and logs `data/tx_stations_unrestricted.csv` (it does not write `wtm_stations_austin.csv`, which is a checked-in input).
 - Missing `solar_radiation` is filled with a hardcoded `1000` W/m² (`backend/dlr_pipeline.py:228`) rather than being flagged — happens to be conservative for ampacity (more assumed solar → lower computed rating) but is an undocumented magic number, not a named constant. **Still open** — `dlr_pipeline.py` was deliberately not touched this pass (see Interface & Data Contract above), to keep C4 and C5's concurrent work non-overlapping.
 - Debug `print()` calls inside `fetch_timeseries` (`backend/dlr_pipeline.py:142-147`) alongside the module's proper `logging` calls elsewhere. **Still open**, same reason.
 - No retry/backoff or rate-limit handling on the Synoptic requests — relevant given the free-tier constraints noted in `PRD.md` §7.1. **Still open.**

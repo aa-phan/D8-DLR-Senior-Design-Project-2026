@@ -1,3 +1,5 @@
+> **Retired 2026-10-12.** The corridor model was superseded: each of the four cities is now an independent rating point. See [`../../decisions/point_scope.md`](../../decisions/point_scope.md). This workstream document is kept as history only.
+
 # Track 3 — Real Transmission-Line Corridor Geometry: Requirements
 
 This is a redirect page. The live requirements traceability table is maintained by GSD directly

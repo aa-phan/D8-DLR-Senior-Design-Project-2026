@@ -1,3 +1,5 @@
+> **Superseded 2026-10-12.** The corridor model recorded in this log (including the `AUSTIN_CORPUS_CHRISTI` / `MIDLAND_EL_PASO` corridors and `config.CORRIDOR_ENDPOINTS`) was superseded by [`point_scope.md`](point_scope.md): each of the four cities is now an independent rating point (`config.LOCATIONS`), with no corridor pairing and no `min()` reduction across cities. The log below is kept as history and describes the corridor-era state.
+
 # Geographic / Corridor Scope Decision Log
 
 **Status:** Resolved in code (2026-10-08) — `backend/config.py::STATIC_RATINGS` is keyed to the four Project Definition cities (Austin, Corpus Christi, Midland, El Paso), `config.CORRIDOR_ENDPOINTS` defines `AUSTIN_CORPUS_CHRISTI` and `MIDLAND_EL_PASO`, and per-city lookup is wired. The sections below are the original working log and describe the state when it was written; the recommendation was adopted. Answers the geographic/corridor scope conflict flagged in `.planning/PROJECT.md` Key Decisions, `.planning/INGEST-CONFLICTS.md`, and `PRD.md` §10 Documentation Discrepancies (row 5).
@@ -12,7 +14,7 @@ Three same-precedence-tier documents/artifacts define three different, non-overl
 |---|---|---|---|
 | `docs/Project Definition.md` §"Input/Output Specifications" (lines 79–86) | Course deliverable (graded) | Austin, Corpus Christi, Midland, El Paso — 4 cities, each with a documented input-range and static-rating bound table | — (this is the baseline) |
 | `backend/config.py::STATIC_RATINGS` (via `docs/data-science/specs/C1-configuration.md`) | SPEC / working code | Houston, Austin, Dallas, Fort Worth, San Antonio — 5 different cities | Austin only |
-| `backend/station_explorer.py::CORRIDORS` (via `docs/data-science/specs/C8-corridor-discretization.md`) | SPEC / working code | Panhandle Export, Permian Basin 345kV, Sweetwater Wind Hub, Big Spring Corridor, West TX to Hill Country — 5 West-Texas transmission corridors (not cities) | none |
+| `backend/station_explorer.py::CORRIDORS` (via `docs/data-science/specs/C8-city-point-rating.md`, formerly `C8-corridor-discretization.md`) | SPEC / working code | Panhandle Export, Permian Basin 345kV, Sweetwater Wind Hub, Big Spring Corridor, West TX to Hill Country — 5 West-Texas transmission corridors (not cities) | none |
 
 A fourth, smaller data point corroborates rather than complicates: `backend/dlr_pipeline.py`'s `__main__` block (line ~439) has a dead-code stub, `STATIC_RATINGS = {"AUSTIN": None, "EL_PASO": None, "MIDLAND": None}` — never read by `run_pipeline` — that is a *subset* of Project Definition.md's four cities (missing only Corpus Christi). This reads as an earlier, abandoned attempt to align the code with the real spec, not a fourth competing scope.
 
@@ -24,7 +26,7 @@ A fourth, smaller data point corroborates rather than complicates: `backend/dlr_
 
 **`config.py`'s 5-city list is itself internally flagged as incomplete and unwired**: `C1-configuration.md` states plainly that "nothing selects a specific city's `STATIC_RATINGS` entry per pipeline run" — every run currently uses a uniform fallback regardless of location. This is a lookup table awaiting a decision, not a settled scope choice. Its city selection (Houston, Dallas, Fort Worth, San Antonio in place of Corpus Christi, Midland, El Paso) also isn't traceable to any documented requirement — `C1-configuration.md`'s own sourcing notes describe a static-rating *research* pass (finding citable ERCOT/PUCT/FERC values for major metros), not a scope decision.
 
-**`station_explorer.py`'s West-Texas corridors are pre-C8 exploratory tooling, not C8 itself.** `C8-corridor-discretization.md` is explicit: "This is not corridor discretization — there's no notion of a line, a route, or multiple points along one." The five corridor names rank station proximity to a single reference point each; they don't discretize a transmission line into multiple points the way C8's actual acceptance criteria require. There's no documented rationale tying these five specific corridors to the four-city spec, or to any requirement at all — they look like ad hoc West Texas exploration (consistent with `config.py::DEFAULT_CONDUCTOR_CONFIG_KWARGS`'s "West Texas Permian Basin avg elevation" comment, also flagged in `PRD.md` §10 as evidence of an implicit, undocumented West-Texas narrowing).
+**`station_explorer.py`'s West-Texas corridors are pre-C8 exploratory tooling, not C8 itself.** The corridor-era `C8-city-point-rating.md` (then named `C8-corridor-discretization.md`) is explicit: "This is not corridor discretization — there's no notion of a line, a route, or multiple points along one." The five corridor names rank station proximity to a single reference point each; they don't discretize a transmission line into multiple points the way C8's actual acceptance criteria require. There's no documented rationale tying these five specific corridors to the four-city spec, or to any requirement at all — they look like ad hoc West Texas exploration (consistent with `config.py::DEFAULT_CONDUCTOR_CONFIG_KWARGS`'s "West Texas Permian Basin avg elevation" comment, also flagged in `PRD.md` §10 as evidence of an implicit, undocumented West-Texas narrowing).
 
 ## Recommendation
 
@@ -39,7 +41,7 @@ Concretely, this means:
 
 ## Open Questions (explicitly not decided here)
 
-- **City→corridor mapping.** C8 needs transmission-line endpoints, not city points. Which two of the four cities (or which city + which substation) define each corridor C8 will discretize? None of the three source documents answer this — it requires either real ERCOT transmission-line data or a team decision on synthetic endpoints, same gap `C8-corridor-discretization.md`'s own Open Questions section already flags ("Real geometry source...no such data source exists in this repo today").
+- **City→corridor mapping.** C8 needs transmission-line endpoints, not city points. Which two of the four cities (or which city + which substation) define each corridor C8 will discretize? None of the three source documents answer this — it requires either real ERCOT transmission-line data or a team decision on synthetic endpoints, same gap the corridor-era C8 spec's (`C8-city-point-rating.md`, formerly `C8-corridor-discretization.md`) own Open Questions section already flags ("Real geometry source...no such data source exists in this repo today").
 - **Re-sourcing the four cities' static ratings.** `Project Definition.md`'s table has bound *ranges*, not necessarily citable, single point-value static ratings in the format `config.py::STATIC_RATINGS` currently uses (a single float per city, following `C1`'s existing convention). Whether to use the table's range midpoint/bound, or re-run the citation research `C1` did for the original 5-city table against these four cities instead, is a team call.
 - **Disposition of the West-Texas corridor list.** Retiring it from the *authoritative* scope doesn't necessarily mean deleting the code — it may still be useful as a secondary/future corridor set once the four required cities are handled, if the team wants broader coverage later. Not decided here.
 
@@ -48,7 +50,7 @@ Concretely, this means:
 - `docs/Project Definition.md` §"Input/Output Specifications" (lines 76–88) — the four-city table
 - `docs/data-science/PRD.md` §10 Documentation Discrepancies (row 5) — the team's own prior flagging of this exact conflict
 - `docs/data-science/specs/C1-configuration.md` — current 5-city `STATIC_RATINGS`, and confirmation that per-city selection isn't wired
-- `docs/data-science/specs/C8-corridor-discretization.md` — confirmation that `station_explorer.py::CORRIDORS` is proximity-ranking, not corridor discretization
+- `docs/data-science/specs/C8-city-point-rating.md` (corridor-era version, formerly `C8-corridor-discretization.md`) — confirmation that `station_explorer.py::CORRIDORS` is proximity-ranking, not corridor discretization
 - `backend/station_explorer.py`, `backend/config.py`, `backend/dlr_pipeline.py` — the three/four conflicting artifacts themselves
 - `.planning/PROJECT.md` Key Decisions, `.planning/INGEST-CONFLICTS.md` — where this conflict was first surfaced during GSD doc ingest
 - `.planning/REQUIREMENTS.md` DS-F5 — the requirement blocked on this decision

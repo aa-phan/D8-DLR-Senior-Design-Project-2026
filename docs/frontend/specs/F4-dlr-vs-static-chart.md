@@ -3,7 +3,7 @@
 
 **Phase:** 2 (Core Views) · **Effort:** M · **Status:** Not started.
 
-**Responsibility:** Visualize dynamic capacity against the static rating over time for the selected location — the project's central visual argument ("visualizing dynamic capacity", `Project Definition.md`; WBS 4.1.3 "Implement real-time data visualization of DLR vs. SLR capacity"; SW-F6). Makes the headroom (or shortfall) between the two ratings readable at a glance, with the driving weather available for context.
+**Responsibility:** Visualize dynamic capacity against the static rating over time for the selected city — the project's central visual argument ("visualizing dynamic capacity", `Project Definition.md`; WBS 4.1.3 "Implement real-time data visualization of DLR vs. SLR capacity"; SW-F6). Makes the headroom (or shortfall) between the two ratings readable at a glance, with the driving weather available for context.
 
 ## Current Implementation
 
@@ -52,7 +52,7 @@ Behavior rules:
 Upstream-data concerns (PRD §9):
 
 - **Variable cadence and missing slots** across station files: charts must not assume a fixed 5-minute interval.
-- **Static line is 900 A in all committed outputs**, not the per-city static ratings (`backend/config.py::STATIC_RATINGS`); a chart that hardcodes a static value would be wrong in either direction — read it from data.
+- **Static line is 900 A in all committed outputs**, not the per-city static ratings (`backend/config.py::STATIC_RATINGS`); a chart that hardcodes a static value would be wrong in either direction — read it from data. A city's static limit is now its own entry, not the minimum of a corridor pair, so a per-city line will differ from older corridor-era figures (for example Corpus Christi 3000 A rather than 1900 A).
 - **Headroom up to 274%** and **DLR below static** both occur; neither matches the "30–50%" in the course documents. The chart's y-axis must accommodate both; do not clip.
 - **`solar_radiation` constant at 1000.0** in five of six stations — if solar is plotted for context it may look like a flat line for a reason DS must explain.
 - **Existing DS plots show repeated date tick labels** on the x-axis (the same `07/01` appears at two ticks); a dashboard time axis must label unambiguously.
@@ -64,7 +64,7 @@ Upstream-data concerns (PRD §9):
 - Against a station with DLR below static (e.g. `F2876` output data) the sub-static region is visibly distinct from uplift and still plotted (no clipping at the static line).
 - Null values and missing time slots (e.g. the `AN490` gaps) render as gaps, not zeros or straight lines across a gap.
 - Axis labels carry units (A, MW if used) and timezone; hover/readout values equal the CSV values to the displayed precision.
-- Switching location updates the chart through F1/F2's selected-location state with no stale series remaining from the previous location.
+- Switching city updates the chart through F1/F2's selected-location state with no stale series remaining from the previous location.
 - When data are stale or unavailable (F1 `stale_or_missing`), the chart shows a clear unavailable state rather than the last series as if current.
 - Chart plotted values for a pipeline run match the pipeline's CSV for every row (feeds F8's consistency check).
 
@@ -72,4 +72,5 @@ Upstream-data concerns (PRD §9):
 
 - OD-5 (headline and styling when DLR < SLR), OD-7 (timezone), OD-8 (MW and ERCOT load).
 - Look-back window and default time range, and whether the user can change them — not specified in the sources.
-- Is the chart a single series for the whole selected location, or per-station overlays when a location has several stations (depends on OD-1)?
+- A city is one point, but the station behind it can change between runs (nearest usable station, with fallback). Is the chart one series per city, or does it mark or split where the source station changes? Station files in the v1 export are keyed by `stid` with no city column (PRD G1), so a per-city series cannot be assembled from them until that mapping exists.
+- No chart plots a corridor minimum or bottleneck; the dashboard has no such series.

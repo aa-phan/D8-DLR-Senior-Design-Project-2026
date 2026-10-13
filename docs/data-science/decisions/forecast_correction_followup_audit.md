@@ -1,3 +1,5 @@
+> **Frozen corridor-era record.** This document is the audit of the completed corridor-based forecast-correction experiment (corridor-era, retired 2026-10-12 as an operating model). It is frozen and is not rewritten for the per-city model; the code that reproduces it uses `backend/legacy_corridor.py` and `config.LEGACY_CORRIDOR_ENDPOINTS`. See [`point_scope.md`](point_scope.md).
+
 # Forecast Correction Follow-up Audit — Data Provenance, Comparison Strength, and Integration Readiness
 
 **Status:** DRAFT / IN PROGRESS. This document is a follow-up, adversarial, independent audit of

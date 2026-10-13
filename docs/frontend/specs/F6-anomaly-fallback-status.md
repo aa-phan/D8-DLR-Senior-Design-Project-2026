@@ -9,6 +9,7 @@
 
 None. DS's producers exist but only in memory, not in any exported file:
 
+- `city_rating.rate_city` (DS C8, "City Point Rating", per `point_scope.md`) resolves one city's nearest usable station observation, runs it through `DLRSafetyMonitor` with the city's own static rating, and returns a per-city dict whose status-relevant keys are `status`, `fallback`, `alerts`, `exhausted` (bool) and `observation`. A city whose lookup exhausts every candidate station falls back to its static rating with `status="fallback"` and an `EXHAUSTED FAIL` alert. This is an in-process return value, not an exported file. The keys were read from `backend/city_rating.py` on 2026-10-12.
 - `backend/DLRSafetyMonitor.py::DLRSafetyMonitor.run_check(raw_data)` (DS C7) returns `{"status", "rating", "fallback", "alerts"}`. Gates G1 (sensor availability), G2 (communication link), G3 (range), G4 (ampacity plausibility) and G5 (delta check) all cause a fallback (G5 reports `min(computed, static_rating)`); G6 is the learned anomaly check (`backend/anomaly_detector.py::AnomalyDetector.check(raw_data, rating) -> (is_anomalous, reason)`, DS C10).
 - `anomaly_score` (unit `pu`, range 0–1000) is defined in `PIPELINE_SCHEMA` v2 but is not in the v1 export.
 - `PIPELINE_SCHEMA` v3's `wind_source`, `temp_source`, `humidity_source`, `solar_source` record per-field provider provenance, including `synoptic` as automatic fallback; also not in the v1 export.
@@ -48,12 +49,13 @@ Behavior rules:
 
 ## Known Issues
 
-- **Status is not in any exported file** — the single biggest gap (PRD §8, G2).
+- **Status is not in any exported file** — the single biggest gap (PRD §8, G2). Status is per city: four independent states, never a corridor-wide flag. The corridor-era "any point fell back" rule and `exhausted_points` count are retired.
+- **Per-city learned-anomaly models are not yet fitted.** `anomaly_{city}.joblib` artifacts are per city; corridor-named ones are legacy and not loaded, and the per-city refit has not been run (`point_scope.md`). Until it is, the learned model branch of G6 is likely absent and heuristics carry it, so an "anomaly detector degraded" condition applies to all four cities and DS does not export it.
 - **Fallback targets** (verified in `DLRSafetyMonitor.py`): G1–G4 and G6 → `static_rating`; G5 → `min(computed, static_rating)`. (`docs/data-science/specs/C7-safety-monitor.md` now matches.) The course documents say "default back to … static" without distinction (OD-6).
 - **DS test contradiction (not confirmed):** DS C7 Known Issues says `test_gate_2_fails_when_link_status_not_ok` asserts `status == "ok"` while fallback is True. The test actually asserts `status == "fallback"`, so no such contradiction exists in the code; `_fallback()` sets `status` to `"fallback"`.
 - **False positives are nonzero in the learned detector** (DS C10: 3.77% and 0.53% on clean held-out data) — so the UI will occasionally show an anomaly on good data; wording should not overclaim a sensor fault.
 - **Learned-model artifacts are gitignored**; without them the model branch is absent and heuristics carry G6 alone (DS C10) — an "anomaly detector degraded" condition DS does not export either.
-- **Shadow stream** (`data/shadow/predictions/*.jsonl`) carries `fallback_used` / `fallback_reason` for forecasts — a different meaning from C7's gate fallback (OD-12).
+- **Shadow stream** (`data/shadow/predictions/{CITY}.jsonl`, v3) carries `fallback_used` / `fallback_reason` for forecasts — a different meaning from C7's gate fallback (OD-12).
 
 ## Acceptance Criteria
 

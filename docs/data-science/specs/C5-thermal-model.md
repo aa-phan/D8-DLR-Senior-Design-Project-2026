@@ -51,7 +51,7 @@ For the standard's own worked-example inputs, the buggy version computed **~1728
 ## Blocks
 
 - **C7** — the safety monitor's plausibility gate (G4) should be checking a rating computed by *this* function, not its own placeholder formula.
-- **C8** — corridor discretization needs to call this per corridor point.
+- **C8** — per-city point rating calls this (via C7's monitor) once per city, using the city's line bearing (`config.CITY_LINE_BEARING_DEG`) as the conductor azimuth for the perpendicular-wind component.
 - **C9** — forecasting needs this as its physical baseline/feature generator.
 
 ## Parallel-safe with

@@ -17,11 +17,12 @@ Test targets, from `System Design Report.md` §3.3:
 
 **Usability review (ISO 9241).** "Clarity of alerts and operator response time to flagged conditions." Reviewed by the whole team (LRC 4.3.4: one primary, five review).
 
-**Full System Integration.** "A change in weather input propagates correctly through IEEE 738 calculation, updates the corridor ampacity, triggers appropriate contingency checks, and displays the updated rating on the dashboard within the trusted duration refresh window." Pass: "data flows end-to-end with no unit errors, no undetected anomalies, and dashboard outputs consistent with pipeline calculations."
+**Full System Integration.** (Quoted as written in the course document, which says "corridor ampacity"; the project now rates four independent city points, so read it as the per-city rating.) "A change in weather input propagates correctly through IEEE 738 calculation, updates the corridor ampacity, triggers appropriate contingency checks, and displays the updated rating on the dashboard within the trusted duration refresh window." Pass: "data flows end-to-end with no unit errors, no undetected anomalies, and dashboard outputs consistent with pipeline calculations."
 
 What this component adds:
 
 - **API/UI contract tests** against the fixture, plus the mock extension for forecast and fallback fields (F5/F6) so they are covered before DS exports real data.
+- **A per-city check:** each of the four cities shows its own rating, status and static limit, and no screen shows a corridor minimum, a bottleneck or any other cross-city reduction.
 - **A pipeline-to-screen consistency check:** for a given pipeline run, every value the UI renders (limits, headroom, weather, forecast, status) equals the CSV value, with unit and timezone labels correct.
 - **A scripted fault-injection set** driven through the feed (stale file, missing file, null columns, fallback rows, out-of-range rows) confirming SW-NF1: nothing leaves a normal-looking dynamic limit when data is untrustworthy.
 - **A usability-review protocol:** tasks an operator-role tester performs without help (read the current limit; tell whether it can be trusted; identify an active fallback and its reason; read the forecast), with success/time recorded.
@@ -41,7 +42,7 @@ Test-harness and fixture-extension scaffolding can start alongside Phase 2/3 wor
 ## Known Issues
 
 - **"Real time" is untestable until a live feed exists.** The pipeline produces batch CSVs (PRD OD-2); the integration test's "within the trusted duration refresh window" criterion needs OD-2 and OD-3 resolved or reinterpreted (e.g. refresh-on-new-file).
-- **The test plan assumes the integrated pipeline** (corridor discretization → anomaly check → forecast) exists; DS Track 1 (`docs/data-science/DEVELOPMENT-TRACKS.md`) is the work that wires those into `run_pipeline`, and it is not yet executed at time of writing, so end-to-end runs through the real pipeline may be limited.
+- **The test plan assumes the integrated pipeline** (per-city rating via `city_rating.rate_city` → anomaly check → forecast) exists, and that the per-city result is exported somewhere the dashboard can read; neither is true today. DS Track 1 (`docs/data-science/DEVELOPMENT-TRACKS.md`) is the work that wires those into `run_pipeline`, and it is not yet executed at time of writing, so end-to-end runs through the real pipeline may be limited.
 - **Operator availability:** the review criterion is about operators; no source document names who the test operators are (real operators vs. proxies is undecided).
 - **Standards criteria are not testable as written:** IEEE 2030.2 / 1815 / C37.118 alignment (PRD OD-10) has no pass/fail definition.
 - **No frontend/API test framework chosen** (OD-11).

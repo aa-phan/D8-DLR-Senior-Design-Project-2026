@@ -8,7 +8,7 @@
 
 ## 1. Why This Ordering
 
-The repo's five production modules (`backend/station_explorer.py`, `backend/dlr_pipeline.py`, `backend/DLRSafetyMonitor.py`, `backend/units_def.py`, `backend/ercot_data_retriever.py` / `backend/ercot_dlr_merger.py`) have **zero cross-module imports**. They communicate entirely through CSV files on disk, coupled by column name — e.g. `backend/ercot_dlr_merger.py` reads `dlr_amps`, `datetime_utc`, `wind_speed`, `air_temp` directly out of whatever `backend/dlr_pipeline.py` exported. That's already close to the modularity the team wants: different people can own different files without touching each other's code. What's missing is that the file contract is **implicit and unenforced** — nothing stops a column rename from silently breaking a downstream script until someone runs it.
+The repo's five production modules (`backend/station_explorer.py`, `backend/dlr_pipeline.py`, `backend/DLRSafetyMonitor.py`, `backend/units_def.py`, `backend/ercot_data_retriever.py` / `backend/ercot_dlr_merger.py`) originally had **no cross-module coupling beyond shared config and the thermal model** (`dlr_pipeline.py` and `DLRSafetyMonitor.py` import `config`/`thermal_model`; `dlr_pipeline.py` also imports `units_def`); the data itself moves through CSV files on disk, coupled by column name — e.g. `backend/ercot_dlr_merger.py` reads `dlr_amps`, `datetime_utc`, `wind_speed`, `air_temp` directly out of whatever `backend/dlr_pipeline.py` exported. That's already close to the modularity the team wants: different people can own different files without touching each other's code. What's missing is that the file contract is **implicit and unenforced** — nothing stops a column rename from silently breaking a downstream script until someone runs it.
 
 That fact drives the whole roadmap: **formalizing the implicit contract is the cheapest, highest-leverage first move**, because it's the specific thing that lets multiple people build against each other's outputs safely and in parallel. Everything after that is ordered least→most complex, with the two Phase 4 components deliberately last because they're both highest-effort and dependent on everything else.
 
@@ -23,7 +23,7 @@ That fact drives the whole roadmap: **formalizing the implicit contract is the c
 | C5 | Thermal Model (IEEE 738) | 2 | M | Implemented as `backend/thermal_model.py`; validated against IEEE 738's own published worked example. A real bug (erroneous π factor, ~69% ampacity overestimate) was found and fixed in the process — see `PRD.md` §9 |
 | C6 | Grid Load Integration (ERCOT) | 2 | M | Implemented, with new test coverage for the three previously-unverified acceptance criteria |
 | C7 | Safety Monitor & Fallback | 3 | M | Implemented (G1–G6; uses C5 ampacity) |
-| C8 | Corridor Spatial Discretization | 3 | L | Implemented (great-circle geometry) |
+| C8 | City Point Rating | 3 | L | Implemented — each of the four cities is an independent rating point (`city_point.py`, `city_rating.py`); the original corridor discretization was retired 2026-10-12 (`decisions/point_scope.md`) |
 | C9 | Ampacity Forecasting | 4 | L | Implemented (naive, ewm, ml) |
 | C10 | Learned Anomaly Detection | 4 | L | Implemented (G6, optional) |
 
@@ -32,7 +32,7 @@ Full detail per component: `specs/C1-configuration.md` through `specs/C10-anomal
 ## 3. Dependency Graph
 
 ```
-                    ┌──> C4 Weather ────────┬──> C8 Corridor
+                    ┌──> C4 Weather ────────┬──> C8 City Point
                     │         │             │
 C1 Configuration ───┼──> C5 Thermal ────────┤
                     │         │             │
@@ -71,7 +71,7 @@ Three genuinely independent tracks — **can run fully in parallel** once Phase 
 ### Phase 3 — Safety & Spatial (C7, C8)
 
 - **C7** becomes small once C5 exists: point `DLRSafetyMonitor._compute_ampacity` at the real thermal model instead of its linear placeholder. Independent of C8.
-- **C8** is the largest net-new build in the roadmap — real corridor geometry, per-point ampacity, min-ampacity bottleneck logic. Needs C4 (weather at each point) and C5 (ampacity at each point), not C7.
+- **C8** was the largest net-new build in the roadmap. As originally scoped it was real corridor geometry, per-point ampacity and min-ampacity bottleneck logic; since 2026-10-12 it is the simpler per-city point rating (one independent point per city, no geometry and no cross-point `min()`; `decisions/point_scope.md`). Needs C4 (weather at each city) and C5 (ampacity at each city, via C7's monitor).
 
 ### Phase 4 — Predictive (C9, C10)
 
@@ -88,7 +88,7 @@ The findings below are the actual point of this document — read them before as
 
 2. **C3's output schema is the largest external-wait risk.** The Software sub-team's dashboard work depends entirely on knowing the DS output column contract, and they are not part of this repo's DS phasing — they're a different sub-team on a different timeline. Publish C3's schema (with a sample fixture CSV) as early in Phase 1 as possible, even before C4/C5/C6 are fully consolidated, so UI work can start against the contract instead of waiting for the full pipeline to be "done."
 
-3. **The weather-provider decision must not gate C8.** It's still genuinely unresolved (PRD §7.1) — Synoptic's free-tier limits are real, NOAA is unvalidated. C4's adapter-interface design exists specifically so C8 can build against the current Synoptic provider (or a mock implementing the same interface) and absorb a provider switch later without re-architecting the corridor pipeline.
+3. **The weather-provider decision must not gate C8.** It's still genuinely unresolved (PRD §7.1) — Synoptic's free-tier limits are real, NOAA is unvalidated. C4's adapter-interface design exists specifically so C8 can build against the current Synoptic provider (or a mock implementing the same interface) and absorb a provider switch later without re-architecting the per-city rating pipeline.
 
 4. **Don't let a dev sit idle waiting on C5 to start C7.** C7's actual change (swap the ampacity formula) is small, but it's gated on C5 landing first. Whoever's slated for C7 should pick up C6 or start scaffolding C8 in the meantime rather than waiting.
 
@@ -108,7 +108,7 @@ Read alongside each component's **Parallel-safe with** field in its spec.
 | Should NOT start until dependency lands | Reason |
 |---|---|
 | C4, C5, C6 before C1/C2 | Would build against config values and column names likely to change |
-| C8 before C4 + C5 | Needs both a weather source and an ampacity function per corridor point |
+| C8 before C4 + C5 | Needs both a weather source and an ampacity function per city point |
 | C9 before C4 + C5 (+ accumulating history) | Needs features and training data volume |
 | C10 before C7 | Builds on the gating framework C7 establishes |
 

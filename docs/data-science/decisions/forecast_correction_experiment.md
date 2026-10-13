@@ -1,3 +1,5 @@
+> **Frozen corridor-era record.** This document records the completed corridor-based forecast-correction experiment (corridor-era, retired 2026-10-12 as an operating model). It is frozen and is not rewritten for the per-city model; the code that reproduces it uses `backend/legacy_corridor.py` and `config.LEGACY_CORRIDOR_ENDPOINTS`. See [`point_scope.md`](point_scope.md).
+
 # Ampacity Forecast Correction Experiment — 24-Hour Primary Comparison
 
 **Status:** Complete — all nine sections below are finalized. The Expectation section was written

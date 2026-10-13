@@ -3,7 +3,7 @@
 
 **Status:** Internal engineering reference, companion to `PRD.md` and `specs/`. Defines build order, dependencies, and where parallel work is and isn't safe. Not a course deliverable and not a calendar — no dates. Effort sizes (S/M/L) are relative complexity, not time estimates; the team should size against its own velocity. **All components are Not started.**
 
-**Last reviewed against repo state:** 2026-10-08
+**Last reviewed against repo state:** 2026-10-12 (per-city scope change; `docs/data-science/decisions/point_scope.md`)
 
 ---
 
@@ -12,7 +12,7 @@
 `frontend/` and `api/` are empty placeholders, so the whole subsystem is greenfield. The facts that shape the order come from outside it:
 
 1. **The DS contract is the only fixed input.** The sole committed data is the 10-row fixture `data/fixtures/sample_pipeline_output.csv`; `outputs/` is gitignored, so a fresh clone has nothing else. The v1 schema (`docs/data-science/schema/pipeline_output_v1.md`) covers current weather, `dlr_amps`, headroom and an uplift flag — but **not** forecast, trusted duration, fallback/anomaly status, sag, location, or the static rating (PRD §8, gaps G1–G8). So the views that the v1 export fully supports (current limit, weather, DLR-vs-static chart) can start now; the forecast and anomaly/fallback views are externally blocked on DS.
-2. **Two small decisions gate everything.** What a "location" is (PRD OD-1) and the front-end stack (OD-11) must be settled before the API's routes and the UI's component choices harden. They are cheap to decide and expensive to reverse.
+2. **Two small decisions gate everything.** What a "location" is (PRD OD-1, now narrowed: DS rates four independent city points and corridors are retired) and the front-end stack (OD-11) must be settled before the API's routes and the UI's component choices harden. They are cheap to decide and expensive to reverse. What remains of OD-1 is how a station file maps to a city and whether a per-station view exists.
 3. **Least→most dependent.** Foundation (data access, shell) first; then views backed by data that exists; then views waiting on DS; then cross-team integration and the course test plan last, because they need everything else.
 
 Mirroring `docs/data-science/ROADMAP.md`: formalizing the contract the UI reads is the cheapest, highest-leverage first move, because it is what lets several people build panels in parallel without colliding.
@@ -62,14 +62,14 @@ Full detail per component: `specs/F1-data-access-api.md` through `specs/F8-integ
 
 Lowest complexity of cross-cutting work, highest fan-out: every view reads through F1 and sits inside F2's shell. Deliberately a serialization point — land the data layer's shape and the shell's layout before panels are built against them.
 
-- **F1** defines the dashboard's one way of reading DS output: a Flask BFF (`api/`) that reads the fixture (and, when present, pipeline output files), normalizes timestamps and nulls, and exposes it to a thin client in `frontend/`. Fixture-first, so everything downstream can start without a Synoptic token or a pipeline run.
+- **F1** defines the dashboard's one way of reading DS output: a Flask BFF (`api/`) that reads the fixture (and, when present, pipeline output files), normalizes timestamps and nulls, and exposes it to a thin client in `frontend/`, per city (four points; no corridor aggregate). Fixture-first, so everything downstream can start without a Synoptic token or a pipeline run.
 - **F2** is the operator-workflow analysis and wireframes (WBS 4.1.1, 4.1.2), plus the app shell: layout slots for each panel, the preset-location selector, global status banner placement, and the ISO 9241 conventions (typography, color/alert conventions, timezone labelling) every panel reuses. Its design deliverables need no code and can start immediately.
 
 ### Phase 2 — Core Views (F3, F4)
 
 Two independent views, **fully parallel**, both supportable by the v1 export alone.
 
-- **F3** is the first vertical slice: select a location → see the current dynamic limit, the static limit, weather. Smallest effort; it proves F1 + F2 end to end early. Sag (SW-F4) is gated on OD-4 and is not required to ship F3.
+- **F3** is the first vertical slice: select a city → see the current dynamic limit, that city's own static limit, weather. Smallest effort; it proves F1 + F2 end to end early. Sag (SW-F4) is gated on OD-4 and is not required to ship F3.
 - **F4** is the DLR-vs-static time series (WBS 4.1.3): the core visual argument of the whole project. Includes how the lower-DLR case is shown (OD-5).
 
 ### Phase 3 — Predictive & Safety Views (F5, F6)
@@ -94,7 +94,7 @@ The findings below are the actual point of this document — read them before as
 
 2. **The DS contract extension is the largest external-wait risk.** F5 and F6 — the forecast panel and the anomaly/fallback indicators, half of WBS 4.1 and the safety-critical half — need columns the v1 export does not carry (PRD §8, G2–G4). DS is a different sub-team with its own roadmap, and the extension is not in their component list. **Send the contract request (PRD §8) to DS now**, before F5/F6 are scheduled, and agree on a mock fixture extension so UI work isn't waiting. Do not invent column names in production code.
 
-3. **Decide the unit of selection (OD-1) and the stack (OD-11) before F1/F2 harden.** A route shaped around `stid` versus city versus corridor is a rewrite if guessed wrong. These two decisions take a meeting, not a sprint — hold it first.
+3. **Confirm the unit of selection (OD-1) and decide the stack (OD-11) before F1/F2 harden.** The per-city contract settles the rating unit as a city, so routes should be per city; a route shaped around `stid` is a rewrite if the station-to-city mapping (G1) lands differently. These two decisions take a meeting, not a sprint — hold it first.
 
 4. **Don't let "trusted duration" gate layout.** OD-3 is genuinely unresolved (10–20 s in `Project Definition.md` vs. minutes–hours in DS). F5's layout, the forecast band, and the "valid until" slot can be built; only the labelled value waits. Whoever owns F5 should not sit idle: start the forecast chart.
 
@@ -105,6 +105,8 @@ The findings below are the actual point of this document — read them before as
 7. **Staffing limits the parallelism on paper.** The Linear Responsibility Chart (`System Design Report.md` Appendix C) lists the same single primary owner (Allie) for every Software-sub-team task, 4.1.1 through 4.3.4, with others in support or review roles. The "can run simultaneously" table below describes which work is *independent*, not how many people are assigned; if the team does not add contributors, treat it as an order-of-attack guide. Reassign explicitly if the parallel split in §6 is to be used.
 
 8. **F4 and F5 share a chart.** Both draw time series with a limit line and a band. They are separate WBS items and separate files, but agree a shared chart wrapper (axes, timezone, units, null handling) in F2 so they don't diverge — a contract, not a blocker.
+
+9. **The per-city result has no export yet.** DS rates each city independently (`city_rating.rate_city`) but returns the result as an in-process dict (plus, optionally, one archive row); the four cities' status, alerts and fallback are not in any file feed a BFF can read. This is the same external wait as Finding 2, now stated per city. Do not synthesize a four-city view from the station CSVs, and do not add a corridor-style aggregate (`min` or bottleneck) in the UI.
 
 ## 6. Parallelization Summary
 
@@ -121,7 +123,7 @@ Read alongside each component's **Parallel-safe with** field in its spec.
 
 | Should NOT start until dependency lands | Reason |
 |---|---|
-| F1 routes before OD-1 | Route shape depends on what a location is |
+| F1 routes before OD-1 (remaining part) | Routes are per city, but the station-to-city mapping (G1) and any per-station view are undecided |
 | F3–F7 before F1 + F2 | No data layer or shell to build on; panels would each invent their own parsing and layout |
 | F5, F6 production code before DS agrees the columns | Would hard-code guessed field names (PRD §8) |
 | F6's "rating basis" wording before OD-6 | The UI must not claim "static rating in effect" when DS's gate fell back to a different basis (G5 reports `min(computed, static)`) |
@@ -133,4 +135,5 @@ Read alongside each component's **Parallel-safe with** field in its spec.
 - `PRD.md` — requirements, open decisions, DS contract requests
 - `specs/README.md` — component index and spec template
 - `docs/System Design Report.md` §3.3 (test plan), Appendix B (WBS 4.0), Appendix C (LRC) — original task breakdown this roadmap supersedes for Software-specific sequencing
+- `docs/data-science/decisions/point_scope.md` — per-city scope contract (corridors retired 2026-10-12)
 - `docs/data-science/ROADMAP.md` (Finding 2, "C3's output schema is the largest external-wait risk") — the DS-side view of this same dependency

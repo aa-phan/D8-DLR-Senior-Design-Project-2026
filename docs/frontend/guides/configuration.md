@@ -53,20 +53,22 @@ Most values are literal constants in the file. The groups most likely to matter 
 
 | Constant | Type | What it holds |
 |----------|------|---------------|
-| `STATIC_RATINGS` | `dict[str, float]` | Static line rating in amps per city: AUSTIN 1900, CORPUS_CHRISTI 3000, MIDLAND 1800, EL_PASO 1450. Each is the midpoint of the range in `docs/Project Definition.md`. |
+| `STATIC_RATINGS` | `dict[str, float]` | Static line rating in amps per city: AUSTIN 1900, CORPUS_CHRISTI 3000, MIDLAND 1800, EL_PASO 1450. Each is the midpoint of the range in `docs/Project Definition.md`. Each city is its own rating point and uses its own entry; previously a corridor used the `min()` of its two endpoint cities (so Corpus Christi was rated 1900 A). |
 | `DEFAULT_STATIC_RATING` | `float` | 900.0 A fallback for a location not in `STATIC_RATINGS`. |
-| `RATING_BOUNDS_BY_LOCATION` / `DEFAULT_RATING_BOUNDS` | `dict` / `tuple` | Per-city plausibility bounds (amps) used by the safety monitor; default is `(400.0, 1800.0)`. |
+| `RATING_BOUNDS_BY_LOCATION` / `DEFAULT_RATING_BOUNDS` | `dict` / `tuple` | Per-city plausibility bounds (amps) used by the safety monitor; default is `(400.0, 1800.0)`. Previously the minimum of the two endpoint cities' bounds. |
 | `DELTA_FRACTION` | `float` | 0.15. Large-swing threshold as a fraction of the static rating. |
 | `SUBCONDUCTORS_PER_PHASE`, `BUNDLE_CONFIG_VERSION`, `BUNDLE_RATING_BASIS` | `dict`, `str`, `str` | Provisional per-city bundle counts (AUSTIN 2, CORPUS_CHRISTI 2, MIDLAND 2, EL_PASO 1) supplied by the Power Systems sub-team. The code states these are a regional assumption, not confirmed for any line segment. Surface the `BUNDLE_RATING_BASIS` caveat wherever bundle ratings are displayed. |
 | `CITY_COORDINATES` | `dict[str, tuple[float, float]]` | City-center `(lat, lon)` for the four cities. |
-| `CORRIDOR_ENDPOINTS` | `dict[str, tuple[str, str]]` | The two corridors: `AUSTIN_CORPUS_CHRISTI` and `MIDLAND_EL_PASO`. This is the authoritative corridor model. |
+| `LOCATIONS` | `tuple[str, ...]` | The four rating points: `AUSTIN`, `CORPUS_CHRISTI`, `MIDLAND`, `EL_PASO` (the keys of `CITY_COORDINATES`). The authoritative location list. Replaces `CORRIDOR_ENDPOINTS`; there are no corridors. |
+| `CITY_LINE_BEARING_DEG` | `dict[str, float]` | Line azimuth per city, used for the perpendicular-wind component: Austin and Corpus Christi 173.15 degrees, Midland and El Paso 267.54 degrees. An **assumption** carried over from the retired corridor bearings, not a measured line orientation. |
+| `LEGACY_CORRIDOR_ENDPOINTS` | `dict[str, tuple[str, str]]` | Retired corridor pairing, kept only for the frozen 2026 forecast-correction experiment. Not for dashboard or API use. |
 | `DEFAULT_CONDUCTOR_CONFIG_KWARGS`, `conductor_kwargs_for(azimuth)` | `dict`, function | 795 kcmil Drake ACSR defaults (diameter, resistance, emissivity, absorptivity, 75 C max temp, azimuth, elevation). |
 | `LINE_VOLTAGE_KV`, `POWER_FACTOR` | `float` | 345.0 kV and 0.95, used when converting amps to MW. |
 | `DEFAULT_STATION_SOURCE`, `DEFAULT_START`, `DEFAULT_END` | `str` | Default station CSV (`data/wtm_stations_austin.csv`) and analysis window (`2025-07-01T00:00:00Z` to `2025-07-04T23:55:00Z`). |
 | `ASOS_STATIONS`, `TCEQ_STATIONS`, `SYNOPTIC_FALLBACK_STATIONS` | `dict[str, str]` | Per-city weather station IDs for each provider (ASOS uses 3-letter FAA codes, Synoptic uses 4-letter ICAO codes, TCEQ uses CAMS site IDs). |
 | `FORECAST_*`, `ANOMALY_*`, `FORECAST_ML_*`, `ANOMALY_ML_*`, `FORECAST_EXPERIMENT_*` | various | Forecast horizon (60 min), minimum history rows (12), model and cache directories, filename templates, training years, random seeds, and anomaly thresholds for the predictive layers. Read the comments in the file before changing any. |
 
-City keys are always the uppercase underscore form: `AUSTIN`, `CORPUS_CHRISTI`, `MIDLAND`, `EL_PASO`. The static-rating, bounds, coordinates, station, and bundle dicts all use the same keys, so an API layer can join on them directly.
+City keys are always the uppercase underscore form: `AUSTIN`, `CORPUS_CHRISTI`, `MIDLAND`, `EL_PASO`. The static-rating, bounds, coordinates, line-bearing, station, and bundle dicts all use the same keys, so an API layer can join on them directly. ERCOT zone selection is also per city (`ANOMALY_ML_ERCOT_ZONE_SUBSTRINGS_BY_CITY`: Austin and Corpus Christi `SOUTH`, Midland and El Paso `WEST`). The migration to per-city scope (`docs/data-science/decisions/point_scope.md`) was in progress when this guide was updated, so check `backend/config.py` for the current constant names.
 
 ### Changing a value
 
@@ -80,11 +82,11 @@ All paths below are relative to the process working directory, so run backend sc
 |------|----------------|-----------|---------|
 | `data/wtm_stations.csv`, `data/wtm_stations_austin.csv` | Yes | checked in (read, not written, by `backend/station_explorer.py`, which writes `data/tx_stations_unrestricted.csv`) | Weather station lists. `data/wtm_stations_austin.csv` is `config.DEFAULT_STATION_SOURCE`. |
 | `data/fixtures/sample_pipeline_output.csv` | Yes | n/a | Sample pipeline output, usable as frontend mock data. |
-| `data/shadow/predictions/<corridor>.jsonl` | No (git-ignored) | `backend/forecast_shadow_pipeline.py`, `backend/forecast_shadow_collect.py` | Append-only shadow prediction log, one JSON line per cycle, one file per corridor (`AUSTIN_CORPUS_CHRISTI`, `MIDLAND_EL_PASO`). |
-| `data/shadow/models/*.joblib` | Yes (deliberately not ignored) | `backend/forecast_shadow_pipeline.py` (model persistence at `SHADOW_MODEL_DIR`) | Trained shadow-model artifacts. They are committed so the GitHub Actions runner can load them. |
-| `data/models/` | No (git-ignored) | `backend/forecast_training.py`, `backend/anomaly_training.py` | Forecast and anomaly model artifacts, training frames, and JSON evidence reports. Names come from `config.FORECAST_ML_*` and `config.ANOMALY_ML_*` templates. |
+| `data/shadow/predictions/<CITY>.jsonl` | No (git-ignored) | `backend/forecast_shadow_pipeline.py`, `backend/forecast_shadow_collect.py` | Append-only shadow prediction log, one JSON line per cycle, one file per city (`AUSTIN`, `CORPUS_CHRISTI`, `MIDLAND`, `EL_PASO`), `schema_version: 3`. Per-city logs start empty. The older `AUSTIN_CORPUS_CHRISTI.jsonl` and `MIDLAND_EL_PASO.jsonl` are legacy corridor-era files (v1 flat and v2) and must be tolerated, not mixed into per-city views. |
+| `data/shadow/models/*.joblib` | Yes (deliberately not ignored) | `backend/forecast_shadow_pipeline.py` (model persistence at `SHADOW_MODEL_DIR`) | Trained shadow-model artifacts, named `{method}_{CITY}.joblib` under the per-city model. They are committed so the GitHub Actions runner can load them. Existing corridor-named artifacts are legacy and not loaded; per-city models have not been refit, so ML shadow candidates report `unavailable` until they are. |
+| `data/models/` | No (git-ignored) | `backend/forecast_training.py`, `backend/anomaly_training.py` | Forecast and anomaly model artifacts, training frames, and JSON evidence reports. Names come from `config.FORECAST_ML_*` and `config.ANOMALY_ML_*` templates (per city: `forecast_{city}.joblib`, `anomaly_{city}.joblib`). |
 | `data/experiment/` | No (git-ignored) | `backend/forecast_experiment.py`, `backend/forecast_leadtime_calibration.py` | Cached fetches and experiment reports (`config.FORECAST_EXPERIMENT_CACHE_DIR`). |
-| `data/historical/ampacity_history.csv` | No (git-ignored) | `backend/historical_archive.py` | Append-only ampacity history (`config.HISTORICAL_ARCHIVE_PATH`). Not present in a fresh clone. |
+| `data/historical/ampacity_history.csv` | No (git-ignored) | `backend/historical_archive.py` | Append-only ampacity history (`config.HISTORICAL_ARCHIVE_PATH`). Not present in a fresh clone. Its corridor-era columns (`corridor`, `bottleneck_index`) have no defined per-city form yet (open). |
 | `outputs/station_data/*.csv` | No (git-ignored) | `backend/dlr_pipeline.py` | Per-station pipeline CSVs named `<start>_<end>_<STID>.csv`. This is the primary flat-file source `api/README.md` describes for the dashboard. |
 | `outputs/station_plots/*.png` | No (git-ignored) | `backend/dlr_pipeline.py` | Per-station plots. |
 | `outputs/ercot_data/ercot_west_load_*.csv` | No (git-ignored) | `backend/ercot_data_retriever.py` | ERCOT load pulls. |

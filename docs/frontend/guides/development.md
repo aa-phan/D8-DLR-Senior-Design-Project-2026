@@ -135,10 +135,10 @@ Rules of the contract, taken from `pipeline_output_v1.md`:
 - Any add, remove, reorder, or rename of a column is a breaking change and bumps the document to `pipeline_output_v2.md`. Watch for that file appearing.
 - Read columns by name, not by position.
 - `datetime_utc` is an ISO-8601 UTC string (for example `2026-07-15T18:00:00Z`) at 5-minute cadence. Convert to local time in the UI.
-- `dlr_headroom_pct` and `dlr_uplift_flag` are derived from whichever static rating the run used. The fixture was produced against the 900 A default (`config.DEFAULT_STATIC_RATING`), so its headroom values will not match a run that used a per-city rating from `config.STATIC_RATINGS`. Show the static rating you are comparing against alongside any headroom figure.
+- `dlr_headroom_pct` and `dlr_uplift_flag` are derived from whichever static rating the run used. The fixture was produced against the 900 A default (`config.DEFAULT_STATIC_RATING`), so its headroom values will not match a run that used a per-city rating from `config.STATIC_RATINGS` (each city uses its own entry, not a corridor minimum). Show the static rating you are comparing against alongside any headroom figure.
 - `dlr_uplift_flag` is a boolean serialized in CSV as `True` or `False`. Parse it explicitly rather than treating the string as truthy.
 - The static ratings are placeholders (midpoints of ranges in `docs/Project Definition.md`), not confirmed line ratings. Label them that way in the UI.
-- Not in the v1 file: MW values (added by `backend/ercot_dlr_merger.py`), forecasts, corridor status, alerts, and any trusted-duration value. See "Gaps" in [architecture.md](architecture.md) before designing a panel that needs them.
+- Not in the v1 file: MW values (added by `backend/ercot_dlr_merger.py`), forecasts, per-city rating status, alerts, a `city` column, and any trusted-duration value. See "Gaps" in [architecture.md](architecture.md) before designing a panel that needs them.
 
 ### Develop against the fixture first
 
@@ -163,8 +163,9 @@ Rules of the contract, taken from `pipeline_output_v1.md`:
 
 Two other data sources exist but have weaker contracts. Confirm their shape with DS before depending on them.
 
-- `data/historical/ampacity_history.csv` (git-ignored, written by the corridor pipeline) has a locked column list in `historical_archive.ARCHIVE_COLUMNS` and a `schema_version` column.
-- The shadow forecast JSONL on the `shadow-collection-data` branch is experimental and has two row shapes (the older flat shape and `schema_version: 2`). Any parser must handle both. Details are in [architecture.md](architecture.md).
+- `data/historical/ampacity_history.csv` (git-ignored, written when a per-city rating is archived) has a locked column list in `historical_archive.ARCHIVE_COLUMNS` and a `schema_version` column. The corridor-era columns are not yet redefined for per-city rows (open).
+- The shadow forecast JSONL on the `shadow-collection-data` branch is experimental. Files are now one per city (`{CITY}.jsonl`, `schema_version: 3`, records carry `city`); the corridor-named files are legacy and hold the older flat shape and `schema_version: 2`. Any parser must tolerate all three and must not mix legacy corridor rows into per-city views. Details are in [architecture.md](architecture.md).
+- The dashboard works per city: four independent rating points, no corridor minimum and no bottleneck. See `docs/data-science/decisions/point_scope.md`.
 
 ## Adding a component spec
 
