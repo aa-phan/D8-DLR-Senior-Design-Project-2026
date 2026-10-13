@@ -26,7 +26,7 @@ These are the four artifact families an API could serve. Paths are relative to t
 |--------|----------|----------|----------------|-----------|
 | `outputs/station_data/{prefix}_{STID}.csv` | `dlr_pipeline.export_results` | [`pipeline_output_v1.md`](../../data-science/schema/pipeline_output_v1.md), 11 columns | No (`/outputs` ignored); fixture at `data/fixtures/sample_pipeline_output.csv` is tracked | Versioned doc, unversioned files |
 | `outputs/merged_ercot_dlr_{STID}.csv` | `ercot_dlr_merger.py` `__main__` | Section below, 8 columns | No | Informal; no spec doc |
-| `data/historical/ampacity_history.csv` | `historical_archive.append_observation` | `historical_archive.ARCHIVE_COLUMNS`, 11 columns | No | Column list locked in code |
+| `data/historical/ampacity_history.csv` | `historical_archive.append_observation` | `historical_archive.ARCHIVE_COLUMNS`, 10 columns | No | Column list locked in code |
 | `data/shadow/predictions/{CITY}.jsonl` | `forecast_shadow_pipeline.log_cycle_predictions` | `schema_version: 3` (per city; field list in section 3). Legacy corridor files hold v1 flat and v2 rows | No on `main`; live copy on the `shadow-collection-data` branch | Experimental, may change |
 | `rate_city(...)` return dict | `city_rating.rate_city` (per-city contract) | Section 4 | n/a (in-process only) | No file or HTTP form |
 
@@ -99,7 +99,7 @@ Caveats:
 
 Appended by `historical_archive.append_observation` when a rating is archived (at most one row per `rate_city` call; `archive=True` is the default). The file is gitignored and absent from a fresh clone.
 
-The scope contract says `rate_city` may archive one row but does not list the columns. In the code read on 2026-10-12, `historical_archive.ARCHIVE_COLUMNS` (11 columns, `ARCHIVE_SCHEMA_VERSION = 1`) is below. Treat it as current code, not a decided contract.
+The scope contract says `rate_city` may archive one row but does not list the columns. In the code read on 2026-10-12, `historical_archive.ARCHIVE_COLUMNS` (10 columns, `ARCHIVE_SCHEMA_VERSION = 1`) is below. Treat it as current code, not a decided contract.
 
 | Column | Type | Notes |
 |--------|------|-------|
@@ -112,10 +112,9 @@ The scope contract says `rate_city` may archive one row but does not list the co
 | `static_rating` | float | The city's own `STATIC_RATINGS` entry, A |
 | `status` | string | `ok` or `fallback` |
 | `fallback` | boolean | |
-| `bottleneck_index` | int or null | Kept only for shape compatibility; per-city rows write it as null. Do not use it |
 | `schema_version` | int | `1`. Not bumped for the `corridor` to `city` rename |
 
-Corridor-era archive files (header has `corridor`) are still readable: `read_history` exposes that column as `city`, and appends follow the file's existing header order. Legacy rows are corridor-level (the bottleneck point's values) and must not be mixed into a per-city series without deciding how to treat them (open). If the bottleneck point had no observation (exhausted probe) no row is written. Rows failing `units_def.validate_pipeline_row` are rejected on write, and `read_history` drops invalid rows on read.
+Corridor-era archive files (header has `corridor`, and possibly the old `bottleneck_index` column) are still readable: `read_history` exposes that column as `city`, and appends follow the file's existing header order. Legacy rows are corridor-level (the bottleneck point's values) and must not be mixed into a per-city series without deciding how to treat them (open). If the bottleneck point had no observation (exhausted probe) no row is written. Rows failing `units_def.validate_pipeline_row` are rejected on write, and `read_history` drops invalid rows on read.
 
 ### 4. City rating dict (`rate_city`)
 
@@ -270,7 +269,7 @@ None of these is resolved in the repo. Each needs an owner and a decision before
 7. **Schema versioning for station CSVs.** The export has no version marker. The open question is tracked in the C3 spec; if the CSV column list changes, `pipeline_output_v1.md` is meant to be superseded by a v2 document.
 8. **Consumer authentication and hosting.** Not decided. <!-- VERIFY: hosting platform and consumer auth for api/ and frontend/ -->
 9. **Station-to-city mapping.** The station CSV carries only `stid`, and a city's source station can change between runs. A per-city series from station files needs a mapping that does not exist yet (PRD OD-1, G1).
-10. **Per-city archive and shadow v3 shapes.** The archive columns for per-city rows are implemented (`corridor` renamed `city`; `bottleneck_index` kept but always null) and the v3 shadow record is implemented (section 3), but neither is covered by the scope contract's own text. Confirm with DS before treating them as stable.
+10. **Per-city archive and shadow v3 shapes.** The archive columns for per-city rows are implemented (`corridor` renamed `city`; the always-null `bottleneck_index` dropped on 2026-10-13) and the v3 shadow record is implemented (section 3), but neither is covered by the scope contract's own text. Confirm with DS before treating them as stable.
 11. **Missing outputs.** The Project Definition lists a "trusted-duration window" and a forecast panel. No backend code computes the former, and the forecast is not in any feed. Confirm with DS before designing UI that depends on them.
 
 ## Compatibility rules for consumers

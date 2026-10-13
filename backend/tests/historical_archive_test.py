@@ -1,6 +1,6 @@
 """
 Tests for backend/historical_archive.py -- shared C9/C10 support (D-07's
-locked 11-column row schema, one row per city per run, D-09's
+locked 10-column row schema, one row per city per run, D-09's
 append-only CSV storage).
 
 Every test writes under `tmp_path` so no test ever touches
@@ -30,7 +30,6 @@ def _row(air_temp=25.0, city="AUSTIN", dlr_amps=1200.0,
         "static_rating": 1200.0,
         "status": "ok",
         "fallback": False,
-        "bottleneck_index": 0,
         "schema_version": ha.ARCHIVE_SCHEMA_VERSION,
     }
 
@@ -142,7 +141,6 @@ def test_build_archive_row_validates_for_normal_and_fallback_readings():
             observation=observation,
             check_result=check_result,
             static_rating=1200.0,
-            bottleneck_index=0,
         )
         errors = units_def.validate_pipeline_row(ha._validation_row(row), strict=False)
         assert errors == []
@@ -235,3 +233,21 @@ def test_append_observation_accepts_corridor_keyed_row(tmp_path):
     path = tmp_path / "a.csv"
     assert ha.append_observation(_legacy_row(city="AUSTIN"), path=str(path)) is True
     assert ha.read_history(path=str(path)).iloc[0]["city"] == "AUSTIN"
+
+
+def test_append_and_read_file_with_legacy_bottleneck_index_column(tmp_path):
+    path = tmp_path / "old.csv"
+    old_columns = [c for c in ha.ARCHIVE_COLUMNS]
+    old_columns.insert(old_columns.index("schema_version"), "bottleneck_index")
+    old_row = dict(_row(city="AUSTIN"), bottleneck_index=0)
+    pd.DataFrame([old_row], columns=old_columns).to_csv(path, index=False)
+
+    assert ha.append_observation(
+        _row(city="AUSTIN", datetime_utc="2026-01-02T00:00:00"), path=str(path)
+    ) is True
+
+    df = ha.read_history(path=str(path))
+    assert len(df) == 2
+    assert list(df.columns) == old_columns
+    assert pd.isna(df.iloc[1]["bottleneck_index"])
+    assert df.iloc[1]["dlr_amps"] == 1200.0

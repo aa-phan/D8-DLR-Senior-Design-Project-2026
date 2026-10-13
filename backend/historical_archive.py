@@ -18,15 +18,15 @@ Column list locked at the Plan 04-01 Task 1 checkpoint (D-07 — one-way:
 once `ampacity_forecast.py`/`anomaly_detector.py` read this shape and rows
 accumulate, changing it means migrating or discarding real history):
     datetime_utc, city, air_temp, wind_speed, solar_radiation,
-    dlr_amps, static_rating, status, fallback, bottleneck_index,
-    schema_version
+    dlr_amps, static_rating, status, fallback, schema_version
 
-Point-scope change: the `corridor` column is now `city` (same position). The
-`bottleneck_index` column is retained only so existing readers/builders of
-this shape keep working; per-city rows always write it as null. Archive files
-written in the corridor era (header has `corridor`) are still readable:
-`read_history` exposes that column as `city`, and `append_observation`
-appends in the file's existing header order so columns never misalign.
+Point-scope change: the `corridor` column is now `city` (same position), and
+the corridor-era `bottleneck_index` column (always null for per-city rows) was
+dropped on 2026-10-13. Archive files written earlier (header has `corridor`
+and/or `bottleneck_index`) are still readable: `read_history` exposes
+`corridor` as `city` and returns any extra legacy column as it is, and
+`append_observation` appends in the file's existing header order so columns
+never misalign (a legacy `bottleneck_index` is written as empty).
 """
 
 import logging
@@ -39,7 +39,7 @@ import units_def
 
 logger = logging.getLogger(__name__)
 
-# D-07 checkpoint decision (Task 1, `proposed` option): the 11-column row
+# D-07 checkpoint decision (Task 1, `proposed` option): the 10-column row
 # shape every Phase 4 model reads. schema_version starts at 1.
 ARCHIVE_SCHEMA_VERSION: int = 1
 
@@ -53,7 +53,6 @@ ARCHIVE_COLUMNS: list[str] = [
     "static_rating",
     "status",
     "fallback",
-    "bottleneck_index",
     "schema_version",
 ]
 
@@ -64,7 +63,6 @@ def build_archive_row(
     observation: dict,
     check_result: dict,
     static_rating: float,
-    bottleneck_index=None,
 ) -> dict:
     """
     Assemble one archive row from a `DLRSafetyMonitor.run_check` cycle.
@@ -89,9 +87,6 @@ def build_archive_row(
         "static_rating": float(static_rating),
         "status": check_result["status"],
         "fallback": bool(check_result["fallback"]),
-        "bottleneck_index": (
-            int(bottleneck_index) if bottleneck_index is not None else None
-        ),
         "schema_version": ARCHIVE_SCHEMA_VERSION,
     }
     return {col: row[col] for col in ARCHIVE_COLUMNS}

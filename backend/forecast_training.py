@@ -227,9 +227,6 @@ def city_training_frame(city: str, years: int) -> pd.DataFrame:
         "static_rating": float(point.static_rating),
         "status": "ok",
         "fallback": False,
-        # Corridor-era column kept in ARCHIVE_COLUMNS only for shape
-        # compatibility; a per-city frame has no bottleneck.
-        "bottleneck_index": None,
         "schema_version": historical_archive.ARCHIVE_SCHEMA_VERSION,
     })[historical_archive.ARCHIVE_COLUMNS]
 
