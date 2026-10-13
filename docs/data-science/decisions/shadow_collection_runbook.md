@@ -259,7 +259,7 @@ named reason instead of using a neighbouring hour). Rows logged before the fix h
 field and carry the offset, so they must not be scored or pooled with later rows (see V6 in
 `confirmation_protocol_v3_per_city.md`).
 
-## Cadence and forecast model (2026-10-13)
+## Cadence and underlying weather model (2026-10-13)
 
 Two protocol-affecting collector changes, decided by the project owner on 2026-10-13 (decisions 6B and 11B in
 `confirmation_protocol_v3_per_city.md`, which is still DRAFT) and made before the 2026-11-01 model freeze.
@@ -272,7 +272,7 @@ still fits: 4 cities x `CITY_TIMEOUT_S` (360 s) + 3 x `INTER_CITY_DELAY_S` (15 s
 `forecast_shadow_healthcheck.py` needs no change: it checks that each city's latest entry is younger than
 `--max-age-minutes` (default 1440), which does not depend on cadence.
 
-**2. Forecast model: `gfs_seamless`.** The live forecast now comes from `config.SHADOW_LIVE_FORECAST_MODEL`
+**2. Underlying weather model: `gfs_seamless`.** (The external numerical weather prediction model the shadow candidates start from, not the Phase 1 "ml" ampacity forecaster.) The live forecast now comes from `config.SHADOW_LIVE_FORECAST_MODEL`
 (`"gfs_seamless"`, the model the corrections were trained on), passed to `fetch_single_run(model=...)`. Before
 2026-10-13 it was `ecmwf_ifs` (the provider default, `open_meteo_forecast_provider.FORECAST_MODEL_ID`, which is
 frozen-experiment territory and was not changed). Each new v3 row carries a top-level `"forecast_model"` string
@@ -300,7 +300,7 @@ the 2/day figure. The repository is private and the plan's monthly Linux-minute 
 
 No persistent machine is designated or required. The collector runs on GitHub's own scheduled
 runners via `.github/workflows/shadow_collect.yml` — free, no provisioning, no uptime/sleep
-concerns, and its cadence is 4 cycles/day (`cron: '0 0,6,12,18 * * *'`, raised from 2/day on 2026-10-13; see "Cadence and forecast model (2026-10-13)" below).
+concerns, and its cadence is 4 cycles/day (`cron: '0 0,6,12,18 * * *'`, raised from 2/day on 2026-10-13; see "Cadence and underlying weather model (2026-10-13)" below).
 
 **One-time setup (do this once, before the first scheduled run):**
 1. In the GitHub repo → **Settings → Secrets and variables → Actions → New repository secret**,

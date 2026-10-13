@@ -45,7 +45,7 @@ marked.
 | 8 | Ship rule | **Option D with X = 5 A:** three evidence levels ("supported", "indicated, not resolved", "not shown"); one method for all cities, "consistent" meaning the point estimate favours it in at least 3 of 4 cities; keep `ml_wind_corrected` unless an alternative is consistently better, fall back to `raw_forecast` if a correction is "not shown". **8c: `reference_ml_refit_24h`'s own target hour (decision time + 24 h) is its headline**, with the logged-`valid_time` score reported alongside, flagged | Yes |
 | 9 | Scoring basis | **Option C, with the headline reversed from the draft's recommendation: both row sources, reported separately and never pooled; the reconstructed frames are the headline for choosing which candidate to ship; the shadow logs are the live-system check.** The question the 2026-11-24 evaluation answers is "which candidate to ship" | Differs (see note 2) |
 | 10 | Duplicates and pairing | **Option A with (i):** first-logged row per `(city, valid_time)`; a pair is scored only where both candidates are `ok`; excluded duplicates counted and listed | Yes |
-| 11 | Live weather model | **Option B: switch the live collector to `gfs_seamless`**, record `forecast_model` on every row, score only rows produced after the switch. Implemented together with decision 6 | Yes |
+| 11 | Underlying weather model | **Option B: switch the live collector's underlying weather model to `gfs_seamless`**, record `forecast_model` on every row, score only rows produced after the switch. Implemented together with decision 6 | Yes |
 
 **Note 1 (decision 1).** With no ceiling and no calibrated metrics, the ranking among eligible candidates
 rests on point error and the practical-benefit rule of decision 8. This is stated, not hidden: the result
@@ -400,7 +400,9 @@ correction models were trained against the same archive. The four cities share r
 pooled comparison has far less than four times the information of one city (the scorer reports an effective
 sample size). Neither point is new; both are listed here so every limitation sits in one place.
 
-### V5. The live forecasts come from a different weather model than the one the corrections were trained on
+### V5. The underlying weather model behind the live forecasts differs from the one the corrections were trained on
+
+**Terminology.** "Underlying weather model" means the external numerical weather prediction (NWP) model whose forecast the shadow candidates start from (`gfs_seamless` or `ecmwf_ifs`, set by `config.SHADOW_LIVE_FORECAST_MODEL`). It is not the Phase 1 "ml" ampacity forecaster (`forecast_ampacity(method="ml")`), which the shadow collector does not use, and it is not one of the shadow candidates.
 
 The development evidence and the fitted corrections used Open-Meteo's **Previous Runs API pinned to
 `gfs_seamless`** (`open_meteo_forecast_provider.PREVIOUS_RUNS_MODEL_ID`; `forecast_correction_experiment.md`:
@@ -410,7 +412,7 @@ null", and "nothing in this record generalizes to a different model"). The live 
 `open_meteo_forecast_provider.FORECAST_MODEL_ID = "ecmwf_ifs"`. So the live `raw_forecast` is an ECMWF IFS
 forecast, and `ml_wind_corrected` / `ml_cooling_corrected` apply corrections learned from **GFS** forecast
 errors to **ECMWF** forecasts. Nothing in `shadow_collection_runbook.md` or the audit record reconciles the
-two <!-- VERIFY: searched the runbook, the audit record and the experiment record on 2026-10-13 for any note that the live model differs; none found -->. The log rows do not record which NWP
+two <!-- VERIFY: searched the runbook, the audit record and the experiment record on 2026-10-13 for any note that the underlying weather model differs; none found -->. The log rows do not record which NWP
 model produced them, so the scorer cannot tell from the rows alone.
 
 **Consequence:** the correction candidates are scored out of the distribution they were fit on, in a way
@@ -418,7 +420,7 @@ that could help or hurt them, and the development-era margins (including "wind a
 transfer. The candidates' relative standing on live data would then say less about the correction methods
 than about the model mismatch. This is more serious than V1 because it affects the raw forecast itself, not
 only the anchor. Both models answer a live single-run request today (mechanical check, 2026-10-13), so
-aligning the live model with the training model is technically possible; see decision 11.
+aligning the underlying weather model behind the live forecast with the one used in training is technically possible; see decision 11.
 
 ### V6. Rows logged before 2026-10-13 predict the weather one hour before the hour they are scored against (fixed)
 
@@ -472,7 +474,7 @@ freeze or before any outcome is seen; none of them may be chosen after seeing FR
 | 8 | Headline comparison and the numeric "negligible" threshold | Per-city MAE reduction vs `raw_forecast` of at least 5 A, with a three-level evidence label; pre-state the action for each level | The v2 retain-wind and retain-raw defaults stay but have no numbers, so they cannot be applied mechanically |
 | 9 | Which rows are the scoring basis | Shadow logs are the headline; reconstructed frames are a separately reported secondary analysis | Defaults to whatever the scorer is built on; ambiguous |
 | 10 | One row per `(city, valid_time)`, and complete-case pairing | First-logged row per `(city, valid_time)`; pairs scored only where both candidates are `ok` | The scorer author chooses; duplicates may be double counted |
-| 11 | Which NWP model the live collector uses (V5) | Switch live to `gfs_seamless` before the freeze, bundled with decision 6, record the model in each row, and score only rows produced after the switch | Live stays on `ecmwf_ifs`; scores are read with the V5 caveat and say less about the correction methods |
+| 11 | Which underlying weather model the live collector uses (V5) | Switch live to `gfs_seamless` before the freeze, bundled with decision 6, record the model in each row, and score only rows produced after the switch | Live stays on `ecmwf_ifs`; scores are read with the V5 caveat and say less about the correction methods |
 
 ### Decision 1. The 8% overrating ceiling
 
@@ -741,7 +743,7 @@ This changes what is measured, so it must be fixed **before the freeze**, and it
   spirit as v2's missing-data policy: never silently dropped, never imputed).
 - **If the owner does nothing.** The scorer author chooses; duplicates may be double counted.
 
-### Decision 11. Which weather model does the live collector use? (validity threat V5)
+### Decision 11. Which underlying weather model does the live collector use? (validity threat V5)
 
 - **Question.** The corrections and all development numbers are for `gfs_seamless` forecasts; the live
   collector fetches `ecmwf_ifs`. Should the scored live forecasts use the training model?
@@ -819,9 +821,9 @@ recommendation, choose another option, or defer an item (in which case the "if n
 | 8 | Headline comparison and "negligible" threshold | D, X = 5 A, 3-of-4 cities; 8c own target hour (selected 2026-10-13) | |
 | 9 | Scoring basis | C, reconstructed frames headline, logs as live check (selected 2026-10-13) | |
 | 10 | Duplicates and pairing | A with (i) (selected 2026-10-13) | |
-| 11 | Live weather model (V5) | B: gfs_seamless (selected 2026-10-13) | |
+| 11 | Underlying weather model (V5) | B: gfs_seamless (selected 2026-10-13) | |
 
-I have read this amendment, I acknowledge the known validity threats V1 to V6 (live-versus-training anchor, the `reference_ml_refit_24h` target hour, the logged `persistence_24h` definition, reanalysis truth, the live-versus-training weather model, the pre-fix one-hour forecast offset), I acknowledge that the fit-window deviation in "Recorded decision: fit window and the
+I have read this amendment, I acknowledge the known validity threats V1 to V6 (live-versus-training anchor, the `reference_ml_refit_24h` target hour, the logged `persistence_24h` definition, reanalysis truth, the underlying weather model, live versus training, the pre-fix one-hour forecast offset), I acknowledge that the fit-window deviation in "Recorded decision: fit window and the
 model freeze" was made and accepted on 2026-10-12 as described, and I approve the choices recorded above as the per-city
 confirmation protocol (v3), effective from the date below. These choices were made without reading any FRESH-basis outcome.
 
@@ -840,7 +842,7 @@ The consequences below follow mechanically from the existing documents and code;
 3. **Collection continues** at the cadence in the workflow file (2/day) and per-city logs keep accruing. Nobody should read outcomes before 2026-11-24.
 4. **Per-decision defaults** are the "if the owner does nothing" entries above, in short: no ceiling applied; no
    family-wise correction defined; 590-row code gate in conflict with v2; corridor rows not counted; both dates unchanged; cadence 2/day;
-   archive truth with no secondary check; v2's qualitative defaults without numeric thresholds; basis and duplicate handling left to the scorer author; live model stays `ecmwf_ifs` with V5 stated.
+   archive truth with no secondary check; v2's qualitative defaults without numeric thresholds; basis and duplicate handling left to the scorer author; underlying weather model stays `ecmwf_ifs` with V5 stated.
 5. **The drafter's recommendation for the unsigned case (itself the owner's to accept).** Treat any per-city result on 2026-11-24
    as exploratory and descriptive: report the metrics above with intervals and the sample size, make no pass/fail
    selection claim, and state that the thresholds were not pre-registered. This protects the one-shot discipline;

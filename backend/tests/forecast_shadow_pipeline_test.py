@@ -2142,7 +2142,7 @@ def test_the_retry_budget_per_city_fits_the_per_city_process_cap():
 
 
 # ──────────────────────────────────────────────────────────────────────
-# 2026-10-13 (protocol v3 V5/decision 11B): the live forecast model is
+# 2026-10-13 (protocol v3 V5/decision 11B): the underlying weather model behind the live forecast is
 # configured, recorded per row, and persistence never mixes models.
 # ──────────────────────────────────────────────────────────────────────
 

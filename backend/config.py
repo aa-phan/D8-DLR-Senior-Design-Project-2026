@@ -727,7 +727,7 @@ SYNOPTIC_FALLBACK_STATIONS: dict[str, str] = {
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Live shadow collector: which NWP model produces the logged forecasts
+# Live shadow collector: which underlying weather (NWP) model produces the logged forecasts
 # ──────────────────────────────────────────────────────────────────────────────
 # 2026-10-13: owner decision 11B (docs/data-science/decisions/
 # confirmation_protocol_v3_per_city.md, validity threat V5): the live shadow
