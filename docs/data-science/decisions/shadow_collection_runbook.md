@@ -470,3 +470,12 @@ Dry run first, on the day too: it makes no network call and creates no evidence 
     PYTHONPATH=backend .venv/bin/python -c "import json,sys; import forecast_shadow_decision as d; print(d.combined_summary(json.load(open(sys.argv[1])), json.load(open(sys.argv[2]))))" <port report.json> <scorer report.json>
 
 The headline decision comes from the port's report; the live-system check never changes it, and no count is ever added across the two sources.
+
+## Artifact hash manifest (recorded 2026-10-13)
+
+`data/shadow/models/ARTIFACT_HASHES.sha256` holds the sha256 of the 12 per-city shadow artifacts
+(`ml_wind_corrected`, `ml_cooling_corrected`, `reference_ml_refit_24h` x AUSTIN, CORPUS_CHRISTI, MIDLAND, EL_PASO).
+Check it from the repo root with `shasum -a 256 -c data/shadow/models/ARTIFACT_HASHES.sha256` (all 12 must print OK).
+Nothing is refit after the 2026-11-01 freeze based on FRESH data; any artifact change after that date must be
+reported as a protocol deviation and the manifest not silently regenerated. The legacy corridor-named artifacts are
+not in the manifest.
