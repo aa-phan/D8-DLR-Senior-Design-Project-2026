@@ -615,7 +615,7 @@ def test_render_markdown_order_and_required_lines(tmp_path):
                                   "## Per-city comparisons", "## Validity flags", "## Scope and exclusions",
                                   "## Not measured", "## Planner defaults", "## Evidence files")]
     assert idx == sorted(idx)
-    assert "~590" in md and "not met" in md
+    assert "~590" in md and "Nominal count is below ~590" in md and "target met" not in md
     assert md.index("## Sample size") < md.index("## Headline family")
     assert "Override: none" in core.render_markdown(_report())
 
@@ -634,3 +634,33 @@ def test_dumps_is_deterministic_and_nan_free():
     a = {"b": [1.0, float("inf")], "a": np.float64("nan")}
     assert core.dumps(a) == core.dumps(dict(reversed(list(a.items()))))
     assert json.loads(core.dumps(a)) == {"a": None, "b": [1.0, None]}
+
+
+# --- 2026-10-13: precision targets are judged on EFFECTIVE n, never on a pooled nominal count ----
+
+def test_precision_targets_are_judged_on_effective_n_when_it_is_given():
+    t = core.precision_targets(768, n_eff=150.0)
+    assert t["basis"] == "effective" and t["n"] == 768 and t["n_effective"] == 150.0
+    assert t["tail_rate_target_met"] is False and t["mdd_target_met"] is False
+    # an effective n can never be larger than the nominal n it came from
+    assert core.precision_targets(100, n_eff=900.0)["tail_rate_target_met"] is False
+    # no effective n supplied: nominal basis, as before
+    assert core.precision_targets(768)["basis"] == "nominal"
+    assert core.precision_targets(768)["tail_rate_target_met"] is True
+
+
+def test_sample_size_render_never_reports_a_pooled_nominal_count_as_meeting_a_target():
+    report = {"sample_size": {
+        "pooled_nominal": {"targets": core.precision_targets(768)},
+        "per_city": {"AUSTIN": {"n_scored": {"raw_forecast": 192}, "targets": core.precision_targets(192)}},
+        "pairs": [{
+            "a": "ml_wind_corrected", "b": "raw_forecast", "n_paired": 768, "n_eff_bootstrap": 140.0,
+            "n_eff_acf_by_city": {"AUSTIN": 60.0}, "mdd": 20.0, "rows_needed_for_5A": 2400,
+            "targets": core.precision_targets(768, 140.0),
+        }],
+    }}
+    md = core.render_sample_size(report)
+    pooled_line = [l for l in md.splitlines() if l.startswith("- Pooled NOMINAL")][0]
+    assert "NOT an effective sample size" in pooled_line and "target met" not in pooled_line
+    assert "| not met | not met |" in md  # the pair row, judged on effective n = 140
+    assert "met | met" not in md

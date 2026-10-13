@@ -443,7 +443,7 @@ def build_family_report(errors_by_city: dict, *, row_source: str, params: Option
             "rho_bar": h_["rho_bar"], "analytic_design_effect_n": h_["analytic_design_effect_n"],
             "mdd": h_["mdd"], "rows_needed_for_5A": h_["rows_needed_for_5A"],
             "per_city_n_paired": {city: c["per_city"][city]["n_paired"] for city in cities},
-            "targets": core.precision_targets(c["n_paired"]),
+            "targets": core.precision_targets(c["n_paired"], h_["n_eff_bootstrap"]),
         })
     return {
         "row_source": row_source,

@@ -745,13 +745,33 @@ def descriptive_metrics(pred, truth) -> dict:
     }
 
 
-def precision_targets(n: int) -> dict:
+def precision_targets(n: int, n_eff=None) -> dict:
+    """
+    Whether the ~590-row (tail-rate precision) and ~1,575-row (5 A minimum detectable
+    difference) targets are met. When an EFFECTIVE sample size is supplied it is what
+    the targets are judged against (never more than the nominal n): a pooled count that
+    sums correlated rows from four cities that share weather overstates the information
+    and must never be read as meeting a precision target (found 2026-10-13: 192 rows per
+    city pooled to 768 nominal rows and read "met"). Without an effective n the figure is
+    NOMINAL only (`basis == "nominal"`) and callers must label it so.
+    """
+    nominal = int(n)
+    if n_eff is not None and np.isfinite(float(n_eff)):
+        judged = min(nominal, float(n_eff))
+        basis = "effective"
+        n_effective = float(n_eff)
+    else:
+        judged = float(nominal)
+        basis = "nominal"
+        n_effective = None
     return {
-        "n": int(n),
+        "n": nominal,
+        "n_effective": n_effective,
+        "basis": basis,
         "tail_rate_target_rows": TAIL_RATE_TARGET_ROWS,
-        "tail_rate_target_met": bool(n >= TAIL_RATE_TARGET_ROWS),
+        "tail_rate_target_met": bool(judged >= TAIL_RATE_TARGET_ROWS),
         "mdd_target_rows": MDD_TARGET_ROWS,
-        "mdd_target_met": bool(n >= MDD_TARGET_ROWS),
+        "mdd_target_met": bool(judged >= MDD_TARGET_ROWS),
     }
 
 
@@ -927,18 +947,21 @@ def render_sample_size(report: dict) -> str:
                  f"{MDD_TARGET_ROWS} rows for a 5 A minimum detectable difference.")
     pt = pooled.get("targets")
     if pt:
-        lines.append(f"- Pooled nominal n (max over candidates) = {pt['n']}: ~{TAIL_RATE_TARGET_ROWS} target "
-                     f"{'met' if pt['tail_rate_target_met'] else 'not met'}; ~{MDD_TARGET_ROWS} target "
-                     f"{'met' if pt['mdd_target_met'] else 'not met'} (nominal, not effective).")
+        lines.append(f"- Pooled NOMINAL n (max over candidates) = {pt['n']}. This sums rows from cities that share "
+                     f"weather and rows six hours apart that are correlated, so it is NOT an effective sample size "
+                     f"and is never judged against the ~{TAIL_RATE_TARGET_ROWS} / ~{MDD_TARGET_ROWS} targets here; "
+                     f"the targets are judged on effective n in the pair table below.")
     for city, block in (ss.get("per_city") or {}).items():
         t = block.get("targets") or {}
         ns = ", ".join(f"{c}={n}" for c, n in (block.get("n_scored") or {}).items())
-        lines.append(f"- {city}: n scored per candidate: {ns}; ~{TAIL_RATE_TARGET_ROWS} "
-                     f"{'met' if t.get('tail_rate_target_met') else 'not met'}; ~{MDD_TARGET_ROWS} "
-                     f"{'met' if t.get('mdd_target_met') else 'not met'}.")
+        tail = "at or above" if t.get("tail_rate_target_met") else "below"
+        mdd = "at or above" if t.get("mdd_target_met") else "below"
+        lines.append(f"- {city}: n scored per candidate: {ns}. Nominal count is {tail} ~{TAIL_RATE_TARGET_ROWS} and "
+                     f"{mdd} ~{MDD_TARGET_ROWS} (nominal only: six-hourly rows are autocorrelated, so the "
+                     f"effective n is lower).")
     pairs = ss.get("pairs") or []
     if pairs:
-        lines += ["", "| pair (A vs B) | n paired (pooled) | n_eff (bootstrap) | n_eff (ACF, per city) | MDD (amps) | rows needed for 5 A | ~590 | ~1,575 |",
+        lines += ["", "| pair (A vs B) | n paired (pooled) | n_eff (bootstrap) | n_eff (ACF, per city) | MDD (amps) | rows needed for 5 A | ~590 (judged on effective n) | ~1,575 (judged on effective n) |",
                   "|---|---|---|---|---|---|---|---|"]
         for p in pairs:
             lines.append(
