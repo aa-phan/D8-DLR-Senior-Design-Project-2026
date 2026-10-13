@@ -334,6 +334,21 @@ should be checked for `unavailable` forecasts by position. Other Open-Meteo call
 solar proxy, archive, previous-runs) do not send `Connection: close`; the per-city process
 boundary covers them too.
 
+**Outcome of the per-city processes, and the retry that actually fixed it (2026-10-13).** The first
+run with a process per city (run 38337657403's successor, 02:49 UTC) still timed out for the 3rd and 4th
+city, so process state was ruled out as the cause: the identical single-runs request answered in
+about 0.6 s from a developer machine for all four cities. What worked is the retry now in
+`forecast_shadow_pipeline.fetch_live_forecast_for_valid_time` (`_FORECAST_FETCH_ATTEMPTS = 3`,
+`_FORECAST_FETCH_TIMEOUT_S = 30`, `_FORECAST_FETCH_RETRY_DELAY_S = 20`, transport errors only; each
+attempt's duration is logged at INFO). In three consecutive workflow runs after it
+(38339746263, 38340170149, 38340580821) all four cities returned `ok` for `ml_wind_corrected`,
+`ml_cooling_corrected` and `raw_forecast`. In two of those runs Midland's first attempt stalled for
+the full 30 s read timeout and its second attempt succeeded in 0.6 s, so the stall is a transient
+that a fresh attempt clears immediately; it was not seen on the other cities in those runs. The cause
+of the stall on Open-Meteo's side (or the runner's IP) is **not established**; this is a mitigation
+matched to the evidence. If a city's forecast candidates show `unavailable` after all three attempts,
+look for `single-run fetch attempt` lines in that run's log to see each attempt's duration.
+
 The collector keeps a fixed pause between consecutive cities' live-provider requests (never before
 the first) — currently 15 seconds, so four cities add about 45 seconds of delay per run. The pause
 exists because back-to-back requests to the same providers were observed to make the second
