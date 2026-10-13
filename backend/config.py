@@ -39,10 +39,15 @@ no pipeline execution) — it is safe to import without triggering any of
 # targeted at these four cities — is the natural next step (see
 # `geographic_scope.md` Open Questions).
 STATIC_RATINGS: dict[str, float] = {
-    "AUSTIN": 1900.0,          # midpoint of documented 800-3000 A range
-    "CORPUS_CHRISTI": 3000.0,  # midpoint of documented 1000-5000 A range
-    "MIDLAND": 1800.0,         # midpoint of documented 600-3000 A range
-    "EL_PASO": 1450.0,         # midpoint of documented 600-2300 A range
+    # PER-CONDUCTOR amps = documented 345 kV BUNDLE average / SUBCONDUCTORS_PER_PHASE
+    # (owner-supplied 2026-10-13: bundle ranges Austin 2300-5000, Midland 2500-5000,
+    # Corpus Christi 1600-4400, El Paso 640-2000 A; averages 3650, 3750, 3000, 1320 A).
+    # Unverified for any specific line segment; bundle counts are the Power Systems
+    # team's provisional assumption (SUBCONDUCTORS_PER_PHASE below).
+    "AUSTIN": 1825.0,          # 3650 A bundle average / 2
+    "CORPUS_CHRISTI": 1500.0,  # 3000 A bundle average / 2
+    "MIDLAND": 1875.0,         # 3750 A bundle average / 2
+    "EL_PASO": 1320.0,         # 1320 A bundle average / 1
 }
 
 # Fallback static rating (Amps) for any location not present in

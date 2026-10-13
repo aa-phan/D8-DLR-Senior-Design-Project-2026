@@ -9,7 +9,7 @@
 | Property | Source | Notes |
 |---|---|---|
 | Location | `config.CITY_COORDINATES[city]` | One lat/lon per city |
-| Static rating | `config.STATIC_RATINGS[city]` | Previously a corridor used `min()` of its two endpoint cities. Effective change: Corpus Christi now uses 3000 A (was 1900 A) and Midland 1800 A (was 1450 A); Austin (1900 A) and El Paso (1450 A) are unchanged |
+| Static rating | `config.STATIC_RATINGS[city]` | Previously a corridor used `min()` of its two endpoint cities. Values changed again on 2026-10-13 (owner decision): per-conductor amps = owner-supplied 345 kV bundle average / subconductors per phase, i.e. Austin 1825, Corpus Christi 1500, Midland 1875, El Paso 1320 (before: 1900, 3000, 1800, 1450, midpoints of the Project Definition ranges). They affect headroom %, the static fallback and retained-capacity reporting only, not any model target or artifact |
 | Plausibility bounds | `config.RATING_BOUNDS_BY_LOCATION[city]` | Previously the min of the two endpoint cities' bounds |
 | Line bearing | `config.CITY_LINE_BEARING_DEG[city]` | **Assumption**: carried over from the retired corridor bearings (Austin and Corpus Christi 173.15°, Midland and El Paso 267.54°) so perpendicular-wind behavior is unchanged. A point has no line direction of its own |
 | Resolver | `city_point.city_point(city)` → `CityPoint` | Replaces `corridor_discretization.corridor_geometry`. Raises `KeyError` naming valid cities for an unknown key (also the closed-set guard for model-artifact paths) |

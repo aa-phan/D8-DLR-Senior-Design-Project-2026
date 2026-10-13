@@ -68,7 +68,7 @@ Differences between the spec/fixture and the real exports that a parser must tol
 
 Parse timestamps with a library that accepts both ISO forms rather than a fixed format string.
 
-The static rating behind `dlr_headroom_pct` and `dlr_uplift_flag` depends on the `city` passed to `run_pipeline`: a value from `config.STATIC_RATINGS` (a city uses its own entry, never the minimum of a corridor pair; Corpus Christi is 3000 A, previously 1900 A under the pair rule), or `config.DEFAULT_STATIC_RATING` (900 A) when `city` is omitted or unknown. The CSV does not record which rating was used. The checked-in AN489 file's headroom values are consistent with 900 A. Treat headroom as relative to an unrecorded, provisional rating.
+The static rating behind `dlr_headroom_pct` and `dlr_uplift_flag` depends on the `city` passed to `run_pipeline`: a value from `config.STATIC_RATINGS` (a city uses its own entry, never the minimum of a corridor pair; Corpus Christi is 1500 A per conductor, previously 1900 A under the pair rule), or `config.DEFAULT_STATIC_RATING` (900 A) when `city` is omitted or unknown. The CSV does not record which rating was used. The checked-in AN489 file's headroom values are consistent with 900 A. Treat headroom as relative to an unrecorded, provisional rating.
 
 There is no `schema_version` column and the filename carries no version. The file name pattern is `{file_prefix}_{stid}.csv`; the `__main__` block of `dlr_pipeline.py` sets the prefix to `{START date}_{END date}`, for example `2025-07-01_2025-07-04`.
 
@@ -89,7 +89,7 @@ Produced by `backend/ercot_dlr_merger.py`. It reads one station CSV, resamples t
 
 Caveats:
 
-- `static_capacity_mw` in the checked-in example is 510.9 MW, which corresponds to the 900 A default rating, not the 1900 A `AUSTIN` rating. The file was likely produced before `city` selection existed, so regenerating it will give different static values. <!-- VERIFY: how and when outputs/merged_ercot_dlr_AN489.csv was generated -->
+- `static_capacity_mw` in the checked-in example is 510.9 MW, which corresponds to the 900 A default rating, not the 1825 A `AUSTIN` rating. The file was likely produced before `city` selection existed, so regenerating it will give different static values. <!-- VERIFY: how and when outputs/merged_ercot_dlr_AN489.csv was generated -->
 - Conversion formula: `P = sqrt(3) * V * I * PF / 1000`, with the amps being a single conductor's rating. Bundle counts are not applied here.
 - The `datetime_local` column exists only because of that side effect. Do not depend on it; convert from `datetime_utc` in the frontend.
 - The `__main__` block writes the CSV and PNG to the **current working directory**, not `outputs/`.
@@ -277,7 +277,7 @@ None of these is resolved in the repo. Each needs an owner and a decision before
 
 - Treat extra CSV columns and extra JSON keys as additive. `PIPELINE_SCHEMA` (version 3 in `units_def.PIPELINE_SCHEMA_VERSION`) is additive-only: keys are added, never renamed or removed.
 - Do not assume the `candidates` key exists on every JSONL line.
-- Static ratings in `config.STATIC_RATINGS` are unconfirmed placeholders (midpoints of ranges in the Project Definition). Label them as such in the UI. A city uses its own entry, no longer the minimum of a corridor pair.
+- Static ratings in `config.STATIC_RATINGS` are unconfirmed per-conductor values derived from owner-supplied bundle averages (2026-10-13). Label them as such in the UI. A city uses its own entry, no longer the minimum of a corridor pair.
 - Per-city line bearings (`config.CITY_LINE_BEARING_DEG`) are an assumption carried over from the retired corridor bearings, not a measurement. They affect `wind_perp_ms` and therefore the ratings.
 - Never reduce across cities in a client: no minimum, no bottleneck, no corridor total.
 - All backend timestamps are UTC. Convert to local time in the frontend.

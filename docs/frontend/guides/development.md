@@ -137,7 +137,7 @@ Rules of the contract, taken from `pipeline_output_v1.md`:
 - `datetime_utc` is an ISO-8601 UTC string (for example `2026-07-15T18:00:00Z`) at 5-minute cadence. Convert to local time in the UI.
 - `dlr_headroom_pct` and `dlr_uplift_flag` are derived from whichever static rating the run used. The fixture was produced against the 900 A default (`config.DEFAULT_STATIC_RATING`), so its headroom values will not match a run that used a per-city rating from `config.STATIC_RATINGS` (each city uses its own entry, not a corridor minimum). Show the static rating you are comparing against alongside any headroom figure.
 - `dlr_uplift_flag` is a boolean serialized in CSV as `True` or `False`. Parse it explicitly rather than treating the string as truthy.
-- The static ratings are placeholders (midpoints of ranges in `docs/Project Definition.md`), not confirmed line ratings. Label them that way in the UI.
+- The static ratings are placeholders (per-conductor values derived from bundle averages supplied by the owner on 2026-10-13), not confirmed line ratings. Label them that way in the UI.
 - Not in the v1 file: MW values (added by `backend/ercot_dlr_merger.py`), forecasts, per-city rating status, alerts, a `city` column, and any trusted-duration value. See "Gaps" in [architecture.md](architecture.md) before designing a panel that needs them.
 
 ### Develop against the fixture first

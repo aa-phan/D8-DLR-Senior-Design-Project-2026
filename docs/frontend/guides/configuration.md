@@ -53,7 +53,7 @@ Most values are literal constants in the file. The groups most likely to matter 
 
 | Constant | Type | What it holds |
 |----------|------|---------------|
-| `STATIC_RATINGS` | `dict[str, float]` | Static line rating in amps per city: AUSTIN 1900, CORPUS_CHRISTI 3000, MIDLAND 1800, EL_PASO 1450. Each is the midpoint of the range in `docs/Project Definition.md`. Each city is its own rating point and uses its own entry; previously a corridor used the `min()` of its two endpoint cities (so Corpus Christi was rated 1900 A). |
+| `STATIC_RATINGS` | `dict[str, float]` | Static line rating in per-conductor amps per city: AUSTIN 1825, CORPUS_CHRISTI 1500, MIDLAND 1875, EL_PASO 1320. Each is the owner-supplied 345 kV bundle average (3650, 3000, 3750, 1320 A) divided by `SUBCONDUCTORS_PER_PHASE` (2, 2, 2, 1). Each city is its own rating point and uses its own entry; previously a corridor used the `min()` of its two endpoint cities. |
 | `DEFAULT_STATIC_RATING` | `float` | 900.0 A fallback for a location not in `STATIC_RATINGS`. |
 | `RATING_BOUNDS_BY_LOCATION` / `DEFAULT_RATING_BOUNDS` | `dict` / `tuple` | Per-city plausibility bounds (amps) used by the safety monitor; default is `(400.0, 1800.0)`. Previously the minimum of the two endpoint cities' bounds. |
 | `DELTA_FRACTION` | `float` | 0.15. Large-swing threshold as a fraction of the static rating. |

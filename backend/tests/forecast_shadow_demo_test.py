@@ -179,11 +179,11 @@ def test_run_once_falls_back_to_static_rating_when_forecast_fetch_fails(monkeypa
     assert prediction.fallback_used is True
     assert "synthetic timeout" in prediction.fallback_reason
     assert prediction.model_version is None
-    # EL_PASO's OWN static rating (1450.0, config.STATIC_RATINGS) -- each
+    # EL_PASO's OWN static rating (1320.0, config.STATIC_RATINGS) -- each
     # city is an independent point; no other city's rating is involved.
     assert prediction.city == "EL_PASO"
     assert prediction.ampacity_amps == config.STATIC_RATINGS["EL_PASO"]
-    assert prediction.ampacity_amps == 1450.0
+    assert prediction.ampacity_amps == 1320.0
     # ShadowTimestamps must still be real and internally consistent even
     # though the HTTP call never completed -- all four fields are
     # computable from valid_time/horizon_minutes alone.

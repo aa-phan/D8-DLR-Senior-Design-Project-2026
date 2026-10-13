@@ -102,7 +102,7 @@ docs/       data-science/ (PRD, roadmap, component specs) and frontend/ (PRD, ro
 | `line_azimuth` | `ConductorConfig` | Compass bearing of your line — critical for perpendicular wind. Per-city defaults are `config.CITY_LINE_BEARING_DEG`, an **assumption** carried over from the retired corridor bearings, not a measured line orientation |
 | `max_temp_c` | `ConductorConfig` | ERCOT emergency rating limit (often 75–100°C for ACSR) |
 | `resistance_ac` | `ConductorConfig` | From ACSR table at 25°C; look up by conductor code name |
-| `city` | `run_pipeline()`, `plot_dlr_summary()` | Selects the per-city static rating from `config.STATIC_RATINGS` (e.g. `"AUSTIN"` at 1900 A); an omitted or unrecognised city falls back to `config.DEFAULT_STATIC_RATING` at 900 A |
+| `city` | `run_pipeline()`, `plot_dlr_summary()` | Selects the per-city static rating from `config.STATIC_RATINGS` (e.g. `"AUSTIN"` at 1825 A per conductor); an omitted or unrecognised city falls back to `config.DEFAULT_STATIC_RATING` at 900 A |
 | `solar_alt_deg` | `run_pipeline()` | Use seasonal midday average for your latitude |
 
 ---

@@ -52,7 +52,7 @@ Behavior rules:
 Upstream-data concerns (PRD §9):
 
 - **Variable cadence and missing slots** across station files: charts must not assume a fixed 5-minute interval.
-- **Static line is 900 A in all committed outputs**, not the per-city static ratings (`backend/config.py::STATIC_RATINGS`); a chart that hardcodes a static value would be wrong in either direction — read it from data. A city's static limit is now its own entry, not the minimum of a corridor pair, so a per-city line will differ from older corridor-era figures (for example Corpus Christi 3000 A rather than 1900 A).
+- **Static line is 900 A in all committed outputs**, not the per-city static ratings (`backend/config.py::STATIC_RATINGS`); a chart that hardcodes a static value would be wrong in either direction — read it from data. A city's static limit is now its own entry, not the minimum of a corridor pair, so a per-city line will differ from older corridor-era figures (for example Corpus Christi 1500 A per conductor rather than 1900 A).
 - **Headroom up to 274%** and **DLR below static** both occur; neither matches the "30–50%" in the course documents. The chart's y-axis must accommodate both; do not clip.
 - **`solar_radiation` constant at 1000.0** in five of six stations — if solar is plotted for context it may look like a flat line for a reason DS must explain.
 - **Existing DS plots show repeated date tick labels** on the x-axis (the same `07/01` appears at two ticks); a dashboard time axis must label unambiguously.

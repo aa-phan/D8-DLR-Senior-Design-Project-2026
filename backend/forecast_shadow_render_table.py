@@ -78,10 +78,11 @@ RENDERED_CYCLE_CAP = 5
 # Design Report, Prior Art Report, pss_e_handoff.md, C6-grid-load-
 # integration.md -- supplies an independently-sourced static rating).
 STATIC_RATINGS_CAVEAT = (
-    "Static ratings are this project's own unverified placeholder (the midpoint of a *range* "
-    "given in `Project Definition.md`'s I/O spec table) -- explicitly flagged by the "
-    "data-science team's own `C1-configuration.md` spec as \"derived-from-spec rather than "
-    "independently sourced,\" and never confirmed by the Power Systems sub-team. Do not treat a "
+    "Static ratings are this project's own unverified per-conductor values (an owner-supplied "
+    "345 kV bundle average divided by the provisional subconductor count, 2026-10-13) -- "
+    "explicitly flagged by the data-science team's own `C1-configuration.md` spec as "
+    "\"derived rather than independently sourced,\" and never confirmed for a specific line by "
+    "the Power Systems sub-team. Do not treat a "
     "predicted ampacity below this number as a safety violation without that context."
 )
 

@@ -52,7 +52,7 @@ def _synthetic_observations() -> pd.DataFrame:
 def _run(monkeypatch, **city_kwargs) -> pd.DataFrame:
     """Monkeypatches fetch_timeseries and runs the pipeline with the
     synthetic weather above. This weather yields dlr_amps ~= 1252.99 A,
-    which sits strictly between the 900 A fallback and Austin's 1900 A
+    which sits strictly between the 900 A fallback and Austin's 1825 A
     rating — that is what makes the uplift flag flip between the two
     cases below."""
     monkeypatch.setattr(dlr_pipeline, "fetch_timeseries", lambda *a, **k: _synthetic_observations())
@@ -127,7 +127,7 @@ def test_plot_labels_the_resolved_city_rating(monkeypatch, tmp_path):
         dlr_pipeline.plot_dlr_summary(df, city="AUSTIN", output_dir=str(tmp_path), file_prefix="t")
         assert (tmp_path / "t_TEST1.png").exists()
         labels = [line.get_label() for line in dlr_pipeline.plt.gcf().axes[0].get_lines()]
-        assert "Static Rating (1900 A)" in labels
+        assert "Static Rating (1825 A)" in labels
     finally:
         real_close("all")
 

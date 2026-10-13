@@ -51,7 +51,7 @@ Upstream data this layer must cope with (read off the fixture and the local, unt
 - **Variable cadence** across station files (hourly, ~15-minute, ~20-minute, vs. the 5-minute the schema document states) and **missing slots** (`AN490`: 92 rows over a four-day hourly window).
 - **Entire columns null** (`relative_humidity` for `AN489`, `AN490`) and a **constant `solar_radiation = 1000.0`** in five of six station files.
 - **Filenames encode the window and station** (`{prefix}_{stid}.csv`); a station that returned zero rows from the weather API is silently absent from the output (DS `C3` Known Issues) — the BFF cannot distinguish "no such station" from "dead station" and should not claim to.
-- **Static rating is per city now.** A city uses its own `config.STATIC_RATINGS` entry rather than the minimum of a corridor pair (Corpus Christi 3000 A, was 1900 A). The station CSV still does not record which rating was used, and no `stid`→city mapping exists in it (PRD G1).
+- **Static rating is per city now.** A city uses its own `config.STATIC_RATINGS` entry rather than the minimum of a corridor pair (Corpus Christi 1500 A per conductor since 2026-10-13; it was 1900 A under the pair rule). The station CSV still does not record which rating was used, and no `stid`→city mapping exists in it (PRD G1).
 - **No static-rating column.** Derivable only as `dlr_amps / (1 + dlr_headroom_pct / 100)` (PRD §8, G5); decide whether to derive in the BFF (arithmetic the DS team hasn't sanctioned — tension with SW-NF4) or request the column.
 
 ## Acceptance Criteria
