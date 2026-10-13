@@ -18,91 +18,99 @@ Regenerated automatically after every `shadow_collect.yml` run — do not hand-e
 
 | City | Decision time | Valid time | ml_wind_corrected | ml_cooling_corrected | raw_forecast | persistence_24h | reference_ml_refit_24h | Notes |
 |---|---|---|---|---|---|---|---|---|
-| AUSTIN | 2026-10-13 02:50 UTC (2026-10-12 21:50 CDT) | 2026-10-13 18:00 UTC (13:00 CDT) | ✓ 1123.6 | ✓ 1188.0 | ✓ 1154.8 | unavailable | ✓ 1288.7 | persistence_24h: no prior entry within tolerance of decision_time 2026-10-13T02:50:06.357445+00:00 (cold start, or a gap in this city's collection history) |
-| CORPUS_CHRISTI | 2026-10-13 02:50 UTC (2026-10-12 21:50 CDT) | 2026-10-13 18:00 UTC (13:00 CDT) | ✓ 1353.4 | ✓ 1316.4 | ✓ 1262.7 | unavailable | ✓ 1441.5 | persistence_24h: no prior entry within tolerance of decision_time 2026-10-13T02:50:27.854410+00:00 (cold start, or a gap in this city's collection history) |
-| EL_PASO | 2026-10-13 02:53 UTC (2026-10-12 21:53 CDT) | 2026-10-13 18:00 UTC (13:00 CDT) | unavailable | unavailable | unavailable | unavailable | ✓ 1227.7 | ml_wind_corrected: forecast unavailable for EL_PASO: fetch_live_forecast_for_valid_time: retrieval failed for city 'EL_PASO', run 2026-10-12 18:00:00+00:00: HTTPSConnectionPool(host='single-runs-api.o… |
-| MIDLAND | 2026-10-13 02:51 UTC (2026-10-12 21:51 CDT) | 2026-10-13 18:00 UTC (13:00 CDT) | unavailable | unavailable | unavailable | unavailable | ✓ 1585.5 | ml_wind_corrected: forecast unavailable for MIDLAND: fetch_live_forecast_for_valid_time: retrieval failed for city 'MIDLAND', run 2026-10-12 18:00:00+00:00: HTTPSConnectionPool(host='single-runs-api.o… |
+| AUSTIN | 2026-10-13 03:02 UTC (2026-10-12 22:02 CDT) | 2026-10-13 18:00 UTC (13:00 CDT) | ✓ 1128.5 | ✓ 1177.5 | ✓ 1154.8 | unavailable | ✓ 1316.5 | persistence_24h: no prior entry within tolerance of decision_time 2026-10-13T03:02:31.704446+00:00 (cold start, or a gap in this city's collection history) |
+| CORPUS_CHRISTI | 2026-10-13 03:02 UTC (2026-10-12 22:02 CDT) | 2026-10-13 18:00 UTC (13:00 CDT) | ✓ 1347.5 | ✓ 1312.2 | ✓ 1262.7 | unavailable | ✓ 1399.3 | persistence_24h: no prior entry within tolerance of decision_time 2026-10-13T03:02:53.399440+00:00 (cold start, or a gap in this city's collection history) |
+| EL_PASO | 2026-10-13 03:05 UTC (2026-10-12 22:05 CDT) | 2026-10-13 18:00 UTC (13:00 CDT) | ✓ 1026.1 | ✓ 1118.3 | ✓ 1083.6 | unavailable | ✓ 1247.2 | persistence_24h: no prior entry within tolerance of decision_time 2026-10-13T03:05:28.905181+00:00 (cold start, or a gap in this city's collection history) |
+| MIDLAND | 2026-10-13 03:04 UTC (2026-10-12 22:04 CDT) | 2026-10-13 18:00 UTC (13:00 CDT) | ✓ 1776.6 | ✓ 1716.0 | ✓ 1750.0 | unavailable | ✓ 1622.2 | persistence_24h: no prior entry within tolerance of decision_time 2026-10-13T03:04:17.630354+00:00 (cold start, or a gap in this city's collection history) |
 
 ## AUSTIN
 
-2 logged prediction(s), most recent first.
+3 logged prediction(s), most recent first.
 
-All five candidates per cycle (`schema_version: 3`), most recent 2 of 2 shown:
+All five candidates per cycle (`schema_version: 3`), most recent 3 of 3 shown:
 
 | Decision time | Valid time | ml_wind_corrected | ml_cooling_corrected | raw_forecast | persistence_24h | reference_ml_refit_24h | Notes |
 |---|---|---|---|---|---|---|---|
+| 2026-10-13 03:02 UTC (2026-10-12 22:02 CDT) | 2026-10-13 18:00 UTC (13:00 CDT) | ✓ 1128.5 | ✓ 1177.5 | ✓ 1154.8 | unavailable | ✓ 1316.5 | persistence_24h: no prior entry within tolerance of decision_time 2026-10-13T03:02:31.704446+00:00 (cold start, or a gap in this city's collection history) |
 | 2026-10-13 02:50 UTC (2026-10-12 21:50 CDT) | 2026-10-13 18:00 UTC (13:00 CDT) | ✓ 1123.6 | ✓ 1188.0 | ✓ 1154.8 | unavailable | ✓ 1288.7 | persistence_24h: no prior entry within tolerance of decision_time 2026-10-13T02:50:06.357445+00:00 (cold start, or a gap in this city's collection history) |
 | 2026-10-13 02:36 UTC (2026-10-12 21:36 CDT) | 2026-10-13 18:00 UTC (13:00 CDT) | ✓ 1123.8 | ✓ 1181.3 | ✓ 1154.8 | unavailable | ✓ 1303.3 | persistence_24h: no prior entry within tolerance of decision_time 2026-10-13T02:36:41.306867+00:00 (cold start, or a gap in this city's collection history) |
 
 > Conductor-based bundle thermal estimate (equal-current-sharing assumption across subconductors) -- NOT a verified equipment-limited circuit rating. Subconductor-per-phase counts are the Power Systems sub-team's provisional, regional assumption, not yet confirmed for any specific line segment.
 
-Bundle-level (subconductors-per-phase) ampacity, same cycles as above, most recent 2 of 2 shown:
+Bundle-level (subconductors-per-phase) ampacity, same cycles as above, most recent 3 of 3 shown:
 
 | Decision time | Valid time | ml_wind_corrected | ml_cooling_corrected | raw_forecast | persistence_24h | reference_ml_refit_24h | Notes |
 |---|---|---|---|---|---|---|---|
+| 2026-10-13 03:02 UTC (2026-10-12 22:02 CDT) | 2026-10-13 18:00 UTC (13:00 CDT) | ✓ 2257.0 | ✓ 2354.9 | ✓ 2309.6 | unavailable | ✓ 2633.1 | persistence_24h: no matched prior entry this cycle (see the candidate's own reason) |
 | 2026-10-13 02:50 UTC (2026-10-12 21:50 CDT) | 2026-10-13 18:00 UTC (13:00 CDT) | ✓ 2247.3 | ✓ 2376.0 | ✓ 2309.6 | unavailable | ✓ 2577.3 | persistence_24h: no matched prior entry this cycle (see the candidate's own reason) |
 | 2026-10-13 02:36 UTC (2026-10-12 21:36 CDT) | 2026-10-13 18:00 UTC (13:00 CDT) | ✓ 2247.6 | ✓ 2362.6 | ✓ 2309.6 | unavailable | ✓ 2606.6 | persistence_24h: no matched prior entry this cycle (see the candidate's own reason) |
 
 
 ## CORPUS_CHRISTI
 
-2 logged prediction(s), most recent first.
+3 logged prediction(s), most recent first.
 
-All five candidates per cycle (`schema_version: 3`), most recent 2 of 2 shown:
+All five candidates per cycle (`schema_version: 3`), most recent 3 of 3 shown:
 
 | Decision time | Valid time | ml_wind_corrected | ml_cooling_corrected | raw_forecast | persistence_24h | reference_ml_refit_24h | Notes |
 |---|---|---|---|---|---|---|---|
+| 2026-10-13 03:02 UTC (2026-10-12 22:02 CDT) | 2026-10-13 18:00 UTC (13:00 CDT) | ✓ 1347.5 | ✓ 1312.2 | ✓ 1262.7 | unavailable | ✓ 1399.3 | persistence_24h: no prior entry within tolerance of decision_time 2026-10-13T03:02:53.399440+00:00 (cold start, or a gap in this city's collection history) |
 | 2026-10-13 02:50 UTC (2026-10-12 21:50 CDT) | 2026-10-13 18:00 UTC (13:00 CDT) | ✓ 1353.4 | ✓ 1316.4 | ✓ 1262.7 | unavailable | ✓ 1441.5 | persistence_24h: no prior entry within tolerance of decision_time 2026-10-13T02:50:27.854410+00:00 (cold start, or a gap in this city's collection history) |
 | 2026-10-13 02:37 UTC (2026-10-12 21:37 CDT) | 2026-10-13 18:00 UTC (13:00 CDT) | ✓ 1353.4 | ✓ 1316.4 | ✓ 1262.7 | unavailable | ✓ 1469.3 | persistence_24h: no prior entry within tolerance of decision_time 2026-10-13T02:37:01.794712+00:00 (cold start, or a gap in this city's collection history) |
 
 > Conductor-based bundle thermal estimate (equal-current-sharing assumption across subconductors) -- NOT a verified equipment-limited circuit rating. Subconductor-per-phase counts are the Power Systems sub-team's provisional, regional assumption, not yet confirmed for any specific line segment.
 
-Bundle-level (subconductors-per-phase) ampacity, same cycles as above, most recent 2 of 2 shown:
+Bundle-level (subconductors-per-phase) ampacity, same cycles as above, most recent 3 of 3 shown:
 
 | Decision time | Valid time | ml_wind_corrected | ml_cooling_corrected | raw_forecast | persistence_24h | reference_ml_refit_24h | Notes |
 |---|---|---|---|---|---|---|---|
+| 2026-10-13 03:02 UTC (2026-10-12 22:02 CDT) | 2026-10-13 18:00 UTC (13:00 CDT) | ✓ 2694.9 | ✓ 2624.5 | ✓ 2525.3 | unavailable | ✓ 2798.5 | persistence_24h: no matched prior entry this cycle (see the candidate's own reason) |
 | 2026-10-13 02:50 UTC (2026-10-12 21:50 CDT) | 2026-10-13 18:00 UTC (13:00 CDT) | ✓ 2706.8 | ✓ 2632.8 | ✓ 2525.3 | unavailable | ✓ 2882.9 | persistence_24h: no matched prior entry this cycle (see the candidate's own reason) |
 | 2026-10-13 02:37 UTC (2026-10-12 21:37 CDT) | 2026-10-13 18:00 UTC (13:00 CDT) | ✓ 2706.8 | ✓ 2632.8 | ✓ 2525.3 | unavailable | ✓ 2938.5 | persistence_24h: no matched prior entry this cycle (see the candidate's own reason) |
 
 
 ## EL_PASO
 
-2 logged prediction(s), most recent first.
+3 logged prediction(s), most recent first.
 
-All five candidates per cycle (`schema_version: 3`), most recent 2 of 2 shown:
+All five candidates per cycle (`schema_version: 3`), most recent 3 of 3 shown:
 
 | Decision time | Valid time | ml_wind_corrected | ml_cooling_corrected | raw_forecast | persistence_24h | reference_ml_refit_24h | Notes |
 |---|---|---|---|---|---|---|---|
+| 2026-10-13 03:05 UTC (2026-10-12 22:05 CDT) | 2026-10-13 18:00 UTC (13:00 CDT) | ✓ 1026.1 | ✓ 1118.3 | ✓ 1083.6 | unavailable | ✓ 1247.2 | persistence_24h: no prior entry within tolerance of decision_time 2026-10-13T03:05:28.905181+00:00 (cold start, or a gap in this city's collection history) |
 | 2026-10-13 02:53 UTC (2026-10-12 21:53 CDT) | 2026-10-13 18:00 UTC (13:00 CDT) | unavailable | unavailable | unavailable | unavailable | ✓ 1227.7 | ml_wind_corrected: forecast unavailable for EL_PASO: fetch_live_forecast_for_valid_time: retrieval failed for city 'EL_PASO', run 2026-10-12 18:00:00+00:00: HTTPSConnectionPool(host='single-runs-api.o… |
 | 2026-10-13 02:39 UTC (2026-10-12 21:39 CDT) | 2026-10-13 18:00 UTC (13:00 CDT) | unavailable | unavailable | unavailable | unavailable | ✓ 1287.5 | ml_wind_corrected: forecast unavailable for EL_PASO: fetch_live_forecast_for_valid_time: retrieval failed for city 'EL_PASO', run 2026-10-12 18:00:00+00:00: HTTPSConnectionPool(host='single-runs-api.o… |
 
 > Conductor-based bundle thermal estimate (equal-current-sharing assumption across subconductors) -- NOT a verified equipment-limited circuit rating. Subconductor-per-phase counts are the Power Systems sub-team's provisional, regional assumption, not yet confirmed for any specific line segment.
 
-Bundle-level (subconductors-per-phase) ampacity, same cycles as above, most recent 2 of 2 shown:
+Bundle-level (subconductors-per-phase) ampacity, same cycles as above, most recent 3 of 3 shown:
 
 | Decision time | Valid time | ml_wind_corrected | ml_cooling_corrected | raw_forecast | persistence_24h | reference_ml_refit_24h | Notes |
 |---|---|---|---|---|---|---|---|
+| 2026-10-13 03:05 UTC (2026-10-12 22:05 CDT) | 2026-10-13 18:00 UTC (13:00 CDT) | ✓ 1026.1 | ✓ 1118.3 | ✓ 1083.6 | unavailable | ✓ 1247.2 | persistence_24h: no matched prior entry this cycle (see the candidate's own reason) |
 | 2026-10-13 02:53 UTC (2026-10-12 21:53 CDT) | 2026-10-13 18:00 UTC (13:00 CDT) | unavailable | unavailable | unavailable | unavailable | ✓ 1227.7 | ml_wind_corrected: forecast unavailable for EL_PASO: fetch_live_forecast_for_valid_time: retrieval failed for city 'EL_PASO', run 2026-10-12 18:00:00+00:00: HTTPSConnectionPool(host='single-runs-api.o… |
 | 2026-10-13 02:39 UTC (2026-10-12 21:39 CDT) | 2026-10-13 18:00 UTC (13:00 CDT) | unavailable | unavailable | unavailable | unavailable | ✓ 1287.5 | ml_wind_corrected: forecast unavailable for EL_PASO: fetch_live_forecast_for_valid_time: retrieval failed for city 'EL_PASO', run 2026-10-12 18:00:00+00:00: HTTPSConnectionPool(host='single-runs-api.o… |
 
 
 ## MIDLAND
 
-2 logged prediction(s), most recent first.
+3 logged prediction(s), most recent first.
 
-All five candidates per cycle (`schema_version: 3`), most recent 2 of 2 shown:
+All five candidates per cycle (`schema_version: 3`), most recent 3 of 3 shown:
 
 | Decision time | Valid time | ml_wind_corrected | ml_cooling_corrected | raw_forecast | persistence_24h | reference_ml_refit_24h | Notes |
 |---|---|---|---|---|---|---|---|
+| 2026-10-13 03:04 UTC (2026-10-12 22:04 CDT) | 2026-10-13 18:00 UTC (13:00 CDT) | ✓ 1776.6 | ✓ 1716.0 | ✓ 1750.0 | unavailable | ✓ 1622.2 | persistence_24h: no prior entry within tolerance of decision_time 2026-10-13T03:04:17.630354+00:00 (cold start, or a gap in this city's collection history) |
 | 2026-10-13 02:51 UTC (2026-10-12 21:51 CDT) | 2026-10-13 18:00 UTC (13:00 CDT) | unavailable | unavailable | unavailable | unavailable | ✓ 1585.5 | ml_wind_corrected: forecast unavailable for MIDLAND: fetch_live_forecast_for_valid_time: retrieval failed for city 'MIDLAND', run 2026-10-12 18:00:00+00:00: HTTPSConnectionPool(host='single-runs-api.o… |
 | 2026-10-13 02:38 UTC (2026-10-12 21:38 CDT) | 2026-10-13 18:00 UTC (13:00 CDT) | unavailable | unavailable | unavailable | unavailable | ✓ 1605.0 | ml_wind_corrected: forecast unavailable for MIDLAND: fetch_live_forecast_for_valid_time: retrieval failed for city 'MIDLAND', run 2026-10-12 18:00:00+00:00: HTTPSConnectionPool(host='single-runs-api.o… |
 
 > Conductor-based bundle thermal estimate (equal-current-sharing assumption across subconductors) -- NOT a verified equipment-limited circuit rating. Subconductor-per-phase counts are the Power Systems sub-team's provisional, regional assumption, not yet confirmed for any specific line segment.
 
-Bundle-level (subconductors-per-phase) ampacity, same cycles as above, most recent 2 of 2 shown:
+Bundle-level (subconductors-per-phase) ampacity, same cycles as above, most recent 3 of 3 shown:
 
 | Decision time | Valid time | ml_wind_corrected | ml_cooling_corrected | raw_forecast | persistence_24h | reference_ml_refit_24h | Notes |
 |---|---|---|---|---|---|---|---|
+| 2026-10-13 03:04 UTC (2026-10-12 22:04 CDT) | 2026-10-13 18:00 UTC (13:00 CDT) | ✓ 3553.1 | ✓ 3432.0 | ✓ 3500.0 | unavailable | ✓ 3244.4 | persistence_24h: no matched prior entry this cycle (see the candidate's own reason) |
 | 2026-10-13 02:51 UTC (2026-10-12 21:51 CDT) | 2026-10-13 18:00 UTC (13:00 CDT) | unavailable | unavailable | unavailable | unavailable | ✓ 3171.0 | ml_wind_corrected: forecast unavailable for MIDLAND: fetch_live_forecast_for_valid_time: retrieval failed for city 'MIDLAND', run 2026-10-12 18:00:00+00:00: HTTPSConnectionPool(host='single-runs-api.o… |
 | 2026-10-13 02:38 UTC (2026-10-12 21:38 CDT) | 2026-10-13 18:00 UTC (13:00 CDT) | unavailable | unavailable | unavailable | unavailable | ✓ 3210.1 | ml_wind_corrected: forecast unavailable for MIDLAND: fetch_live_forecast_for_valid_time: retrieval failed for city 'MIDLAND', run 2026-10-12 18:00:00+00:00: HTTPSConnectionPool(host='single-runs-api.o… |
 
