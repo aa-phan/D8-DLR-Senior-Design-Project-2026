@@ -402,10 +402,9 @@ per D-02). All four cities report `available: true`:
   `docs/data-science/specs/C6-grid-load-integration.md`). This run fetched calendar year 2025 only
   (`config.ANOMALY_ML_LOAD_YEARS`, 1 year); the 2026 archive file that failed was not requested, so
   this success does not show that the earlier failure is resolved. (A separate retest on 2026-10-13 pulled 2026-06-01..03 successfully, so the 2026 file now downloads; see C6.)
-- **Reproducibility caveat.** `gridstatus` 0.35.0 is installed in `.venv` but is **not listed in
-  `requirements.txt`**, so a fresh environment built from `requirements.txt` alone would not run
-  `--characterize-load` until `gridstatus` is installed. `requirements.txt` was deliberately not
-  changed by this run.
+- **Reproducibility caveat (resolved 2026-10-13).** `gridstatus` 0.35.0 was not listed in
+  `requirements.txt` when this run was made. It is now pinned there (`gridstatus==0.35.0`, verified in a
+  fresh venv), so an environment built from `requirements.txt` runs `--characterize-load`.
 
 ### Corridor-era load characterization (retired 2026-10-12)
 

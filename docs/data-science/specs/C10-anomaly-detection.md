@@ -104,8 +104,7 @@ Sourced from `docs/data-science/decisions/anomaly_detection_model.md`'s Limitati
   per-city zone mapping is `config.ANOMALY_ML_ERCOT_ZONE_SUBSTRINGS_BY_CITY`), but it never reaches
   the live `check()` call, and wiring it in is Track 1's scope, not this component's. The zone group
   is `SOUTH` for `AUSTIN` and `CORPUS_CHRISTI` and `WEST` for `MIDLAND` and `EL_PASO`, so each pair
-  shares one load series. `gridstatus` 0.35.0 is installed in `.venv` but is not listed in
-  `requirements.txt`, a reproducibility caveat for `--characterize-load`.
+  shares one load series. `gridstatus==0.35.0` is pinned in `requirements.txt` (added 2026-10-13, verified in a fresh venv).
 - A clean checkout has **no persisted model artifact** until
   `.venv/bin/python3 backend/anomaly_training.py --bakeoff` (or `--city <CITY>`) is run —
   `data/models/` is git-ignored, generated data. Until then, the model branch is simply **absent**
