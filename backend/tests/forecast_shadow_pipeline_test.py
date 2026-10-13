@@ -23,6 +23,18 @@ import weather_provider
 _CITY = "AUSTIN"
 
 
+
+def _hourly_frame(run, values):
+    """A fake single-run response shaped like the real one: HOURLY rows from the
+    run's initialization hour for 48 hours (what `forecast_days=2` returns), every
+    hour carrying `values`. The live fetch now requires the EXACT valid hour to be
+    present (2026-10-13), so fakes must cover it instead of relying on a nearest-
+    earlier-row fallback."""
+    frame = pd.DataFrame({"datetime_utc": pd.date_range(run, periods=48, freq="h", tz="UTC")})
+    for column, value in values.items():
+        frame[column] = value
+    return frame
+
 def _synthetic_wind_fit_frame(n=80, seed=1):
     rng = np.random.default_rng(seed)
     ts = pd.date_range("2024-01-01", periods=n, freq="6h", tz="UTC")
@@ -252,11 +264,10 @@ def test_fetch_live_forecast_renames_provider_columns_to_fcst_prefix(monkeypatch
     import open_meteo_forecast_provider
 
     def _fake_fetch_single_run(lat, lon, run, forecast_days=None, **kwargs):
-        return pd.DataFrame([{
-            "datetime_utc": run + pd.Timedelta(hours=6),
+        return _hourly_frame(run, {
             "air_temp": 22.5, "wind_speed": 3.1, "wind_direction": 200.0,
             "solar_radiation": 450.0, "relative_humidity": 60.0,
-        }])
+        })
 
     monkeypatch.setattr(open_meteo_forecast_provider, "fetch_single_run", _fake_fetch_single_run)
 
@@ -551,11 +562,10 @@ def test_shadow_pipeline_falls_back_explicitly_when_anchor_source_unavailable(mo
 
 def _fake_fetch_single_run_const(air_temp=22.0, wind_speed=3.0, wind_direction=200.0, solar=400.0):
     def _fetch(lat, lon, run, forecast_days=None, **kwargs):
-        return pd.DataFrame([{
-            "datetime_utc": run + pd.Timedelta(hours=6),
+        return _hourly_frame(run, {
             "air_temp": air_temp, "wind_speed": wind_speed, "wind_direction": wind_direction,
             "solar_radiation": solar, "relative_humidity": 55.0,
-        }])
+        })
     return _fetch
 
 
@@ -674,11 +684,10 @@ def test_fetch_live_forecast_accepts_decision_time_exactly_at_availability_time(
     import open_meteo_forecast_provider
 
     def _fake_fetch_single_run(lat, lon, run, forecast_days=None, **kwargs):
-        return pd.DataFrame([{
-            "datetime_utc": run + pd.Timedelta(hours=6),
+        return _hourly_frame(run, {
             "air_temp": 20.0, "wind_speed": 3.0, "wind_direction": 100.0,
             "solar_radiation": 300.0, "relative_humidity": 50.0,
-        }])
+        })
 
     monkeypatch.setattr(open_meteo_forecast_provider, "fetch_single_run", _fake_fetch_single_run)
     lag_hours = shadow._resolve_publication_lag_hours()
@@ -710,11 +719,10 @@ def test_fetch_live_forecast_uses_the_real_publication_lag_not_zero(monkeypatch)
     import open_meteo_forecast_provider
 
     def _fake_fetch_single_run(lat, lon, run, forecast_days=None, **kwargs):
-        return pd.DataFrame([{
-            "datetime_utc": run + pd.Timedelta(hours=6),
+        return _hourly_frame(run, {
             "air_temp": 20.0, "wind_speed": 3.0, "wind_direction": 100.0,
             "solar_radiation": 300.0, "relative_humidity": 50.0,
-        }])
+        })
 
     monkeypatch.setattr(open_meteo_forecast_provider, "fetch_single_run", _fake_fetch_single_run)
     lag_hours = shadow._resolve_publication_lag_hours()
@@ -740,11 +748,10 @@ def test_fetch_live_forecast_rejects_a_row_with_only_one_null_field(monkeypatch)
     import open_meteo_forecast_provider
 
     def _fake_fetch_single_run(lat, lon, run, forecast_days=None, **kwargs):
-        return pd.DataFrame([{
-            "datetime_utc": run + pd.Timedelta(hours=6),
+        return _hourly_frame(run, {
             "air_temp": None, "wind_speed": 3.0, "wind_direction": 100.0,
             "solar_radiation": 300.0, "relative_humidity": 50.0,
-        }])
+        })
 
     monkeypatch.setattr(open_meteo_forecast_provider, "fetch_single_run", _fake_fetch_single_run)
     past_valid_time = pd.Timestamp("2026-01-01T00:00:00Z")
@@ -1005,12 +1012,11 @@ def _fake_fetch_single_run_counting(counter, **overrides):
 
     def _fetch(lat, lon, run, forecast_days=None, **kwargs):
         counter["forecast"] += 1
-        return pd.DataFrame([{
-            "datetime_utc": run + pd.Timedelta(hours=6),
+        return _hourly_frame(run, {
             "air_temp": base["air_temp"], "wind_speed": base["wind_speed"],
             "wind_direction": base["wind_direction"], "solar_radiation": base["solar_radiation"],
             "relative_humidity": 55.0,
-        }])
+        })
     return _fetch
 
 
@@ -1148,6 +1154,7 @@ def test_persistence_24h_propagates_unavailable_from_matched_entrys_raw_forecast
     now = pd.Timestamp.now(tz="UTC")
     _write_jsonl_entry(path, {
         "schema_version": 3, "city": _CITY, "valid_time": now.isoformat(),
+        "forecast_model": config.SHADOW_LIVE_FORECAST_MODEL,
         "candidates": {"raw_forecast": {
             "status": "unavailable", "ampacity_amps": None, "fallback_used": False,
             "fallback_reason": None, "model_version": None, "input_provenance": None,
@@ -1182,6 +1189,7 @@ def test_persistence_24h_skips_a_pre_cutover_flat_shape_line_without_raising(tmp
 def _v3_entry(valid_time, ampacity=1111.0, **extra):
     entry = {
         "schema_version": 3, "city": _CITY, "valid_time": valid_time.isoformat(),
+        "forecast_model": config.SHADOW_LIVE_FORECAST_MODEL,
         "candidates": {"raw_forecast": {
             "status": "ok", "ampacity_amps": ampacity, "fallback_used": False,
             "fallback_reason": None, "model_version": None, "reason": None,
@@ -1954,6 +1962,7 @@ def test_persistence_24h_bundle_carries_forward_matched_entrys_own_bundle_verbat
     }
     entry = {
         "schema_version": 3, "city": _CITY,
+        "forecast_model": config.SHADOW_LIVE_FORECAST_MODEL,
         "decision_time": "2026-10-06T18:00:00+00:00",
         "valid_time": matched_valid_time.isoformat(),
         "candidates": {
@@ -1980,6 +1989,7 @@ def test_persistence_24h_bundle_unavailable_when_matched_entry_has_no_bundle_key
     matched_valid_time = _TRUTH_PROXY_ANCHOR
     entry = {
         "schema_version": 3, "city": _CITY,
+        "forecast_model": config.SHADOW_LIVE_FORECAST_MODEL,
         "decision_time": "2026-10-06T18:00:00+00:00",
         "valid_time": matched_valid_time.isoformat(),
         "candidates": {
@@ -2129,3 +2139,168 @@ def test_the_retry_budget_per_city_fits_the_per_city_process_cap():
     )
     assert worst_forecast_s == 130
     assert worst_forecast_s < collect.CITY_TIMEOUT_S
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 2026-10-13 (protocol v3 V5/decision 11B): the live forecast model is
+# configured, recorded per row, and persistence never mixes models.
+# ──────────────────────────────────────────────────────────────────────
+
+def test_shadow_forecast_model_config_values():
+    import open_meteo_forecast_provider as omp
+    assert config.SHADOW_LIVE_FORECAST_MODEL == "gfs_seamless"
+    assert config.SHADOW_LEGACY_FORECAST_MODEL == "ecmwf_ifs"
+    assert omp.FORECAST_MODEL_ID == "ecmwf_ifs"  # frozen-experiment constant untouched
+
+
+def test_fetch_live_forecast_passes_the_configured_model(monkeypatch):
+    import open_meteo_forecast_provider as omp
+
+    _retry_fixture(monkeypatch)
+    valid_time = pd.Timestamp("2026-01-02T00:00:00Z")
+    calls = []
+
+    def _capture(lat, lon, run, **kwargs):
+        calls.append(kwargs)
+        return _good_single_run_frame(valid_time)
+
+    monkeypatch.setattr(omp, "fetch_single_run", _capture)
+    shadow.fetch_live_forecast_for_valid_time(
+        _CITY, valid_time, horizon_minutes=1440, lat=30.27, lon=-97.74,
+    )
+    assert calls[0]["model"] == config.SHADOW_LIVE_FORECAST_MODEL == "gfs_seamless"
+    assert calls[0]["timeout"] == shadow._FORECAST_FETCH_TIMEOUT_S
+
+    monkeypatch.setattr(config, "SHADOW_LIVE_FORECAST_MODEL", "ecmwf_ifs")  # revert path
+    shadow.fetch_live_forecast_for_valid_time(
+        _CITY, valid_time, horizon_minutes=1440, lat=30.27, lon=-97.74,
+    )
+    assert calls[1]["model"] == "ecmwf_ifs"
+
+
+def _log_one_cycle(tmp_path, monkeypatch, **kwargs):
+    monkeypatch.setattr(shadow, "SHADOW_PREDICTIONS_DIR", str(tmp_path))
+    ts = shadow.ShadowTimestamps(
+        initialization_time=pd.Timestamp("2026-10-06T00:00:00Z"),
+        availability_time=pd.Timestamp("2026-10-06T06:00:00Z"),
+        decision_time=pd.Timestamp("2026-10-06T12:00:00Z"),
+        valid_time=pd.Timestamp("2026-10-07T00:00:00Z"),
+        horizon_minutes=1440,
+    )
+    candidates = {
+        name: shadow.ShadowPrediction(
+            city=_CITY, method=name, ampacity_amps=1000.0, timestamps=ts,
+            fallback_used=False, status="ok", reason=None,
+        )
+        for name in shadow.CANDIDATE_METHOD_NAMES
+    }
+    path = shadow.log_cycle_predictions(_CITY, candidates, ts, **kwargs)
+    with open(path) as fh:
+        return json.loads(fh.readline())
+
+
+def test_logged_v3_row_carries_forecast_model_and_stays_schema_3(tmp_path, monkeypatch):
+    record = _log_one_cycle(tmp_path, monkeypatch)
+    assert record["schema_version"] == 3
+    assert record["forecast_model"] == "gfs_seamless"
+
+
+def test_logged_row_follows_the_config_when_reverted(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "SHADOW_LIVE_FORECAST_MODEL", "ecmwf_ifs")
+    assert _log_one_cycle(tmp_path, monkeypatch)["forecast_model"] == "ecmwf_ifs"
+
+
+def test_entry_forecast_model_treats_a_missing_field_as_legacy_ecmwf():
+    assert shadow.entry_forecast_model({"schema_version": 3}) == "ecmwf_ifs"
+    assert shadow.entry_forecast_model({"forecast_model": None}) == "ecmwf_ifs"
+    assert shadow.entry_forecast_model({"forecast_model": "gfs_seamless"}) == "gfs_seamless"
+
+
+def test_persistence_refuses_a_legacy_row_without_forecast_model_and_says_cold_start(tmp_path, monkeypatch):
+    monkeypatch.setattr(shadow, "SHADOW_PREDICTIONS_DIR", str(tmp_path))
+    now = pd.Timestamp.now(tz="UTC")
+    entry = _v3_entry(now, ampacity=1111.0)
+    entry.pop("forecast_model")  # a pre-2026-10-13 row: no field = ecmwf_ifs
+    _write_jsonl_entry(str(tmp_path / f"{_CITY}.jsonl"), entry)
+
+    result = shadow.Persistence24hShadowMethod().compute(_CITY, now)  # current model: gfs_seamless
+    assert result.status == "unavailable"
+    assert result.ampacity_amps is None
+    assert "gfs_seamless" in result.reason and "different forecast model" in result.reason
+    assert "cold start" in result.reason
+
+
+def test_persistence_refuses_an_entry_from_the_other_model_both_directions(tmp_path, monkeypatch):
+    monkeypatch.setattr(shadow, "SHADOW_PREDICTIONS_DIR", str(tmp_path))
+    now = pd.Timestamp.now(tz="UTC")
+    _write_jsonl_entry(str(tmp_path / f"{_CITY}.jsonl"), _v3_entry(now, forecast_model="gfs_seamless"))
+    assert shadow.Persistence24hShadowMethod().compute(_CITY, now, forecast_model="ecmwf_ifs").status == "unavailable"
+    assert shadow.Persistence24hShadowMethod().compute(_CITY, now, forecast_model="gfs_seamless").status == "ok"
+
+
+def test_persistence_skips_a_closer_other_model_entry_for_a_same_model_one(tmp_path, monkeypatch):
+    monkeypatch.setattr(shadow, "SHADOW_PREDICTIONS_DIR", str(tmp_path))
+    path = str(tmp_path / f"{_CITY}.jsonl")
+    now = pd.Timestamp.now(tz="UTC")
+    legacy = _v3_entry(now, ampacity=1.0)
+    legacy.pop("forecast_model")
+    _write_jsonl_entry(path, legacy)  # exact match in time, wrong model
+    _write_jsonl_entry(path, _v3_entry(now + pd.Timedelta(hours=1), ampacity=2.0))
+    result = shadow.Persistence24hShadowMethod().compute(_CITY, now)
+    assert result.status == "ok"
+    assert result.ampacity_amps == 2.0
+
+
+# --- 2026-10-13: the valid hour must be the EXACT hour, never the hour before -----
+
+def test_fetch_live_forecast_asks_for_enough_days_to_cover_the_valid_hour(monkeypatch):
+    import open_meteo_forecast_provider as omp
+    seen = {}
+
+    def _capture(lat, lon, run, forecast_days=None, **kwargs):
+        seen["forecast_days"] = forecast_days
+        return _hourly_frame(run, {
+            "air_temp": 20.0, "wind_speed": 3.0, "wind_direction": 100.0,
+            "solar_radiation": 300.0, "relative_humidity": 50.0,
+        })
+
+    monkeypatch.setattr(omp, "fetch_single_run", _capture)
+    valid_time = pd.Timestamp("2026-01-02T06:00:00Z")
+    shadow.fetch_live_forecast_for_valid_time(_CITY, valid_time, horizon_minutes=1440, lat=30.27, lon=-97.74)
+    # init = valid - 24h, so the valid hour is init+24h: forecast_days=1 (init..init+23h) cannot contain it.
+    assert seen["forecast_days"] * 24 > 24
+    assert seen["forecast_days"] == shadow._FORECAST_FETCH_DAYS >= 2
+
+
+def test_fetch_live_forecast_uses_the_exact_valid_hour_not_the_hour_before(monkeypatch):
+    import open_meteo_forecast_provider as omp
+
+    def _distinct_per_hour(lat, lon, run, forecast_days=None, **kwargs):
+        hours = pd.date_range(run, periods=48, freq="h", tz="UTC")
+        return pd.DataFrame({
+            "datetime_utc": hours,
+            "air_temp": [float(i) for i in range(48)],  # hour offset from the run encoded in the value
+            "wind_speed": 3.0, "wind_direction": 100.0, "solar_radiation": 300.0, "relative_humidity": 50.0,
+        })
+
+    monkeypatch.setattr(omp, "fetch_single_run", _distinct_per_hour)
+    valid_time = pd.Timestamp("2026-01-02T06:00:00Z")
+    row, ts = shadow.fetch_live_forecast_for_valid_time(_CITY, valid_time, horizon_minutes=1440, lat=30.27, lon=-97.74)
+    assert row["fcst_air_temp"] == 24.0  # init+24h; the old behavior returned init+23h (23.0)
+
+
+def test_fetch_live_forecast_raises_when_the_exact_valid_hour_is_absent(monkeypatch):
+    import open_meteo_forecast_provider as omp
+
+    def _only_before(lat, lon, run, forecast_days=None, **kwargs):
+        return pd.DataFrame({
+            "datetime_utc": pd.date_range(run, periods=24, freq="h", tz="UTC"),  # init..init+23h only
+            "air_temp": 20.0, "wind_speed": 3.0, "wind_direction": 100.0,
+            "solar_radiation": 300.0, "relative_humidity": 50.0,
+        })
+
+    monkeypatch.setattr(omp, "fetch_single_run", _only_before)
+    with pytest.raises(shadow.StaleOrMissingDataError, match="exactly valid_time"):
+        shadow.fetch_live_forecast_for_valid_time(
+            _CITY, pd.Timestamp("2026-01-02T06:00:00Z"), horizon_minutes=1440, lat=30.27, lon=-97.74,
+        )

@@ -41,6 +41,20 @@ CANDIDATE_METHOD_NAMES: tuple[str, ...] = (
     "persistence_24h", "reference_ml_refit_24h",
 )
 
+# 2026-10-13 (protocol v3 V5/decision 11B): each v3 row records the NWP model that
+# produced its forecast in a top-level `forecast_model` field. A row WITHOUT the
+# field predates the switch and is an `ecmwf_ifs` row. Duplicated here (mirrors
+# `config.SHADOW_LEGACY_FORECAST_MODEL`) rather than imported, for the same
+# dependency-light reason as CANDIDATE_METHOD_NAMES. The tag is shown per row so
+# the README never presents rows from different models as one series.
+LEGACY_FORECAST_MODEL = "ecmwf_ifs"
+
+
+def _entry_forecast_model(e: dict) -> str:
+    model = e.get("forecast_model") if isinstance(e, dict) else None
+    return model if isinstance(model, str) and model else LEGACY_FORECAST_MODEL
+
+
 # RENDERED_CYCLE_CAP (2026-10-08, "the new render format is messy, it'll
 # add a new table after every run"): the number of most-recent
 # schema_version>=3 cycles rendered per city. The one-block-per-cycle
@@ -228,7 +242,8 @@ def _render_new_shape_row(e: dict) -> str:
             notes_parts.append(f"{name}: {reason}")
     notes = _escape_note("; ".join(notes_parts), limit=200)
     return (
-        f"| {_format_timestamp(e.get('decision_time'))} | {_format_timestamp(e.get('valid_time'))} | " +
+        f"| {_format_timestamp(e.get('decision_time'))} | {_format_timestamp(e.get('valid_time'))} | "
+        f"{_entry_forecast_model(e)} | " +
         " | ".join(cells) +
         f" | {notes} |"
     )
@@ -283,7 +298,8 @@ def _render_bundle_row(e: dict) -> str:
             notes_parts.append(f"{name}: {reason}")
     notes = _escape_note("; ".join(notes_parts), limit=200)
     return (
-        f"| {_format_timestamp(e.get('decision_time'))} | {_format_timestamp(e.get('valid_time'))} | " +
+        f"| {_format_timestamp(e.get('decision_time'))} | {_format_timestamp(e.get('valid_time'))} | "
+        f"{_entry_forecast_model(e)} | " +
         " | ".join(cells) +
         f" | {notes} |"
     )
@@ -315,8 +331,8 @@ def _render_bundle_table(entries: list[dict]) -> list[str]:
         "Bundle-level (subconductors-per-phase) ampacity, same cycles as above, most recent "
         f"{len(shown)} of {len(entries)} shown:",
         "",
-        f"| Decision time | Valid time | {header_cells} | Notes |",
-        "|---|---|" + "---|" * len(CANDIDATE_METHOD_NAMES) + "---|",
+        f"| Decision time | Valid time | NWP model | {header_cells} | Notes |",
+        "|---|---|---|" + "---|" * len(CANDIDATE_METHOD_NAMES) + "---|",
     ]
     block.extend(_render_bundle_row(e) for e in shown)
     block.append("")
@@ -339,10 +355,19 @@ def _render_new_shape_table(entries: list[dict]) -> list[str]:
         "All five candidates per cycle (`schema_version: 3`), most recent "
         f"{len(shown)} of {len(entries)} shown:",
         "",
-        f"| Decision time | Valid time | {header_cells} | Notes |",
-        "|---|---|" + "---|" * len(CANDIDATE_METHOD_NAMES) + "---|",
+        f"| Decision time | Valid time | NWP model | {header_cells} | Notes |",
+        "|---|---|---|" + "---|" * len(CANDIDATE_METHOD_NAMES) + "---|",
     ]
     block.extend(_render_new_shape_row(e) for e in shown)
+    models = {_entry_forecast_model(e) for e in entries}
+    if len(models) > 1:
+        block.append("")
+        block.append(
+            "_Rows in this city's log come from more than one NWP model "
+            f"({', '.join(sorted(models))}); rows without a `forecast_model` field are "
+            "`ecmwf_ifs` (before 2026-10-13). They are different series and must not be "
+            "pooled when scoring._"
+        )
     if len(entries) > RENDERED_CYCLE_CAP:
         block.append("")
         block.append(
@@ -378,8 +403,8 @@ def _render_latest_summary(latest: list[tuple[str, dict]]) -> list[str]:
     block = [
         "## Latest cycle per city",
         "",
-        f"| City | Decision time | Valid time | {header_cells} | Notes |",
-        "|---|---|---|" + "---|" * len(CANDIDATE_METHOD_NAMES) + "---|",
+        f"| City | Decision time | Valid time | NWP model | {header_cells} | Notes |",
+        "|---|---|---|---|" + "---|" * len(CANDIDATE_METHOD_NAMES) + "---|",
     ]
     for city, entry in latest:
         block.append(f"| {city} " + _render_new_shape_row(entry))

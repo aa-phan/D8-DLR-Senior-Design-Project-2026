@@ -184,3 +184,22 @@ def test_the_cli_really_spawns_a_python_child_and_rejects_an_unknown_city():
     )
     assert proc.returncode != 0
     assert "invalid choice" in proc.stderr
+
+
+def test_workflow_cron_is_four_cycles_a_day_and_documents_the_revert():
+    import re
+    workflow = os.path.join(
+        os.path.dirname(__file__), "..", "..", ".github", "workflows", "shadow_collect.yml"
+    )
+    text = open(workflow).read()
+    try:
+        import yaml
+        doc = yaml.safe_load(text)
+        crons = [s["cron"] for s in (doc.get("on") or doc.get(True))["schedule"]]
+    except ImportError:  # PyYAML is not a project dependency
+        crons = re.findall(r"^\s*-\s*cron:\s*'([^']+)'", text, flags=re.M)
+    assert crons == ["0 0,6,12,18 * * *"]
+    assert "REVERT" in text
+    assert "0 6,18 * * *" in text  # the 2/day revert value is spelled out
+    assert 'SHADOW_LIVE_FORECAST_MODEL = "ecmwf_ifs"' in text
+    assert "timeout-minutes: 30" in text

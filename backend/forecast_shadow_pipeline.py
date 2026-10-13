@@ -49,6 +49,13 @@ Nothing here reduces across cities.
       "city": "AUSTIN",
       "initialization_time", "availability_time", "decision_time",
       "valid_time": <ISO-8601>, "horizon_minutes": 1440,
+      "forecast_model": <str>,   # NWP model that produced the forecast
+                                 # (added 2026-10-13, additive; schema stays 3).
+                                 # A row WITHOUT this field is a legacy
+                                 # `config.SHADOW_LEGACY_FORECAST_MODEL`
+                                 # ("ecmwf_ifs") row; readers must treat a
+                                 # missing field that way, per line, forever.
+                                 # Rows of different models must never be pooled.
       "logged_at": <ISO-8601>, "basis_caveat": <str>,
       "candidates": {<one entry per CANDIDATE_METHOD_NAMES>: {
           "status": "ok" | "unavailable" | "failed",
@@ -201,6 +208,19 @@ def _resolve_publication_lag_hours() -> float:
 # (`requests.exceptions.RequestException`) are retried: an unavailable run
 # (`SingleRunUnavailable`) or a malformed/null response is not transient.
 _FORECAST_FETCH_ATTEMPTS = 3
+
+# 2026-10-13: how many forecast days the single-run request asks for. The run
+# is initialized EXACTLY `horizon` (24 h) before the valid time, so the valid
+# hour is init+24h. A single-run response with `forecast_days=1` covers only
+# init..init+23h, so with the old value 1 the valid hour was never in the
+# frame and the old `frame.index.asof(valid_ts)` lookup silently returned the
+# hour BEFORE (init+23h): every forecast-based candidate (`raw_forecast`,
+# `ml_wind_corrected`, `ml_cooling_corrected`, and `persistence_24h`, which
+# copies `raw_forecast`) predicted the weather one hour earlier than the hour
+# it was scored against. 2 days covers init..init+47h. Found 2026-10-13 by a
+# read-only check; rows logged before this fix carry that one-hour offset
+# and also lack the `forecast_model` field (both changes shipped together).
+_FORECAST_FETCH_DAYS = 2
 _FORECAST_FETCH_TIMEOUT_S = 30
 _FORECAST_FETCH_RETRY_DELAY_S = 20
 
@@ -217,8 +237,10 @@ def fetch_live_forecast_for_valid_time(
     whose initialization sits exactly one horizon before the target --
     the run this prediction is ACTUALLY entitled to use if horizon_minutes
     is the real decision-to-valid lead), fetched via `open_meteo_forecast_
-    provider.fetch_single_run` under the provider's own pinned
-    `FORECAST_MODEL_ID`. This is the concrete answer to whether live
+    provider.fetch_single_run` under
+    `config.SHADOW_LIVE_FORECAST_MODEL` ("gfs_seamless" since 2026-10-13,
+    protocol v3 V5/decision 11B; before that the provider's own pinned
+    `FORECAST_MODEL_ID` "ecmwf_ifs"). This is the concrete answer to whether live
     retrieval selects a run that covers the requested valid time: it is
     constructed to, by always deriving the run from valid_time and
     horizon_minutes rather than always reusing "the latest run" or a
@@ -258,7 +280,8 @@ def fetch_live_forecast_for_valid_time(
         started = time.monotonic()
         try:
             frame = open_meteo_forecast_provider.fetch_single_run(
-                lat, lon, initialization_time, forecast_days=1,
+                lat, lon, initialization_time, forecast_days=_FORECAST_FETCH_DAYS,
+                model=config.SHADOW_LIVE_FORECAST_MODEL,
                 timeout=_FORECAST_FETCH_TIMEOUT_S,
             )
             logger.info(
@@ -301,13 +324,17 @@ def fetch_live_forecast_for_valid_time(
         )
 
     frame = frame.set_index("datetime_utc") if "datetime_utc" in frame.columns else frame
-    try:
-        row = frame.loc[frame.index.asof(valid_ts)]
-    except (KeyError, ValueError) as exc:
+    # STRICT lookup (2026-10-13): the row for exactly `valid_ts` or an error.
+    # The earlier `frame.index.asof(valid_ts)` quietly fell back to the
+    # nearest EARLIER hour when the exact hour was absent, which is how the
+    # one-hour offset described at `_FORECAST_FETCH_DAYS` went unnoticed.
+    if valid_ts not in frame.index:
         raise StaleOrMissingDataError(
-            f"fetch_live_forecast_for_valid_time: no row near valid_time "
-            f"{valid_ts} in run {initialization_time}'s response: {exc}"
-        ) from exc
+            f"fetch_live_forecast_for_valid_time: run {initialization_time}'s response "
+            f"has no row for exactly valid_time {valid_ts} (covers "
+            f"{frame.index.min()} .. {frame.index.max()})"
+        )
+    row = frame.loc[valid_ts]
 
     # `fetch_single_run` returns the provider's own plain column names
     # (air_temp, wind_speed, ...) -- apply the SAME "fcst_" rename
@@ -1106,6 +1133,18 @@ def read_city_log_entries(city: str) -> list[dict]:
     return entries
 
 
+def entry_forecast_model(entry) -> str:
+    """
+    The NWP model that produced a logged v3 row. A row without a
+    `forecast_model` field (everything logged before 2026-10-13) is a legacy
+    `config.SHADOW_LEGACY_FORECAST_MODEL` row. Applied per line, forever.
+    """
+    model = entry.get("forecast_model") if isinstance(entry, dict) else None
+    if isinstance(model, str) and model:
+        return model
+    return config.SHADOW_LEGACY_FORECAST_MODEL
+
+
 class Persistence24hShadowMethod:
     """
     Plan 05-02 (D-05): the live, decision-time-available form of
@@ -1127,7 +1166,14 @@ class Persistence24hShadowMethod:
 
     name = "persistence_24h"
 
-    def compute(self, city: str, this_cycle_decision_time) -> "ShadowPrediction":
+    def compute(
+        self, city: str, this_cycle_decision_time, forecast_model: Optional[str] = None,
+    ) -> "ShadowPrediction":
+        # 2026-10-13 (V5/decision 11B): only reuse a prior entry produced by the
+        # SAME NWP model as this cycle (missing field = legacy ecmwf_ifs), so
+        # persistence never mixes an ecmwf-era forecast with a gfs-era one.
+        current_model = forecast_model or config.SHADOW_LIVE_FORECAST_MODEL
+        other_model_seen = False
         decision_ts = pd.Timestamp(this_cycle_decision_time)
         if decision_ts.tzinfo is None:
             decision_ts = decision_ts.tz_localize("UTC")
@@ -1146,6 +1192,10 @@ class Persistence24hShadowMethod:
             if entry_valid_time.tzinfo is None:
                 entry_valid_time = entry_valid_time.tz_localize("UTC")
             delta = abs(entry_valid_time - decision_ts)
+            if entry_forecast_model(entry) != current_model:
+                if delta <= _PERSISTENCE_VALID_TIME_TOLERANCE:
+                    other_model_seen = True
+                continue
             if delta <= _PERSISTENCE_VALID_TIME_TOLERANCE and (
                 best_delta is None or delta < best_delta
             ):
@@ -1158,8 +1208,18 @@ class Persistence24hShadowMethod:
                 timestamps=None, fallback_used=False, status="unavailable",
                 reason=(
                     "no prior entry within tolerance of decision_time "
-                    f"{decision_ts.isoformat()} (cold start, or a gap in "
-                    "this city's collection history)"
+                    f"{decision_ts.isoformat()} produced by forecast model "
+                    f"{current_model!r} (cold start, or a gap in this city's "
+                    "collection history"
+                    + (
+                        "; a prior entry exists within tolerance but was produced "
+                        "by a different forecast model and is deliberately not "
+                        "reused -- after the 2026-10-13 switch to gfs_seamless, "
+                        "persistence is unavailable until a gfs_seamless entry "
+                        "falls within tolerance"
+                        if other_model_seen else ""
+                    )
+                    + ")"
                 ),
                 bundle={
                     "status": "unavailable",
@@ -1838,6 +1898,7 @@ class ShadowPipeline:
 
 def log_cycle_predictions(
     city: str, candidates: dict, timestamps: ShadowTimestamps,
+    forecast_model: Optional[str] = None,
 ) -> str:
     """
     Plan 05-02 (D-06; schema_version 3 since 2026-10-12, keyed by `city` --
@@ -1884,6 +1945,7 @@ def log_cycle_predictions(
         "schema_version": 3,
         "city": city,
         **timestamps.as_dict(),
+        "forecast_model": forecast_model or config.SHADOW_LIVE_FORECAST_MODEL,
         "logged_at": datetime.now(timezone.utc).isoformat(),
         "basis_caveat": (
             "Reanalysis-derived development comparison; this live prediction's "

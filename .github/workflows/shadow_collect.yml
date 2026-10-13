@@ -3,7 +3,7 @@ name: Shadow Collection
 # Experimental/shadow forecast-correction prototype (ml-modeling workstream, Phase 4
 # follow-up). This workflow is NEVER invoked by production -- dlr_pipeline.py and every
 # other production caller remain untouched. It exists solely to run
-# backend/forecast_shadow_collect.py twice daily so real shadow predictions accumulate
+# backend/forecast_shadow_collect.py four times daily so real shadow predictions accumulate
 # ahead of the fixed 2026-11-24 evaluation date. See
 # docs/data-science/decisions/shadow_collection_runbook.md for the full operational
 # reference and docs/data-science/decisions/forecast_correction_followup_audit.md for
@@ -11,8 +11,20 @@ name: Shadow Collection
 
 on:
   schedule:
-    # 06:00 and 18:00 UTC daily -- matches the runbook's existing cron cadence exactly.
-    - cron: '0 6,18 * * *'
+    # 4 decision cycles/day (00, 06, 12, 18 UTC), raised from 2/day on 2026-10-13
+    # (protocol v3 decision 6B). Rationale: the NWP runs on a 6-hourly UTC grid, and a
+    # single decision cycle yields exactly ONE valid time (the next grid hour 11-17 h
+    # ahead). GitHub starts scheduled runs 3-8 h late, so expect about 2-4 distinct
+    # valid times per day, not a guaranteed 4.
+    #
+    # ===================== REVERT (if Actions minutes limits are hit) =====================
+    # * Back to 2 cycles/day: edit the cron line below back to  '0 6,18 * * *'.
+    # * Back to the legacy forecast model: set SHADOW_LIVE_FORECAST_MODEL = "ecmwf_ifs" in
+    #   backend/config.py (the 2026-10-13 default is "gfs_seamless", decision 11B). Rows are
+    #   then tagged ecmwf_ifs again and MUST NOT be pooled with gfs_seamless rows.
+    # The two reverts are independent. Rows already logged are never rewritten.
+    # =======================================================================================
+    - cron: '0 0,6,12,18 * * *'
   workflow_dispatch: {} # allow a manual run for testing, from the Actions tab
 
 permissions:
@@ -31,7 +43,10 @@ jobs:
     # forecast fetch, an anchor fetch (TCEQ then Synoptic), a truth-proxy station fetch
     # (TCEQ then Synoptic) and a solar-proxy fetch with one retry can each hit their own
     # 60s HTTP timeout (~7 minutes worst case), so 4 cities can legitimately run well past
-    # the old 15 minutes before the job is cut off.
+    # the old 15 minutes before the job is cut off. Arithmetic at the cap (unchanged by
+    # the 4/day cadence, which only changes how often the job starts): 4 cities x
+    # CITY_TIMEOUT_S (360 s) = 1440 s + 3 x INTER_CITY_DELAY_S (15 s) = 1485 s (~24.8 min),
+    # which fits 30 minutes before the pre-flight, install and push steps (~1-2 min).
     timeout-minutes: 30
     steps:
       - name: Checkout code (main)

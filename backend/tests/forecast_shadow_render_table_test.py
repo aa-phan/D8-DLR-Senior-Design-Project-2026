@@ -517,3 +517,36 @@ def test_render_markdown_includes_methods_explanation_once_with_real_data(tmp_pa
 
     assert markdown.count("What the five candidates actually do") == 1
     assert markdown.index("What the five candidates actually do") < markdown.index("## AUSTIN")
+
+
+# 2026-10-13 (V5/decision 11B): each row shows the NWP model that produced it.
+
+def test_render_shows_the_nwp_tag_and_treats_a_missing_field_as_ecmwf_ifs(tmp_path):
+    path = str(tmp_path / "AUSTIN.jsonl")
+    legacy = _new_shape_entry(decision_time="2026-10-12T12:00:00+00:00")
+    legacy.pop("forecast_model", None)
+    new = _new_shape_entry(decision_time="2026-10-13T12:00:00+00:00", forecast_model="gfs_seamless")
+    _write_entry(path, legacy)
+    _write_entry(path, new)
+    markdown = render_table.render_markdown(str(tmp_path))
+    assert "| NWP model |" in markdown
+    assert "| ecmwf_ifs |" in markdown
+    assert "| gfs_seamless |" in markdown
+    assert "must not be pooled" in markdown  # mixed-model caution line
+    assert render_table._entry_forecast_model(legacy) == "ecmwf_ifs"
+
+
+def test_render_single_model_city_has_no_mixed_model_note(tmp_path):
+    path = str(tmp_path / "AUSTIN.jsonl")
+    _write_entry(path, _new_shape_entry(forecast_model="gfs_seamless"))
+    markdown = render_table.render_markdown(str(tmp_path))
+    assert "| gfs_seamless |" in markdown
+    assert "must not be pooled" not in markdown
+
+
+def test_render_keeps_the_five_row_cap_with_the_tag_column(tmp_path):
+    path = str(tmp_path / "AUSTIN.jsonl")
+    for i in range(8):
+        _write_entry(path, _new_shape_entry(decision_time=f"2026-10-13T{i:02d}:00:00+00:00", forecast_model="gfs_seamless"))
+    markdown = render_table.render_markdown(str(tmp_path))
+    assert "most recent 5 of 8 shown" in markdown

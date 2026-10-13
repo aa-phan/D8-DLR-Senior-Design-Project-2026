@@ -724,3 +724,21 @@ SYNOPTIC_FALLBACK_STATIONS: dict[str, str] = {
     "MIDLAND": "KMAF",
     "EL_PASO": "KELP",
 }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Live shadow collector: which NWP model produces the logged forecasts
+# ──────────────────────────────────────────────────────────────────────────────
+# 2026-10-13: owner decision 11B (docs/data-science/decisions/
+# confirmation_protocol_v3_per_city.md, validity threat V5): the live shadow
+# forecast uses "gfs_seamless", the weather model the correction models were
+# trained on, instead of the legacy "ecmwf_ifs" that `fetch_single_run` falls
+# back to. open_meteo_forecast_provider.FORECAST_MODEL_ID = "ecmwf_ifs" is
+# FROZEN-experiment territory and must NOT be changed; the shadow collector
+# passes this value explicitly instead.
+# REVERT: set this to "ecmwf_ifs". Rows are then tagged "ecmwf_ifs" again and
+# must never be pooled with gfs_seamless rows when scoring.
+SHADOW_LIVE_FORECAST_MODEL: str = "gfs_seamless"
+# The model every v3 row logged before the 2026-10-13 switch used. A row with no
+# `forecast_model` field is a legacy row and is read as this model.
+SHADOW_LEGACY_FORECAST_MODEL: str = "ecmwf_ifs"
