@@ -7,16 +7,17 @@ convention. It imports `ampacity_forecast` for `build_ml_features` so
 exactly one feature-engineering implementation exists (dependency points
 training -> runtime, never the reverse).
 
-Assembles a real, non-synthetic per-corridor `dlr_amps` training series
-from Open-Meteo Archive backfill run through `thermal_model.ieee738_
-ampacity` for the corridor's two endpoint cities, reduces it to one
-corridor-level series via the codebase's established weakest-link `min()`
-convention (mirroring `corridor_discretization.rate_corridor`), fits a
-`scikit-learn` estimator on it, and persists the result atomically for
+Assembles a real, non-synthetic per-city `dlr_amps` training series from
+Open-Meteo Archive backfill for ONE city's own coordinate, run through
+`thermal_model.ieee738_ampacity` with that city's `city_point` bearing and
+conductor. Each city is an independent rating point
+(docs/data-science/decisions/point_scope.md): there is no pairing of cities
+and no `min()` across them. Fits a `scikit-learn` estimator on it and
+persists the result atomically for
 `ampacity_forecast.forecast_ampacity(..., method="ml")` to load.
 
 Run directly:
-    .venv/bin/python3 backend/forecast_training.py --corridor AUSTIN_CORPUS_CHRISTI --years 1
+    .venv/bin/python3 backend/forecast_training.py --city AUSTIN --years 1
 """
 
 import argparse
@@ -31,7 +32,7 @@ import pandas as pd
 
 import ampacity_forecast
 import config
-import corridor_discretization
+import city_point
 import historical_archive
 import open_meteo_provider
 import thermal_model
@@ -43,7 +44,7 @@ logger = logging.getLogger(__name__)
 def _make_regression_candidate():
     """Regression arm of D-01's bake-off. Fixed `random_state` so a
     bake-off run is reproducible. Lazy `sklearn` import, matching this
-    module's other estimator-touching functions (`fit_corridor_model`) --
+    module's other estimator-touching functions (`fit_model`) --
     importing `forecast_training` stays free of a hard `sklearn` import."""
     from sklearn.ensemble import HistGradientBoostingRegressor
 
@@ -116,7 +117,13 @@ def corridor_weakest_link(
     columns_b: dict,
 ) -> tuple:
     """
-    The codebase's one weakest-link corridor reduction (Phase 3 Plan 02,
+    FROZEN LEGACY HELPER -- retired corridor model. No per-city path uses
+    this: `city_training_frame` never reduces across cities
+    (docs/data-science/decisions/point_scope.md). Kept ONLY because the
+    frozen forecast-correction experiment (`forecast_experiment.py`, and
+    `forecast_shadow_pipeline.py` until it is migrated) still calls it.
+
+    The codebase's former weakest-link corridor reduction (Phase 3 Plan 02,
     D-03): given each endpoint city's ampacity array and a mapping of
     column name to that city's own values for the same rows, return the
     elementwise-minimum ampacity, an integer bottleneck-city index array
@@ -130,7 +137,7 @@ def corridor_weakest_link(
     deliberately, mirroring `corridor_discretization.rate_corridor`'s own
     `ratings.index(min_rating)` first-match convention -- not an arbitrary
     choice. This helper exists so the production trainer
-    (`corridor_training_frame`) and the new experiment harness share ONE
+    (the old corridor trainer) and the new experiment harness share ONE
     reduction rather than maintaining two independent copies of a rule
     that is easy to get subtly wrong.
 
@@ -170,23 +177,19 @@ def corridor_weakest_link(
     return dlr_amps, bottleneck_index.astype(int), winning_columns
 
 
-def corridor_training_frame(corridor: str, years: int) -> pd.DataFrame:
+def city_training_frame(city: str, years: int) -> pd.DataFrame:
     """
-    Assemble a real, `historical_archive.ARCHIVE_COLUMNS`-shaped training
-    frame for `corridor` from `years` complete calendar years of
-    Open-Meteo backfill for its two endpoint cities.
+    Assemble a real, archive-shaped training frame for `city` from `years`
+    complete calendar years of that city's own Open-Meteo backfill.
 
-    Each endpoint city's ampacity is computed independently via
-    `thermal_model.perpendicular_wind` + `ieee738_ampacity` (using the
-    corridor's own bearing and `ConductorConfig` from `corridor_
-    discretization.corridor_geometry` -- never recomputed here). The
-    corridor-level `dlr_amps` at each timestamp is the elementwise
-    `min()` of the two cities' ampacities (the codebase's established
-    weakest-link reduction, mirroring `corridor_discretization.rate_
-    corridor`); that row's weather is the *winning* (lower-ampacity)
-    city's own observation, never the other city's and never an average
-    -- "the archived weather is always the weather that produced the
-    archived rating."
+    Ampacity is computed via `thermal_model.perpendicular_wind` +
+    `ieee738_ampacity` using the bearing and `ConductorConfig` from
+    `city_point.city_point(city)` -- never recomputed here. `dlr_amps` is
+    that city's OWN ampacity (no reduction across cities), and every row's
+    weather is the weather that produced its rating.
+
+    The frame carries a `city` column; `bottleneck_index` is null (no
+    cross-city reduction exists).
 
     Every assembled row is validated through `units_def.validate_
     pipeline_row(historical_archive._validation_row(row), strict=False)`
@@ -195,72 +198,38 @@ def corridor_training_frame(corridor: str, years: int) -> pd.DataFrame:
     message, mirroring `historical_archive.read_history`'s own
     validate-before-training behavior.
     """
-    geometry = corridor_discretization.corridor_geometry(corridor)
-    city_a, city_b = config.CORRIDOR_ENDPOINTS[corridor]
+    point = city_point.city_point(city)
+    weather = fetch_city_weather(city, years)
 
-    weather_a = fetch_city_weather(city_a, years)
-    weather_b = fetch_city_weather(city_b, years)
-
-    merged = weather_a.merge(
-        weather_b, on="datetime_utc", how="inner", suffixes=("_a", "_b")
-    )
-
-    perp_a = thermal_model.perpendicular_wind(
-        merged["wind_speed_a"].to_numpy(dtype=float),
-        merged["wind_direction_a"].to_numpy(dtype=float),
-        geometry.bearing_deg,
-    )
-    perp_b = thermal_model.perpendicular_wind(
-        merged["wind_speed_b"].to_numpy(dtype=float),
-        merged["wind_direction_b"].to_numpy(dtype=float),
-        geometry.bearing_deg,
+    perp = thermal_model.perpendicular_wind(
+        weather["wind_speed"].to_numpy(dtype=float),
+        weather["wind_direction"].to_numpy(dtype=float),
+        point.bearing_deg,
     )
 
     # RESEARCH.md Pitfall 2: ieee738_ampacity returns np.ndarray even for
     # scalar input -- explicit float64 cast at this boundary.
-    amps_a = np.asarray(
+    dlr_amps = np.asarray(
         thermal_model.ieee738_ampacity(
-            merged["air_temp_a"].to_numpy(dtype=float), perp_a,
-            merged["solar_radiation_a"].to_numpy(dtype=float), geometry.conductor,
+            weather["air_temp"].to_numpy(dtype=float), perp,
+            weather["solar_radiation"].to_numpy(dtype=float), point.conductor,
         ),
         dtype=float,
     )
-    amps_b = np.asarray(
-        thermal_model.ieee738_ampacity(
-            merged["air_temp_b"].to_numpy(dtype=float), perp_b,
-            merged["solar_radiation_b"].to_numpy(dtype=float), geometry.conductor,
-        ),
-        dtype=float,
-    )
-
-    dlr_amps, bottleneck_index, winning_columns = corridor_weakest_link(
-        amps_a, amps_b,
-        {
-            "air_temp": merged["air_temp_a"].to_numpy(dtype=float),
-            "wind_speed": merged["wind_speed_a"].to_numpy(dtype=float),
-            "solar_radiation": merged["solar_radiation_a"].to_numpy(dtype=float),
-        },
-        {
-            "air_temp": merged["air_temp_b"].to_numpy(dtype=float),
-            "wind_speed": merged["wind_speed_b"].to_numpy(dtype=float),
-            "solar_radiation": merged["solar_radiation_b"].to_numpy(dtype=float),
-        },
-    )
-    air_temp = winning_columns["air_temp"]
-    wind_speed = winning_columns["wind_speed"]
-    solar_radiation = winning_columns["solar_radiation"]
 
     frame = pd.DataFrame({
-        "datetime_utc": merged["datetime_utc"],
-        "corridor": corridor,
-        "air_temp": air_temp,
-        "wind_speed": wind_speed,
-        "solar_radiation": solar_radiation,
+        "datetime_utc": weather["datetime_utc"],
+        "city": city,
+        "air_temp": weather["air_temp"].to_numpy(dtype=float),
+        "wind_speed": weather["wind_speed"].to_numpy(dtype=float),
+        "solar_radiation": weather["solar_radiation"].to_numpy(dtype=float),
         "dlr_amps": dlr_amps,
-        "static_rating": float(geometry.static_rating),
+        "static_rating": float(point.static_rating),
         "status": "ok",
         "fallback": False,
-        "bottleneck_index": bottleneck_index.astype(int),
+        # Corridor-era column kept in ARCHIVE_COLUMNS only for shape
+        # compatibility; a per-city frame has no bottleneck.
+        "bottleneck_index": None,
         "schema_version": historical_archive.ARCHIVE_SCHEMA_VERSION,
     })[historical_archive.ARCHIVE_COLUMNS]
 
@@ -278,8 +247,8 @@ def corridor_training_frame(corridor: str, years: int) -> pd.DataFrame:
     dropped = int((~keep_mask).sum())
     if dropped:
         logger.warning(
-            "corridor_training_frame: dropped %d invalid row(s) for %s: %s",
-            dropped, corridor, first_bad_message,
+            "city_training_frame: dropped %d invalid row(s) for %s: %s",
+            dropped, city, first_bad_message,
         )
 
     return frame[keep_mask].reset_index(drop=True)
@@ -289,7 +258,7 @@ def build_training_matrix(
     frame: pd.DataFrame, horizon_minutes: float | None = None,
 ) -> tuple[pd.DataFrame, pd.Series]:
     """
-    Build the (X, y) training matrix from a `corridor_training_frame`-
+    Build the (X, y) training matrix from a `city_training_frame`-
     shaped frame: index by `datetime_utc`, build `ampacity_forecast.
     build_ml_features` for X, and set the target `y` to `dlr_amps`
     shifted FORWARD by exactly `horizon_minutes` worth of rows (1 row at
@@ -353,7 +322,7 @@ def build_training_matrix(
     return X_clean, y_clean
 
 
-def bakeoff_corridor(X: pd.DataFrame, y: pd.Series) -> dict:
+def bakeoff_city(X: pd.DataFrame, y: pd.Series) -> dict:
     """
     D-01's two-candidate comparison: for each entry in `CANDIDATE_
     ESTIMATORS`, fit a FRESH (never-before-fit) estimator on each
@@ -399,7 +368,7 @@ def bakeoff_corridor(X: pd.DataFrame, y: pd.Series) -> dict:
 
 def baseline_scores(frame: pd.DataFrame) -> dict:
     """
-    Score `"naive"` and `"ewm"` on the SAME assembled corridor `frame` by
+    Score `"naive"` and `"ewm"` on the SAME assembled city `frame` by
     calling `ampacity_forecast.backtest_residuals` -- the apples-to-apples
     requirement in ROADMAP SC3/SC4: the baselines come from the module's
     own walk-forward function, never a second error computation written
@@ -427,22 +396,22 @@ def baseline_scores(frame: pd.DataFrame) -> dict:
     return scores
 
 
-def corridor_report(corridor: str, frame: pd.DataFrame, X: pd.DataFrame,
+def city_report(city: str, frame: pd.DataFrame, X: pd.DataFrame,
                      y: pd.Series) -> dict:
     """
-    Merge `bakeoff_corridor` and `baseline_scores` into one mapping for
-    `corridor`: a `candidates` sub-mapping holding all four entries (the
+    Merge `bakeoff_city` and `baseline_scores` into one mapping for
+    `city`: a `candidates` sub-mapping holding all four entries (the
     two `CANDIDATE_ESTIMATORS` plus `"naive"` and `"ewm"`), plus the
     assembled row count and the window (`window_start`/`window_end`, ISO
     strings) the score was measured on -- so a shortened run is visible in
     the evidence rather than hidden behind a score (this plan's first
     prohibition).
     """
-    candidates = bakeoff_corridor(X, y)
+    candidates = bakeoff_city(X, y)
     candidates.update(baseline_scores(frame))
 
     return {
-        "corridor": corridor,
+        "city": city,
         "rows": int(len(frame)),
         "window_start": pd.Timestamp(frame["datetime_utc"].min()).isoformat(),
         "window_end": pd.Timestamp(frame["datetime_utc"].max()).isoformat(),
@@ -514,7 +483,7 @@ def select_winner(report: dict) -> str:
     return winner
 
 
-def fit_corridor_model(X: pd.DataFrame, y: pd.Series, estimator):
+def fit_model(X: pd.DataFrame, y: pd.Series, estimator):
     """
     Fit `estimator` (already constructed, unfitted) on (X, y) and return
     it fitted. The same function serves the tracer's single fit (Plan
@@ -525,20 +494,20 @@ def fit_corridor_model(X: pd.DataFrame, y: pd.Series, estimator):
     return estimator
 
 
-def persist_corridor_model(model, corridor: str) -> str:
+def persist_model(model, city: str) -> str:
     """
-    Persist `model` for `corridor` atomically: `joblib.dump` to a temp
+    Persist `model` for `city` atomically: `joblib.dump` to a temp
     file in `config.FORECAST_ML_MODEL_DIR`, then `os.replace` onto
-    `ampacity_forecast._model_path_for(corridor)`. The temp-then-replace
+    `ampacity_forecast._model_path_for(city)`. The temp-then-replace
     is the concurrency/interruption guarantee -- a run killed mid-write,
-    or two runs racing on one corridor, can never leave a torn `.joblib`
-    for `ampacity_forecast._load_corridor_model` to deserialize (last
+    or two runs racing on one city, can never leave a torn `.joblib`
+    for `ampacity_forecast._load_model` to deserialize (last
     writer wins, never a partially-written file). Returns the final path.
     """
     import joblib
 
     os.makedirs(config.FORECAST_ML_MODEL_DIR, exist_ok=True)
-    final_path = ampacity_forecast._model_path_for(corridor)
+    final_path = ampacity_forecast._model_path_for(city)
 
     fd, tmp_path = tempfile.mkstemp(
         dir=config.FORECAST_ML_MODEL_DIR, suffix=".joblib.tmp"
@@ -555,18 +524,24 @@ def persist_corridor_model(model, corridor: str) -> str:
     return final_path
 
 
+# TEMPORARY alias: callers outside this module's ownership (frozen
+# forecast_experiment.py / forecast_experiment_audit.py, and
+# forecast_shadow_fit_reference_refit.py) still call the old name.
+fit_corridor_model = fit_model
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description=(
-            "Assemble real Open-Meteo-derived per-corridor training data, "
+            "Assemble real Open-Meteo-derived per-city training data, "
             "fit, and atomically persist an 'ml' forecasting model."
         )
     )
     parser.add_argument(
-        "--corridor",
-        choices=sorted(config.CORRIDOR_ENDPOINTS),
+        "--city",
+        choices=sorted(config.LOCATIONS),
         default=None,
-        help="Corridor to train. Default: every corridor in config.CORRIDOR_ENDPOINTS.",
+        help="City to train. Default: every city in config.LOCATIONS.",
     )
     parser.add_argument(
         "--years",
@@ -579,95 +554,95 @@ def main(argv=None):
         "--bakeoff",
         action="store_true",
         help="Run D-01's two-candidate bake-off (regression vs. neural "
-             "network) against the naive/ewm baselines, per corridor, "
-             "select each corridor's own measured winner by MAE, persist "
+             "network) against the naive/ewm baselines, per city, "
+             "select each city's own measured winner by MAE, persist "
              "it, and write the accumulated comparison to "
              "config.FORECAST_ML_BAKEOFF_REPORT_NAME.",
     )
     args = parser.parse_args(argv)
 
-    corridors = [args.corridor] if args.corridor else sorted(config.CORRIDOR_ENDPOINTS)
+    cities = [args.city] if args.city else sorted(config.LOCATIONS)
 
     if args.bakeoff:
-        _run_bakeoff(corridors, args.years)
+        _run_bakeoff(cities, args.years)
         return
 
-    for corridor in corridors:
+    for city in cities:
         try:
-            frame = corridor_training_frame(corridor, args.years)
+            frame = city_training_frame(city, args.years)
         except Exception:
             logger.exception(
-                "forecast_training: failed assembling corridor %s -- "
-                "continuing to the next corridor", corridor,
+                "forecast_training: failed assembling city %s -- "
+                "continuing to the next city", city,
             )
-            print(f"{corridor}: FAILED to assemble training frame -- see log")
+            print(f"{city}: FAILED to assemble training frame -- see log")
             continue
 
         os.makedirs(config.FORECAST_ML_MODEL_DIR, exist_ok=True)
         frame_path = os.path.join(
             config.FORECAST_ML_MODEL_DIR,
-            config.FORECAST_ML_TRAINING_FRAME_TEMPLATE.format(corridor=corridor),
+            config.FORECAST_ML_TRAINING_FRAME_TEMPLATE.format(city=city),
         )
         frame.to_csv(frame_path, index=False)
 
         X, y = build_training_matrix(frame)
-        model = fit_corridor_model(X, y, _make_regression_candidate())
-        model_path = persist_corridor_model(model, corridor)
+        model = fit_model(X, y, _make_regression_candidate())
+        model_path = persist_model(model, city)
 
         start = frame["datetime_utc"].min()
         end = frame["datetime_utc"].max()
         print(
-            f"{corridor}: {len(frame)} rows, {start} -> {end}, "
+            f"{city}: {len(frame)} rows, {start} -> {end}, "
             f"model persisted to {model_path}"
         )
 
 
-def _run_bakeoff(corridors, years):
+def _run_bakeoff(cities, years):
     """
-    D-01's bake-off entry point, one corridor at a time: assemble, build
+    D-01's bake-off entry point, one city at a time: assemble, build
     the comparison report, select the winner by measured MAE, refit it
     ONCE on the full matrix, persist it, and accumulate the report. A
-    failure assembling one corridor is reported by name and the run
-    continues to the next corridor rather than aborting silently
-    (`01-02-PLAN.md` Task 2). Each corridor also gets one final `SUMMARY:`
-    line (corridor, rows, window span, winner, persisted path) so a single
+    failure assembling one city is reported by name and the run
+    continues to the next city rather than aborting silently
+    (`01-02-PLAN.md` Task 2). Each city also gets one final `SUMMARY:`
+    line (city, rows, window span, winner, persisted path) so a single
     invocation's stdout is a complete, greppable record of what was
     trained.
     """
     reports = {}
     summary_lines = []
 
-    for corridor in corridors:
+    for city in cities:
         try:
-            frame = corridor_training_frame(corridor, years)
+            frame = city_training_frame(city, years)
         except Exception:
             logger.exception(
-                "forecast_training --bakeoff: failed assembling corridor "
-                "%s -- continuing to the next corridor", corridor,
+                "forecast_training --bakeoff: failed assembling city "
+                "%s -- continuing to the next city", city,
             )
-            print(f"{corridor}: FAILED to assemble training frame -- see log")
+            print(f"{city}: FAILED to assemble training frame -- see log")
             continue
 
         os.makedirs(config.FORECAST_ML_MODEL_DIR, exist_ok=True)
         frame_path = os.path.join(
             config.FORECAST_ML_MODEL_DIR,
-            config.FORECAST_ML_TRAINING_FRAME_TEMPLATE.format(corridor=corridor),
+            config.FORECAST_ML_TRAINING_FRAME_TEMPLATE.format(city=city),
         )
         frame.to_csv(frame_path, index=False)
 
         X, y = build_training_matrix(frame)
-        report = corridor_report(corridor, frame, X, y)
+        report = city_report(city, frame, X, y)
         winner_name = select_winner(report)
-        winner_estimator = fit_corridor_model(
+        winner_estimator = fit_model(
             X, y, CANDIDATE_ESTIMATORS[winner_name]()
         )
-        model_path = persist_corridor_model(winner_estimator, corridor)
+        model_path = persist_model(winner_estimator, city)
 
-        reports[corridor] = report
+        reports[city] = report
 
         start = frame["datetime_utc"].min()
         end = frame["datetime_utc"].max()
-        print(f"\n{corridor}: {len(frame)} rows, {start} -> {end}")
+        print(f"\n{city}: {len(frame)} rows, {start} -> {end}")
         print(f"{'candidate':<32}{'mae':>12}{'rmse':>12}{'rows':>10}")
         for name, scores in report["candidates"].items():
             print(
@@ -676,7 +651,7 @@ def _run_bakeoff(corridors, years):
             )
         print(f"winner: {winner_name} -> persisted to {model_path}")
         summary_lines.append(
-            f"SUMMARY: {corridor} rows={len(frame)} window={start}->{end} "
+            f"SUMMARY: {city} rows={len(frame)} window={start}->{end} "
             f"winner={winner_name} path={model_path}"
         )
 

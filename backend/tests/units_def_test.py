@@ -416,7 +416,7 @@ if __name__ == "__main__":
 # top-level `test_*` names; confirmed live, see the 2026-08-31
 # ACKNOWLEDGEMENTS.md entry documenting this gap). The tests below are real
 # top-level `test_*` functions so pytest actually collects and runs them,
-# following backend/tests/corridor_discretization_test.py's convention
+# following backend/tests/city_rating_test.py's convention
 # (module-level imports, plain asserts, no classes).
 
 import units_def as _units_def_module  # noqa: E402  (see note above on section placement)

@@ -27,10 +27,10 @@ class _RaisingDetector:
 
 
 def _valid_archive_row(datetime_utc="2026-01-01T00:00:00", air_temp=25.0,
-                        corridor="AUSTIN_CORPUS_CHRISTI"):
+                        city="AUSTIN"):
     return {
         "datetime_utc": datetime_utc,
-        "corridor": corridor,
+        "city": city,
         "air_temp": air_temp,
         "wind_speed": 5.0,
         "solar_radiation": 500.0,
@@ -38,12 +38,11 @@ def _valid_archive_row(datetime_utc="2026-01-01T00:00:00", air_temp=25.0,
         "static_rating": 1200.0,
         "status": "ok",
         "fallback": False,
-        "bottleneck_index": 0,
         "schema_version": historical_archive.ARCHIVE_SCHEMA_VERSION,
     }
 
 
-def _seed_archive(path, n=24, corridor="AUSTIN_CORPUS_CHRISTI"):
+def _seed_archive(path, n=24, city="AUSTIN"):
     """
     Append `n` archive rows through `historical_archive.append_observation`
     to `path`, with `dlr_amps` tightly clustered around 1200.0 A (alternating
@@ -63,7 +62,7 @@ def _seed_archive(path, n=24, corridor="AUSTIN_CORPUS_CHRISTI"):
     for i, amps in enumerate(values):
         row = {
             "datetime_utc": (base_dt + timedelta(hours=i)).isoformat(),
-            "corridor": corridor,
+            "city": city,
             "air_temp": 25.0,
             "wind_speed": 5.0,
             "solar_radiation": 500.0,
@@ -71,7 +70,6 @@ def _seed_archive(path, n=24, corridor="AUSTIN_CORPUS_CHRISTI"):
             "static_rating": 1200.0,
             "status": "ok",
             "fallback": False,
-            "bottleneck_index": 0,
             "schema_version": historical_archive.ARCHIVE_SCHEMA_VERSION,
         }
         assert historical_archive.append_observation(row, path=str(path)) is True

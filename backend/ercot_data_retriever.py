@@ -7,7 +7,7 @@ Nothing in the runtime decision path imports this module -- a test in
 `backend/tests/anomaly_training_test.py` asserts `anomaly_detector.py`
 never imports it or `gridstatus`. This module exists solely to pull
 historical ERCOT settlement load for an offline sanity-check of a
-corridor's fitted per-variable weather envelope against known
+city's fitted per-variable weather envelope against known
 load-driven demand patterns; it never touches `AnomalyDetector.check`'s
 live input (`raw_data` carries no load field, and adding one is Track 1's
 scope, not this workstream's -- see D-02).
@@ -118,7 +118,7 @@ def pull_ercot_data(
     # that were actually matched (empty when the no-match fallback fired)
     # as frame attributes -- so a caller (e.g.
     # anomaly_training.characterize_load) can report which zones a
-    # corridor was actually characterized against without re-deriving or
+    # city was actually characterized against without re-deriving or
     # guessing the selection logic itself.
     final_df.attrs["load_column"] = out_col
     final_df.attrs["zone_columns_matched"] = list(zone_cols)

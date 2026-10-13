@@ -1,4 +1,6 @@
 """
+FROZEN: reproduces the completed corridor-based 2026 experiment (docs/data-science/decisions/point_scope.md). Uses legacy_corridor; do not extend.
+
 Forecast Correction Follow-up Audit -- Frozen-Window Guard, Named Bases, and
 the First Provenance Finding (Phase 4, D-01/D-02, Plan 04-01)
 ==========================================================================
@@ -44,7 +46,7 @@ import scipy.stats
 
 import ampacity_forecast
 import config
-import corridor_discretization
+import legacy_corridor
 import experiment_splits
 import forecast_correction_models
 import forecast_experiment
@@ -118,7 +120,7 @@ def _assert_no_real_corridor_marker(frame: pd.DataFrame) -> None:
     synthetic result for a real-data one.
     """
     if "corridor" in frame.columns:
-        real = set(frame["corridor"].unique()) & set(config.CORRIDOR_ENDPOINTS)
+        real = set(frame["corridor"].unique()) & set(config.LEGACY_CORRIDOR_ENDPOINTS)
         if real:
             raise ValueError(
                 f"forecast_experiment_audit: a SYNTHETIC-basis frame names "
@@ -511,7 +513,7 @@ def _build_corridor_basis_entry(corridor: str, *, lead_hours: int, resolved_wind
     value). This function does not return or log the test split's row
     count or any other property of it.
     """
-    city_a, city_b = config.CORRIDOR_ENDPOINTS[corridor]
+    city_a, city_b = config.LEGACY_CORRIDOR_ENDPOINTS[corridor]
 
     # Per-city null-drop measurement FIRST, while a fresh fetch (if any) is
     # still possible -- corridor_anchored_pair_frame below will then hit
@@ -597,7 +599,7 @@ def build_basis_manifest(
 ) -> dict:
     """
     Assemble the real ABLATION and FRESH bases for every corridor in
-    `corridors` (default: every corridor in `config.CORRIDOR_ENDPOINTS`),
+    `corridors` (default: every corridor in `config.LEGACY_CORRIDOR_ENDPOINTS`),
     measure the null-drop for each endpoint city, and write the whole
     manifest as JSON to `manifest_path` (default:
     `data/experiment/audit_basis_manifest.json`, git-ignored evidence, never
@@ -619,7 +621,7 @@ def build_basis_manifest(
     if manifest_path is None:
         manifest_path = DEFAULT_MANIFEST_PATH
 
-    valid_corridors = sorted(config.CORRIDOR_ENDPOINTS)
+    valid_corridors = sorted(config.LEGACY_CORRIDOR_ENDPOINTS)
     if corridors is None:
         corridors = valid_corridors
     else:
@@ -1021,8 +1023,8 @@ def leakage_probe_coverage_report(
     and every downstream computation (fitting, arm 5's feature table, both
     probe modes) is built exclusively from the train+val (ABLATION) portion.
     """
-    valid_corridors = sorted(config.CORRIDOR_ENDPOINTS)
-    if corridor not in config.CORRIDOR_ENDPOINTS:
+    valid_corridors = sorted(config.LEGACY_CORRIDOR_ENDPOINTS)
+    if corridor not in config.LEGACY_CORRIDOR_ENDPOINTS:
         raise ValueError(
             f"leakage_probe_coverage_report: unknown corridor {corridor!r} "
             f"-- valid corridors: {valid_corridors}"
@@ -1032,8 +1034,8 @@ def leakage_probe_coverage_report(
     if report_path is None:
         report_path = _leakage_report_path(corridor)
 
-    city_a, city_b = config.CORRIDOR_ENDPOINTS[corridor]
-    geometry = corridor_discretization.corridor_geometry(corridor)
+    city_a, city_b = config.LEGACY_CORRIDOR_ENDPOINTS[corridor]
+    geometry = legacy_corridor.corridor_geometry(corridor)
 
     # ---- Assemble the real ABLATION-basis corridor frame, mirroring
     # build_basis_manifest's own boundary/filter/clip discipline exactly,
@@ -1384,7 +1386,7 @@ def arm5_label_timing_finding(corridor: str, *, lead_hours: int = None) -> dict:
     """
     if lead_hours is None:
         lead_hours = config.FORECAST_EXPERIMENT_PRIMARY_LEAD_HOURS
-    city_a, city_b = config.CORRIDOR_ENDPOINTS[corridor]
+    city_a, city_b = config.LEGACY_CORRIDOR_ENDPOINTS[corridor]
     experiment_horizon_minutes = lead_hours * 60
 
     corridor_frame, boundaries, stacked_train, train_val_stacked = _ablation_train_val_stacked(
@@ -1541,7 +1543,7 @@ def arm5_lag_offset_finding(corridor: str, *, lead_hours: int = None) -> dict:
     """
     if lead_hours is None:
         lead_hours = config.FORECAST_EXPERIMENT_PRIMARY_LEAD_HOURS
-    city_a, city_b = config.CORRIDOR_ENDPOINTS[corridor]
+    city_a, city_b = config.LEGACY_CORRIDOR_ENDPOINTS[corridor]
 
     _corridor_frame, _boundaries, _stacked_train, train_val_stacked = _ablation_train_val_stacked(
         corridor, lead_hours=lead_hours,
@@ -2045,8 +2047,8 @@ def ablation_basis_report(
     fails (which would mean the fit frame was not actually narrowed to
     the train side).
     """
-    valid_corridors = sorted(config.CORRIDOR_ENDPOINTS)
-    if corridor not in config.CORRIDOR_ENDPOINTS:
+    valid_corridors = sorted(config.LEGACY_CORRIDOR_ENDPOINTS)
+    if corridor not in config.LEGACY_CORRIDOR_ENDPOINTS:
         raise ValueError(
             f"ablation_basis_report: unknown corridor {corridor!r} -- "
             f"valid corridors: {valid_corridors}"
@@ -2058,8 +2060,8 @@ def ablation_basis_report(
     if block_lengths is None:
         block_lengths = _DEFAULT_ABLATION_BLOCK_LENGTHS
 
-    city_a, city_b = config.CORRIDOR_ENDPOINTS[corridor]
-    geometry = corridor_discretization.corridor_geometry(corridor)
+    city_a, city_b = config.LEGACY_CORRIDOR_ENDPOINTS[corridor]
+    geometry = legacy_corridor.corridor_geometry(corridor)
 
     # ---- Assemble the real ABLATION-basis corridor frame, the SAME
     # boundary/filter/pin-safety-clip discipline build_basis_manifest and
@@ -2532,8 +2534,8 @@ def _fresh_confirmation_report(
     confirmation read, not permission to skip the sample-size requirement
     the protocol itself sets.
     """
-    valid_corridors = sorted(config.CORRIDOR_ENDPOINTS)
-    if corridor not in config.CORRIDOR_ENDPOINTS:
+    valid_corridors = sorted(config.LEGACY_CORRIDOR_ENDPOINTS)
+    if corridor not in config.LEGACY_CORRIDOR_ENDPOINTS:
         raise ValueError(
             f"_fresh_confirmation_report: unknown corridor {corridor!r} -- "
             f"valid corridors: {valid_corridors}"
@@ -2551,8 +2553,8 @@ def _fresh_confirmation_report(
     if fresh_manifest_path is None:
         fresh_manifest_path = DEFAULT_MANIFEST_PATH
 
-    city_a, city_b = config.CORRIDOR_ENDPOINTS[corridor]
-    geometry = corridor_discretization.corridor_geometry(corridor)
+    city_a, city_b = config.LEGACY_CORRIDOR_ENDPOINTS[corridor]
+    geometry = legacy_corridor.corridor_geometry(corridor)
 
     # ---- Row-count check FIRST, before any frame is even assembled --
     # refuses an under-powered sample without ever touching a FRESH-basis
@@ -2878,8 +2880,8 @@ def fresh_basis_attempt(
 
     Raises `ValueError` naming the valid corridors for an unknown one.
     """
-    valid_corridors = sorted(config.CORRIDOR_ENDPOINTS)
-    if corridor not in config.CORRIDOR_ENDPOINTS:
+    valid_corridors = sorted(config.LEGACY_CORRIDOR_ENDPOINTS)
+    if corridor not in config.LEGACY_CORRIDOR_ENDPOINTS:
         raise ValueError(
             f"fresh_basis_attempt: unknown corridor {corridor!r} -- valid "
             f"corridors: {valid_corridors}"
@@ -3186,8 +3188,8 @@ def convection_crossover_wind_speed(corridor: str, *, air_temp_c: float = None) 
             conductor configuration pathological enough to warrant direct
             investigation, not a silent fallback).
     """
-    valid_corridors = sorted(config.CORRIDOR_ENDPOINTS)
-    if corridor not in config.CORRIDOR_ENDPOINTS:
+    valid_corridors = sorted(config.LEGACY_CORRIDOR_ENDPOINTS)
+    if corridor not in config.LEGACY_CORRIDOR_ENDPOINTS:
         raise ValueError(
             f"convection_crossover_wind_speed: unknown corridor {corridor!r} "
             f"-- valid corridors: {valid_corridors}"
@@ -3195,7 +3197,7 @@ def convection_crossover_wind_speed(corridor: str, *, air_temp_c: float = None) 
     if air_temp_c is None:
         air_temp_c = _DEFAULT_CROSSOVER_AIR_TEMP_C
 
-    geometry = corridor_discretization.corridor_geometry(corridor)
+    geometry = legacy_corridor.corridor_geometry(corridor)
     conductor = geometry.conductor
 
     natural = float(np.asarray(thermal_model.natural_convection(air_temp_c, conductor)))
@@ -3289,8 +3291,8 @@ def overrating_by_regime(
             not partition every scored row (should not occur by
             construction; asserted defensively).
     """
-    valid_corridors = sorted(config.CORRIDOR_ENDPOINTS)
-    if corridor not in config.CORRIDOR_ENDPOINTS:
+    valid_corridors = sorted(config.LEGACY_CORRIDOR_ENDPOINTS)
+    if corridor not in config.LEGACY_CORRIDOR_ENDPOINTS:
         raise ValueError(
             f"overrating_by_regime: unknown corridor {corridor!r} -- valid "
             f"corridors: {valid_corridors}"
@@ -3298,7 +3300,7 @@ def overrating_by_regime(
     if minimum_bin_rows is None:
         minimum_bin_rows = _DEFAULT_MINIMUM_BIN_ROWS
 
-    geometry = corridor_discretization.corridor_geometry(corridor)
+    geometry = legacy_corridor.corridor_geometry(corridor)
     scored_frame = scored_frame.reset_index(drop=True)
     truth = scored_frame["truth_dlr_amps"].to_numpy(dtype=float)
     prediction = np.asarray(prediction, dtype=float)
@@ -3540,8 +3542,8 @@ def _quantile_source_frame(corridor: str, *, lead_hours: int = None) -> dict:
             own minimum timestamp (the same out-of-sample assertion
             `ablation_basis_report` makes).
     """
-    valid_corridors = sorted(config.CORRIDOR_ENDPOINTS)
-    if corridor not in config.CORRIDOR_ENDPOINTS:
+    valid_corridors = sorted(config.LEGACY_CORRIDOR_ENDPOINTS)
+    if corridor not in config.LEGACY_CORRIDOR_ENDPOINTS:
         raise ValueError(
             f"_quantile_source_frame: unknown corridor {corridor!r} -- "
             f"valid corridors: {valid_corridors}"
@@ -3549,8 +3551,8 @@ def _quantile_source_frame(corridor: str, *, lead_hours: int = None) -> dict:
     if lead_hours is None:
         lead_hours = config.FORECAST_EXPERIMENT_PRIMARY_LEAD_HOURS
 
-    city_a, city_b = config.CORRIDOR_ENDPOINTS[corridor]
-    geometry = corridor_discretization.corridor_geometry(corridor)
+    city_a, city_b = config.LEGACY_CORRIDOR_ENDPOINTS[corridor]
+    geometry = legacy_corridor.corridor_geometry(corridor)
 
     corridor_frame = forecast_experiment.corridor_anchored_pair_frame(
         corridor, FROZEN_WINDOW_START, FROZEN_WINDOW_END, lead_hours=lead_hours,
@@ -4328,8 +4330,8 @@ def overrating_basis_report(
     Raises:
         ValueError: naming the valid corridors, for an unknown one.
     """
-    valid_corridors = sorted(config.CORRIDOR_ENDPOINTS)
-    if corridor not in config.CORRIDOR_ENDPOINTS:
+    valid_corridors = sorted(config.LEGACY_CORRIDOR_ENDPOINTS)
+    if corridor not in config.LEGACY_CORRIDOR_ENDPOINTS:
         raise ValueError(
             f"overrating_basis_report: unknown corridor {corridor!r} -- "
             f"valid corridors: {valid_corridors}"
@@ -4386,7 +4388,7 @@ def overrating_basis_report(
         fit_frame, calibrate_frame, evaluate_frame, candidate_names=real_candidate_names, alphas=alphas,
     )
 
-    city_a, city_b = config.CORRIDOR_ENDPOINTS[corridor]
+    city_a, city_b = config.LEGACY_CORRIDOR_ENDPOINTS[corridor]
     static_reference_amps = min(
         config.STATIC_RATINGS.get(city_a, config.DEFAULT_STATIC_RATING),
         config.STATIC_RATINGS.get(city_b, config.DEFAULT_STATIC_RATING),
@@ -4529,8 +4531,8 @@ def low_wind_sensitivity_sweep(
     Raises:
         ValueError: naming the valid corridors, for an unknown one.
     """
-    valid_corridors = sorted(config.CORRIDOR_ENDPOINTS)
-    if corridor not in config.CORRIDOR_ENDPOINTS:
+    valid_corridors = sorted(config.LEGACY_CORRIDOR_ENDPOINTS)
+    if corridor not in config.LEGACY_CORRIDOR_ENDPOINTS:
         raise ValueError(
             f"low_wind_sensitivity_sweep: unknown corridor {corridor!r} -- "
             f"valid corridors: {valid_corridors}"
@@ -4540,7 +4542,7 @@ def low_wind_sensitivity_sweep(
     if ghi_wm2 is None:
         ghi_wm2 = _DEFAULT_SENSITIVITY_GHI_WM2
 
-    geometry = corridor_discretization.corridor_geometry(corridor)
+    geometry = legacy_corridor.corridor_geometry(corridor)
     conductor = geometry.conductor
 
     crossover_result = convection_crossover_wind_speed(corridor, air_temp_c=air_temp_c)
@@ -4928,8 +4930,8 @@ def cooling_correction_ceiling_finding(corridor: str, *, lead_hours: int = None)
     Raises:
         ValueError: naming the valid corridors, for an unknown one.
     """
-    valid_corridors = sorted(config.CORRIDOR_ENDPOINTS)
-    if corridor not in config.CORRIDOR_ENDPOINTS:
+    valid_corridors = sorted(config.LEGACY_CORRIDOR_ENDPOINTS)
+    if corridor not in config.LEGACY_CORRIDOR_ENDPOINTS:
         raise ValueError(
             f"cooling_correction_ceiling_finding: unknown corridor "
             f"{corridor!r} -- valid corridors: {valid_corridors}"
@@ -4937,8 +4939,8 @@ def cooling_correction_ceiling_finding(corridor: str, *, lead_hours: int = None)
     if lead_hours is None:
         lead_hours = config.FORECAST_EXPERIMENT_PRIMARY_LEAD_HOURS
 
-    city_a, city_b = config.CORRIDOR_ENDPOINTS[corridor]
-    geometry = corridor_discretization.corridor_geometry(corridor)
+    city_a, city_b = config.LEGACY_CORRIDOR_ENDPOINTS[corridor]
+    geometry = legacy_corridor.corridor_geometry(corridor)
 
     corridor_frame = forecast_experiment.corridor_anchored_pair_frame(
         corridor, FROZEN_WINDOW_START, FROZEN_WINDOW_END, lead_hours=lead_hours,
@@ -5407,8 +5409,8 @@ def lag_vs_covariate_ablation(corridor: str, *, block_lengths=None, report_path:
             own max timestamp is not strictly before the scored frame's own
             min timestamp (the measurement would not be out-of-sample).
     """
-    valid_corridors = sorted(config.CORRIDOR_ENDPOINTS)
-    if corridor not in config.CORRIDOR_ENDPOINTS:
+    valid_corridors = sorted(config.LEGACY_CORRIDOR_ENDPOINTS)
+    if corridor not in config.LEGACY_CORRIDOR_ENDPOINTS:
         raise ValueError(
             f"lag_vs_covariate_ablation: unknown corridor {corridor!r} -- "
             f"valid corridors: {valid_corridors}"
@@ -5419,7 +5421,7 @@ def lag_vs_covariate_ablation(corridor: str, *, block_lengths=None, report_path:
         report_path = _ablation_features_report_path(corridor)
 
     lead_hours = config.FORECAST_EXPERIMENT_PRIMARY_LEAD_HOURS
-    city_a, city_b = config.CORRIDOR_ENDPOINTS[corridor]
+    city_a, city_b = config.LEGACY_CORRIDOR_ENDPOINTS[corridor]
 
     partition = _feature_column_partition()
     lag_cols, covariate_cols, all_cols = partition["lag"], partition["covariate"], partition["all"]

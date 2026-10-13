@@ -1,10 +1,12 @@
 """
+FROZEN: reproduces the completed corridor-based 2026 experiment (docs/data-science/decisions/point_scope.md). Uses legacy_corridor; do not extend.
+
 Ampacity Forecast Experiment Harness -- Anchored Pair Frame + Arm Scoring
 (D-01 legacy 1h arm + D-04 PRIMARY 24h arm, Phase 3 experiment)
 ==========================================================================
 Standalone offline entry point -- NOT imported by the runtime pipeline,
 mirroring `forecast_training.py`/`anomaly_training.py`'s own convention.
-Imports `ampacity_forecast`, `config`, `corridor_discretization`,
+Imports `ampacity_forecast`, `config`, `legacy_corridor`,
 `experiment_splits`, `forecast_training` (for `corridor_weakest_link` only --
 Plan 03-04, the repository's ONE weakest-link reduction, never a second
 copy), `open_meteo_forecast_provider`, `open_meteo_provider`,
@@ -113,7 +115,7 @@ import scipy.stats
 
 import ampacity_forecast
 import config
-import corridor_discretization
+import legacy_corridor
 import experiment_splits
 import forecast_correction_models
 import forecast_training
@@ -282,10 +284,10 @@ def _guard_test_split_access(split_name: str) -> None:
 
 def _corridor_for_city(city: str) -> str:
     """
-    Reverse-lookup: the one corridor in `config.CORRIDOR_ENDPOINTS` whose
+    Reverse-lookup: the one corridor in `config.LEGACY_CORRIDOR_ENDPOINTS` whose
     endpoints include `city`. Task 3 scores at CITY level, but
     `thermal_model.ieee738_ampacity` needs a per-corridor `ConductorConfig`
-    and bearing (`corridor_discretization.corridor_geometry`) -- the
+    and bearing (`legacy_corridor.corridor_geometry`) -- the
     conductor config is per-corridor even though this module scores one
     city at a time (03-01-PLAN.md Task 3 read_first).
 
@@ -293,13 +295,13 @@ def _corridor_for_city(city: str) -> str:
         ValueError: naming `city` and the valid cities, if `city` is not
             an endpoint of any corridor.
     """
-    for corridor, (city_a, city_b) in config.CORRIDOR_ENDPOINTS.items():
+    for corridor, (city_a, city_b) in config.LEGACY_CORRIDOR_ENDPOINTS.items():
         if city in (city_a, city_b):
             return corridor
-    valid = sorted({c for pair in config.CORRIDOR_ENDPOINTS.values() for c in pair})
+    valid = sorted({c for pair in config.LEGACY_CORRIDOR_ENDPOINTS.values() for c in pair})
     raise ValueError(
         f"forecast_experiment: {city!r} is not an endpoint of any corridor "
-        f"in config.CORRIDOR_ENDPOINTS; valid cities: {valid}"
+        f"in config.LEGACY_CORRIDOR_ENDPOINTS; valid cities: {valid}"
     )
 
 
@@ -365,7 +367,7 @@ def _city_ampacity(air_temp, wind_speed, wind_direction, solar_radiation, geomet
 # bearing to turn weather into amps via `_city_ampacity`) and returning a
 # callable of the scored frame. Nothing is bound to a geometry at import
 # time; a caller resolves the geometry for its own corridor/city first
-# (`corridor_discretization.corridor_geometry`), then builds each arm's
+# (`legacy_corridor.corridor_geometry`), then builds each arm's
 # callable from it. Order below is significant ONLY for report readability
 # (the order candidates print in) -- it has no effect on scoring. The
 # oracle's membership in this mapping does NOT make it a candidate: Task 2's
@@ -588,7 +590,7 @@ def anchored_pair_frame(city: str, start=None, end=None, *, lead_hours: int) -> 
         return cached
 
     lat, lon = config.CITY_COORDINATES[city]
-    geometry = corridor_discretization.corridor_geometry(_corridor_for_city(city))
+    geometry = legacy_corridor.corridor_geometry(_corridor_for_city(city))
 
     truth = open_meteo_provider.fetch_open_meteo(lat, lon, start, end)
     truth = truth.sort_values("datetime_utc").reset_index(drop=True)
@@ -749,7 +751,7 @@ def _bottleneck_counts(bottleneck_index, corridor: str) -> dict:
     endpoints -- the per-corridor bottleneck distribution Task 2's report
     extension carries.
     """
-    city_a, city_b = config.CORRIDOR_ENDPOINTS[corridor]
+    city_a, city_b = config.LEGACY_CORRIDOR_ENDPOINTS[corridor]
     idx = np.asarray(bottleneck_index)
     return {city_a: int(np.sum(idx == 0)), city_b: int(np.sum(idx == 1))}
 
@@ -782,7 +784,7 @@ def corridor_anchored_pair_frame(corridor: str, start=None, end=None, *, lead_ho
         anchor group's own winning-city selection, since an arm's own
         bottleneck city need not match either of those.
     On an exact ampacity tie in any group, the bottleneck resolves to the
-    first endpoint city (`config.CORRIDOR_ENDPOINTS[corridor][0]`), matching
+    first endpoint city (`config.LEGACY_CORRIDOR_ENDPOINTS[corridor][0]`), matching
     `corridor_weakest_link`'s own documented tie-break.
 
     Returns a DataFrame with `datetime_utc`, `anchor_datetime_utc`,
@@ -798,7 +800,7 @@ def corridor_anchored_pair_frame(corridor: str, start=None, end=None, *, lead_ho
     join on `datetime_utc` drops rows relative to either city's own
     assembled frame -- never silently.
     """
-    city_a, city_b = config.CORRIDOR_ENDPOINTS[corridor]
+    city_a, city_b = config.LEGACY_CORRIDOR_ENDPOINTS[corridor]
     frame_a = anchored_pair_frame(city_a, start, end, lead_hours=lead_hours)
     frame_b = anchored_pair_frame(city_b, start, end, lead_hours=lead_hours)
 
@@ -810,7 +812,7 @@ def corridor_anchored_pair_frame(corridor: str, start=None, end=None, *, lead_ho
             corridor, city_a, len(frame_a), city_b, len(frame_b), len(merged),
         )
 
-    geometry = corridor_discretization.corridor_geometry(corridor)
+    geometry = legacy_corridor.corridor_geometry(corridor)
 
     result = pd.DataFrame({"datetime_utc": merged["datetime_utc"]})
     result["anchor_datetime_utc"] = merged["anchor_datetime_utc_a"]
@@ -1016,7 +1018,7 @@ def _stacked_pair_frame(corridor: str, start=None, end=None, *, lead_hours: int)
     genuine hourly cadence for its lag features; callers that need arms 3
     or 4's exact-lead invariant apply `filter_to_exact_lead` themselves.
     """
-    city_a, city_b = config.CORRIDOR_ENDPOINTS[corridor]
+    city_a, city_b = config.LEGACY_CORRIDOR_ENDPOINTS[corridor]
     frame_a = anchored_pair_frame(city_a, start, end, lead_hours=lead_hours).copy()
     frame_a["endpoint_city"] = city_a
     frame_b = anchored_pair_frame(city_b, start, end, lead_hours=lead_hours).copy()
@@ -1682,7 +1684,7 @@ def _run_city_tracer(city, start, end, lead_hours, lead_cfg):
     _guard_test_split_access("val")
     assert_exact_lead(val_scored, lead_hours=lead_hours)
 
-    geometry = corridor_discretization.corridor_geometry(_corridor_for_city(city))
+    geometry = legacy_corridor.corridor_geometry(_corridor_for_city(city))
 
     # The 24-hour persistence arm's prediction is the anchor group's
     # ampacity DIRECTLY -- built by anchored_pair_frame as a shift of the
@@ -1923,7 +1925,7 @@ def _run_corridor(corridor, start, end, lead_hours, lead_cfg, split):
     scored_frame = {"val": val_filtered, "test": test_filtered}[split]
     assert_exact_lead(scored_frame, lead_hours=lead_hours)
 
-    geometry = corridor_discretization.corridor_geometry(corridor)
+    geometry = legacy_corridor.corridor_geometry(corridor)
 
     if split == "test":
         # Plan 03-06 Task 3: the phase's one irreversible step. Fit arms
@@ -2023,9 +2025,9 @@ def main(argv=None):
         "(the default), this module scores at CORRIDOR level instead.",
     )
     parser.add_argument(
-        "--corridor", choices=sorted(config.CORRIDOR_ENDPOINTS), default=None,
+        "--corridor", choices=sorted(config.LEGACY_CORRIDOR_ENDPOINTS), default=None,
         help="Corridor to score in corridor-level mode. Default: every "
-        "corridor in config.CORRIDOR_ENDPOINTS. Ignored when --city is given.",
+        "corridor in config.LEGACY_CORRIDOR_ENDPOINTS. Ignored when --city is given.",
     )
     parser.add_argument(
         "--start", default=None,
@@ -2065,7 +2067,7 @@ def main(argv=None):
         _run_city_tracer(args.city, start, end, lead_hours, lead_cfg)
         return
 
-    corridors = [args.corridor] if args.corridor else sorted(config.CORRIDOR_ENDPOINTS)
+    corridors = [args.corridor] if args.corridor else sorted(config.LEGACY_CORRIDOR_ENDPOINTS)
     for corridor in corridors:
         _run_corridor(corridor, start, end, lead_hours, lead_cfg, args.split)
 

@@ -28,11 +28,10 @@ import wind_vector as wv
 
 class _FakeGeometry:
     """
-    Minimal `corridor_discretization.CorridorGeometry` duck type
-    (`bearing_deg`, `conductor`) -- `forecast_correction_models` never
-    imports `corridor_discretization` itself (staying decoupled from the
-    experiment harness's own geometry construction), so tests supply their
-    own lightweight stand-in.
+    Minimal `city_point.CityPoint` duck type (`bearing_deg`, `conductor`)
+    -- `forecast_correction_models` never imports `city_point` itself
+    (staying decoupled from the callers' own geometry construction), so
+    tests supply their own lightweight stand-in.
     """
 
     def __init__(self, bearing_deg=90.0, conductor=None):
@@ -49,7 +48,7 @@ def _synthetic_wind_frame(
     two_cities=True, geometry=None,
 ):
     """
-    Deterministic corridor-shaped synthetic frame for the wind-correction
+    Deterministic synthetic frame for the wind-correction
     family: `fcst_wind_*` is the truth wind offset by a constant (u, v)
     vector plus noise, `anchor_wind_*` is a noisy observation of truth,
     and `truth_ampacity` is computed directly through `thermal_model` from
@@ -667,3 +666,27 @@ def test_select_cooling_configuration_signature_has_no_test_frame_param():
 
     params = list(inspect.signature(m.select_cooling_configuration).parameters)
     assert not any("test" in p.lower() for p in params), params
+
+
+def test_wind_correction_per_city_fits_single_city_with_city_column():
+    frame = _synthetic_wind_frame(two_cities=False).rename(
+        columns={"endpoint_city": "city"}
+    )
+    frame["city"] = "AUSTIN"
+    train, test = frame.iloc[:160], frame.iloc[160:]
+    factory = next(iter(m.WIND_CORRECTION_ESTIMATORS.values()))
+    model = m.fit_wind_correction(train, factory, pooling="per_city")
+    assert list(model.models) == ["AUSTIN"]
+    prediction = m.predict_wind_correction(model, test)
+    assert len(prediction.speed) == len(test)
+
+
+def test_select_wind_configuration_single_city_skips_pooled():
+    frame = _synthetic_wind_frame(two_cities=False).rename(
+        columns={"endpoint_city": "city"}
+    )
+    frame["city"] = "AUSTIN"
+    result = m.select_wind_configuration(
+        frame.iloc[:150], frame.iloc[150:], _FakeGeometry()
+    )
+    assert {v["pooling"] for v in result["scores"].values()} == {"per_city"}

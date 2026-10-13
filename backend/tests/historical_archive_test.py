@@ -1,11 +1,11 @@
 """
 Tests for backend/historical_archive.py -- shared C9/C10 support (D-07's
-locked 11-column row schema, D-08's per-corridor granularity, D-09's
+locked 11-column row schema, one row per city per run, D-09's
 append-only CSV storage).
 
 Every test writes under `tmp_path` so no test ever touches
 `config.HISTORICAL_ARCHIVE_PATH`. Follows
-backend/tests/corridor_discretization_test.py's conventions (module-level
+backend/tests/city_rating_test.py's conventions (module-level
 imports, plain asserts, no classes, no network).
 """
 
@@ -18,11 +18,11 @@ import historical_archive as ha
 import units_def
 
 
-def _row(air_temp=25.0, corridor="AUSTIN_CORPUS_CHRISTI", dlr_amps=1200.0,
+def _row(air_temp=25.0, city="AUSTIN", dlr_amps=1200.0,
          datetime_utc="2026-01-01T00:00:00"):
     return {
         "datetime_utc": datetime_utc,
-        "corridor": corridor,
+        "city": city,
         "air_temp": air_temp,
         "wind_speed": 5.0,
         "solar_radiation": 500.0,
@@ -109,21 +109,21 @@ def test_read_history_validate_false_returns_every_row(tmp_path):
     assert len(df) == 2
 
 
-def test_read_history_filters_by_corridor(tmp_path):
+def test_read_history_filters_by_city(tmp_path):
     path = tmp_path / "ampacity_history.csv"
     assert ha.append_observation(
-        _row(corridor="AUSTIN_CORPUS_CHRISTI", datetime_utc="2026-01-01T00:00:00"),
+        _row(city="AUSTIN", datetime_utc="2026-01-01T00:00:00"),
         path=str(path),
     ) is True
     assert ha.append_observation(
-        _row(corridor="MIDLAND_EL_PASO", datetime_utc="2026-01-01T01:00:00"),
+        _row(city="MIDLAND", datetime_utc="2026-01-01T01:00:00"),
         path=str(path),
     ) is True
 
-    df = ha.read_history(path=str(path), corridor="AUSTIN_CORPUS_CHRISTI")
+    df = ha.read_history(path=str(path), city="AUSTIN")
 
     assert len(df) == 1
-    assert df.iloc[0]["corridor"] == "AUSTIN_CORPUS_CHRISTI"
+    assert df.iloc[0]["city"] == "AUSTIN"
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -137,7 +137,7 @@ def test_build_archive_row_validates_for_normal_and_fallback_readings():
 
     for check_result in (normal_result, fallback_result):
         row = ha.build_archive_row(
-            corridor="AUSTIN_CORPUS_CHRISTI",
+            city="AUSTIN",
             datetime_utc="2026-01-01T00:00:00",
             observation=observation,
             check_result=check_result,
@@ -150,7 +150,7 @@ def test_build_archive_row_validates_for_normal_and_fallback_readings():
 
 def test_build_archive_row_keys_and_schema_version():
     row = ha.build_archive_row(
-        corridor="AUSTIN_CORPUS_CHRISTI",
+        city="AUSTIN",
         datetime_utc="2026-01-01T00:00:00",
         observation={"temp": 25.0, "wind": 5.0, "solar": 500.0},
         check_result={"status": "ok", "rating": 1200.0, "fallback": False, "alerts": []},
@@ -163,7 +163,7 @@ def test_build_archive_row_keys_and_schema_version():
 
 def test_build_archive_row_numeric_values_are_python_floats():
     row = ha.build_archive_row(
-        corridor="AUSTIN_CORPUS_CHRISTI",
+        city="AUSTIN",
         datetime_utc="2026-01-01T00:00:00",
         observation={"temp": 25.0, "wind": 5.0, "solar": 500.0},
         check_result={"status": "ok", "rating": 1200.0, "fallback": False, "alerts": []},
@@ -188,3 +188,50 @@ def test_append_then_read_round_trips_dlr_amps_at_full_float_precision(tmp_path)
     df = ha.read_history(path=str(path))
 
     assert df.iloc[0]["dlr_amps"] == precise_value
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Corridor-era archive compatibility
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _legacy_row(**kw):
+    row = _row(**kw)
+    row["corridor"] = row.pop("city")
+    return row
+
+
+def test_read_history_exposes_legacy_corridor_column_as_city(tmp_path):
+    path = tmp_path / "legacy.csv"
+    legacy_columns = [c if c != "city" else "corridor" for c in ha.ARCHIVE_COLUMNS]
+    pd.DataFrame([_legacy_row(city="AUSTIN_CORPUS_CHRISTI")], columns=legacy_columns).to_csv(
+        path, index=False
+    )
+
+    df = ha.read_history(path=str(path))
+
+    assert "corridor" not in df.columns
+    assert df.iloc[0]["city"] == "AUSTIN_CORPUS_CHRISTI"
+    # A per-city filter never matches a legacy corridor row.
+    assert ha.read_history(path=str(path), city="AUSTIN").empty
+
+
+def test_append_to_legacy_file_keeps_columns_aligned(tmp_path):
+    path = tmp_path / "legacy.csv"
+    legacy_columns = [c if c != "city" else "corridor" for c in ha.ARCHIVE_COLUMNS]
+    pd.DataFrame([_legacy_row(city="MIDLAND_EL_PASO")], columns=legacy_columns).to_csv(
+        path, index=False
+    )
+
+    assert ha.append_observation(
+        _row(city="AUSTIN", datetime_utc="2026-01-02T00:00:00"), path=str(path)
+    ) is True
+
+    df = ha.read_history(path=str(path))
+    assert len(df) == 2
+    assert ha.read_history(path=str(path), city="AUSTIN").iloc[0]["dlr_amps"] == 1200.0
+
+
+def test_append_observation_accepts_corridor_keyed_row(tmp_path):
+    path = tmp_path / "a.csv"
+    assert ha.append_observation(_legacy_row(city="AUSTIN"), path=str(path)) is True
+    assert ha.read_history(path=str(path)).iloc[0]["city"] == "AUSTIN"

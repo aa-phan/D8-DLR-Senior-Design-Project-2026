@@ -25,18 +25,18 @@ default of 0 so Plan 04-03's construction sites are unaffected.
 
 v1.3 Phase 1 (01-01) adds a third, Tier-2 method: `method="ml"`, a real
 fitted `scikit-learn` estimator trained offline (`forecast_training.py`)
-on a real, Open-Meteo-backfill-derived per-corridor series and persisted
-per corridor under `config.FORECAST_ML_MODEL_DIR`. Unlike `"naive"`/
+on a real, Open-Meteo-backfill-derived per-city series and persisted
+per city under `config.FORECAST_ML_MODEL_DIR`. Unlike `"naive"`/
 `"ewm"`, `"ml"` is multivariate (D-04): it builds lagged-`dlr_amps` +
 weather features (`build_ml_features`) and selects its fitted model from
-`history["corridor"]` alone (D-05) -- no change to this module's public
+`history["city"]` alone (D-05) -- no change to this module's public
 `forecast_ampacity` signature. `_point_forecast` and `backtest_residuals`
 both gained optional `history`/`model` parameters so `"ml"` can see the
 weather columns naive/EWM never needed; those parameters are internal-only
 extensions (RESEARCH.md Pattern 1) and are inert for `"naive"`/`"ewm"`.
 Importing this module still performs no file I/O, no network call, and no
 `sklearn`/`joblib` import -- `joblib` is imported lazily inside
-`_load_corridor_model`, so naive/EWM keep working with `scikit-learn`
+`_load_model`, so naive/EWM keep working with `scikit-learn`
 absent.
 """
 
@@ -162,7 +162,7 @@ def build_ml_features(frame: pd.DataFrame) -> pd.DataFrame:
 def _extract_ml_frame(history: pd.DataFrame) -> pd.DataFrame:
     """
     Build the `"ml"` method's working frame from an archive-shaped
-    `history`: requires `dlr_amps`, `corridor`, `datetime_utc` and every
+    `history`: requires `dlr_amps`, `city`, `datetime_utc` and every
     column in `config.FORECAST_ML_FEATURE_WEATHER_COLUMNS`, raising
     `ValueError` naming the missing column(s) otherwise.
 
@@ -179,11 +179,17 @@ def _extract_ml_frame(history: pd.DataFrame) -> pd.DataFrame:
     apart.
     """
     required = (
-        {"dlr_amps", "corridor", "datetime_utc"}
+        {"dlr_amps", "city", "datetime_utc"}
         | set(config.FORECAST_ML_FEATURE_WEATHER_COLUMNS)
     )
     missing = sorted(required - set(history.columns))
     if missing:
+        if "city" in missing and "corridor" in history.columns:
+            raise ValueError(
+                "_extract_ml_frame: history has only the legacy 'corridor' "
+                "column (corridor-era archive schema); a per-city 'city' "
+                "column is required"
+            )
         raise ValueError(
             f"_extract_ml_frame: history is missing required column(s) {missing}"
         )
@@ -203,80 +209,99 @@ def _extract_ml_frame(history: pd.DataFrame) -> pd.DataFrame:
     return frame
 
 
-def _corridor_of(frame: pd.DataFrame) -> str:
+def _city_of(frame: pd.DataFrame) -> str:
     """
-    Return `frame`'s single `corridor` value.
+    Return `frame`'s single `city` value.
 
-    Raises `ValueError` naming both/all distinct values when `frame`
-    carries more than one corridor (`historical_archive.read_history(
-    corridor=...)` already filters to one corridor per call, so a mixed
-    frame reaching here is a caller bug, not a case to average over), and
-    raises naming the valid corridors when the single value is absent from
-    `config.CORRIDOR_ENDPOINTS` -- this is also the path-traversal guard
-    for `_model_path_for`: the corridor key is validated against a closed
-    set before it is ever formatted into a filename (T-01-03).
+    Raises `ValueError` naming all distinct values when `frame` carries
+    more than one city (`historical_archive.read_history(city=...)` already
+    filters to one city per call, so a mixed frame reaching here is a
+    caller bug, not a case to average over), and raises naming the valid
+    cities when the single value is absent from `config.LOCATIONS` -- this
+    is also the path-traversal guard for `_model_path_for`: the city key is
+    validated against a closed set before it is ever formatted into a
+    filename (T-01-03).
+
+    A frame that has only the legacy corridor-era `corridor` column (no
+    `city` column) is rejected with a clear error rather than guessed at:
+    corridor labels do not name a single city.
     """
-    corridors = frame["corridor"].unique().tolist()
-    if len(corridors) != 1:
+    if "city" not in frame.columns:
+        if "corridor" in frame.columns:
+            raise ValueError(
+                "_city_of: `history` has only the legacy 'corridor' column "
+                "(corridor-era archive schema); a per-city 'city' column is "
+                "required. Migrate the archive rather than guessing a city."
+            )
+        raise ValueError("_city_of: `history` has no 'city' column")
+
+    cities = frame["city"].unique().tolist()
+    if len(cities) != 1:
         raise ValueError(
-            f"_corridor_of: expected exactly one corridor in `history`, "
-            f"found {sorted(str(c) for c in corridors)}"
+            f"_city_of: expected exactly one city in `history`, "
+            f"found {sorted(str(c) for c in cities)}"
         )
 
-    corridor = corridors[0]
-    if corridor not in config.CORRIDOR_ENDPOINTS:
+    city = cities[0]
+    if city not in config.LOCATIONS:
         raise ValueError(
-            f"_corridor_of: unknown corridor {corridor!r}; valid corridors: "
-            f"{sorted(config.CORRIDOR_ENDPOINTS)}"
+            f"_city_of: unknown city {city!r}; valid cities: "
+            f"{sorted(config.LOCATIONS)}"
         )
-    return corridor
+    return city
 
 
-def _model_path_for(corridor: str) -> str:
+def _model_path_for(city: str) -> str:
     """
-    Resolve a corridor's persisted model artifact path. Built only from
+    Resolve a city's persisted model artifact path. Built only from
     `config.FORECAST_ML_MODEL_DIR` + `config.FORECAST_ML_MODEL_FILENAME_
     TEMPLATE` -- no function on the `"ml"` path accepts a caller-supplied
-    path (T-01-03); callers must go through `_corridor_of` first so
-    `corridor` is already validated against `config.CORRIDOR_ENDPOINTS`.
+    path (T-01-03); callers must go through `_city_of` first so `city` is
+    already validated against `config.LOCATIONS`.
     """
-    filename = config.FORECAST_ML_MODEL_FILENAME_TEMPLATE.format(corridor=corridor)
+    filename = config.FORECAST_ML_MODEL_FILENAME_TEMPLATE.format(city=city)
     return os.path.join(config.FORECAST_ML_MODEL_DIR, filename)
 
 
-# Per-corridor fitted-model cache, populated by `_load_corridor_model`.
+# Per-city fitted-model cache, populated by `_load_model`.
 _MODEL_CACHE: dict = {}
 
 
-def _load_corridor_model(corridor: str):
+def _load_model(city: str):
     """
-    Load (and cache) the persisted fitted estimator for `corridor`.
+    Load (and cache) the persisted fitted estimator for `city`.
 
     Imports `joblib` lazily, inside this function body, so `import
     ampacity_forecast` stays free of file I/O, network calls and any
     `sklearn`/`joblib` import -- naive/EWM keep working in an environment
     where `scikit-learn` is absent. Raises `FileNotFoundError` naming the
-    corridor, the expected path, and the training command that produces
-    it when the artifact does not exist -- this module never degrades to
-    another method when a model is missing (see this plan's prohibitions).
+    city, the expected path, and the training command that produces it when
+    the artifact does not exist -- this module never degrades to another
+    method when a model is missing (see this plan's prohibitions).
     """
-    if corridor in _MODEL_CACHE:
-        return _MODEL_CACHE[corridor]
+    if city in _MODEL_CACHE:
+        return _MODEL_CACHE[city]
 
-    path = _model_path_for(corridor)
+    path = _model_path_for(city)
     if not os.path.exists(path):
         raise FileNotFoundError(
-            f"_load_corridor_model: no trained model for corridor "
-            f"{corridor!r} at {path!r}. Train one with: "
+            f"_load_model: no trained model for city "
+            f"{city!r} at {path!r}. Train one with: "
             f".venv/bin/python3 backend/forecast_training.py "
-            f"--corridor {corridor}"
+            f"--city {city}"
         )
 
     import joblib  # lazy — keeps `import ampacity_forecast` sklearn-free
 
     model = joblib.load(path)
-    _MODEL_CACHE[corridor] = model
+    _MODEL_CACHE[city] = model
     return model
+
+
+# TEMPORARY alias for callers outside this module's ownership
+# (forecast_shadow_pipeline, forecast_shadow_fit_reference_refit); remove
+# once they call `_load_model`.
+_load_corridor_model = _load_model
 
 
 def _point_forecast(series: pd.Series, method: str, halflife_min=None,
@@ -371,7 +396,7 @@ def backtest_residuals(series: pd.Series, method: str, min_train_rows=None,
     RESEARCH.md Pitfall 1 warns about.
 
     `history` (v1.3 Phase 1) is required for `method="ml"`: the fitted
-    model for `history`'s corridor is loaded ONCE, before the loop (never
+    model for `history`'s city is loaded ONCE, before the loop (never
     refit per step — RESEARCH.md Pattern 4), and each step calls
     `_point_forecast` with that same fixed model plus `history.iloc[:i]`
     (the identical strict-prefix slice applied to `series`, since
@@ -399,7 +424,7 @@ def backtest_residuals(series: pd.Series, method: str, min_train_rows=None,
             raise ValueError(
                 "backtest_residuals: method='ml' requires the `history` frame"
             )
-        model = _load_corridor_model(_corridor_of(history))
+        model = _load_model(_city_of(history))
 
     residuals = np.empty(n - min_train_rows, dtype=float)
     for offset, i in enumerate(range(min_train_rows, n)):
@@ -457,7 +482,7 @@ def forecast_ampacity(history: pd.DataFrame, horizon_min=None, method="naive",
 
     if method == "ml":
         # _extract_ml_frame -> series from that frame -> same cold-start
-        # return of None -> load the model via _corridor_of ->
+        # return of None -> load the model via _city_of ->
         # _point_forecast(..., history=ml_frame, model=model) ->
         # backtest_residuals(..., history=ml_frame). No second path to
         # the four output columns; the quantile/clamp logic below is
@@ -468,7 +493,7 @@ def forecast_ampacity(history: pd.DataFrame, horizon_min=None, method="naive",
         if len(series) < min_rows:
             return None
 
-        model = _load_corridor_model(_corridor_of(ml_frame))
+        model = _load_model(_city_of(ml_frame))
         point_forecast = _point_forecast(
             series, method, halflife_min, history=ml_frame, model=model
         )

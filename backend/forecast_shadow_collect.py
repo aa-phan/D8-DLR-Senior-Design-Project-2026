@@ -14,13 +14,13 @@ Runnable today, by hand:
     PYTHONPATH=backend .venv/bin/python3 backend/forecast_shadow_collect.py
 
 Exit codes (for a cron/launchd wrapper to alert on):
-    0  every corridor was attempted and logged something (all five
+    0  every city in `config.LOCATIONS` (all four) was attempted and logged something (all five
        candidates' results, each independently ok/fallback/unavailable/
        failed -- `run_once_all_methods` itself never lets a retrieval/
        model/anchor failure escape uncaught; see
        `forecast_shadow_pipeline.ShadowPipeline.predict`).
     1  a hard failure escaped `run_once_all_methods` for at least one
-       corridor (a bug, not an expected fallback/unavailable condition
+       city (a bug, not an expected fallback/unavailable condition
        for any individual candidate) -- see stderr.
     2  skipped entirely: another invocation already holds the lock
        (duplicate-run protection -- see `_acquire_lock`). This is NOT a
@@ -41,12 +41,13 @@ import forecast_shadow_demo
 
 _LOCK_PATH = os.path.join("data", "shadow", ".collect.lock")
 
-# INTER_CORRIDOR_DELAY_S: a pause between corridors' live-provider requests.
-# Confirmed, not just hypothesized (2026-10-07): a one-off diagnostic run
-# that reversed corridor processing order made the SECOND corridor fail and
-# the first succeed, regardless of which corridor was which -- this is
-# purely position-dependent (always whichever request goes second), not
-# specific to either corridor or location. The exact real request (same
+# INTER_CITY_DELAY_S: a pause between cities' live-provider requests.
+# Confirmed, not just hypothesized (2026-10-07, when the unit was a
+# two-corridor cycle): a one-off diagnostic run that reversed processing
+# order made the SECOND unit fail and the first succeed, regardless of
+# which one was which -- this is purely position-dependent (always
+# whichever request goes second), not specific to any corridor, city or
+# location. The exact real request (same
 # run, same params) succeeds in well under a second when issued directly
 # from a non-CI machine, so this is not a defect in the request itself or
 # in Open-Meteo's run availability. Leading hypothesis: a per-IP rate limit
@@ -57,7 +58,7 @@ _LOCK_PATH = os.path.join("data", "shadow", ".collect.lock")
 # all, e.g. a retry-with-backoff might be needed instead). Do not assume
 # a larger number here is automatically correct without measuring it the
 # same way this value was tested.
-INTER_CORRIDOR_DELAY_S: float = 15.0
+INTER_CITY_DELAY_S: float = 15.0
 
 
 def _acquire_lock():
@@ -94,13 +95,13 @@ def collect_once() -> int:
 
     try:
         hard_failure = False
-        for i, corridor in enumerate(config.CORRIDOR_ENDPOINTS):
+        for i, city in enumerate(config.LOCATIONS):
             if i > 0:
-                # Only between corridors, never before the first -- see
-                # INTER_CORRIDOR_DELAY_S's own docstring for why this exists.
-                time.sleep(INTER_CORRIDOR_DELAY_S)
+                # Only between cities, never before the first -- see
+                # INTER_CITY_DELAY_S's own comment for why this exists.
+                time.sleep(INTER_CITY_DELAY_S)
             try:
-                forecast_shadow_demo.run_once_all_methods(corridor)
+                forecast_shadow_demo.run_once_all_methods(city)
             except Exception:
                 # A failure HERE means something escaped
                 # run_once_all_methods's own try/except entirely (a real
@@ -110,7 +111,7 @@ def collect_once() -> int:
                 # This is the failure-reporting path a cron wrapper's
                 # exit-code check is for.
                 hard_failure = True
-                print(f"forecast_shadow_collect: hard failure for corridor {corridor!r}:", file=sys.stderr)
+                print(f"forecast_shadow_collect: hard failure for city {city!r}:", file=sys.stderr)
                 traceback.print_exc(file=sys.stderr)
         return 1 if hard_failure else 0
     finally:

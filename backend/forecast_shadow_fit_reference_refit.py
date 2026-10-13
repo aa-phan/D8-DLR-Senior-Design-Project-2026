@@ -1,112 +1,101 @@
 """
 One-time offline fit+commit script for the `reference_ml_refit_24h` shadow
-candidate's persisted MLP artifact (Phase 5 Plan 04, D-03/D-04/D-09).
+candidate's persisted MLP artifact (Phase 5 Plan 04, D-03/D-04/D-09),
+fitted PER CITY since 2026-10-12 (`docs/data-science/decisions/
+point_scope.md`).
 
-**Run once, offline -- never by the scheduled collector.** This script is
-not imported by `forecast_shadow_pipeline.py`, `forecast_shadow_collect.py`,
-or any other runtime path; it is invoked directly (`python
-forecast_shadow_fit_reference_refit.py`) by a human, exactly once per
-corridor (or re-run only if the pinned train-plus-validation window ever
-needs to be extended). `forecast_shadow_collect.py`'s scheduled cycle never
-calls anything in this module -- it only ever loads the `.joblib` artifact
-this script writes, via `forecast_shadow_pipeline.load_correction_model`.
+**Run once per city, offline -- never by the scheduled collector.** This
+script is not imported by `forecast_shadow_pipeline.py`,
+`forecast_shadow_collect.py`, or any other runtime path; it is invoked
+directly (`python forecast_shadow_fit_reference_refit.py`) by a human, once
+per city in `config.LOCATIONS` (or re-run only if the pinned
+train-plus-validation window ever needs to be extended). The scheduled
+cycle never calls anything in this module -- it only ever loads the
+`.joblib` artifact this script writes, via `forecast_shadow_pipeline.
+load_correction_model`. Until a city has been refit, that city's
+`reference_ml_refit_24h` candidate reports `status="unavailable"` with a
+named reason (the `FileNotFoundError` path), never a crash.
 
-**Reuses, never reimplements.** Every step below calls an existing,
-already-tested `forecast_experiment`/`forecast_training` function verbatim
--- the exact arm-5 recipe `forecast_experiment.fit_fitted_arms` already
-runs (`backend/forecast_experiment.py` lines 1063-1140): `_stacked_pair_
-frame` -> `_arm5_truth_frame` -> `forecast_training.build_training_matrix
-(horizon_minutes=1440)` -> `forecast_training.fit_corridor_model(...,
-CANDIDATE_ESTIMATORS["MLPRegressor"]())`. This script adds no new training
-logic of its own; it only adds the "persist to `data/shadow/models/`"
-step `fit_fitted_arms` itself never performs (that function returns the
-fitted estimator in-memory for the audit harness, it never writes it to
-disk).
+**Target: that city's own ampacity.** The training series is one city's
+own archived truth weather (`open_meteo_provider.fetch_open_meteo`, the
+same Archive API source the frozen experiment's truth side used) run
+through `thermal_model.ieee738_ampacity` with `city_point.city_point(city)`'s
+bearing and conductor -- never a minimum over two cities. The recipe is
+otherwise arm 5's: `forecast_training.build_training_matrix(horizon_minutes
+=1440)` -> `forecast_training.fit_model(..., CANDIDATE_ESTIMATORS[
+"MLPRegressor"]())`.
 
-**Sole output: one `.joblib` artifact per corridor, committed.**
+**Pinned window.** Starts at `forecast_experiment_audit.FROZEN_WINDOW_START`
+and ends the day before `forecast_experiment_audit.FROZEN_TEST_SPLIT_START`
+(never the frozen test split itself -- D-09). Those two CONSTANTS are the
+only things imported from the frozen audit module; no corridor builder
+(`_stacked_pair_frame`, `_arm5_truth_frame`, `legacy_corridor`) is used.
+
+**Sole output: one `.joblib` artifact per city, committed.**
 `data/shadow/models/` is the one directory this project deliberately
 carved out of `.gitignore` for exactly this purpose -- `.gitignore`'s own
 comment: "`/data/shadow/models/` is DELIBERATELY NOT ignored (2026-10-06):
 the trained .joblib artifacts there must reach the GitHub Actions runner,
 which has no other way to obtain them (no network access to retrain...)".
-This script's two output files (`reference_ml_refit_24h_<corridor>.joblib`)
-land in that same carve-out, alongside the existing `ml_wind_corrected_*`/
-`ml_cooling_corrected_*` artifacts.
+Each output file is `reference_ml_refit_24h_<CITY>.joblib`, alongside the
+per-city `ml_wind_corrected_*`/`ml_cooling_corrected_*` artifacts. Legacy
+corridor-named artifacts there are not loaded and not touched.
 
 **Never touches `ampacity_forecast`'s production model/cache (D-03).**
-`forecast_training.fit_corridor_model` only ever calls `estimator.fit(...)`
--- it never calls `forecast_training.persist_corridor_model` (that
-function targets `ampacity_forecast`'s own 60-minute production artifact
-path) and never imports or touches `ampacity_forecast._load_corridor_model`
-or its process-global per-corridor model cache.
+`forecast_training.fit_model` only ever calls `estimator.fit(...)` -- it
+never calls `forecast_training.persist_model` (that function targets
+`ampacity_forecast`'s own 60-minute production artifact path) and never
+imports or touches `ampacity_forecast._load_model` or its process-global
+per-city model cache.
 """
 
 from __future__ import annotations
 
 import config
-import forecast_experiment
+import city_point
 import forecast_experiment_audit
+import forecast_shadow_fit_models
 import forecast_shadow_pipeline
-import forecast_training
+import open_meteo_provider
 
-_METHOD_NAME = "reference_ml_refit_24h"
+_METHOD_NAME = forecast_shadow_fit_models.REFERENCE_METHOD
 
 
 def _train_val_window_end() -> str:
+    """Delegates to `forecast_shadow_fit_models.train_val_window_end` (day before the test split)."""
+    return forecast_shadow_fit_models.train_val_window_end()
+
+
+def _city_truth_frame(city: str, start: str, end: str):
     """
-    The calendar day immediately before `FROZEN_TEST_SPLIT_START`, as an
-    ISO date string -- never the frozen test split itself (D-09: this
-    offline fit must never read a FRESH-basis/test-split row).
+    `city`'s own hourly archive truth over `[start, end]` (network), shaped
+    by the shared `forecast_shadow_fit_models.weather_to_arm5_frame`.
     """
-    import pandas as pd
-
-    test_split_start = pd.Timestamp(forecast_experiment_audit.FROZEN_TEST_SPLIT_START)
-    day_before = test_split_start - pd.Timedelta(days=1)
-    return day_before.strftime("%Y-%m-%d")
+    lat, lon = city_point.city_point(city).coord
+    truth = open_meteo_provider.fetch_open_meteo(lat, lon, start, end)
+    return forecast_shadow_fit_models.weather_to_arm5_frame(truth, city)
 
 
-def fit_and_save(corridor: str) -> str:
+def fit_and_save(city: str) -> str:
     """
-    Fit `reference_ml_refit_24h`'s MLP estimator for `corridor` on the
-    pinned train-plus-validation window, via arm 5's exact recipe, and
-    persist it under `data/shadow/models/` via `forecast_shadow_pipeline.
-    save_correction_model`.
-
-    Calls, in this exact order, the three functions this task's `<action>`
-    names: `forecast_experiment._arm5_truth_frame`, `forecast_training.
-    build_training_matrix(horizon_minutes=1440)`, `forecast_training.
-    fit_corridor_model(..., CANDIDATE_ESTIMATORS["MLPRegressor"]())`.
-
-    Returns the path `save_correction_model` wrote to. Prints the row
-    count the estimator was fit on (`len(X5)`) and the written path --
-    this script's one piece of operational honesty: a reader running it
-    later should see how much data the artifact was fit on without
-    re-deriving it.
+    Fit ONLY `reference_ml_refit_24h` for `city` from live Archive-API truth
+    (network) and persist it. The offline, cache-based refit of all three
+    candidates is `forecast_shadow_fit_models.fit_city`; both share the same
+    arm-5 fit (`fit_reference_estimator`). Returns the path written.
     """
-    city_a, city_b = config.CORRIDOR_ENDPOINTS[corridor]
-
-    train_val_frame = forecast_experiment._stacked_pair_frame(
-        corridor,
-        forecast_experiment_audit.FROZEN_WINDOW_START,
-        _train_val_window_end(),
-        lead_hours=config.FORECAST_EXPERIMENT_PRIMARY_LEAD_HOURS,
+    arm5_frame = _city_truth_frame(
+        city, forecast_experiment_audit.FROZEN_WINDOW_START, _train_val_window_end(),
     )
-
-    arm5_frame = forecast_experiment._arm5_truth_frame(train_val_frame, city_a, city_b)
-    X5, y5 = forecast_training.build_training_matrix(arm5_frame, horizon_minutes=1440)
-    estimator = forecast_training.fit_corridor_model(
-        X5, y5, forecast_training.CANDIDATE_ESTIMATORS["MLPRegressor"]()
-    )
-
-    path = forecast_shadow_pipeline.save_correction_model(estimator, corridor, _METHOD_NAME)
-    print(f"fit_and_save({corridor!r}): fit on {len(X5)} row(s) -- wrote {path!r}")
+    estimator, n_rows = forecast_shadow_fit_models.fit_reference_estimator(arm5_frame)
+    path = forecast_shadow_pipeline.save_correction_model(estimator, city, _METHOD_NAME)
+    print(f"fit_and_save({city!r}): fit on {n_rows} row(s) -- wrote {path!r}")
     return path
 
 
 def main() -> None:
-    for corridor in config.CORRIDOR_ENDPOINTS:
-        path = fit_and_save(corridor)
-        print(f"{corridor}: {path}")
+    for city in config.LOCATIONS:
+        path = fit_and_save(city)
+        print(f"{city}: {path}")
 
 
 if __name__ == "__main__":

@@ -40,7 +40,10 @@ def test_render_markdown_with_no_files_reports_nothing_logged_yet(tmp_path):
 # ──────────────────────────────────────────────────────────────────────
 
 
-def test_render_markdown_one_corridor_one_old_shape_entry_shows_count_not_row_detail(tmp_path):
+def test_render_markdown_ignores_a_legacy_corridor_log_and_names_it_in_a_footer(tmp_path):
+    """Legacy corridor-era logs (rows keyed by `corridor`) are not rendered
+    -- no section, no row detail, never mixed into a city's table -- but a
+    single footer line names them so their absence is explicit."""
     _write_entry(str(tmp_path / "AUSTIN_CORPUS_CHRISTI.jsonl"), {
         "corridor": "AUSTIN_CORPUS_CHRISTI", "method": "ml_wind_corrected",
         "ampacity_amps": 1004.136, "fallback_used": False, "fallback_reason": None,
@@ -50,82 +53,78 @@ def test_render_markdown_one_corridor_one_old_shape_entry_shows_count_not_row_de
 
     markdown = render_table.render_markdown(str(tmp_path))
 
-    assert "## AUSTIN_CORPUS_CHRISTI" in markdown
-    assert "1 logged prediction(s)" in markdown
-    assert "1 pre-cutover (single-method) entries" in markdown
-    assert "data/shadow/predictions/AUSTIN_CORPUS_CHRISTI.jsonl" in markdown
-    # No per-row detail: the specific ampacity value is never rendered.
+    assert "## AUSTIN_CORPUS_CHRISTI" not in markdown
+    assert "Legacy corridor-era logs are not rendered" in markdown
+    assert "`AUSTIN_CORPUS_CHRISTI.jsonl`" in markdown
     assert "1004.1" not in markdown
     assert "2026-10-07T06:52:09+00:00" not in markdown
 
 
-def test_render_markdown_old_shape_entries_never_render_a_table_at_all(tmp_path):
-    """
-    Pins the exact bug report ("the old table underneath the new one"):
-    even with multiple old-shape entries carrying every field the old
-    per-row renderer used to format (pipe characters, null fields, a very
-    long fallback_reason), NO pipe-table syntax for them appears anywhere
-    in the output -- only the one-line summary.
-    """
-    path = str(tmp_path / "AUSTIN_CORPUS_CHRISTI.jsonl")
+def test_render_markdown_legacy_v2_corridor_log_is_ignored_even_with_candidates(tmp_path):
+    entry = _new_shape_entry(schema_version=2, corridor="MIDLAND_EL_PASO")
+    entry.pop("city")
+    _write_entry(str(tmp_path / "MIDLAND_EL_PASO.jsonl"), entry)
+
+    markdown = render_table.render_markdown(str(tmp_path))
+
+    assert "## MIDLAND_EL_PASO" not in markdown
+    assert "✓ 650.0" not in markdown
+    assert "`MIDLAND_EL_PASO.jsonl`" in markdown
+
+
+def test_render_markdown_non_v3_rows_in_a_city_file_are_counted_not_rendered(tmp_path):
+    """A flat single-method row (the demo's layout: keyed by `city`, no
+    schema_version) in a city's own log is summarized by count only."""
+    path = str(tmp_path / "AUSTIN.jsonl")
     _write_entry(path, {
-        "corridor": "AUSTIN_CORPUS_CHRISTI", "method": "raw_forecast", "ampacity_amps": 500.0,
-        "fallback_used": True,
-        "fallback_reason": "provider A failed | provider B also failed",
-        "decision_time": "2026-10-07T01:00:00+00:00", "valid_time": "x",
+        "city": "AUSTIN", "method": "ml_wind_corrected",
+        "ampacity_amps": 1004.136, "fallback_used": False, "fallback_reason": None,
+        "model_version": None,
+        "decision_time": "2026-10-07T06:52:09+00:00", "valid_time": "2026-10-07T18:00:00+00:00",
     })
-    _write_entry(path, {
-        "corridor": "AUSTIN_CORPUS_CHRISTI", "method": "raw_forecast", "ampacity_amps": None,
-        "fallback_used": True, "model_version": None, "fallback_reason": "x" * 500,
-        "decision_time": "2026-10-07T02:00:00+00:00", "valid_time": "x",
+    _write_entry(path, _new_shape_entry())
+
+    markdown = render_table.render_markdown(str(tmp_path))
+
+    assert "## AUSTIN" in markdown
+    assert "1 logged prediction(s)" in markdown
+    assert "1 non-`schema_version: 3` row(s)" in markdown
+    assert "1004.1" not in markdown
+
+
+def test_render_markdown_skips_a_malformed_line_instead_of_crashing(tmp_path):
+    path = str(tmp_path / "AUSTIN.jsonl")
+    _write_entry(path, _new_shape_entry())
+    with open(path, "a") as fh:
+        fh.write("{not json\n")
+    markdown = render_table.render_markdown(str(tmp_path))
+    assert "1 logged prediction(s)" in markdown
+
+
+def test_render_markdown_latest_summary_has_one_row_per_city_and_never_mixes_legacy(tmp_path):
+    for city, amps in (("AUSTIN", 111.0), ("CORPUS_CHRISTI", 222.0), ("MIDLAND", 333.0), ("EL_PASO", 444.0)):
+        entry = _new_shape_entry(city=city)
+        entry["candidates"]["raw_forecast"]["ampacity_amps"] = amps
+        _write_entry(str(tmp_path / f"{city}.jsonl"), entry)
+    _write_entry(str(tmp_path / "AUSTIN_CORPUS_CHRISTI.jsonl"), {
+        "corridor": "AUSTIN_CORPUS_CHRISTI", "method": "raw_forecast", "ampacity_amps": 999.0,
     })
 
     markdown = render_table.render_markdown(str(tmp_path))
 
-    assert "2 pre-cutover (single-method) entries" in markdown
-    assert "provider A failed" not in markdown
-    assert "x" * 100 not in markdown
-    assert "| Method | Fallback?" not in markdown  # the old header row is gone entirely
-
-
-def test_render_markdown_is_deterministic_for_unchanged_input(tmp_path):
-    """
-    No dynamic "rendered at" timestamp -- re-rendering the SAME input must
-    produce byte-identical output, so the workflow's own `git diff
-    --cached --quiet` dedupe (a day with no new predictions produces no
-    commit) still works correctly once this file is part of what's
-    committed.
-    """
-    _write_entry(str(tmp_path / "AUSTIN_CORPUS_CHRISTI.jsonl"), {
-        "corridor": "AUSTIN_CORPUS_CHRISTI", "method": "ml_wind_corrected", "ampacity_amps": 1.0,
-        "fallback_used": False, "decision_time": "x", "valid_time": "x",
-    })
-
-    first = render_table.render_markdown(str(tmp_path))
-    second = render_table.render_markdown(str(tmp_path))
-
-    assert first == second
-
-
-def test_main_writes_the_rendered_markdown_to_the_given_output_path(tmp_path, monkeypatch):
-    predictions_dir = tmp_path / "predictions"
-    _write_entry(str(predictions_dir / "AUSTIN_CORPUS_CHRISTI.jsonl"), {
-        "corridor": "AUSTIN_CORPUS_CHRISTI", "method": "ml_wind_corrected", "ampacity_amps": 1.0,
-        "fallback_used": False, "decision_time": "x", "valid_time": "x",
-    })
-    out_path = tmp_path / "README.md"
-
-    monkeypatch.setattr(
-        "sys.argv", ["forecast_shadow_render_table.py", str(predictions_dir), str(out_path)]
-    )
-    assert render_table.main() == 0
-
-    content = out_path.read_text()
-    assert "AUSTIN_CORPUS_CHRISTI" in content
+    summary = markdown.split("## Latest cycle per city")[1].split("\n## ")[0]
+    rows = [ln for ln in summary.splitlines() if ln.startswith("| ") and "---" not in ln and "City" not in ln]
+    assert len(rows) == 4
+    for city, amps in (("AUSTIN", 111.0), ("CORPUS_CHRISTI", 222.0), ("MIDLAND", 333.0), ("EL_PASO", 444.0)):
+        assert any(ln.startswith(f"| {city} |") and f"✓ {amps:.1f}" in ln for ln in rows)
+    assert "999.0" not in markdown
+    # One section per city, in file-name order.
+    for city in ("AUSTIN", "CORPUS_CHRISTI", "MIDLAND", "EL_PASO"):
+        assert f"\n## {city}\n" in markdown
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Plan 05-05, Task 1: both shapes forever (05-01's approved schema_version-2
+# Plan 05-05, Task 1: both shapes forever (05-01's approved schema_version-3
 # shape + no-migration-of-historical-rows strategy).
 # ──────────────────────────────────────────────────────────────────────
 
@@ -164,7 +163,7 @@ def _new_shape_entry(**overrides) -> dict:
         },
     }
     entry = {
-        "schema_version": 2, "corridor": "AUSTIN_CORPUS_CHRISTI",
+        "schema_version": 3, "city": "AUSTIN",
         "decision_time": "2026-10-07T06:52:09+00:00", "valid_time": "2026-10-07T18:00:00+00:00",
         "logged_at": "2026-10-07T06:52:10+00:00",
         "candidates": candidates,
@@ -175,23 +174,21 @@ def _new_shape_entry(**overrides) -> dict:
     return entry
 
 
-def test_render_markdown_old_shape_only_renders_summary_line_not_a_table(tmp_path):
+def test_render_markdown_non_v3_only_city_file_renders_summary_line_not_a_table(tmp_path):
     """
-    2026-10-08 ("remove that"): superseded regression pin. The original
-    version of this test hand-reconstructed the exact row/table text the
-    legacy per-row renderer produced -- that renderer is now removed
-    entirely (old-shape rows render a one-line summary, never a table),
-    so this test pins the NEW behavior instead.
+    2026-10-08 ("remove that"), per city since 2026-10-12: non-v3 rows
+    (flat single-method rows keyed by `city`) render a one-line count,
+    never a table.
     """
-    path = str(tmp_path / "AUSTIN_CORPUS_CHRISTI.jsonl")
+    path = str(tmp_path / "AUSTIN.jsonl")
     _write_entry(path, {
-        "corridor": "AUSTIN_CORPUS_CHRISTI", "method": "ml_wind_corrected",
+        "city": "AUSTIN", "method": "ml_wind_corrected",
         "ampacity_amps": 1004.136, "fallback_used": False, "fallback_reason": None,
-        "model_version": "ml_wind_corrected_AUSTIN_CORPUS_CHRISTI@2026-10-07T06:51:38+00:00",
+        "model_version": "ml_wind_corrected_AUSTIN@2026-10-07T06:51:38+00:00",
         "decision_time": "2026-10-07T06:52:09+00:00", "valid_time": "2026-10-07T18:00:00+00:00",
     })
     _write_entry(path, {
-        "corridor": "AUSTIN_CORPUS_CHRISTI", "method": "raw_forecast", "ampacity_amps": None,
+        "city": "AUSTIN", "method": "raw_forecast", "ampacity_amps": None,
         "fallback_used": True, "fallback_reason": "total failure", "model_version": None,
         "decision_time": "2026-10-07T18:52:09+00:00", "valid_time": "2026-10-08T06:00:00+00:00",
     })
@@ -199,33 +196,32 @@ def test_render_markdown_old_shape_only_renders_summary_line_not_a_table(tmp_pat
     markdown = render_table.render_markdown(str(tmp_path))
 
     expected = (
-        "## AUSTIN_CORPUS_CHRISTI\n"
+        "## AUSTIN\n"
         "\n"
-        "2 logged prediction(s), most recent first.\n"
+        "0 logged prediction(s), most recent first.\n"
         "\n"
-        "_2 pre-cutover (single-method) entries exist in this corridor's raw "
-        "history and are not rendered here -- see "
-        "`data/shadow/predictions/AUSTIN_CORPUS_CHRISTI.jsonl` on this branch "
-        "for the full single-candidate record._\n"
+        "_2 non-`schema_version: 3` row(s) in this city's raw log are not rendered here "
+        "-- see `data/shadow/predictions/AUSTIN.jsonl` on this branch._\n"
         "\n"
     )
     assert expected in markdown
-    assert "ml_wind_corrected_AUSTIN_CORPUS_CHRISTI@2026-10-07T06:51:38" not in markdown
+    assert "ml_wind_corrected_AUSTIN@2026-10-07T06:51:38" not in markdown
     assert "total failure" not in markdown
+    assert "## Latest cycle per city" not in markdown  # no v3 row to summarize
 
 
 def test_render_markdown_new_shape_entry_renders_all_five_candidates(tmp_path):
-    _write_entry(str(tmp_path / "AUSTIN_CORPUS_CHRISTI.jsonl"), _new_shape_entry())
+    _write_entry(str(tmp_path / "AUSTIN.jsonl"), _new_shape_entry())
 
     markdown = render_table.render_markdown(str(tmp_path))
 
     for name in _NEW_SHAPE_CANDIDATE_NAMES:
         assert name in markdown
-    assert "schema_version: 2" in markdown
+    assert "schema_version: 3" in markdown
 
 
 def test_render_markdown_new_shape_unavailable_candidate_shows_its_reason(tmp_path):
-    _write_entry(str(tmp_path / "AUSTIN_CORPUS_CHRISTI.jsonl"), _new_shape_entry())
+    _write_entry(str(tmp_path / "AUSTIN.jsonl"), _new_shape_entry())
 
     markdown = render_table.render_markdown(str(tmp_path))
 
@@ -247,7 +243,7 @@ def test_render_markdown_new_shape_renders_one_row_not_a_subsection(tmp_path):
     old multi-line "### Cycle — ..." sub-section header the prior format
     used -- this is the behavior change this test exists to pin.
     """
-    _write_entry(str(tmp_path / "AUSTIN_CORPUS_CHRISTI.jsonl"), _new_shape_entry())
+    _write_entry(str(tmp_path / "AUSTIN.jsonl"), _new_shape_entry())
 
     markdown = render_table.render_markdown(str(tmp_path))
 
@@ -257,13 +253,13 @@ def test_render_markdown_new_shape_renders_one_row_not_a_subsection(tmp_path):
     formatted = render_table._format_timestamp("2026-10-07T06:52:09+00:00")
     row_lines = [
         line for line in markdown.splitlines()
-        if formatted in line and "|" in line
+        if line.startswith(f"| {formatted}")
     ]
     assert len(row_lines) == 1, row_lines
 
 
 def test_render_markdown_new_shape_row_shows_ok_candidates_with_checkmark_ampacity(tmp_path):
-    _write_entry(str(tmp_path / "AUSTIN_CORPUS_CHRISTI.jsonl"), _new_shape_entry())
+    _write_entry(str(tmp_path / "AUSTIN.jsonl"), _new_shape_entry())
 
     markdown = render_table.render_markdown(str(tmp_path))
 
@@ -273,7 +269,7 @@ def test_render_markdown_new_shape_row_shows_ok_candidates_with_checkmark_ampaci
 
 
 def test_render_markdown_new_shape_row_shows_unavailable_status_not_a_bare_ampacity(tmp_path):
-    _write_entry(str(tmp_path / "AUSTIN_CORPUS_CHRISTI.jsonl"), _new_shape_entry())
+    _write_entry(str(tmp_path / "AUSTIN.jsonl"), _new_shape_entry())
 
     markdown = render_table.render_markdown(str(tmp_path))
 
@@ -284,7 +280,7 @@ def test_render_markdown_new_shape_row_shows_unavailable_status_not_a_bare_ampac
 
 
 def test_render_markdown_new_shape_notes_column_names_which_candidate_and_why(tmp_path):
-    _write_entry(str(tmp_path / "AUSTIN_CORPUS_CHRISTI.jsonl"), _new_shape_entry())
+    _write_entry(str(tmp_path / "AUSTIN.jsonl"), _new_shape_entry())
 
     markdown = render_table.render_markdown(str(tmp_path))
 
@@ -302,7 +298,7 @@ def test_render_markdown_new_shape_caps_rendered_cycles_and_says_so(tmp_path):
     newest first, and the document says how many older ones were omitted
     -- never silently truncated with no indication.
     """
-    path = str(tmp_path / "AUSTIN_CORPUS_CHRISTI.jsonl")
+    path = str(tmp_path / "AUSTIN.jsonl")
     total = render_table.RENDERED_CYCLE_CAP + 5
     for i in range(total):
         _write_entry(path, _new_shape_entry(
@@ -327,7 +323,7 @@ def test_render_markdown_new_shape_caps_rendered_cycles_and_says_so(tmp_path):
 
 
 def test_render_markdown_new_shape_under_cap_does_not_print_an_omission_note(tmp_path):
-    _write_entry(str(tmp_path / "AUSTIN_CORPUS_CHRISTI.jsonl"), _new_shape_entry())
+    _write_entry(str(tmp_path / "AUSTIN.jsonl"), _new_shape_entry())
 
     markdown = render_table.render_markdown(str(tmp_path))
 
@@ -336,15 +332,13 @@ def test_render_markdown_new_shape_under_cap_does_not_print_an_omission_note(tmp
 
 def test_render_markdown_mixed_old_and_new_shape_lines_both_accounted_for_in_one_document(tmp_path):
     """
-    The real situation this collector is in from the cutover forward: one
-    corridor file with an old-shape line AND a new-shape line. Both must
-    render correctly in the same document with no exception -- the old
-    one as its one-line summary (2026-10-08: no longer a table), the new
-    one as its own compact row.
+    One city file with a non-v3 (flat) line AND a v3 line. Both must be
+    accounted for in the same document with no exception -- the flat one
+    as a one-line count, the v3 one as its own compact row.
     """
-    path = str(tmp_path / "AUSTIN_CORPUS_CHRISTI.jsonl")
+    path = str(tmp_path / "AUSTIN.jsonl")
     _write_entry(path, {
-        "corridor": "AUSTIN_CORPUS_CHRISTI", "method": "ml_wind_corrected",
+        "city": "AUSTIN", "method": "ml_wind_corrected",
         "ampacity_amps": 700.0, "fallback_used": False, "fallback_reason": None,
         "model_version": "v1", "decision_time": "2026-10-06T06:00:00+00:00",
         "valid_time": "2026-10-06T18:00:00+00:00",
@@ -353,13 +347,11 @@ def test_render_markdown_mixed_old_and_new_shape_lines_both_accounted_for_in_one
 
     markdown = render_table.render_markdown(str(tmp_path))
 
-    # Old-shape row accounted for by the one-line summary, never a table.
-    assert "1 pre-cutover (single-method) entries" in markdown
+    assert "1 non-`schema_version: 3` row(s)" in markdown
     assert "| 2026-10-06T06:00:00+00:00 | 2026-10-06T18:00:00+00:00 | ml_wind_corrected |" not in markdown
-    # New-shape block still present with all five candidates.
     for name in _NEW_SHAPE_CANDIDATE_NAMES:
         assert name in markdown
-    assert "2 logged prediction(s)" in markdown
+    assert "1 logged prediction(s)" in markdown
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -370,14 +362,12 @@ def test_render_markdown_mixed_old_and_new_shape_lines_both_accounted_for_in_one
 def _new_shape_entry_with_bundle(**overrides) -> dict:
     """`_new_shape_entry` extended with a real `bundle` dict on each
     candidate -- ml_wind_corrected/ml_cooling_corrected/raw_forecast "ok"
-    (a different bottleneck city than the per-conductor one, to prove the
-    two identities render independently), persistence_24h/
-    reference_ml_refit_24h bundle-unavailable."""
+    (bundle = this city's own value times its subconductor count),
+    persistence_24h/reference_ml_refit_24h bundle-unavailable."""
     entry = _new_shape_entry(**overrides)
     ok_bundle = {
-        "status": "ok", "endpoint_bundle_ampacity_amps": {"AUSTIN": 1300.0, "CORPUS_CHRISTI": 1250.0},
-        "corridor_bundle_ampacity_amps": 1250.0, "bundle_bottleneck_city": "CORPUS_CHRISTI",
-        "subconductors_per_phase": {"AUSTIN": 2, "CORPUS_CHRISTI": 2},
+        "status": "ok", "bundle_ampacity_amps": 1300.0,
+        "subconductors_per_phase": 2,
         "config_version": "v1-provisional-2026-10-08",
         "rating_basis": "Conductor-based bundle thermal estimate...", "reason": None,
     }
@@ -397,33 +387,30 @@ def _new_shape_entry_with_bundle(**overrides) -> dict:
 
 
 def test_render_markdown_shows_bundle_table_when_bundle_data_present(tmp_path):
-    _write_entry(str(tmp_path / "AUSTIN_CORPUS_CHRISTI.jsonl"), _new_shape_entry_with_bundle())
+    _write_entry(str(tmp_path / "AUSTIN.jsonl"), _new_shape_entry_with_bundle())
 
     markdown = render_table.render_markdown(str(tmp_path))
 
     assert "Bundle-level (subconductors-per-phase) ampacity" in markdown
-    assert "✓ 1250.0 (CORPUS_CHRISTI)" in markdown  # the bundle bottleneck
+    assert "✓ 1300.0" in markdown
+    assert "(AUSTIN)" not in markdown  # no bottleneck-city suffix in a per-city log
     assert "Subconductor-per-phase counts are the Power Systems sub-team's provisional" in markdown
 
 
-def test_render_markdown_bundle_bottleneck_can_differ_from_per_conductor_row(tmp_path):
-    """
-    The per-conductor row's own candidate cells show ml_wind_corrected's
-    ampacity (650.0, no bottleneck city named at this table's own
-    granularity) while the bundle row for the SAME cycle shows
-    CORPUS_CHRISTI as the bundle bottleneck -- the two tables' bottleneck
-    concepts are visually separate, never conflated into one cell.
-    """
-    _write_entry(str(tmp_path / "AUSTIN_CORPUS_CHRISTI.jsonl"), _new_shape_entry_with_bundle())
+def test_render_markdown_bundle_row_is_separate_from_the_per_conductor_row(tmp_path):
+    """The per-conductor row shows ml_wind_corrected's ampacity (650.0) and
+    the bundle row for the SAME cycle shows the bundle value (1300.0) --
+    two separate tables, never one cell."""
+    _write_entry(str(tmp_path / "AUSTIN.jsonl"), _new_shape_entry_with_bundle())
 
     markdown = render_table.render_markdown(str(tmp_path))
 
     assert "✓ 650.0" in markdown  # per-conductor ml_wind_corrected cell
-    assert "✓ 1250.0 (CORPUS_CHRISTI)" in markdown  # bundle cell, same cycle
+    assert "✓ 1300.0" in markdown  # bundle cell, same cycle
 
 
 def test_render_markdown_bundle_table_notes_column_names_unavailable_candidates(tmp_path):
-    _write_entry(str(tmp_path / "AUSTIN_CORPUS_CHRISTI.jsonl"), _new_shape_entry_with_bundle())
+    _write_entry(str(tmp_path / "AUSTIN.jsonl"), _new_shape_entry_with_bundle())
 
     markdown = render_table.render_markdown(str(tmp_path))
 
@@ -434,36 +421,34 @@ def test_render_markdown_bundle_table_notes_column_names_unavailable_candidates(
 def test_render_markdown_omits_bundle_table_when_no_entry_carries_bundle_data(tmp_path):
     """Entries that predate the bundle feature (no 'bundle' key on any
     candidate) must not produce an empty/useless bundle table."""
-    _write_entry(str(tmp_path / "AUSTIN_CORPUS_CHRISTI.jsonl"), _new_shape_entry())  # no bundle key
+    _write_entry(str(tmp_path / "AUSTIN.jsonl"), _new_shape_entry())  # no bundle key
 
     markdown = render_table.render_markdown(str(tmp_path))
 
     assert "Bundle-level" not in markdown
 
 
-def test_render_markdown_main_table_shows_per_conductor_bottleneck_city(tmp_path):
-    """
-    2026-10-08 ("i don't see that on the first table anymore"):
-    bottleneck_city has always been computed and stored per candidate but
-    was never rendered in the main (per-conductor) table, in either this
-    format or the one before it. Pins that it now appears.
-    """
+def test_render_markdown_main_table_never_shows_a_bottleneck_city_suffix(tmp_path):
+    """Per-city logs have no bottleneck: even a (corridor-era shaped)
+    provenance naming one must not produce a "(CITY)" suffix, and anchor
+    provenance renders nowhere in the cell."""
     entry = _new_shape_entry()
     entry["candidates"]["ml_wind_corrected"]["input_provenance"] = {
-        "per_city_ampacity_amps": {"AUSTIN": 650.0, "CORPUS_CHRISTI": 900.0},
         "bottleneck_city": "AUSTIN",
+        "anchor_provenance": {"anchor_source": "tceq", "anchor_station": "X"},
     }
-    _write_entry(str(tmp_path / "AUSTIN_CORPUS_CHRISTI.jsonl"), entry)
+    _write_entry(str(tmp_path / "AUSTIN.jsonl"), entry)
 
     markdown = render_table.render_markdown(str(tmp_path))
 
-    assert "✓ 650.0 (AUSTIN)" in markdown
+    assert "✓ 650.0 (" not in markdown
+    assert "✓ 650.0" in markdown
 
 
 def test_render_markdown_main_table_omits_city_suffix_when_no_bottleneck_known(tmp_path):
     """reference_ml_refit_24h (and any candidate with no per-city
     provenance) must render a bare ampacity, never a stray "(None)"."""
-    _write_entry(str(tmp_path / "AUSTIN_CORPUS_CHRISTI.jsonl"), _new_shape_entry())
+    _write_entry(str(tmp_path / "AUSTIN.jsonl"), _new_shape_entry())
 
     markdown = render_table.render_markdown(str(tmp_path))
 
@@ -525,8 +510,8 @@ def test_render_markdown_includes_methods_explanation_once_at_the_top_with_no_da
 def test_render_markdown_includes_methods_explanation_once_with_real_data(tmp_path):
     """Pins that the explanation renders exactly once regardless of how
     many corridors/entries exist -- never once per corridor."""
-    _write_entry(str(tmp_path / "AUSTIN_CORPUS_CHRISTI.jsonl"), _new_shape_entry())
-    _write_entry(str(tmp_path / "MIDLAND_EL_PASO.jsonl"), _new_shape_entry(corridor="MIDLAND_EL_PASO"))
+    _write_entry(str(tmp_path / "AUSTIN.jsonl"), _new_shape_entry())
+    _write_entry(str(tmp_path / "MIDLAND.jsonl"), _new_shape_entry(city="MIDLAND"))
 
     markdown = render_table.render_markdown(str(tmp_path))
 

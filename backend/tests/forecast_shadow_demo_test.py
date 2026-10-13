@@ -22,6 +22,18 @@ import forecast_shadow_pipeline as shadow
 import weather_provider
 
 
+@pytest.fixture(autouse=True)
+def _isolate_shadow_predictions_dir(monkeypatch, tmp_path_factory):
+    """
+    Never let a test append to the real `data/shadow/predictions/` logs
+    (found 2026-10-12: three `run_once` tests lacked this redirect and
+    polluted both the legacy corridor logs and the per-city logs). Tests
+    that need to read the log re-patch `SHADOW_PREDICTIONS_DIR` to their own
+    `tmp_path`, which takes precedence.
+    """
+    monkeypatch.setattr(shadow, "SHADOW_PREDICTIONS_DIR", str(tmp_path_factory.mktemp("predictions")))
+
+
 class _StopHereSentinel(Exception):
     """
     Raised by a monkeypatched `fetch_live_forecast_for_valid_time` purely to
@@ -62,13 +74,13 @@ def test_run_once_requests_a_valid_time_on_the_six_hour_utc_grid(monkeypatch):
 
     captured = {}
 
-    def _capture(corridor, valid_time, horizon_minutes, *, lat, lon):
+    def _capture(city, valid_time, horizon_minutes, *, lat, lon):
         captured["valid_time"] = valid_time
         raise _StopHereSentinel("stop here -- only capturing the call")
 
     monkeypatch.setattr(shadow, "fetch_live_forecast_for_valid_time", _capture)
     with pytest.raises(_StopHereSentinel):
-        demo.run_once("AUSTIN_CORPUS_CHRISTI")
+        demo.run_once("AUSTIN")
 
     valid_time = captured["valid_time"]
     assert valid_time == pd.Timestamp("2026-10-07T18:00:00")
@@ -92,14 +104,14 @@ def test_run_once_requests_a_valid_time_strictly_more_than_eleven_hours_out(monk
     """
     captured = {}
 
-    def _capture(corridor, valid_time, horizon_minutes, *, lat, lon):
+    def _capture(city, valid_time, horizon_minutes, *, lat, lon):
         captured["valid_time"] = valid_time
         raise _StopHereSentinel("stop here -- only capturing the call")
 
     monkeypatch.setattr(shadow, "fetch_live_forecast_for_valid_time", _capture)
     before = pd.Timestamp.utcnow()
     with pytest.raises(_StopHereSentinel):
-        demo.run_once("AUSTIN_CORPUS_CHRISTI")
+        demo.run_once("AUSTIN")
     after = pd.Timestamp.utcnow()
 
     valid_time = captured["valid_time"]
@@ -118,7 +130,7 @@ def test_run_once_uses_raw_forecast_method_without_attempting_any_model_load(mon
 
     monkeypatch.setattr(shadow, "load_correction_model", _should_not_be_called)
 
-    def _fake_fetch(corridor, valid_time, horizon_minutes, *, lat, lon):
+    def _fake_fetch(city, valid_time, horizon_minutes, *, lat, lon):
         row = pd.Series({
             "fcst_air_temp": 25.0, "fcst_wind_speed": 3.0, "fcst_wind_direction": 180.0,
             "fcst_solar_radiation": 500.0, "datetime_utc": valid_time,
@@ -132,7 +144,7 @@ def test_run_once_uses_raw_forecast_method_without_attempting_any_model_load(mon
         return row, ts
 
     monkeypatch.setattr(shadow, "fetch_live_forecast_for_valid_time", _fake_fetch)
-    prediction = demo.run_once("AUSTIN_CORPUS_CHRISTI", "raw_forecast")
+    prediction = demo.run_once("AUSTIN", "raw_forecast")
     assert prediction.method == "raw_forecast"
     assert prediction.fallback_used is False
 
@@ -153,25 +165,24 @@ def test_run_once_falls_back_to_static_rating_when_forecast_fetch_fails(monkeypa
     rating, never crash or guess) -- per endpoint city, reduced by the
     same weakest-link principle used elsewhere.
     """
-    def _raise_stale(corridor, valid_time, horizon_minutes, *, lat, lon):
+    def _raise_stale(city, valid_time, horizon_minutes, *, lat, lon):
         raise shadow.StaleOrMissingDataError(
             f"fetch_live_forecast_for_valid_time: retrieval failed for "
-            f"corridor {corridor!r}: synthetic timeout"
+            f"city {city!r}: synthetic timeout"
         )
 
     monkeypatch.setattr(shadow, "fetch_live_forecast_for_valid_time", _raise_stale)
 
-    prediction = demo.run_once("MIDLAND_EL_PASO", "ml_wind_corrected")
+    prediction = demo.run_once("EL_PASO", "ml_wind_corrected")
 
     assert prediction.method == "static_rating_fallback"
     assert prediction.fallback_used is True
     assert "synthetic timeout" in prediction.fallback_reason
     assert prediction.model_version is None
-    # MIDLAND=1800.0, EL_PASO=1450.0 (config.STATIC_RATINGS) -- the
-    # weakest-link minimum, never an average or the stronger city's value.
-    assert prediction.ampacity_amps == min(
-        config.STATIC_RATINGS["MIDLAND"], config.STATIC_RATINGS["EL_PASO"]
-    )
+    # EL_PASO's OWN static rating (1450.0, config.STATIC_RATINGS) -- each
+    # city is an independent point; no other city's rating is involved.
+    assert prediction.city == "EL_PASO"
+    assert prediction.ampacity_amps == config.STATIC_RATINGS["EL_PASO"]
     assert prediction.ampacity_amps == 1450.0
     # ShadowTimestamps must still be real and internally consistent even
     # though the HTTP call never completed -- all four fields are
@@ -207,7 +218,7 @@ def test_run_once_falls_back_to_raw_forecast_when_no_persisted_model_exists(monk
     """
     monkeypatch.setattr(shadow, "SHADOW_MODEL_DIR", str(tmp_path))
 
-    def _fake_fetch(corridor, valid_time, horizon_minutes, *, lat, lon):
+    def _fake_fetch(city, valid_time, horizon_minutes, *, lat, lon):
         row = pd.Series({
             "fcst_air_temp": 25.0, "fcst_wind_speed": 3.0, "fcst_wind_direction": 180.0,
             "fcst_solar_radiation": 500.0, "datetime_utc": valid_time,
@@ -221,13 +232,13 @@ def test_run_once_falls_back_to_raw_forecast_when_no_persisted_model_exists(monk
         return row, ts
 
     monkeypatch.setattr(shadow, "fetch_live_forecast_for_valid_time", _fake_fetch)
-    prediction = demo.run_once("AUSTIN_CORPUS_CHRISTI", "ml_wind_corrected")
+    prediction = demo.run_once("AUSTIN", "ml_wind_corrected")
     assert prediction.method == "raw_forecast"
     assert prediction.fallback_used is True
     assert prediction.fallback_reason is not None
     assert "no persisted" in prediction.fallback_reason
     assert "ml_wind_corrected" in prediction.fallback_reason
-    assert "AUSTIN_CORPUS_CHRISTI" in prediction.fallback_reason
+    assert "AUSTIN" in prediction.fallback_reason
     captured = capsys.readouterr()
     assert "no persisted" in captured.err
 
@@ -238,7 +249,7 @@ def test_run_once_logs_and_returns_the_same_prediction(monkeypatch, tmp_path):
     wrong object)."""
     monkeypatch.setattr(shadow, "SHADOW_PREDICTIONS_DIR", str(tmp_path))
 
-    def _fake_fetch(corridor, valid_time, horizon_minutes, *, lat, lon):
+    def _fake_fetch(city, valid_time, horizon_minutes, *, lat, lon):
         row = pd.Series({
             "fcst_air_temp": 25.0, "fcst_wind_speed": 3.0, "fcst_wind_direction": 180.0,
             "fcst_solar_radiation": 500.0, "datetime_utc": valid_time,
@@ -252,26 +263,29 @@ def test_run_once_logs_and_returns_the_same_prediction(monkeypatch, tmp_path):
         return row, ts
 
     monkeypatch.setattr(shadow, "fetch_live_forecast_for_valid_time", _fake_fetch)
-    prediction = demo.run_once("AUSTIN_CORPUS_CHRISTI", "raw_forecast")
+    prediction = demo.run_once("AUSTIN", "raw_forecast")
 
     import json
-    path = __import__("os").path.join(str(tmp_path), "AUSTIN_CORPUS_CHRISTI.jsonl")
+    path = __import__("os").path.join(str(tmp_path), "AUSTIN.jsonl")
     with open(path) as fh:
         logged = json.loads(fh.readline())
+    assert logged["city"] == "AUSTIN"
+    assert "corridor" not in logged
     assert logged["ampacity_amps"] == prediction.ampacity_amps
     assert logged["method"] == prediction.method
 
 
 # ──────────────────────────────────────────────────────────────────────
 # Plan 05-02: run_once_all_methods -- the five-candidate orchestration
-# entry point. Network-free throughout: the shared fetch itself is
-# monkeypatched to a synthetic success/failure, never a real network call.
+# entry point, per city since 2026-10-12. Network-free throughout: the
+# shared fetch itself is monkeypatched to a synthetic success/failure,
+# never a real network call.
 # ──────────────────────────────────────────────────────────────────────
 
-def _fake_shared_inputs_factory(cities, *, air_temp=30.0, wind_speed=5.0, wind_direction=90.0,
+def _fake_shared_inputs_factory(*, air_temp=30.0, wind_speed=5.0, wind_direction=90.0,
                                   solar=500.0, anchor_wind_speed=4.0, anchor_wind_direction=95.0,
                                   anchor_air_temp=29.0):
-    def _fake_shared_inputs(corridor_arg, *, valid_time, decision_time, horizon_minutes):
+    def _fake_shared_inputs(city_arg, *, valid_time, decision_time, horizon_minutes):
         frame = pd.DataFrame([{
             "fcst_air_temp": air_temp, "fcst_wind_speed": wind_speed,
             "fcst_wind_direction": wind_direction, "fcst_solar_radiation": solar,
@@ -282,11 +296,15 @@ def _fake_shared_inputs_factory(cities, *, air_temp=30.0, wind_speed=5.0, wind_d
             "anchor_air_temp": anchor_air_temp, "anchor_observation_time": decision_time,
             "anchor_source": "tceq", "anchor_station": "TEST",
         })
-        return {
-            city: shadow.SharedCityFetchResult(city, frame.copy(), None, anchor.copy(), None)
-            for city in cities
-        }
+        return shadow.SharedCityFetchResult(city_arg, frame.copy(), None, anchor.copy(), None)
     return _fake_shared_inputs
+
+
+def _read_single_record(tmp_path, city):
+    import json
+    import os
+    with open(os.path.join(str(tmp_path), f"{city}.jsonl")) as fh:
+        return json.loads(fh.readline())
 
 
 def test_run_once_all_methods_attempts_all_five_and_isolates_one_sabotaged_candidate(monkeypatch, tmp_path):
@@ -295,21 +313,15 @@ def test_run_once_all_methods_attempts_all_five_and_isolates_one_sabotaged_candi
     recorded as status='failed'; the other four candidates still compute
     and log for the same cycle."""
     monkeypatch.setattr(shadow, "SHADOW_PREDICTIONS_DIR", str(tmp_path))
-    corridor = "AUSTIN_CORPUS_CHRISTI"
-    cities = config.CORRIDOR_ENDPOINTS[corridor]
+    monkeypatch.setattr(shadow, "SHADOW_MODEL_DIR", str(tmp_path / "no_models"))
+    city = "AUSTIN"
+    monkeypatch.setattr(shadow, "fetch_shared_city_inputs", _fake_shared_inputs_factory())
 
-    monkeypatch.setattr(shadow, "fetch_shared_corridor_inputs", _fake_shared_inputs_factory(cities))
-
-    original = shadow.Persistence24hShadowMethod.compute
-
-    def _raise(self, corridor_arg, decision_time):
+    def _raise(self, city_arg, decision_time):
         raise RuntimeError("deliberate sabotage for the isolation test")
 
     monkeypatch.setattr(shadow.Persistence24hShadowMethod, "compute", _raise)
-    try:
-        results = demo.run_once_all_methods(corridor)
-    finally:
-        shadow.Persistence24hShadowMethod.compute = original
+    results = demo.run_once_all_methods(city)
 
     assert set(results) == set(shadow.CANDIDATE_METHOD_NAMES)
     assert results["persistence_24h"].status == "failed"
@@ -321,20 +333,17 @@ def test_run_once_all_methods_attempts_all_five_and_isolates_one_sabotaged_candi
 
     # The same cycle's log line must still carry all five candidates --
     # one candidate's failure must not have aborted the write.
-    import json
-    path = __import__("os").path.join(str(tmp_path), f"{corridor}.jsonl")
-    with open(path) as fh:
-        record = json.loads(fh.readline())
-    assert record["schema_version"] == 2
+    record = _read_single_record(tmp_path, city)
+    assert record["schema_version"] == 3
+    assert record["city"] == city
+    assert "corridor" not in record
     assert set(record["candidates"]) == set(shadow.CANDIDATE_METHOD_NAMES)
     assert record["candidates"]["persistence_24h"]["status"] == "failed"
 
 
 def _fake_truth_proxy_fetch_weather(location, start, end, provider="synoptic", **kwargs):
     """Plan 05-04: a complete, network-free 7-hour station window for
-    whichever single CAMS id `fetch_live_truth_proxy_series` requests --
-    used so this file's `run_once_all_methods` tests stay network-free
-    even though `reference_ml_refit_24h` is no longer a stub."""
+    whichever single CAMS id `fetch_live_truth_proxy_series` requests."""
     end_ts = pd.Timestamp(end)
     if end_ts.tzinfo is None:
         end_ts = end_ts.tz_localize("UTC")
@@ -348,115 +357,189 @@ def _fake_truth_proxy_fetch_weather(location, start, end, provider="synoptic", *
     return pd.DataFrame(rows)
 
 
-def test_run_once_all_methods_reports_reference_refit_as_ok_with_a_real_artifact_and_truth_proxy_window(monkeypatch, tmp_path):
-    """Plan 05-04: now that a real persisted artifact exists for this
-    corridor and the live truth-proxy path is wired, a clean run with a
-    complete (mocked, network-free) truth-proxy window must reach
-    `reference_ml_refit_24h` status='ok' -- no longer the 05-02 stub's
-    perpetual 'no persisted artifact' unavailability. The three
-    per-city-reduced candidates must also reach status='ok' (real
-    persisted wind/cooling models already exist in this repo for this
-    corridor)."""
+def _fit_synthetic_wind_model(city):
+    import numpy as np
+    import forecast_correction_models
+
+    rng = np.random.default_rng(1)
+    n = 80
+    ts = pd.date_range("2024-01-01", periods=n, freq="6h", tz="UTC")
+    frame = pd.DataFrame({
+        "datetime_utc": ts, "city": city,
+        "fcst_wind_speed": rng.uniform(1.0, 10.0, n), "fcst_wind_direction": rng.uniform(0.0, 360.0, n),
+        "fcst_air_temp": rng.uniform(10.0, 35.0, n), "fcst_solar_radiation": rng.uniform(0.0, 800.0, n),
+        "anchor_wind_speed": rng.uniform(1.0, 10.0, n), "anchor_wind_direction": rng.uniform(0.0, 360.0, n),
+        "truth_wind_speed": rng.uniform(1.0, 10.0, n), "truth_wind_direction": rng.uniform(0.0, 360.0, n),
+    })
+    return forecast_correction_models.fit_wind_correction(
+        frame, forecast_correction_models._make_wind_linear_regression, pooling="per_city",
+    )
+
+
+class _FakeEstimator:
+    def predict(self, X):
+        import numpy as np
+        return np.array([1234.0])
+
+
+def test_run_once_all_methods_ok_with_per_city_artifacts_and_a_complete_truth_proxy_window(monkeypatch, tmp_path):
+    """Plan 05-04, per city: with this city's own artifacts present
+    (stubbed here -- the real per-city refit has not been run) and a
+    complete (mocked, network-free) truth-proxy window, wind and
+    reference_ml_refit_24h reach status='ok', each carrying this city's own
+    ampacity; the cooling candidate whose artifact is absent is
+    `unavailable` with the named FileNotFoundError reason, never failed."""
     monkeypatch.setattr(shadow, "SHADOW_PREDICTIONS_DIR", str(tmp_path))
     monkeypatch.setattr(weather_provider, "fetch_weather", _fake_truth_proxy_fetch_weather)
-    corridor = "AUSTIN_CORPUS_CHRISTI"
-    cities = config.CORRIDOR_ENDPOINTS[corridor]
-    monkeypatch.setattr(shadow, "fetch_shared_corridor_inputs", _fake_shared_inputs_factory(cities))
+    city = "AUSTIN"
+    monkeypatch.setattr(shadow, "fetch_shared_city_inputs", _fake_shared_inputs_factory())
 
-    results = demo.run_once_all_methods(corridor)
+    wind_model = _fit_synthetic_wind_model(city)
 
+    def _load(city_arg, method_name):
+        assert city_arg == city
+        if method_name == "ml_wind_corrected":
+            return wind_model
+        if method_name == "reference_ml_refit_24h":
+            return _FakeEstimator()
+        raise FileNotFoundError(f"no persisted {method_name!r} model for city {city_arg!r}")
+
+    monkeypatch.setattr(shadow, "load_correction_model", _load)
+    monkeypatch.setattr(shadow, "model_version_for", lambda city_arg, method_name: f"{method_name}_{city_arg}@test")
+
+    results = demo.run_once_all_methods(city)
+
+    assert results["ml_wind_corrected"].status == "ok"
+    assert results["ml_wind_corrected"].city == city
+    assert results["ml_wind_corrected"].model_version == f"ml_wind_corrected_{city}@test"
+    assert results["ml_wind_corrected"].input_provenance["anchor_provenance"]["anchor_source"] == "tceq"
+    assert results["raw_forecast"].status == "ok"
+    assert results["raw_forecast"].input_provenance is None
     assert results["reference_ml_refit_24h"].status == "ok"
-    assert isinstance(results["reference_ml_refit_24h"].ampacity_amps, float)
+    assert results["reference_ml_refit_24h"].ampacity_amps == 1234.0
+    assert results["ml_cooling_corrected"].status == "unavailable"
+    assert "ml_cooling_corrected" in results["ml_cooling_corrected"].reason
     for name in shadow.CANDIDATE_METHOD_NAMES:
         assert results[name].status != "failed", (name, results[name])
+        assert "per_city_ampacity_amps" not in (results[name].input_provenance or {})
+        assert "bottleneck_city" not in (results[name].input_provenance or {})
 
 
-def test_run_once_all_methods_marks_ml_wind_corrected_unavailable_when_one_citys_anchor_missing(monkeypatch, tmp_path):
+def test_run_once_all_methods_missing_per_city_artifacts_are_unavailable_never_a_crash(monkeypatch, tmp_path):
+    """Until each city is refit, the three ML candidates report
+    unavailable with a named reason (the FileNotFoundError path) while
+    raw_forecast still records. A legacy corridor artifact in the models
+    dir is not loaded."""
+    monkeypatch.setattr(shadow, "SHADOW_PREDICTIONS_DIR", str(tmp_path / "pred"))
+    models = tmp_path / "models"
+    models.mkdir()
+    (models / "ml_wind_corrected_AUSTIN_CORPUS_CHRISTI.joblib").write_bytes(b"legacy")
+    monkeypatch.setattr(shadow, "SHADOW_MODEL_DIR", str(models))
+    monkeypatch.setattr(weather_provider, "fetch_weather", _fake_truth_proxy_fetch_weather)
+    monkeypatch.setattr(shadow, "fetch_shared_city_inputs", _fake_shared_inputs_factory())
+
+    results = demo.run_once_all_methods("AUSTIN")
+
+    for name in ("ml_wind_corrected", "ml_cooling_corrected", "reference_ml_refit_24h"):
+        assert results[name].status == "unavailable", (name, results[name])
+        assert f"{name}_AUSTIN.joblib" in results[name].reason
+    assert results["raw_forecast"].status == "ok"
+
+
+def test_run_once_all_methods_marks_anchored_candidates_unavailable_when_the_anchor_is_missing(monkeypatch, tmp_path):
     """D-04: a candidate whose required inputs are missing for this cycle
-    (here, one city's anchor) is recorded unavailable, independent of
-    every other candidate's own availability -- raw_forecast (needs no
-    anchor) must still read ok."""
+    (here, the anchor) is recorded unavailable, independent of every
+    other candidate's own availability -- raw_forecast (needs no anchor)
+    must still read ok."""
     monkeypatch.setattr(shadow, "SHADOW_PREDICTIONS_DIR", str(tmp_path))
-    corridor = "AUSTIN_CORPUS_CHRISTI"
-    cities = config.CORRIDOR_ENDPOINTS[corridor]
+    monkeypatch.setattr(shadow, "SHADOW_MODEL_DIR", str(tmp_path / "no_models"))
 
-    frame = pd.DataFrame([{
-        "fcst_air_temp": 30.0, "fcst_wind_speed": 5.0, "fcst_wind_direction": 90.0,
-        "fcst_solar_radiation": 500.0,
-    }])
-    frame.attrs["geometry"] = None
-    anchor = pd.Series({
-        "anchor_wind_speed": 4.0, "anchor_wind_direction": 95.0, "anchor_air_temp": 29.0,
-        "anchor_observation_time": pd.Timestamp.now(tz="UTC"), "anchor_source": "tceq",
-        "anchor_station": "TEST",
-    })
+    def _fake_shared_inputs(city_arg, *, valid_time, decision_time, horizon_minutes):
+        frame = pd.DataFrame([{
+            "fcst_air_temp": 30.0, "fcst_wind_speed": 5.0, "fcst_wind_direction": 90.0,
+            "fcst_solar_radiation": 500.0,
+        }])
+        frame.attrs["geometry"] = None
+        return shadow.SharedCityFetchResult(city_arg, frame, None, None, "simulated anchor gap")
 
-    def _fake_shared_inputs(corridor_arg, *, valid_time, decision_time, horizon_minutes):
-        results = {}
-        for i, city in enumerate(cities):
-            if i == 0:
-                results[city] = shadow.SharedCityFetchResult(city, frame.copy(), None, None, "simulated anchor gap")
-            else:
-                results[city] = shadow.SharedCityFetchResult(city, frame.copy(), None, anchor.copy(), None)
-        return results
+    monkeypatch.setattr(shadow, "fetch_shared_city_inputs", _fake_shared_inputs)
 
-    monkeypatch.setattr(shadow, "fetch_shared_corridor_inputs", _fake_shared_inputs)
-
-    results = demo.run_once_all_methods(corridor)
+    results = demo.run_once_all_methods("AUSTIN")
 
     assert results["ml_wind_corrected"].status == "unavailable"
+    assert "simulated anchor gap" in results["ml_wind_corrected"].reason
     assert results["ml_cooling_corrected"].status == "unavailable"
     assert results["raw_forecast"].status == "ok"
 
 
-# ──────────────────────────────────────────────────────────────────────
-# 2026-10-08 ("bundle-level ampacity"): run_once_all_methods wires real
-# bundle computation into the live orchestration loop, end to end.
-# ──────────────────────────────────────────────────────────────────────
-
-
-def test_run_once_all_methods_wires_mixed_bundle_counts_for_midland_el_paso(monkeypatch, tmp_path):
-    """
-    MIDLAND_EL_PASO: config.SUBCONDUCTORS_PER_PHASE gives MIDLAND=2,
-    EL_PASO=1 -- the exact mixed-count corridor named in the request.
-    `_fake_shared_inputs_factory` feeds BOTH endpoint cities identical
-    weather, so their PER-CONDUCTOR ampacities tie -- any bundle
-    bottleneck observed here can only come from the subconductor count
-    itself, never from a weather-driven per-conductor difference,
-    isolating exactly the behavior under test.
-    """
+def test_run_once_all_methods_marks_frame_candidates_unavailable_when_the_forecast_is_missing(monkeypatch, tmp_path):
     monkeypatch.setattr(shadow, "SHADOW_PREDICTIONS_DIR", str(tmp_path))
-    corridor = "MIDLAND_EL_PASO"
-    cities = config.CORRIDOR_ENDPOINTS[corridor]
-    monkeypatch.setattr(shadow, "fetch_shared_corridor_inputs", _fake_shared_inputs_factory(cities))
+    monkeypatch.setattr(shadow, "SHADOW_MODEL_DIR", str(tmp_path / "no_models"))
 
-    results = demo.run_once_all_methods(corridor)
+    def _fake_shared_inputs(city_arg, *, valid_time, decision_time, horizon_minutes):
+        return shadow.SharedCityFetchResult(city_arg, None, "simulated forecast gap", None, "simulated anchor gap")
+
+    monkeypatch.setattr(shadow, "fetch_shared_city_inputs", _fake_shared_inputs)
+    results = demo.run_once_all_methods("EL_PASO")
+
+    for name in shadow.FRAME_BASED_METHOD_NAMES:
+        assert results[name].status == "unavailable"
+        assert "simulated forecast gap" in results[name].reason
+        assert results[name].bundle["status"] == "unavailable"
+
+
+def test_run_once_all_methods_uses_the_citys_own_bearing_and_never_reduces_across_cities(monkeypatch, tmp_path):
+    """Each city's raw_forecast ampacity is computed from that city's own
+    frame via `city_point(city)`: identical weather in two cities with
+    DIFFERENT bearings (AUSTIN 173.15 vs MIDLAND 267.54) yields different
+    values, and each equals the direct per-city computation."""
+    import numpy as np
+    import city_point
+    import thermal_model
+
+    monkeypatch.setattr(shadow, "SHADOW_PREDICTIONS_DIR", str(tmp_path))
+    monkeypatch.setattr(shadow, "SHADOW_MODEL_DIR", str(tmp_path / "no_models"))
+    monkeypatch.setattr(shadow, "fetch_shared_city_inputs", _fake_shared_inputs_factory())
+
+    got = {}
+    for city in ("AUSTIN", "MIDLAND"):
+        got[city] = demo.run_once_all_methods(city)["raw_forecast"].ampacity_amps
+        point = city_point.city_point(city)
+        perp = thermal_model.perpendicular_wind(np.array([5.0]), np.array([90.0]), point.bearing_deg)
+        expected = thermal_model.ieee738_ampacity(np.array([30.0]), perp, np.array([500.0]), point.conductor)
+        assert got[city] == pytest.approx(float(np.asarray(expected)[0]))
+    assert got["AUSTIN"] != pytest.approx(got["MIDLAND"])
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 2026-10-08 ("bundle-level ampacity"), per city since 2026-10-12:
+# run_once_all_methods wires real bundle computation into the live
+# orchestration loop, end to end.
+# ──────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("city,count", [("MIDLAND", 2), ("EL_PASO", 1)])
+def test_run_once_all_methods_bundle_uses_the_citys_own_subconductor_count(monkeypatch, tmp_path, city, count):
+    """MIDLAND (2 subconductors) and EL_PASO (1) share a bearing, so with
+    identical weather their per-conductor values tie; only the bundle
+    differs, by each city's own count -- and it persists through the real
+    logging path."""
+    monkeypatch.setattr(shadow, "SHADOW_PREDICTIONS_DIR", str(tmp_path))
+    monkeypatch.setattr(shadow, "SHADOW_MODEL_DIR", str(tmp_path / "no_models"))
+    monkeypatch.setattr(shadow, "fetch_shared_city_inputs", _fake_shared_inputs_factory())
+
+    results = demo.run_once_all_methods(city)
 
     raw = results["raw_forecast"]
     assert raw.status == "ok"
-    per_city = raw.input_provenance["per_city_ampacity_amps"]
-    assert per_city["MIDLAND"] == per_city["EL_PASO"]  # tied per-conductor inputs
-
     bundle = raw.bundle
     assert bundle["status"] == "ok"
-    assert bundle["endpoint_bundle_ampacity_amps"]["MIDLAND"] == 2 * per_city["MIDLAND"]
-    assert bundle["endpoint_bundle_ampacity_amps"]["EL_PASO"] == 1 * per_city["EL_PASO"]
-    # Despite tied per-conductor values, EL_PASO's own single subconductor
-    # makes it the bundle bottleneck -- the mixed count alone decides it.
-    assert bundle["bundle_bottleneck_city"] == "EL_PASO"
-    assert bundle["corridor_bundle_ampacity_amps"] == per_city["EL_PASO"]
-    assert bundle["subconductors_per_phase"] == {"MIDLAND": 2, "EL_PASO": 1}
+    assert bundle["subconductors_per_phase"] == count == config.SUBCONDUCTORS_PER_PHASE[city]
+    assert bundle["bundle_ampacity_amps"] == count * raw.ampacity_amps
     assert bundle["config_version"] == config.BUNDLE_CONFIG_VERSION
 
-    # Persisted through the real logging path -- not just present on the
-    # in-memory ShadowPrediction.
-    import json
-    path = __import__("os").path.join(str(tmp_path), f"{corridor}.jsonl")
-    with open(path) as fh:
-        record = json.loads(fh.readline())
-    logged_bundle = record["candidates"]["raw_forecast"]["bundle"]
-    assert logged_bundle["bundle_bottleneck_city"] == "EL_PASO"
-    assert logged_bundle["corridor_bundle_ampacity_amps"] == per_city["EL_PASO"]
+    logged = _read_single_record(tmp_path, city)["candidates"]["raw_forecast"]["bundle"]
+    assert logged["bundle_ampacity_amps"] == count * raw.ampacity_amps
 
 
 def test_run_once_all_methods_bundle_unavailable_mirrors_the_candidates_own_unavailable_reason(monkeypatch, tmp_path):
@@ -465,29 +548,23 @@ def test_run_once_all_methods_bundle_unavailable_mirrors_the_candidates_own_unav
     reason tied to that same cause -- never silently omitted, never a
     generic unrelated message."""
     monkeypatch.setattr(shadow, "SHADOW_PREDICTIONS_DIR", str(tmp_path))
-    corridor = "AUSTIN_CORPUS_CHRISTI"
-    cities = config.CORRIDOR_ENDPOINTS[corridor]
+    monkeypatch.setattr(shadow, "SHADOW_MODEL_DIR", str(tmp_path / "no_models"))
 
-    def _fake_shared_missing_anchor(corridor_arg, *, valid_time, decision_time, horizon_minutes):
+    def _fake_shared_missing_anchor(city_arg, *, valid_time, decision_time, horizon_minutes):
         frame = pd.DataFrame([{
             "fcst_air_temp": 30.0, "fcst_wind_speed": 5.0,
             "fcst_wind_direction": 90.0, "fcst_solar_radiation": 500.0,
         }])
         frame.attrs["geometry"] = None
-        return {
-            city: shadow.SharedCityFetchResult(city, frame.copy(), None, None, "anchor fetch failed (test)")
-            for city in cities
-        }
+        return shadow.SharedCityFetchResult(city_arg, frame, None, None, "anchor fetch failed (test)")
 
-    monkeypatch.setattr(shadow, "fetch_shared_corridor_inputs", _fake_shared_missing_anchor)
+    monkeypatch.setattr(shadow, "fetch_shared_city_inputs", _fake_shared_missing_anchor)
 
-    results = demo.run_once_all_methods(corridor)
+    results = demo.run_once_all_methods("AUSTIN")
 
     wind = results["ml_wind_corrected"]
     assert wind.status == "unavailable"
     assert wind.bundle["status"] == "unavailable"
     assert wind.bundle["reason"] == wind.reason
-    # raw_forecast needs no anchor at all -- unaffected, still a real ok
-    # bundle result, proving candidates are validated independently (D-04).
     assert results["raw_forecast"].status == "ok"
     assert results["raw_forecast"].bundle["status"] == "ok"

@@ -6,7 +6,7 @@ Proves the thin vertical slice end to end: schema layer (units_def.py v3)
 -> validator layer (validate_pipeline_row's categorical branch) -> adapter
 layer (weather_provider.attach_provenance) -> caller-visible output
 (fetch_weather's station path). Follows
-backend/tests/corridor_discretization_test.py's convention (module-level
+backend/tests/city_rating_test.py's convention (module-level
 imports, plain asserts, no test classes) and
 backend/tests/dlr_pipeline_test.py's `monkeypatch.setattr(dlr_pipeline,
 "fetch_timeseries", ...)` convention for avoiding a live network call.
@@ -20,7 +20,7 @@ import pytest
 
 import asos_provider
 import config
-import corridor_discretization
+import city_rating
 import dlr_pipeline
 import nsrdb_provider
 import open_meteo_provider
@@ -119,7 +119,7 @@ def test_module_import_has_no_side_effects(monkeypatch):
     Guards the module docstring's no-side-effects-on-import contract:
     importing weather_provider must not require SYNOPTIC_TOKEN. Re-verify
     explicitly with the token unset (mirrors
-    corridor_discretization_test.py::test_module_importable_with_no_synoptic_token_and_no_network).
+    city_rating_test.py::test_module_importable_with_no_synoptic_token_and_no_network).
     """
     monkeypatch.delenv("SYNOPTIC_TOKEN", raising=False)
     import importlib
@@ -772,7 +772,7 @@ def test_all_four_cities_resolve_to_a_three_letter_asos_station():
         assert resolved in config.ASOS_STATIONS
 
 
-def test_corridor_usable_observation_reads_an_asos_supplemented_frame(monkeypatch):
+def test_city_usable_observation_reads_an_asos_supplemented_frame(monkeypatch):
     synoptic_source = _synthetic_frame(
         air_temp=[25.0, 25.5],
         wind_speed=[5.0, 5.2],
@@ -787,7 +787,7 @@ def test_corridor_usable_observation_reads_an_asos_supplemented_frame(monkeypatc
 
     result = weather_provider.fetch_weather(["KAUS"], _START, _END)
 
-    reading = corridor_discretization._usable_observation(result, "KAUS")
+    reading = city_rating._usable_observation(result, "KAUS")
 
     assert reading is not None
     assert reading["temp"] == 25.0

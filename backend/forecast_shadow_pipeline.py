@@ -14,7 +14,7 @@ uncorrected forecast can be substituted without rebuilding the pipeline.
 **Provisional choice, not a superiority claim.** `backend/forecast_
 experiment_audit.py`'s own block-bootstrap comparisons find neither wind
 nor cooling correction statistically distinguishable from the other at
-either corridor on development data (see `docs/data-science/decisions/
+either city on development data (see `docs/data-science/decisions/
 forecast_correction_followup_audit.md`, "One bounded development
 comparison" and "Corrected verdict"). Wind correction is the working
 choice here because the comparison is inconclusive and it is the
@@ -33,6 +33,51 @@ produced validates self-consistency against reanalysis-derived truth
 (Open-Meteo's Archive API), never an independent sensor measurement. This
 module inherits that same limitation; nothing it logs or predicts is
 field-validated operational safety.
+
+**Per-city, not per-corridor (2026-10-12).** Each city in `config.LOCATIONS`
+(AUSTIN, CORPUS_CHRISTI, MIDLAND, EL_PASO) is one independent rating point
+(contract: `docs/data-science/decisions/point_scope.md`). Every candidate
+computes ONE city's ampacity from that city's own forecast frame (and
+anchor) through `city_point.city_point(city)`'s bearing and conductor.
+Nothing here reduces across cities.
+
+**Log schema, `schema_version: 3`** -- one JSON line per cycle in
+`data/shadow/predictions/{CITY}.jsonl`::
+
+    {
+      "schema_version": 3,
+      "city": "AUSTIN",
+      "initialization_time", "availability_time", "decision_time",
+      "valid_time": <ISO-8601>, "horizon_minutes": 1440,
+      "logged_at": <ISO-8601>, "basis_caveat": <str>,
+      "candidates": {<one entry per CANDIDATE_METHOD_NAMES>: {
+          "status": "ok" | "unavailable" | "failed",
+          "ampacity_amps": float | null,   # this city's single-conductor value
+          "fallback_used": bool, "fallback_reason": str | null,
+          "model_version": str | null,
+          "input_provenance": dict | null, # anchored candidates carry
+                                           # {"anchor_provenance": {"anchor_source",
+                                           #  "anchor_station", "anchor_observation_time"}}
+          "reason": str | null,
+          "bundle": {"status": "ok", "bundle_ampacity_amps": float,
+                     "subconductors_per_phase": int, "config_version": str,
+                     "rating_basis": str, "reason": null}
+                  | {"status": "unavailable", "reason": str, "config_version": str}
+      }},
+      # six-field top-level mirror of candidates["ml_wind_corrected"]:
+      "method", "ampacity_amps", "fallback_used", "fallback_reason",
+      "model_version", "input_provenance"
+    }
+
+v1 (flat, single method, `corridor` key, no `schema_version`) and v2
+(nested `candidates`, `corridor` key) rows exist only in the legacy
+corridor-named logs (`AUSTIN_CORPUS_CHRISTI.jsonl`, `MIDLAND_EL_PASO.jsonl`).
+This module never writes them; `read_city_log_entries` (and so
+`Persistence24hShadowMethod`) only ever returns rows whose `schema_version`
+is >= 3 AND whose `city` equals the requested city, so a legacy row can
+never leak into a per-city result. The single-method demo
+(`ShadowPipeline.log_prediction`) writes the flat layout keyed by `city`
+with no `schema_version`; per-city readers skip it the same way.
 """
 
 from __future__ import annotations
@@ -51,7 +96,7 @@ from dotenv import load_dotenv
 
 import ampacity_forecast
 import config
-import corridor_discretization
+import city_point
 import forecast_correction_models
 import forecast_training
 import open_meteo_forecast_provider
@@ -143,7 +188,7 @@ def _resolve_publication_lag_hours() -> float:
 
 
 def fetch_live_forecast_for_valid_time(
-    corridor: str, valid_time, horizon_minutes: int, *, lat: float, lon: float,
+    city: str, valid_time, horizon_minutes: int, *, lat: float, lon: float,
     decision_time=None,
 ) -> tuple[pd.Series, ShadowTimestamps]:
     """
@@ -166,9 +211,9 @@ def fetch_live_forecast_for_valid_time(
     before (`pd.Timestamp.now(tz="UTC")`) -- byte-identical behavior for
     every existing caller. When provided, that exact value is used
     instead of calling `pd.Timestamp.now()`, so one shared `decision_time`
-    can be pinned across both endpoint cities' fetches in the same cycle
-    (`fetch_shared_corridor_inputs`) rather than each city's fetch
-    independently computing its own microseconds-apart "now."
+    can be pinned across the forecast and anchor fetches in the same cycle
+    (`fetch_shared_city_inputs`) rather than each fetch independently
+    computing its own microseconds-apart "now."
 
     Raises:
         StaleOrMissingDataError: on any network failure, `SingleRunUnavailable`,
@@ -197,18 +242,18 @@ def fetch_live_forecast_for_valid_time(
     except open_meteo_forecast_provider.SingleRunUnavailable as exc:
         raise StaleOrMissingDataError(
             f"fetch_live_forecast_for_valid_time: run {initialization_time} "
-            f"unavailable for corridor {corridor!r}: {exc}"
+            f"unavailable for city {city!r}: {exc}"
         ) from exc
     except Exception as exc:  # network/transport failure of any kind
         raise StaleOrMissingDataError(
             f"fetch_live_forecast_for_valid_time: retrieval failed for "
-            f"corridor {corridor!r}, run {initialization_time}: {exc}"
+            f"city {city!r}, run {initialization_time}: {exc}"
         ) from exc
 
     if frame.empty:
         raise StaleOrMissingDataError(
             f"fetch_live_forecast_for_valid_time: empty response for "
-            f"corridor {corridor!r}, run {initialization_time}"
+            f"city {city!r}, run {initialization_time}"
         )
 
     frame = frame.set_index("datetime_utc") if "datetime_utc" in frame.columns else frame
@@ -240,7 +285,7 @@ def fetch_live_forecast_for_valid_time(
     if row.isnull().any():
         raise StaleOrMissingDataError(
             f"fetch_live_forecast_for_valid_time: null field(s) in the "
-            f"retrieved row for corridor {corridor!r}, valid_time {valid_ts}: "
+            f"retrieved row for city {city!r}, valid_time {valid_ts}: "
             f"{row[row.isnull()].index.tolist()}"
         )
 
@@ -446,7 +491,7 @@ def fetch_live_anchor_observation(
 
 
 def attach_wind_correction_inputs(
-    frame: pd.DataFrame, *, endpoint_city: str, valid_time, decision_time,
+    frame: pd.DataFrame, *, city: str, valid_time, decision_time,
 ) -> pd.DataFrame:
     """
     Enrich a `validate_and_prepare_shadow_row`-prepared frame with the
@@ -455,19 +500,12 @@ def attach_wind_correction_inputs(
     `anchor_wind_speed`/`anchor_wind_direction` (from
     `fetch_live_anchor_observation`), `datetime_utc` (set to `valid_time`,
     for the hour-of-day encoding -- matches training's convention of
-    `datetime_utc` = the valid time T), and `endpoint_city` (for the
-    pooled model's endpoint indicator / the per_city model's grouping).
+    `datetime_utc` = the valid time T), and `city` (the per_city
+    correction model's grouping column, `forecast_correction_models.
+    _city_column`).
 
-    **Single-city by design here.** This function attaches ONE city's
-    (`endpoint_city`) live anchor observation -- it is the per-city
-    building block `CorridorWindCorrectionMethod` (2026-10-06) calls
-    once per endpoint city before reducing both cities' resulting
-    AMPACITIES through `forecast_training.corridor_weakest_link`, the
-    same two-stage per-city-then-minimum reduction
-    `forecast_experiment.corridor_anchored_pair_frame` uses for training.
-    Callers wanting the corridor-correct (both-cities, weakest-link)
-    prediction should use `CorridorWindCorrectionMethod`, not call this
-    function directly expecting a corridor-level answer.
+    Each city is its own rating point: this attaches that one city's live
+    anchor observation and nothing is combined across cities.
 
     **Archive-derived training anchor vs. live-station runtime anchor --
     a named data-source change, not assumed interchangeable.** Training's
@@ -502,13 +540,13 @@ def attach_wind_correction_inputs(
     if valid_time.tzinfo is None:
         valid_time = valid_time.tz_localize("UTC")
 
-    anchor = fetch_live_anchor_observation(endpoint_city, decision_time)
+    anchor = fetch_live_anchor_observation(city, decision_time)
 
     enriched = frame.copy()
     enriched["anchor_wind_speed"] = anchor["anchor_wind_speed"]
     enriched["anchor_wind_direction"] = anchor["anchor_wind_direction"]
     enriched["datetime_utc"] = valid_time
-    enriched["endpoint_city"] = endpoint_city
+    enriched["city"] = city
     enriched.attrs["geometry"] = frame.attrs.get("geometry")
     enriched.attrs["anchor_observation_time"] = anchor["anchor_observation_time"].isoformat()
     enriched.attrs["anchor_source"] = anchor["anchor_source"]
@@ -519,14 +557,14 @@ def attach_wind_correction_inputs(
 _REQUIRED_SHADOW_COLUMNS = ("fcst_air_temp", "fcst_wind_speed", "fcst_wind_direction", "fcst_solar_radiation")
 
 
-def validate_and_prepare_shadow_row(row: pd.Series, *, corridor: str) -> pd.DataFrame:
+def validate_and_prepare_shadow_row(row: pd.Series, *, city: str) -> pd.DataFrame:
     """
     Input validation for one retrieved row: required columns present and
     non-null, units sane (temperature in a physically plausible range,
     wind speed non-negative, solar radiation non-negative), and the
-    corridor's conductor metadata resolvable via `corridor_discretization.
-    corridor_geometry` (raises `KeyError` naming the corridor if not --
-    never silently proceeds without conductor metadata).
+    city's conductor metadata resolvable via `city_point.city_point`
+    (raises `KeyError` naming the valid cities if not -- never silently
+    proceeds without conductor metadata).
 
     Converts wind speed/direction to u/v via `wind_vector.to_uv` and
     attaches both representations, since `forecast_correction_models`'
@@ -542,9 +580,9 @@ def validate_and_prepare_shadow_row(row: pd.Series, *, corridor: str) -> pd.Data
 
     Raises:
         ValueError: naming the missing/invalid field(s).
-        KeyError: if `corridor` is not a resolvable corridor.
+        KeyError: if `city` is not in `config.LOCATIONS`.
     """
-    geometry = corridor_discretization.corridor_geometry(corridor)  # raises KeyError if unknown
+    geometry = city_point.city_point(city)  # raises KeyError if unknown
 
     missing = [c for c in _REQUIRED_SHADOW_COLUMNS if c not in row.index or pd.isnull(row[c])]
     if missing:
@@ -572,13 +610,12 @@ def validate_and_prepare_shadow_row(row: pd.Series, *, corridor: str) -> pd.Data
 @dataclass(frozen=True)
 class SharedCityFetchResult:
     """
-    Plan 05-02 (D-02): one endpoint city's own forecast-fetch outcome and
+    Plan 05-02 (D-02): one city's own forecast-fetch outcome and
     anchor-fetch outcome, captured INDEPENDENTLY -- a failed anchor fetch
-    for this city does not prevent its forecast fetch from being recorded
-    (and vice versa), and this city's own pair of outcomes never affects
-    the other city's. `forecast_frame`/`anchor` are `None` exactly when
-    the corresponding `*_error` is set (a successful fetch always pairs
-    with a `None` error, a failed one always pairs with a `None` result).
+    does not prevent the forecast fetch from being recorded (and vice
+    versa). `forecast_frame`/`anchor` are `None` exactly when the
+    corresponding `*_error` is set (a successful fetch always pairs with a
+    `None` error, a failed one always pairs with a `None` result).
     """
 
     city: str
@@ -588,70 +625,62 @@ class SharedCityFetchResult:
     anchor_error: Optional[str]
 
 
-def fetch_shared_corridor_inputs(
-    corridor: str, *, valid_time, decision_time, horizon_minutes: int,
-) -> dict:
+def fetch_shared_city_inputs(
+    city: str, *, valid_time, decision_time, horizon_minutes: int,
+) -> SharedCityFetchResult:
     """
-    Plan 05-02 (D-02): fetch each endpoint city's live forecast row and
-    live anchor observation EXACTLY ONCE per cycle -- at most two forecast
-    fetches and two anchor fetches total for a two-city corridor -- so
-    every candidate computed from this cycle's result shares the exact
-    same forecast row, the exact same anchor observation, and the exact
-    same `decision_time`, rather than each candidate (or each city) make
-    its own independent network call.
+    Plan 05-02 (D-02): fetch this city's live forecast row and live anchor
+    observation EXACTLY ONCE per cycle -- one forecast fetch and one anchor
+    fetch -- so every candidate computed from this cycle's result shares
+    the exact same forecast row, the exact same anchor observation, and
+    the exact same `decision_time`, rather than each candidate making its
+    own independent network call.
 
-    Each city's forecast attempt and anchor attempt are isolated in their
-    own try/except; a failure in one never prevents the other three
-    attempts (this city's other input, or either of the other city's
-    inputs) from being made. A candidate that discovers one of its
-    required inputs is `None` on the returned result reports itself
-    `status="unavailable"` (D-04) -- this function itself never raises
-    for a single city's fetch failure.
-
-    Returns a `{city: SharedCityFetchResult}` mapping, one entry per city
-    in `config.CORRIDOR_ENDPOINTS[corridor]`.
+    The forecast attempt and the anchor attempt are isolated in their own
+    try/except; a failure in one never prevents the other from being made.
+    A candidate that discovers one of its required inputs is `None` on the
+    returned result reports itself `status="unavailable"` (D-04) -- this
+    function itself never raises for a fetch failure.
     """
-    results: dict = {}
-    for city in config.CORRIDOR_ENDPOINTS[corridor]:
-        lat, lon = config.CITY_COORDINATES[city]
+    lat, lon = config.CITY_COORDINATES[city]
 
-        forecast_frame: Optional[pd.DataFrame] = None
-        forecast_error: Optional[str] = None
-        try:
-            row, _ = fetch_live_forecast_for_valid_time(
-                corridor, valid_time, horizon_minutes=horizon_minutes,
-                lat=lat, lon=lon, decision_time=decision_time,
-            )
-            forecast_frame = validate_and_prepare_shadow_row(row, corridor=corridor)
-        except (StaleOrMissingDataError, ValueError, KeyError) as exc:
-            forecast_error = str(exc)
-
-        anchor: Optional[pd.Series] = None
-        anchor_error: Optional[str] = None
-        try:
-            anchor = fetch_live_anchor_observation(city, decision_time)
-        except StaleOrMissingDataError as exc:
-            anchor_error = str(exc)
-
-        results[city] = SharedCityFetchResult(
-            city=city, forecast_frame=forecast_frame, forecast_error=forecast_error,
-            anchor=anchor, anchor_error=anchor_error,
+    forecast_frame: Optional[pd.DataFrame] = None
+    forecast_error: Optional[str] = None
+    try:
+        row, _ = fetch_live_forecast_for_valid_time(
+            city, valid_time, horizon_minutes=horizon_minutes,
+            lat=lat, lon=lon, decision_time=decision_time,
         )
-    return results
+        forecast_frame = validate_and_prepare_shadow_row(row, city=city)
+    except (StaleOrMissingDataError, ValueError, KeyError) as exc:
+        forecast_error = str(exc)
+
+    anchor: Optional[pd.Series] = None
+    anchor_error: Optional[str] = None
+    try:
+        anchor = fetch_live_anchor_observation(city, decision_time)
+    except StaleOrMissingDataError as exc:
+        anchor_error = str(exc)
+
+    return SharedCityFetchResult(
+        city=city, forecast_frame=forecast_frame, forecast_error=forecast_error,
+        anchor=anchor, anchor_error=anchor_error,
+    )
 
 
 def _enrich_city_frame_for_correction(
-    forecast_frame: pd.DataFrame, *, anchor: pd.Series, endpoint_city: str, valid_time, geometry,
+    forecast_frame: pd.DataFrame, *, anchor: pd.Series, city: str, valid_time, geometry,
 ) -> pd.DataFrame:
     """
     Plan 05-02 (D-01/D-06): a PURE, no-fetch enrichment -- given an
-    already-validated forecast frame (from `fetch_shared_corridor_
-    inputs`'s own result, never re-fetched here) and an already-fetched
-    anchor `Series`, returns a frame carrying every column
+    already-validated forecast frame (from `fetch_shared_city_inputs`'s own
+    result, never re-fetched here) and an already-fetched anchor `Series`,
+    returns a frame carrying every column
     `forecast_correction_models._wind_feature_frame` AND
     `_cooling_feature_frame` need: `anchor_wind_speed`/`anchor_wind_
-    direction`/`anchor_air_temp`, `datetime_utc=valid_time`,
-    `endpoint_city`, and the two perpendicular-wind columns
+    direction`/`anchor_air_temp`, `datetime_utc=valid_time`, `city` (the
+    column `forecast_correction_models._city_column` groups `per_city`
+    models by), and the two perpendicular-wind columns
     (`fcst_perp_wind_ms`/`anchor_perp_wind_ms`) via the SAME
     `thermal_model.perpendicular_wind` function `forecast_experiment.
     _add_correction_columns` uses -- never a second wind-projection
@@ -675,7 +704,7 @@ def _enrich_city_frame_for_correction(
     enriched["anchor_wind_direction"] = anchor_wind_direction
     enriched["anchor_air_temp"] = float(anchor["anchor_air_temp"])
     enriched["datetime_utc"] = valid_ts
-    enriched["endpoint_city"] = endpoint_city
+    enriched["city"] = city
 
     enriched["fcst_perp_wind_ms"] = thermal_model.perpendicular_wind(
         enriched["fcst_wind_speed"].to_numpy(dtype=float),
@@ -699,112 +728,71 @@ def _enrich_city_frame_for_correction(
     return enriched
 
 
-def _corridor_reduce_per_city(method: "CorrectionMethod", city_frames: dict, geometry) -> tuple:
+def anchor_provenance_for(anchor: pd.Series) -> dict:
     """
-    Plan 05-02 (D-01/D-06): generalizes `CorridorWindCorrectionMethod`'s
-    own two-stage per-city-then-weakest-link reduction to ANY
-    `CorrectionMethod`, driven by the orchestrator's already-fetched,
-    already-enriched per-city frames rather than a self-fetching method.
-
-    Calls `method.predict(frame, geometry)` once per city in
-    `sorted(city_frames)`'s own order (a deterministic city-A/city-B
-    assignment, matching `forecast_training.corridor_weakest_link`'s own
-    tie-break-to-lower-index convention), reduces the two resulting
-    ampacities via that same function, and returns
-    `(dlr_amps, per_city_ampacity_amps, bottleneck_city)`.
-
-    Raises:
-        ValueError: naming the found city count, if `city_frames` does
-            not carry exactly two entries.
+    The per-candidate `input_provenance` block for a candidate that used
+    this city's live anchor: `{"anchor_provenance": {"anchor_source",
+    "anchor_station", "anchor_observation_time"}}`. Visible provider
+    fallback (TCEQ -> Synoptic) lives here, distinct from a
+    prediction-method fallback.
     """
-    if len(city_frames) != 2:
-        raise ValueError(
-            f"_corridor_reduce_per_city: expected exactly two cities, found "
-            f"{len(city_frames)} ({sorted(city_frames)!r})"
-        )
-
-    cities = sorted(city_frames)
-    per_city_amps: dict = {}
-    for city in cities:
-        per_city_amps[city] = float(method.predict(city_frames[city], geometry))
-
-    amps_a = np.array([per_city_amps[cities[0]]])
-    amps_b = np.array([per_city_amps[cities[1]]])
-    dlr_amps, bottleneck_index, _ = forecast_training.corridor_weakest_link(amps_a, amps_b, {}, {})
-    bottleneck_city = cities[int(bottleneck_index[0])]
-    return float(dlr_amps[0]), per_city_amps, bottleneck_city
+    observation_time = anchor["anchor_observation_time"]
+    return {
+        "anchor_provenance": {
+            "anchor_source": anchor["anchor_source"],
+            "anchor_station": anchor["anchor_station"],
+            "anchor_observation_time": (
+                observation_time.isoformat()
+                if hasattr(observation_time, "isoformat") else observation_time
+            ),
+        }
+    }
 
 
-# 2026-10-08 ("bundle-level ampacity"): the reason this function takes
-# ALREADY-PER-CONDUCTOR, ALREADY-PER-ENDPOINT values (never the corridor-
-# reduced `dlr_amps` `_corridor_reduce_per_city` also returns) is D-01's own
-# scaling order -- subconductor scaling must happen BEFORE the weakest-link
-# corridor reduction, never after, because the two endpoints can carry
-# different bundle counts (confirmed live: AUSTIN=2, CORPUS_CHRISTI=2,
-# MIDLAND=2, EL_PASO=1, per `config.SUBCONDUCTORS_PER_PHASE`). Scaling an
-# already-corridor-reduced single value by one bundle count would silently
-# assume both endpoints share that count, which this corridor pair's own
-# MIDLAND_EL_PASO case (2 vs. 1) falsifies.
-def compute_endpoint_bundle_ampacity(per_city_ampacity_amps: Optional[dict]) -> dict:
+# 2026-10-08 ("bundle-level ampacity"): bundle output is a strictly
+# additive, separately-labeled reporting basis -- the candidate's own
+# single-conductor `ampacity_amps` is never modified by it. Per-city
+# (2026-10-12): the city's own single-conductor ampacity is scaled by
+# `config.SUBCONDUCTORS_PER_PHASE[city]`; there is no second endpoint and
+# no reduction across cities.
+def compute_city_bundle_ampacity(city: str, ampacity_amps: Optional[float]) -> dict:
     """
-    Scales each city's own single-conductor ampacity by
+    Scales `city`'s own single-conductor ampacity by
     `config.SUBCONDUCTORS_PER_PHASE[city]` (never by 3 for three phases --
     a subconductor bundle is a PER-PHASE parallel-conductor count, entirely
-    unrelated to the three independent phases of a three-phase circuit),
-    then reduces the two endpoints' own bundle ampacities via a corridor-
-    level MINIMUM -- a SEPARATE weakest-link reduction from the one
-    `_corridor_reduce_per_city` already applied to the per-conductor values,
-    never a re-scaling of that function's own `dlr_amps` return.
+    unrelated to the three independent phases of a three-phase circuit).
 
     Returns a dict, always one of two shapes:
 
-    - Unavailable (`per_city_ampacity_amps` is falsy, or names a city not in
-      `config.SUBCONDUCTORS_PER_PHASE`): `{"status": "unavailable", "reason":
-      <str>, "config_version": config.BUNDLE_CONFIG_VERSION}`. Never raises,
-      never invents a value -- the caller's own candidate keeps its existing
-      per-conductor result regardless of this function's outcome.
-    - Ok: `{"status": "ok", "endpoint_bundle_ampacity_amps": {city: float},
-      "corridor_bundle_ampacity_amps": float, "bundle_bottleneck_city": str,
-      "subconductors_per_phase": {city: int}, "config_version":
+    - Unavailable (`ampacity_amps` is `None`, or `city` has no
+      `config.SUBCONDUCTORS_PER_PHASE` entry): `{"status": "unavailable",
+      "reason": <str>, "config_version": config.BUNDLE_CONFIG_VERSION}`.
+      Never raises, never invents a value -- the caller's own candidate
+      keeps its existing per-conductor result regardless.
+    - Ok: `{"status": "ok", "bundle_ampacity_amps": float,
+      "subconductors_per_phase": int, "config_version":
       config.BUNDLE_CONFIG_VERSION, "rating_basis":
-      config.BUNDLE_RATING_BASIS, "reason": None}`. `bundle_bottleneck_city`
-      is computed independently of whatever `bottleneck_city` the caller's
-      own per-conductor reduction found -- the two identities may differ
-      (exactly MIDLAND_EL_PASO's own mixed-count case can produce), and
-      this function never assumes they match.
+      config.BUNDLE_RATING_BASIS, "reason": None}`.
     """
-    if not per_city_ampacity_amps:
+    if ampacity_amps is None:
         return {
             "status": "unavailable",
-            "reason": "no per-city (endpoint) ampacity available for this candidate",
+            "reason": "no ampacity available for this candidate",
             "config_version": config.BUNDLE_CONFIG_VERSION,
         }
 
-    missing = [c for c in per_city_ampacity_amps if c not in config.SUBCONDUCTORS_PER_PHASE]
-    if missing:
+    count = config.SUBCONDUCTORS_PER_PHASE.get(city)
+    if count is None:
         return {
             "status": "unavailable",
-            "reason": (
-                f"no configured SUBCONDUCTORS_PER_PHASE entry for city(ies) {missing!r}"
-            ),
+            "reason": f"no configured SUBCONDUCTORS_PER_PHASE entry for city {city!r}",
             "config_version": config.BUNDLE_CONFIG_VERSION,
         }
 
-    endpoint_bundle_ampacity_amps = {
-        city: config.SUBCONDUCTORS_PER_PHASE[city] * float(amps)
-        for city, amps in per_city_ampacity_amps.items()
-    }
-    bundle_bottleneck_city = min(
-        endpoint_bundle_ampacity_amps, key=endpoint_bundle_ampacity_amps.get
-    )
     return {
         "status": "ok",
-        "endpoint_bundle_ampacity_amps": endpoint_bundle_ampacity_amps,
-        "corridor_bundle_ampacity_amps": endpoint_bundle_ampacity_amps[bundle_bottleneck_city],
-        "bundle_bottleneck_city": bundle_bottleneck_city,
-        "subconductors_per_phase": {
-            city: config.SUBCONDUCTORS_PER_PHASE[city] for city in per_city_ampacity_amps
-        },
+        "bundle_ampacity_amps": count * float(ampacity_amps),
+        "subconductors_per_phase": count,
         "config_version": config.BUNDLE_CONFIG_VERSION,
         "rating_basis": config.BUNDLE_RATING_BASIS,
         "reason": None,
@@ -815,7 +803,7 @@ def compute_endpoint_bundle_ampacity(per_city_ampacity_amps: Optional[dict]) -> 
 class ShadowPrediction:
     """One method's output: the corrected ampacity, the method name, and whether a fallback was used."""
 
-    corridor: str
+    city: str
     method: str
     ampacity_amps: Optional[float]
     timestamps: Optional[ShadowTimestamps]
@@ -832,10 +820,9 @@ class ShadowPrediction:
     status: str = "ok"
     reason: Optional[str] = None
     # 2026-10-08 ("bundle-level ampacity"): a candidate's own per-conductor
-    # fields above (`ampacity_amps`, `input_provenance.per_city_ampacity_amps`)
-    # are NEVER modified by this field's presence -- bundle output is a
-    # strictly additive, separately-labeled reporting basis (see
-    # `compute_endpoint_bundle_ampacity`'s own docstring). `None` only for
+    # field above (`ampacity_amps`) is NEVER modified by this field's
+    # presence -- bundle output is a strictly additive, separately-labeled
+    # reporting basis (see `compute_city_bundle_ampacity`'s own docstring). `None` only for
     # legacy/pre-feature call sites that never set it; every call site this
     # phase touches sets an explicit dict (status "ok" or "unavailable").
     bundle: Optional[dict] = None
@@ -870,10 +857,10 @@ class WindCorrectionShadowMethod:
     def __init__(
         self, model: "forecast_correction_models.WindCorrectionModel", *,
         model_version: Optional[str] = None,
-        endpoint_city: Optional[str] = None, valid_time=None, decision_time=None,
+        city: Optional[str] = None, valid_time=None, decision_time=None,
     ):
         """
-        `endpoint_city`/`valid_time`/`decision_time`, when all three are
+        `city`/`valid_time`/`decision_time`, when all three are
         supplied, make this method fetch its own live anchor observation
         via `attach_wind_correction_inputs` inside `predict` -- so a
         missing/failed anchor source (e.g. no `SYNOPTIC_TOKEN`) raises
@@ -887,14 +874,14 @@ class WindCorrectionShadowMethod:
         """
         self.model = model
         self.model_version = model_version
-        self.endpoint_city = endpoint_city
+        self.city = city
         self.valid_time = valid_time
         self.decision_time = decision_time
 
     def predict(self, frame: pd.DataFrame, geometry) -> float:
-        if self.endpoint_city is not None and self.valid_time is not None and self.decision_time is not None:
+        if self.city is not None and self.valid_time is not None and self.decision_time is not None:
             enriched = attach_wind_correction_inputs(
-                frame, endpoint_city=self.endpoint_city,
+                frame, city=self.city,
                 valid_time=self.valid_time, decision_time=self.decision_time,
             )
             # Propagate the anchor provenance onto the CALLER's frame
@@ -911,99 +898,6 @@ class WindCorrectionShadowMethod:
             frame["fcst_solar_radiation"].to_numpy(dtype=float), geometry.conductor,
         )
         return float(np.asarray(ampacity)[0])
-
-
-class CorridorWindCorrectionMethod:
-    """
-    The CORRIDOR-correct form of wind correction (2026-10-06 pass) --
-    closes the single-city simplification `WindCorrectionShadowMethod`/
-    `attach_wind_correction_inputs` named as a remaining gap.
-
-    Training's own convention (`forecast_experiment._wind_corrected_
-    ampacity`, called once per endpoint city, then reduced through
-    `forecast_training.corridor_weakest_link`) applies the weakest-link
-    MINIMUM to each city's own CORRECTED AMPACITY -- never to a raw
-    weather variable. This class reproduces that exact two-stage
-    reduction live: fetch both endpoint cities' own live forecast +
-    live anchor observation independently, correct each city's own
-    wind and run it through the same `predict_wind_correction` ->
-    `perpendicular_wind` -> `ieee738_ampacity` chain
-    `WindCorrectionShadowMethod` uses for one city, then take the
-    elementwise minimum of the two cities' resulting ampacities via
-    `forecast_training.corridor_weakest_link` -- the repository's one
-    weakest-link reduction, never a second copy of the rule.
-
-    `predict(frame, geometry)` IGNORES the single-city `frame` passed by
-    `ShadowPipeline.predict` for its own correction math -- it exists
-    only so this class satisfies the `CorrectionMethod` protocol
-    `ShadowPipeline` expects, so `ShadowPipeline` itself needs no change.
-    Both cities' live data is fetched internally. Provenance (per-city
-    ampacity, the winning/bottleneck city, and each city's anchor
-    provenance) is written onto the PASSED-IN `frame`'s own `.attrs`
-    (mutated in place, the same pattern `WindCorrectionShadowMethod.
-    predict` already uses), so `ShadowPipeline.predict`'s existing
-    provenance-reading code (`frame.attrs.items()`) picks it up with no
-    change there either.
-
-    Raises:
-        StaleOrMissingDataError: propagated from either city's forecast
-            or anchor fetch -- EITHER city failing fails the whole
-            corridor prediction (a corridor rating with only one city's
-            real data is not the weakest-link reduction training used,
-            and must not be silently reported as though it were).
-    """
-
-    name = "ml_wind_corrected"
-
-    def __init__(
-        self, model: "forecast_correction_models.WindCorrectionModel", *,
-        corridor: str, model_version: Optional[str] = None,
-        valid_time, decision_time, horizon_minutes: int,
-    ):
-        self.model = model
-        self.model_version = model_version
-        self.corridor = corridor
-        self.valid_time = valid_time
-        self.decision_time = decision_time
-        self.horizon_minutes = horizon_minutes
-
-    def predict(self, frame: pd.DataFrame, geometry) -> float:
-        cities = config.CORRIDOR_ENDPOINTS[self.corridor]
-        per_city_amps: dict = {}
-        per_city_provenance: dict = {}
-        for city in cities:
-            lat, lon = config.CITY_COORDINATES[city]
-            row, _ = fetch_live_forecast_for_valid_time(
-                self.corridor, self.valid_time, horizon_minutes=self.horizon_minutes,
-                lat=lat, lon=lon,
-            )
-            city_frame = validate_and_prepare_shadow_row(row, corridor=self.corridor)
-            city_frame = attach_wind_correction_inputs(
-                city_frame, endpoint_city=city,
-                valid_time=self.valid_time, decision_time=self.decision_time,
-            )
-            prediction = forecast_correction_models.predict_wind_correction(self.model, city_frame)
-            perp = thermal_model.perpendicular_wind(prediction.speed, prediction.direction, geometry.bearing_deg)
-            amps = thermal_model.ieee738_ampacity(
-                city_frame["fcst_air_temp"].to_numpy(dtype=float), perp,
-                city_frame["fcst_solar_radiation"].to_numpy(dtype=float), geometry.conductor,
-            )
-            per_city_amps[city] = float(np.asarray(amps)[0])
-            per_city_provenance[city] = {
-                "anchor_observation_time": city_frame.attrs.get("anchor_observation_time"),
-                "anchor_source": city_frame.attrs.get("anchor_source"),
-                "anchor_station": city_frame.attrs.get("anchor_station"),
-            }
-
-        amps_a = np.array([per_city_amps[cities[0]]])
-        amps_b = np.array([per_city_amps[cities[1]]])
-        dlr_amps, bottleneck_index, _ = forecast_training.corridor_weakest_link(amps_a, amps_b, {}, {})
-        bottleneck_city = cities[int(bottleneck_index[0])]
-
-        frame.attrs["per_city_ampacity_amps"] = per_city_amps
-        frame.attrs["bottleneck_city"] = bottleneck_city
-        frame.attrs["anchor_provenance"] = per_city_provenance
-        return float(dlr_amps[0])
 
 
 class CoolingCorrectionShadowMethod:
@@ -1049,35 +943,35 @@ class RawForecastShadowMethod:
         return float(np.asarray(ampacity)[0])
 
 
-def _model_path_for(corridor: str, method_name: str) -> str:
-    return os.path.join(SHADOW_MODEL_DIR, f"{method_name}_{corridor}.joblib")
+def _model_path_for(city: str, method_name: str) -> str:
+    return os.path.join(SHADOW_MODEL_DIR, f"{method_name}_{city}.joblib")
 
 
-def save_correction_model(model, corridor: str, method_name: str) -> str:
-    """Persist a fitted correction model via joblib, mirroring `ampacity_forecast._load_corridor_model`'s own convention."""
+def save_correction_model(model, city: str, method_name: str) -> str:
+    """Persist a fitted correction model via joblib, mirroring `ampacity_forecast._load_model`'s own convention."""
     import joblib  # lazy -- keeps this module importable without sklearn/joblib installed
 
     os.makedirs(SHADOW_MODEL_DIR, exist_ok=True)
-    path = _model_path_for(corridor, method_name)
+    path = _model_path_for(city, method_name)
     joblib.dump(model, path)
     return path
 
 
-def load_correction_model(corridor: str, method_name: str):
+def load_correction_model(city: str, method_name: str):
     """
     Load a persisted correction model.
 
     Raises:
-        FileNotFoundError: naming the corridor, method, expected path, and
+        FileNotFoundError: naming the city, method, expected path, and
             that no training command exists yet for this prototype module
             (fit directly via `forecast_correction_models.fit_wind_correction`/
             `fit_cooling_correction` and call `save_correction_model`).
     """
-    path = _model_path_for(corridor, method_name)
+    path = _model_path_for(city, method_name)
     if not os.path.exists(path):
         raise FileNotFoundError(
             f"load_correction_model: no persisted {method_name!r} model for "
-            f"corridor {corridor!r} at {path!r}. Fit one with "
+            f"city {city!r} at {path!r}. Fit one with "
             f"forecast_correction_models.fit_wind_correction/fit_cooling_correction "
             f"and persist it with forecast_shadow_pipeline.save_correction_model."
         )
@@ -1086,17 +980,17 @@ def load_correction_model(corridor: str, method_name: str):
     return joblib.load(path)
 
 
-def model_version_for(corridor: str, method_name: str) -> str:
+def model_version_for(city: str, method_name: str) -> str:
     """
     A version identifier for the persisted model at `_model_path_for`:
-    `<method>_<corridor>@<file mtime ISO-8601>`. Not a content hash --
+    `<method>_<city>@<file mtime ISO-8601>`. Not a content hash --
     cheap and sufficient to tell two log entries apart if the underlying
     file is ever retrained and re-saved, which is all this prototype's
     logging needs it for.
     """
-    path = _model_path_for(corridor, method_name)
+    path = _model_path_for(city, method_name)
     mtime = datetime.fromtimestamp(os.path.getmtime(path), tz=timezone.utc)
-    return f"{method_name}_{corridor}@{mtime.isoformat()}"
+    return f"{method_name}_{city}@{mtime.isoformat()}"
 
 
 # Plan 05-02 (D-05, Pitfall 3): how close a prior logged entry's own
@@ -1106,18 +1000,79 @@ def model_version_for(corridor: str, method_name: str) -> str:
 # number inline, so the tolerance is visible and changeable in one place.
 _PERSISTENCE_VALID_TIME_TOLERANCE = pd.Timedelta(minutes=90)
 
+# Oldest `schema_version` that is keyed by `city` and carries nested
+# `candidates` -- everything older is the corridor-era layout (v1 flat,
+# v2 corridor-keyed) and is never returned to a per-city reader.
+_PER_CITY_SCHEMA_VERSION = 3
+
+
+def read_city_log_entries(city: str) -> list[dict]:
+    """
+    Every usable schema_version-3 entry in `data/shadow/predictions/
+    {CITY}.jsonl`, in file order. A usable entry is a JSON object whose
+    integer `schema_version` is >= 3 and whose `city` equals `city`.
+
+    Legacy and unreadable rows are SKIPPED, never raised on and never
+    returned (this reader must never crash the collector, and a
+    corridor-era row must never be mixed into a per-city result): a
+    malformed line, a non-object line, a v1 flat row (no `schema_version`,
+    or `< 2`), a v2 corridor row (`corridor` key, no `city`), or a row
+    keyed by a different city. One log line per call names how many rows
+    were skipped for each reason. A missing file returns `[]`.
+    """
+    path = os.path.join(SHADOW_PREDICTIONS_DIR, f"{city}.jsonl")
+    if not os.path.exists(path):
+        return []
+
+    entries: list[dict] = []
+    skipped = {"malformed": 0, "legacy_v1_flat": 0, "legacy_v2_corridor": 0, "other_city_or_schema": 0}
+    with open(path, "r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                skipped["malformed"] += 1
+                continue
+            if not isinstance(entry, dict):
+                skipped["malformed"] += 1
+                continue
+            version = entry.get("schema_version", 1)
+            if isinstance(version, bool) or not isinstance(version, int):
+                skipped["malformed"] += 1
+                continue
+            if version < 2:
+                skipped["legacy_v1_flat"] += 1
+                continue
+            if version < _PER_CITY_SCHEMA_VERSION or ("city" not in entry and "corridor" in entry):
+                skipped["legacy_v2_corridor"] += 1
+                continue
+            if entry.get("city") != city:
+                skipped["other_city_or_schema"] += 1
+                continue
+            entries.append(entry)
+
+    if any(skipped.values()):
+        logger.info(
+            "read_city_log_entries(%r): skipped non-per-city rows in %s: %s",
+            city, path, {k: v for k, v in skipped.items() if v},
+        )
+    return entries
+
 
 class Persistence24hShadowMethod:
     """
     Plan 05-02 (D-05): the live, decision-time-available form of
     `persistence_24h` -- reads THIS collector's own prior logged entry
-    for the same corridor, never a reanalysis/archive backfill. Unlike
-    `forecast_shadow_healthcheck._last_entry` (which correctly wants the
-    positionally-LAST line for its own different purpose, freshness),
-    this method must find the entry whose own `valid_time` is closest to
-    `this_cycle_decision_time` -- at the twice-daily cadence, the
-    immediately-preceding entry's `valid_time` is only ~12h old, not 24h
-    (05-RESEARCH.md Pitfall 3).
+    for the same city (`read_city_log_entries`), never a reanalysis/
+    archive backfill. Unlike `forecast_shadow_healthcheck._last_entry`
+    (which correctly wants the positionally-LAST line for its own
+    different purpose, freshness), this method must find the entry whose
+    own `valid_time` is closest to `this_cycle_decision_time` -- at the
+    twice-daily cadence, the immediately-preceding entry's `valid_time`
+    is only ~12h old, not 24h (05-RESEARCH.md Pitfall 3).
 
     Reads the entry's own `candidates.raw_forecast` sub-object (not
     `ml_wind_corrected`'s) -- see 05-02-PLAN.md's objective for why
@@ -1128,57 +1083,39 @@ class Persistence24hShadowMethod:
 
     name = "persistence_24h"
 
-    def compute(self, corridor: str, this_cycle_decision_time) -> "ShadowPrediction":
+    def compute(self, city: str, this_cycle_decision_time) -> "ShadowPrediction":
         decision_ts = pd.Timestamp(this_cycle_decision_time)
         if decision_ts.tzinfo is None:
             decision_ts = decision_ts.tz_localize("UTC")
 
-        path = os.path.join(SHADOW_PREDICTIONS_DIR, f"{corridor}.jsonl")
         best_entry: Optional[dict] = None
         best_delta: Optional[pd.Timedelta] = None
 
-        if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as fh:
-                for line in fh:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        entry = json.loads(line)
-                    except json.JSONDecodeError:
-                        # A malformed line is skipped, never raised on --
-                        # this reader must never crash the collector.
-                        continue
-                    # A pre-cutover flat-shape row (no schema_version, or
-                    # schema_version 1) is a normal, expected, skippable
-                    # input here -- not a corruption (05-01-SUMMARY.md's
-                    # own no-migration strategy).
-                    if entry.get("schema_version", 1) < 2:
-                        continue
-                    raw_valid_time = entry.get("valid_time")
-                    if raw_valid_time is None:
-                        continue
-                    try:
-                        entry_valid_time = pd.Timestamp(raw_valid_time)
-                    except (ValueError, TypeError):
-                        continue
-                    if entry_valid_time.tzinfo is None:
-                        entry_valid_time = entry_valid_time.tz_localize("UTC")
-                    delta = abs(entry_valid_time - decision_ts)
-                    if delta <= _PERSISTENCE_VALID_TIME_TOLERANCE and (
-                        best_delta is None or delta < best_delta
-                    ):
-                        best_entry = entry
-                        best_delta = delta
+        for entry in read_city_log_entries(city):
+            raw_valid_time = entry.get("valid_time")
+            if raw_valid_time is None:
+                continue
+            try:
+                entry_valid_time = pd.Timestamp(raw_valid_time)
+            except (ValueError, TypeError):
+                continue
+            if entry_valid_time.tzinfo is None:
+                entry_valid_time = entry_valid_time.tz_localize("UTC")
+            delta = abs(entry_valid_time - decision_ts)
+            if delta <= _PERSISTENCE_VALID_TIME_TOLERANCE and (
+                best_delta is None or delta < best_delta
+            ):
+                best_entry = entry
+                best_delta = delta
 
         if best_entry is None:
             return ShadowPrediction(
-                corridor=corridor, method=self.name, ampacity_amps=None,
+                city=city, method=self.name, ampacity_amps=None,
                 timestamps=None, fallback_used=False, status="unavailable",
                 reason=(
                     "no prior entry within tolerance of decision_time "
                     f"{decision_ts.isoformat()} (cold start, or a gap in "
-                    "this corridor's collection history)"
+                    "this city's collection history)"
                 ),
                 bundle={
                     "status": "unavailable",
@@ -1191,7 +1128,7 @@ class Persistence24hShadowMethod:
         raw_status = raw_candidate.get("status")
         if raw_status != "ok":
             return ShadowPrediction(
-                corridor=corridor, method=self.name, ampacity_amps=None,
+                city=city, method=self.name, ampacity_amps=None,
                 timestamps=None, fallback_used=False, status="unavailable",
                 reason=(
                     "the matched prior entry's own raw_forecast candidate "
@@ -1204,38 +1141,29 @@ class Persistence24hShadowMethod:
                 },
             )
 
-        provenance = None
-        if raw_candidate.get("per_city_ampacity_amps") is not None or raw_candidate.get("bottleneck_city") is not None:
-            provenance = {
-                "per_city_ampacity_amps": raw_candidate.get("per_city_ampacity_amps"),
-                "bottleneck_city": raw_candidate.get("bottleneck_city"),
-            }
-        elif isinstance(raw_candidate.get("input_provenance"), dict):
-            provenance = raw_candidate.get("input_provenance")
+        provenance = raw_candidate.get("input_provenance")
+        if not isinstance(provenance, dict):
+            provenance = None
 
         # 2026-10-08 ("bundle-level ampacity"): D-05's own decision-time
         # discipline, extended to bundle output -- persistence must persist
         # the DECISION-TIME bundle rating the matched prior entry's own
-        # raw_forecast candidate already computed from the endpoint values
-        # available AT THAT TIME, never re-derive one now by re-scaling an
-        # already-corridor-reduced ampacity under TODAY's bundle config
-        # (which could silently diverge from what was true back then, and
-        # would double-apply a reduction `compute_endpoint_bundle_ampacity`
-        # already performed once). A matched entry logged before this
-        # feature existed carries no "bundle" key at all -- unavailable,
-        # never backfilled/invented.
+        # raw_forecast candidate already computed, never re-derive one now
+        # under TODAY's bundle config (which could silently diverge from
+        # what was true back then). A matched entry carrying no "bundle"
+        # key is unavailable, never backfilled/invented.
         matched_bundle = raw_candidate.get("bundle")
         if isinstance(matched_bundle, dict):
             bundle = dict(matched_bundle)
         else:
             bundle = {
                 "status": "unavailable",
-                "reason": "the matched prior entry predates bundle reporting (no 'bundle' key)",
+                "reason": "the matched prior entry carries no 'bundle' key",
                 "config_version": config.BUNDLE_CONFIG_VERSION,
             }
 
         return ShadowPrediction(
-            corridor=corridor, method=self.name,
+            city=city, method=self.name,
             ampacity_amps=raw_candidate.get("ampacity_amps"),
             timestamps=None, fallback_used=False, status="ok",
             input_provenance=provenance, bundle=bundle,
@@ -1291,9 +1219,9 @@ _TRUTH_PROXY_SOLAR_HOUR_TOLERANCE = pd.Timedelta(minutes=35)
 # comment for the live-data investigation that motivated this. Deliberately
 # only ONE retry (2 attempts total), not more: each attempt can itself take
 # up to `config.FORECAST_EXPERIMENT_HTTP_TIMEOUT_S` (60s) to time out, this
-# function is called once per endpoint city (2x per corridor), and the
-# scheduled workflow budgets 15 minutes for the ENTIRE two-corridor cycle --
-# a worse-case 3-attempt retry chain here could alone approach that ceiling.
+# function is called once per city (4x per collector run), and the
+# scheduled workflow budgets 30 minutes for the ENTIRE four-city cycle --
+# a worse-case 3-attempt retry chain here would eat a large share of it.
 _SOLAR_PROXY_FETCH_ATTEMPTS = 2
 _SOLAR_PROXY_RETRY_DELAY_S = 3
 
@@ -1315,7 +1243,7 @@ def _select_hour_row(frame: pd.DataFrame, target_ts: "pd.Timestamp", tolerance: 
 
 
 def _fetch_solar_proxy_hours(
-    corridor: str, city: str, lat: float, lon: float,
+    city: str, lat: float, lon: float,
     window_start: "pd.Timestamp", anchor_ts: "pd.Timestamp",
     target_times: list,
 ) -> list:
@@ -1354,14 +1282,14 @@ def _fetch_solar_proxy_hours(
             last_exc = exc
             if attempt + 1 < _SOLAR_PROXY_FETCH_ATTEMPTS:
                 logger.info(
-                    "fetch_live_truth_proxy_series(%r, %r): solar-proxy fetch "
+                    "fetch_live_truth_proxy_series(%r): solar-proxy fetch "
                     "attempt %d/%d failed (%s) -- retrying",
-                    corridor, city, attempt + 1, _SOLAR_PROXY_FETCH_ATTEMPTS, exc,
+                    city, attempt + 1, _SOLAR_PROXY_FETCH_ATTEMPTS, exc,
                 )
                 time.sleep(_SOLAR_PROXY_RETRY_DELAY_S)
     if frame is None:
         raise StaleOrMissingDataError(
-            f"fetch_live_truth_proxy_series: corridor {corridor!r} city "
+            f"fetch_live_truth_proxy_series: city "
             f"{city!r}: solar-proxy (Open-Meteo historical forecast) window "
             f"fetch failed after {_SOLAR_PROXY_FETCH_ATTEMPTS} attempt(s): {last_exc}"
         ) from last_exc
@@ -1371,7 +1299,7 @@ def _fetch_solar_proxy_hours(
         row = _select_hour_row(frame, target_ts, _TRUTH_PROXY_SOLAR_HOUR_TOLERANCE)
         if row is None:
             raise StaleOrMissingDataError(
-                f"fetch_live_truth_proxy_series: corridor {corridor!r} city "
+                f"fetch_live_truth_proxy_series: city "
                 f"{city!r}: no usable Open-Meteo historical-forecast solar "
                 f"row within {_TRUTH_PROXY_SOLAR_HOUR_TOLERANCE} of required "
                 f"hour {target_ts.isoformat()}"
@@ -1379,7 +1307,7 @@ def _fetch_solar_proxy_hours(
         value = row.get("solar_radiation")
         if pd.isnull(value):
             raise StaleOrMissingDataError(
-                f"fetch_live_truth_proxy_series: corridor {corridor!r} city "
+                f"fetch_live_truth_proxy_series: city "
                 f"{city!r}: null 'solar_radiation' (Open-Meteo historical "
                 f"forecast) at required hour {target_ts.isoformat()}"
             )
@@ -1409,7 +1337,7 @@ def _usable_station_row(frame: pd.DataFrame, target_ts: "pd.Timestamp"):
 
 
 def _fetch_station_hours(
-    corridor: str, city: str, cams_id: str,
+    city: str, cams_id: str,
     window_start: "pd.Timestamp", anchor_ts: "pd.Timestamp", target_times: list,
 ):
     """
@@ -1432,7 +1360,7 @@ def _fetch_station_hours(
     `_TRUTH_PROXY_STATION_FIELDS` to a 7-element float list aligned to
     `target_times`; `sources` is a same-length list of `"tceq"` or
     `"synoptic"` naming which provider actually supplied each hour --
-    never a single corridor-wide summary, since a real window can be
+    never a single window-wide summary, since a real window can be
     genuinely mixed (some hours from each provider).
 
     Raises:
@@ -1448,7 +1376,7 @@ def _fetch_station_hours(
         )
     except Exception as exc:
         raise StaleOrMissingDataError(
-            f"fetch_live_truth_proxy_series: corridor {corridor!r} city "
+            f"fetch_live_truth_proxy_series: city "
             f"{city!r}: window fetch failed: {exc}"
         ) from exc
 
@@ -1471,9 +1399,9 @@ def _fetch_station_hours(
     synoptic_frame = None
     if gap_reasons and synoptic_station is not None:
         logger.info(
-            "fetch_live_truth_proxy_series(%r, %r): %d gap hour(s) at TCEQ CAMS "
+            "fetch_live_truth_proxy_series(%r): %d gap hour(s) at TCEQ CAMS "
             "%r -- retrying those hours against Synoptic station %r",
-            corridor, city, len(gap_reasons), cams_id, synoptic_station,
+            city, len(gap_reasons), cams_id, synoptic_station,
         )
         try:
             synoptic_frame = weather_provider.fetch_weather(
@@ -1482,8 +1410,8 @@ def _fetch_station_hours(
             )
         except Exception as exc:
             logger.info(
-                "fetch_live_truth_proxy_series(%r, %r): Synoptic retry fetch "
-                "raised (%s) -- gap hour(s) remain unresolved", corridor, city, exc,
+                "fetch_live_truth_proxy_series(%r): Synoptic retry fetch "
+                "raised (%s) -- gap hour(s) remain unresolved", city, exc,
             )
             synoptic_frame = pd.DataFrame(columns=["datetime_utc", *_TRUTH_PROXY_STATION_FIELDS])
         else:
@@ -1509,7 +1437,7 @@ def _fetch_station_hours(
     if still_missing:
         target_ts, tceq_reason, synoptic_reason = sorted(still_missing, key=lambda t: t[0])[0]
         raise StaleOrMissingDataError(
-            f"fetch_live_truth_proxy_series: corridor {corridor!r} city {city!r}: "
+            f"fetch_live_truth_proxy_series: city {city!r}: "
             f"required hour {target_ts.isoformat()} unusable at both providers "
             f"(tceq CAMS {cams_id!r}: {tceq_reason}; synoptic: {synoptic_reason})"
         )
@@ -1526,48 +1454,42 @@ def _fetch_station_hours(
 
 
 def fetch_live_truth_proxy_series(
-    corridor: str, anchor_time, *, lookback_hours: float = None,
+    city: str, anchor_time, *, lookback_hours: float = None,
 ):
     """
     Plan 05-04 (D-05's decision-time discipline, generalized for arm 5's
-    own lagged/rolling feature needs): build a 7-row, hourly, corridor-
-    level TRUTH-PROXY series -- `anchor_time - lookback_hours` through
+    own lagged/rolling feature needs): build a 7-row, hourly, per-city
+    TRUTH-PROXY series -- `anchor_time - lookback_hours` through
     `anchor_time` inclusive -- from near-real-time station observations,
-    shaped EXACTLY like `forecast_experiment._arm5_truth_frame`'s own
-    output (`datetime_utc`, `dlr_amps`, `air_temp`, `wind_speed`,
+    shaped like the per-city truth frame `forecast_shadow_fit_reference_
+    refit` fits on (`datetime_utc`, `dlr_amps`, `air_temp`, `wind_speed`,
     `solar_radiation`) so it can be fed straight into `ampacity_forecast.
-    build_ml_features` -- the SAME feature builder arm 5's own offline fit
+    build_ml_features` -- the SAME feature builder the offline fit
     (`forecast_training.build_training_matrix`) already calls.
 
-    For EACH endpoint city, fetches ONE window of `provider="tceq"`
-    station observations spanning `[anchor_time - lookback_hours,
-    anchor_time]`, then selects, for each of the 7 target hourly
-    timestamps, the closest row within `_TRUTH_PROXY_HOUR_TOLERANCE` (20
-    minutes). 2026-10-08: a missing/null hour no longer raises
-    immediately -- `_fetch_station_hours` collects every such gap hour
-    first, then makes ONE explicit retry fetch against this city's
-    `config.SYNOPTIC_FALLBACK_STATIONS` entry and re-checks only those
-    gap hours against it (the same explicit-row-level-retry pattern
-    `fetch_live_anchor_observation` already uses for its own single-row
-    lookup, generalized to seven independent hours here, since `fetch_
-    weather`'s own `fallback=True` default only fires on a raised
-    exception/empty response, never on a mechanically successful
-    response whose one specific row is unusable -- TCEQ's own trailing
-    not-yet-reported-hour case). Only a gap hour still unusable after
-    that retry raises `StaleOrMissingDataError`, naming the hour and
-    BOTH providers' own specific failure reasons. Never interpolates,
-    pads, or backfills a missing hour at either provider (D-04/
-    T-05-04-01).
+    Fetches ONE window of `provider="tceq"` station observations for
+    `city` spanning `[anchor_time - lookback_hours, anchor_time]`, then
+    selects, for each of the 7 target hourly timestamps, the closest row
+    within `_TRUTH_PROXY_HOUR_TOLERANCE` (20 minutes). 2026-10-08: a
+    missing/null hour no longer raises immediately -- `_fetch_station_
+    hours` collects every such gap hour first, then makes ONE explicit
+    retry fetch against this city's `config.SYNOPTIC_FALLBACK_STATIONS`
+    entry and re-checks only those gap hours against it (the same
+    explicit-row-level-retry pattern `fetch_live_anchor_observation`
+    already uses for its own single-row lookup, since `fetch_weather`'s
+    own `fallback=True` default only fires on a raised exception/empty
+    response, never on a mechanically successful response whose one
+    specific row is unusable -- TCEQ's own trailing not-yet-reported-hour
+    case). Only a gap hour still unusable after that retry raises
+    `StaleOrMissingDataError`, naming the hour and BOTH providers' own
+    specific failure reasons. Never interpolates, pads, or backfills a
+    missing hour at either provider (D-04/T-05-04-01).
 
-    Once both cities' 7-hour windows are fully validated, each city's own
-    hourly ampacity is computed via the SAME `thermal_model.
-    perpendicular_wind` + `thermal_model.ieee738_ampacity` chain every
-    other method in this module uses, against the corridor's own
-    `geometry.bearing_deg`/`conductor` (`corridor_discretization.
-    corridor_geometry`); the two cities' 7-element ampacity arrays are
-    reduced via ONE call to `forecast_training.corridor_weakest_link` --
-    the repository's one weakest-link reduction, never a second copy of
-    the rule, and never one call per hour.
+    The city's own hourly ampacity (`dlr_amps`) is computed via the SAME
+    `thermal_model.perpendicular_wind` + `thermal_model.ieee738_ampacity`
+    chain every other method in this module uses, against
+    `city_point.city_point(city)`'s own bearing/conductor. It is that
+    city's value -- nothing is reduced across cities.
 
     `lookback_hours` defaults to `config.FORECAST_ML_ROLLING_WINDOW_HOURS`
     (6) -- the exact depth arm 5's own lag/rolling features need
@@ -1591,21 +1513,18 @@ def fetch_live_truth_proxy_series(
         `wind_speed`, `solar_radiation`, sorted ascending by
         `datetime_utc`, whose LAST row's `datetime_utc` equals
         `anchor_time`. `provenance` is
-        `{"station_provenance": {city: {"sources": [...], "fallback_hours":
-        [...]}, ...}, "solar_source": "open_meteo_historical_forecast"}` --
+        `{"station_provenance": {"sources": [...], "fallback_hours":
+        [...]}, "solar_source": "open_meteo_historical_forecast"}` --
         `sources` is a 7-element list of `"tceq"`/`"synoptic"` aligned to
-        the series' own rows for that city, and `fallback_hours` names
-        (as ISO-8601 strings) exactly which hours, if any, came from
-        Synoptic rather than TCEQ -- never a single corridor-wide
-        fallback flag, since one city's window can be genuinely mixed.
-        Never silently omitted or defaulted: a caller that needs to know
-        exactly what supplied this series' inputs always can.
+        the series' own rows, and `fallback_hours` names (as ISO-8601
+        strings) exactly which hours, if any, came from Synoptic rather
+        than TCEQ -- never a single fallback flag, since one window can
+        be genuinely mixed.
 
     Raises:
         StaleOrMissingDataError: on any window-fetch failure, or any
             required hour still unusable after the per-hour Synoptic
-            retry, for either endpoint city, from either the station or
-            the solar-proxy source.
+            retry, from either the station or the solar-proxy source.
     """
     if lookback_hours is None:
         lookback_hours = config.FORECAST_ML_ROLLING_WINDOW_HOURS
@@ -1618,81 +1537,49 @@ def fetch_live_truth_proxy_series(
     # Ascending: anchor_time - lookback_hours, ..., anchor_time - 1h, anchor_time.
     target_times = [anchor_ts - pd.Timedelta(hours=h) for h in range(lookback_hours, -1, -1)]
 
-    geometry = corridor_discretization.corridor_geometry(corridor)
-    city_a, city_b = config.CORRIDOR_ENDPOINTS[corridor]
+    point = city_point.city_point(city)
 
-    per_city_fields: dict = {}
-    station_provenance: dict = {}
-    for city in (city_a, city_b):
-        cams_id = config.TCEQ_STATIONS.get(city)
-        if cams_id is None:
-            raise StaleOrMissingDataError(
-                f"fetch_live_truth_proxy_series: corridor {corridor!r}: no "
-                f"known TCEQ CAMS site for city {city!r}"
-            )
-
-        fields, sources = _fetch_station_hours(
-            corridor, city, cams_id, window_start, anchor_ts, target_times,
+    cams_id = config.TCEQ_STATIONS.get(city)
+    if cams_id is None:
+        raise StaleOrMissingDataError(
+            f"fetch_live_truth_proxy_series: no known TCEQ CAMS site for city {city!r}"
         )
-        station_provenance[city] = {
-            "sources": sources,
-            "fallback_hours": [
-                target_times[i].isoformat()
-                for i, source in enumerate(sources) if source == "synoptic"
-            ],
-        }
 
-        lat, lon = config.CITY_COORDINATES[city]
-        fields["solar_radiation"] = _fetch_solar_proxy_hours(
-            corridor, city, lat, lon, window_start, anchor_ts, target_times,
-        )
-        per_city_fields[city] = fields
-
-    perp_a = thermal_model.perpendicular_wind(
-        np.array(per_city_fields[city_a]["wind_speed"], dtype=float),
-        np.array(per_city_fields[city_a]["wind_direction"], dtype=float),
-        geometry.bearing_deg,
+    fields, sources = _fetch_station_hours(
+        city, cams_id, window_start, anchor_ts, target_times,
     )
-    amps_a = np.asarray(
+    station_provenance = {
+        "sources": sources,
+        "fallback_hours": [
+            target_times[i].isoformat()
+            for i, source in enumerate(sources) if source == "synoptic"
+        ],
+    }
+
+    lat, lon = config.CITY_COORDINATES[city]
+    fields["solar_radiation"] = _fetch_solar_proxy_hours(
+        city, lat, lon, window_start, anchor_ts, target_times,
+    )
+
+    perp = thermal_model.perpendicular_wind(
+        np.array(fields["wind_speed"], dtype=float),
+        np.array(fields["wind_direction"], dtype=float),
+        point.bearing_deg,
+    )
+    dlr_amps = np.asarray(
         thermal_model.ieee738_ampacity(
-            np.array(per_city_fields[city_a]["air_temp"], dtype=float), perp_a,
-            np.array(per_city_fields[city_a]["solar_radiation"], dtype=float), geometry.conductor,
+            np.array(fields["air_temp"], dtype=float), perp,
+            np.array(fields["solar_radiation"], dtype=float), point.conductor,
         ),
         dtype=float,
-    )
-    perp_b = thermal_model.perpendicular_wind(
-        np.array(per_city_fields[city_b]["wind_speed"], dtype=float),
-        np.array(per_city_fields[city_b]["wind_direction"], dtype=float),
-        geometry.bearing_deg,
-    )
-    amps_b = np.asarray(
-        thermal_model.ieee738_ampacity(
-            np.array(per_city_fields[city_b]["air_temp"], dtype=float), perp_b,
-            np.array(per_city_fields[city_b]["solar_radiation"], dtype=float), geometry.conductor,
-        ),
-        dtype=float,
-    )
-
-    dlr_amps, _, winning_columns = forecast_training.corridor_weakest_link(
-        amps_a, amps_b,
-        {
-            "air_temp": np.array(per_city_fields[city_a]["air_temp"], dtype=float),
-            "wind_speed": np.array(per_city_fields[city_a]["wind_speed"], dtype=float),
-            "solar_radiation": np.array(per_city_fields[city_a]["solar_radiation"], dtype=float),
-        },
-        {
-            "air_temp": np.array(per_city_fields[city_b]["air_temp"], dtype=float),
-            "wind_speed": np.array(per_city_fields[city_b]["wind_speed"], dtype=float),
-            "solar_radiation": np.array(per_city_fields[city_b]["solar_radiation"], dtype=float),
-        },
     )
 
     series = pd.DataFrame({
         "datetime_utc": target_times,
         "dlr_amps": dlr_amps,
-        "air_temp": winning_columns["air_temp"],
-        "wind_speed": winning_columns["wind_speed"],
-        "solar_radiation": winning_columns["solar_radiation"],
+        "air_temp": np.array(fields["air_temp"], dtype=float),
+        "wind_speed": np.array(fields["wind_speed"], dtype=float),
+        "solar_radiation": np.array(fields["solar_radiation"], dtype=float),
     }).sort_values("datetime_utc").reset_index(drop=True)
 
     provenance = {
@@ -1702,66 +1589,44 @@ def fetch_live_truth_proxy_series(
     return series, provenance
 
 
-_PER_CITY_NOT_APPLICABLE_REASON = (
-    "reference_ml_refit_24h is architecturally corridor-level-native with no "
-    "per-city decomposition at inference time, exactly as at training time: "
-    "the estimator is fit on forecast_experiment._arm5_truth_frame's own "
-    "weakest-link-reduced corridor series and never sees a per-city value, "
-    "so there is no per-city ampacity to report here either."
-)
-
-# 2026-10-08 ("bundle-level ampacity"): reference_ml_refit_24h can NEVER
-# produce a bundle estimate, regardless of whether the prediction itself
-# succeeds this cycle -- a corridor-only prediction has no per-endpoint
-# value to scale by a (possibly different) per-city subconductor count, so
-# there is no honest way to derive one. Never invented, never silently
-# approximated from the corridor value under one assumed bundle count.
-_BUNDLE_NOT_APPLICABLE = {
-    "status": "unavailable",
-    "reason": (
-        "reference_ml_refit_24h produces only a corridor-level prediction "
-        "(see per_city_not_applicable_reason) -- a corridor-only value "
-        "cannot generally be converted to a bundle estimate when endpoint "
-        "cities carry different subconductors-per-phase counts, so no "
-        "bundle output is computed for this candidate."
-    ),
-    "config_version": config.BUNDLE_CONFIG_VERSION,
-}
-
-
 class ReferenceRefit24hShadowMethod:
     """
     Plan 05-04 (D-03/D-04): the real predict path, replacing 05-02's
-    honest `status="unavailable"` stub now that a persisted arm-5 MLP
-    artifact exists for both corridors (`backend/forecast_shadow_fit_
-    reference_refit.py`). Loads the persisted estimator via `load_
-    correction_model` (never fits/retrains it -- D-09, T-05-04-04), builds
-    its live feature row from `fetch_live_truth_proxy_series`'s 7-hour
-    truth-proxy window via `ampacity_forecast.build_ml_features` (the SAME
-    feature builder the offline fit used), and predicts from the LAST row
-    (the one anchored at `anchor_time`, the only row whose lag/rolling
-    features are fully determined).
+    honest `status="unavailable"` stub once a persisted arm-5 MLP artifact
+    exists for the city (`backend/forecast_shadow_fit_reference_refit.py`,
+    one artifact per city, fit on that city's OWN ampacity -- not a
+    minimum). Loads the persisted estimator via `load_correction_model`
+    (never fits/retrains it -- D-09, T-05-04-04), builds its live feature
+    row from `fetch_live_truth_proxy_series`'s 7-hour truth-proxy window
+    via `ampacity_forecast.build_ml_features` (the SAME feature builder
+    the offline fit used), and predicts from the LAST row (the one
+    anchored at `anchor_time`, the only row whose lag/rolling features
+    are fully determined).
+
+    A missing per-city artifact (the state until each city is refit) is
+    `status="unavailable"` with the `FileNotFoundError`'s own named
+    reason -- never a crash.
     """
 
     name = "reference_ml_refit_24h"
 
-    def compute(self, corridor: str, anchor_time) -> "ShadowPrediction":
+    def compute(self, city: str, anchor_time) -> "ShadowPrediction":
         try:
-            estimator = load_correction_model(corridor, self.name)
+            estimator = load_correction_model(city, self.name)
         except FileNotFoundError as exc:
             return ShadowPrediction(
-                corridor=corridor, method=self.name, ampacity_amps=None,
+                city=city, method=self.name, ampacity_amps=None,
                 timestamps=None, fallback_used=False, status="unavailable",
-                reason=str(exc), bundle=dict(_BUNDLE_NOT_APPLICABLE),
+                reason=str(exc), bundle=compute_city_bundle_ampacity(city, None),
             )
 
         try:
-            truth_proxy_series, truth_provenance = fetch_live_truth_proxy_series(corridor, anchor_time)
+            truth_proxy_series, truth_provenance = fetch_live_truth_proxy_series(city, anchor_time)
         except StaleOrMissingDataError as exc:
             return ShadowPrediction(
-                corridor=corridor, method=self.name, ampacity_amps=None,
+                city=city, method=self.name, ampacity_amps=None,
                 timestamps=None, fallback_used=False, status="unavailable",
-                reason=str(exc), bundle=dict(_BUNDLE_NOT_APPLICABLE),
+                reason=str(exc), bundle=compute_city_bundle_ampacity(city, None),
             )
 
         indexed = truth_proxy_series.set_index("datetime_utc").sort_index()
@@ -1773,7 +1638,7 @@ class ReferenceRefit24hShadowMethod:
             # series's own per-hour validation above -- asserted, not merely
             # trusted, per this plan's own <behavior> spec.
             raise AssertionError(
-                f"ReferenceRefit24hShadowMethod.compute({corridor!r}): the "
+                f"ReferenceRefit24hShadowMethod.compute({city!r}): the "
                 f"live feature row built from a validated 7-hour truth-proxy "
                 f"window still carries a null value -- refusing to predict "
                 f"from it: {last_row.to_dict(orient='records')}"
@@ -1784,15 +1649,14 @@ class ReferenceRefit24hShadowMethod:
         provenance = {
             "truth_proxy_window_start": truth_proxy_series["datetime_utc"].iloc[0].isoformat(),
             "truth_proxy_window_end": truth_proxy_series["datetime_utc"].iloc[-1].isoformat(),
-            "per_city_ampacity_amps": None,
-            "per_city_not_applicable_reason": _PER_CITY_NOT_APPLICABLE_REASON,
             **truth_provenance,
         }
         return ShadowPrediction(
-            corridor=corridor, method=self.name, ampacity_amps=prediction,
+            city=city, method=self.name, ampacity_amps=prediction,
             timestamps=None, fallback_used=False, status="ok",
-            model_version=model_version_for(corridor, self.name),
-            input_provenance=provenance, bundle=dict(_BUNDLE_NOT_APPLICABLE),
+            model_version=model_version_for(city, self.name),
+            input_provenance=provenance,
+            bundle=compute_city_bundle_ampacity(city, prediction),
         )
 
 
@@ -1831,12 +1695,12 @@ CANDIDATE_METHOD_NAMES: tuple[str, ...] = (
     "persistence_24h", "reference_ml_refit_24h",
 )
 
-# The three candidates needing the per-city-then-weakest-link reduction
-# `_corridor_reduce_per_city` performs; `persistence_24h` and
-# `reference_ml_refit_24h` are corridor-level by construction (one read
-# of this collector's own prior log, one artifact load) and never go
-# through this reduction.
-PER_CITY_REDUCED_METHOD_NAMES: tuple[str, ...] = (
+# The three candidates computed from the cycle's shared forecast frame
+# (`fetch_shared_city_inputs`); `persistence_24h` and
+# `reference_ml_refit_24h` are not -- one reads this collector's own prior
+# log for the city, the other loads an artifact and fetches its own
+# truth-proxy window.
+FRAME_BASED_METHOD_NAMES: tuple[str, ...] = (
     "ml_wind_corrected", "ml_cooling_corrected", "raw_forecast",
 )
 
@@ -1847,11 +1711,11 @@ class ShadowPipeline:
     together behind one call. Never invoked by production code.
     """
 
-    def __init__(self, corridor: str, primary_method: CorrectionMethod, *, fallback_method: Optional[CorrectionMethod] = None):
-        self.corridor = corridor
+    def __init__(self, city: str, primary_method: CorrectionMethod, *, fallback_method: Optional[CorrectionMethod] = None):
+        self.city = city
         self.primary_method = primary_method
         self.fallback_method = fallback_method or RawForecastShadowMethod()
-        self.geometry = corridor_discretization.corridor_geometry(corridor)
+        self.geometry = city_point.city_point(city)
 
     def predict(self, frame: pd.DataFrame, timestamps: ShadowTimestamps) -> ShadowPrediction:
         """
@@ -1882,7 +1746,7 @@ class ShadowPipeline:
                 k: v for k, v in frame.attrs.items() if k != "geometry"
             } or None
             return ShadowPrediction(
-                corridor=self.corridor, method=self.primary_method.name,
+                city=self.city, method=self.primary_method.name,
                 ampacity_amps=amps, timestamps=timestamps, fallback_used=False,
                 model_version=getattr(self.primary_method, "model_version", None),
                 input_provenance=provenance,
@@ -1894,7 +1758,7 @@ class ShadowPipeline:
             )
             amps = self.fallback_method.predict(frame, self.geometry)
             return ShadowPrediction(
-                corridor=self.corridor, method=self.fallback_method.name,
+                city=self.city, method=self.fallback_method.name,
                 ampacity_amps=amps, timestamps=timestamps, fallback_used=True,
                 fallback_reason=str(exc),
             )
@@ -1902,14 +1766,14 @@ class ShadowPipeline:
     def log_prediction(self, prediction: ShadowPrediction) -> str:
         """
         Append one prediction record as a JSON line under
-        `data/shadow/predictions/<corridor>.jsonl` (git-ignored, same
+        `data/shadow/predictions/<CITY>.jsonl` (git-ignored, same
         generated-evidence convention as every other report this phase
         has produced under `data/`). Returns the path written to.
         """
         os.makedirs(SHADOW_PREDICTIONS_DIR, exist_ok=True)
-        path = os.path.join(SHADOW_PREDICTIONS_DIR, f"{self.corridor}.jsonl")
+        path = os.path.join(SHADOW_PREDICTIONS_DIR, f"{self.city}.jsonl")
         record = {
-            "corridor": prediction.corridor,
+            "city": prediction.city,
             "method": prediction.method,
             "ampacity_amps": prediction.ampacity_amps,
             "fallback_used": prediction.fallback_used,
@@ -1929,12 +1793,13 @@ class ShadowPipeline:
 
 
 def log_cycle_predictions(
-    corridor: str, candidates: dict, timestamps: ShadowTimestamps,
+    city: str, candidates: dict, timestamps: ShadowTimestamps,
 ) -> str:
     """
-    Plan 05-02 (D-06, 05-01-SUMMARY.md's approved schema_version-2 shape):
+    Plan 05-02 (D-06; schema_version 3 since 2026-10-12, keyed by `city` --
+    see the module docstring for the full record shape):
     writes exactly ONE JSON line per cycle to the SAME `data/shadow/
-    predictions/<corridor>.jsonl` path `ShadowPipeline.log_prediction`
+    predictions/<CITY>.jsonl` path `ShadowPipeline.log_prediction`
     already writes (append mode, never a second file/directory), carrying
     all five candidates nested under their own names plus the six-field
     backward-compatible top-level mirror of `candidates["ml_wind_
@@ -1949,7 +1814,7 @@ def log_cycle_predictions(
     own (possibly `None`) `timestamps` field.
     """
     os.makedirs(SHADOW_PREDICTIONS_DIR, exist_ok=True)
-    path = os.path.join(SHADOW_PREDICTIONS_DIR, f"{corridor}.jsonl")
+    path = os.path.join(SHADOW_PREDICTIONS_DIR, f"{city}.jsonl")
 
     def _candidate_record(prediction: ShadowPrediction) -> dict:
         return {
@@ -1972,8 +1837,8 @@ def log_cycle_predictions(
     mirror = candidate_records["ml_wind_corrected"]
 
     record = {
-        "schema_version": 2,
-        "corridor": corridor,
+        "schema_version": 3,
+        "city": city,
         **timestamps.as_dict(),
         "logged_at": datetime.now(timezone.utc).isoformat(),
         "basis_caveat": (

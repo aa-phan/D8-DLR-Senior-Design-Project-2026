@@ -76,7 +76,7 @@ def nearest_stations(stations: pd.DataFrame, lat: float, lon: float, n: int = 5)
     """
     Generalization of `rank_by_corridor` from the fixed five-point
     `CORRIDORS` dict to an arbitrary (lat, lon) point (D-07's station-
-    resolution layer, consumed by `corridor_discretization.py`, C8).
+    resolution layer, consumed by `city_rating.py`, C8).
 
     Returns at most `n` rows of `stations`, sorted ascending by a
     `km_to_point` column this function adds, with ties broken by `stid`

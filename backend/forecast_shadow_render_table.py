@@ -29,7 +29,8 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 # Mirrors `forecast_shadow_pipeline.CANDIDATE_METHOD_NAMES` (05-02's D-01
-# order, 05-01-SUMMARY.md's approved schema_version-2 shape) -- duplicated
+# order, 05-01-SUMMARY.md's approved nested-candidates shape, keyed by city
+# since `schema_version: 3`) -- duplicated
 # here rather than imported, so this pure-function, network-free render
 # script stays dependency-light. `forecast_shadow_pipeline.py` pulls in
 # pandas/scikit-learn/dotenv for its own live-prediction machinery, none of
@@ -42,16 +43,16 @@ CANDIDATE_METHOD_NAMES: tuple[str, ...] = (
 
 # RENDERED_CYCLE_CAP (2026-10-08, "the new render format is messy, it'll
 # add a new table after every run"): the number of most-recent
-# schema_version>=2 cycles rendered per corridor. The one-block-per-cycle
+# schema_version>=3 cycles rendered per city. The one-block-per-cycle
 # format this replaced grew the README by a full multi-line sub-table on
 # every single collection run with no limit, forever. This caps the
 # RENDERED view only -- every cycle beyond the cap is still in the raw
-# `data/shadow/predictions/<corridor>.jsonl` on `shadow-collection-data`,
+# `data/shadow/predictions/<CITY>.jsonl` on `shadow-collection-data`,
 # untouched and un-pruned; nothing is deleted, only what this specific
-# README shows is bounded. Pre-cutover (flat-shape) rows are never capped
-# -- that stream is finite and stopped growing at the cutover, per 05-01's
-# approved "no migration" strategy, so there is nothing to bound there.
-RENDERED_CYCLE_CAP = 20
+# README shows is bounded.
+# 2026-10-12: cap lowered from 20 to 5 -- the README shows only the 5 most recent
+# cycles per city; the raw per-city JSONL on the data branch keeps everything.
+RENDERED_CYCLE_CAP = 5
 
 # Flagged explicitly (2026-10-07, "verify the static rating is realistic
 # first"): the per-city STATIC_RATINGS values are this project's own
@@ -86,10 +87,10 @@ BASIS_CAVEAT = (
 # forward-in-time extrapolation, and on what variable). Written as a
 # Markdown block (not a single-line string) since it has its own internal
 # structure; inserted once per render, right after the two existing
-# caveats above, never per-corridor or per-cycle.
+# caveats above, never per-city or per-cycle.
 METHODS_EXPLANATION = """\
 **What the five candidates actually do.** All five answer the exact same question -- what will \
-this corridor's ampacity be at the SAME future target time -- but differ in who does the \
+this city's ampacity be at the SAME future target time -- but differ in who does the \
 forward-in-time extrapolation, and on what:
 
 - **External-forecast-plus-local-physics** (`ml_wind_corrected`, `ml_cooling_corrected`, \
@@ -99,13 +100,10 @@ independent NWP model. This project only transforms that already-future weather 
 layer trained to reduce IEEE 738's own known bias (`ml_wind_corrected`/`ml_cooling_corrected`). \
 This project does none of the weather extrapolation itself.
 - **Self-contained statistical extrapolation** (`reference_ml_refit_24h`): no external forecast \
-consulted at all. A model learns directly in ampacity-space, from this corridor's own recent \
+consulted at all. A model learns directly in ampacity-space, from this city's own recent \
 lagged ampacity history plus the MOST RECENTLY OBSERVED (not forecast) weather, to extrapolate \
 the next value. This project does 100% of the forward-looking work itself, with no outside NWP \
-input -- and because the model was trained on an already corridor-reduced series (weakest-link \
-`min()` applied BEFORE any feature was built), it can only ever produce one corridor-level \
-number, never a per-city breakdown (see `reference_ml_refit_24h`'s own `per_city_not_applicable_\
-reason` field whenever it predicts).
+input.
 - **No extrapolation at all** (`persistence_24h`): makes no new claim about how conditions \
 evolve. It reuses -- unmodified -- this SAME collector's own `raw_forecast` prediction from ~24 \
 hours ago for the matching target hour, betting only that today looks like yesterday at this \
@@ -117,7 +115,7 @@ technical record this summary is drawn from.\
 """
 
 
-# 2026-10-08 ("UTC is hard to interpret quickly"): every corridor this
+# 2026-10-08 ("UTC is hard to interpret quickly"): every city this
 # collector covers (Austin, Corpus Christi, Midland, El Paso) is in
 # `America/Chicago` (ERCOT's own home time zone), so that -- not an
 # arbitrary third zone -- is the one local time shown alongside UTC.
@@ -163,8 +161,14 @@ def _load_entries(path: str) -> list[dict]:
     with open(path) as fh:
         for line in fh:
             line = line.strip()
-            if line:
-                entries.append(json.loads(line))
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue  # a malformed line is skipped, never raised on
+            if isinstance(entry, dict):
+                entries.append(entry)
     return entries
 
 
@@ -185,15 +189,9 @@ def _escape_note(text, limit: int = 100) -> str:
 def _render_candidate_cell(c: dict) -> str:
     """
     One cell's worth of one candidate's outcome for the compact one-
-    row-per-cycle table: a checkmark-prefixed ampacity, with its own
-    per-conductor `bottleneck_city` in parentheses when the candidate's
-    `input_provenance` names one (2026-10-08, "i don't see that on the
-    first table anymore" -- `bottleneck_city` has always been computed
-    and stored per candidate but was never actually rendered here, in
-    either this format or the one before it; this is the first time it
-    appears in the README at all, not a regression). `reference_ml_
-    refit_24h` has no per-city/bottleneck concept at all (architecturally
-    corridor-only) and so never gets a city suffix. Never embeds the
+    row-per-cycle table: a checkmark-prefixed ampacity (this city's own
+    single-conductor value -- there is no bottleneck city in a per-city
+    log). Never embeds the
     candidate's own `reason`/`fallback_reason` text here -- those are
     long, free-form strings that would blow out a 5-candidate-wide row;
     `_render_new_shape_row` collects them into one trailing Notes column
@@ -202,17 +200,13 @@ def _render_candidate_cell(c: dict) -> str:
     status = c.get("status") or "—"
     ampacity = c.get("ampacity_amps")
     if status == "ok" and isinstance(ampacity, (int, float)):
-        provenance = c.get("input_provenance") or {}
-        city = provenance.get("bottleneck_city")
-        if city:
-            return f"✓ {ampacity:.1f} ({city})"
         return f"✓ {ampacity:.1f}"
     return status  # "unavailable" / "failed" / "—" -- never a bare ampacity without its status
 
 
 def _render_new_shape_row(e: dict) -> str:
     """
-    Renders one schema_version>=2 cycle as ONE table row (2026-10-08, per
+    Renders one schema_version>=3 cycle as ONE table row (2026-10-08, per
     the user's own "compact one-row-per-cycle" direction, replacing the
     original one-sub-section-per-cycle format that grew the README by a
     full multi-line block on every single run forever). One column per
@@ -256,20 +250,16 @@ BUNDLE_RATING_BASIS_CAVEAT = (
 def _render_bundle_cell(c: dict) -> str:
     """
     One candidate's bundle outcome for the bundle table -- a checkmark-
-    prefixed `corridor_bundle_ampacity_amps` with its OWN
-    `bundle_bottleneck_city` in parentheses (deliberately named
-    separately from whatever the per-conductor table's own bottleneck
-    was -- the two can differ, per the mixed-count case this feature
-    exists to surface), or the bundle's own status word when
-    unavailable.
+    prefixed `bundle_ampacity_amps` (this city's single-conductor value
+    times its own subconductors-per-phase count), or the bundle's own
+    status word when unavailable.
     """
     bundle = c.get("bundle") or {}
     status = bundle.get("status") or "—"
     if status == "ok":
-        amps = bundle.get("corridor_bundle_ampacity_amps")
-        city = bundle.get("bundle_bottleneck_city") or "?"
+        amps = bundle.get("bundle_ampacity_amps")
         if isinstance(amps, (int, float)):
-            return f"✓ {amps:.1f} ({city})"
+            return f"✓ {amps:.1f}"
     return status
 
 
@@ -278,9 +268,8 @@ def _render_bundle_row(e: dict) -> str:
     One cycle's bundle-level row -- same shape as `_render_new_shape_row`
     (one cell per candidate, a trailing aggregated Notes column for any
     non-"ok" bundle), rendered as its OWN table rather than extra columns
-    on the per-conductor table, so the two bottleneck identities (per-
-    conductor vs. bundle) and the two rating bases stay visually distinct
-    rather than cramped into one already-wide row.
+    on the per-conductor table, so the two rating bases stay visually
+    distinct rather than cramped into one already-wide row.
     """
     candidates = e.get("candidates") or {}
     cells = [_render_bundle_cell(candidates.get(name) or {}) for name in CANDIDATE_METHOD_NAMES]
@@ -336,10 +325,10 @@ def _render_bundle_table(entries: list[dict]) -> list[str]:
 
 def _render_new_shape_table(entries: list[dict]) -> list[str]:
     """
-    Renders every schema_version>=2 entry for one corridor as ONE compact
+    Renders every schema_version>=3 entry for one city as ONE compact
     table, most-recent-first, capped to `RENDERED_CYCLE_CAP` rows. Caller
-    passes already-sorted, already-filtered (schema_version>=2) entries
-    for a single corridor; this function owns only the cap and the table
+    passes already-sorted, already-filtered (schema_version>=3) entries
+    for a single city; this function owns only the cap and the table
     shape, not the sort/filter.
     """
     if not entries:
@@ -347,7 +336,7 @@ def _render_new_shape_table(entries: list[dict]) -> list[str]:
     shown = entries[:RENDERED_CYCLE_CAP]
     header_cells = " | ".join(CANDIDATE_METHOD_NAMES)
     block = [
-        "All five candidates per cycle (`schema_version: 2`), most recent "
+        "All five candidates per cycle (`schema_version: 3`), most recent "
         f"{len(shown)} of {len(entries)} shown:",
         "",
         f"| Decision time | Valid time | {header_cells} | Notes |",
@@ -359,30 +348,61 @@ def _render_new_shape_table(entries: list[dict]) -> list[str]:
         block.append(
             f"_{len(entries) - RENDERED_CYCLE_CAP} older cycle(s) omitted from this "
             "render -- still present, unpruned, in the raw "
-            "`data/shadow/predictions/<corridor>.jsonl` file._"
+            "`data/shadow/predictions/<CITY>.jsonl` file._"
         )
+    block.append("")
+    return block
+
+
+def _is_legacy_corridor_log(entries: list[dict]) -> bool:
+    """
+    True for a corridor-era log (v1 flat or v2 rows keyed by `corridor`):
+    it has at least one `corridor`-keyed row and no `city`-keyed row.
+    """
+    has_corridor = any(isinstance(e, dict) and "corridor" in e for e in entries)
+    has_city = any(isinstance(e, dict) and "city" in e for e in entries)
+    return has_corridor and not has_city
+
+
+def _is_current_entry(entry, city: str) -> bool:
+    version = entry.get("schema_version", 1) if isinstance(entry, dict) else None
+    return (
+        isinstance(version, int) and not isinstance(version, bool)
+        and version >= 3 and entry.get("city") == city
+    )
+
+
+def _render_latest_summary(latest: list[tuple[str, dict]]) -> list[str]:
+    """One row per city: its most recent v3 cycle (`latest` is `[(city, entry)]`)."""
+    header_cells = " | ".join(CANDIDATE_METHOD_NAMES)
+    block = [
+        "## Latest cycle per city",
+        "",
+        f"| City | Decision time | Valid time | {header_cells} | Notes |",
+        "|---|---|---|" + "---|" * len(CANDIDATE_METHOD_NAMES) + "---|",
+    ]
+    for city, entry in latest:
+        block.append(f"| {city} " + _render_new_shape_row(entry))
     block.append("")
     return block
 
 
 def render_markdown(predictions_dir: str) -> str:
     """
-    Pure function: `predictions_dir` (a directory of `<corridor>.jsonl`
-    files, the shape `forecast_shadow_pipeline.log_prediction`/
-    `log_cycle_predictions` writes) in, a complete Markdown document out.
-    One section per corridor, most recent first.
+    Pure function: `predictions_dir` (a directory of `<CITY>.jsonl` files,
+    the shape `forecast_shadow_pipeline.log_cycle_predictions` writes) in,
+    a complete Markdown document out: a one-row-per-city "latest cycle"
+    summary, then one section per city (most recent cycle first, capped to
+    `RENDERED_CYCLE_CAP`).
 
-    Each logged line is grouped by its OWN shape (`entry.get(
-    "schema_version", 1) >= 2`). schema_version>=2 entries render as ONE
-    compact one-row-per-cycle table, capped to the most recent
-    `RENDERED_CYCLE_CAP` cycles (2026-10-08 -- the original
-    one-sub-section-per-cycle format grew the README by a full block on
-    every run forever). 2026-10-08 (second pass, "remove that" -- the
-    rendered view no longer shows pre-cutover flat-shape rows as a table
-    at all): those rows are summarized in a single one-line count instead
-    -- they are NEVER deleted or migrated from the raw JSONL (05-01's own
-    approved "no migration" strategy), only no longer rendered as their
-    own table underneath the new one.
+    Only `schema_version>=3` entries keyed by the file's own city are
+    rendered. Legacy corridor-era logs (`AUSTIN_CORPUS_CHRISTI.jsonl`,
+    `MIDLAND_EL_PASO.jsonl`: rows keyed by `corridor`) are IGNORED -- not
+    rendered, never mixed into any city's table -- and named in one
+    footer line so their absence is explicit. They are never deleted or
+    migrated (05-01's approved "no migration" strategy); the raw files stay
+    on `shadow-collection-data`. Non-v3 rows inside a city's own file
+    (e.g. flat single-method demo rows) are counted in one line, not shown.
     """
     lines = [
         "# Shadow Collection — Live Predictions",
@@ -397,41 +417,48 @@ def render_markdown(predictions_dir: str) -> str:
         "",
     ]
     paths = sorted(glob.glob(os.path.join(predictions_dir, "*.jsonl")))
-    if not paths:
-        lines.append("_No predictions logged yet._")
-        return "\n".join(lines) + "\n"
 
+    city_sections: list[tuple[str, list[dict], int]] = []
+    legacy_logs: list[str] = []
     for path in paths:
-        corridor = os.path.splitext(os.path.basename(path))[0]
+        name = os.path.splitext(os.path.basename(path))[0]
         entries = _load_entries(path)
-        entries.sort(key=lambda e: e.get("decision_time", ""), reverse=True)
-        lines.append(f"## {corridor}")
+        if _is_legacy_corridor_log(entries):
+            legacy_logs.append(os.path.basename(path))
+            continue
+        current = [e for e in entries if _is_current_entry(e, name)]
+        current.sort(key=lambda e: e.get("decision_time", ""), reverse=True)
+        city_sections.append((name, current, len(entries) - len(current)))
+
+    if not city_sections:
+        lines.append("_No predictions logged yet._")
         lines.append("")
-        lines.append(f"{len(entries)} logged prediction(s), most recent first.")
-        lines.append("")
+    else:
+        latest = [(city, current[0]) for city, current, _ in city_sections if current]
+        if latest:
+            lines.extend(_render_latest_summary(latest))
 
-        new_entries = [e for e in entries if e.get("schema_version", 1) >= 2]
-        old_entries = [e for e in entries if e.get("schema_version", 1) < 2]
-
-        lines.extend(_render_new_shape_table(new_entries))
-        lines.extend(_render_bundle_table(new_entries))
-
-        if old_entries:
-            # 2026-10-08 ("why does the readme still have the old table
-            # underneath the new one -- remove that"): pre-cutover
-            # flat-shape rows are no longer rendered as their own table at
-            # all. They are NOT deleted or migrated (05-01's own approved
-            # strategy) -- still fully present, untouched, in the raw
-            # `<corridor>.jsonl` on `shadow-collection-data` -- only the
-            # RENDERED view stops showing them, exactly like
-            # `RENDERED_CYCLE_CAP`'s own "older cycles omitted" note above.
-            lines.append(
-                f"_{len(old_entries)} pre-cutover (single-method) entries exist in "
-                "this corridor's raw history and are not rendered here -- see "
-                f"`data/shadow/predictions/{corridor}.jsonl` on this branch for "
-                "the full single-candidate record._"
-            )
+        for city, current, other_count in city_sections:
+            lines.append(f"## {city}")
             lines.append("")
+            lines.append(f"{len(current)} logged prediction(s), most recent first.")
+            lines.append("")
+            lines.extend(_render_new_shape_table(current))
+            lines.extend(_render_bundle_table(current))
+            if other_count:
+                lines.append(
+                    f"_{other_count} non-`schema_version: 3` row(s) in this city's raw log are "
+                    f"not rendered here -- see `data/shadow/predictions/{city}.jsonl` on this "
+                    "branch._"
+                )
+                lines.append("")
+            lines.append("")
+
+    if legacy_logs:
+        lines.append(
+            "_Legacy corridor-era logs are not rendered (different schema, never mixed with the "
+            f"per-city tables): {', '.join(f'`{n}`' for n in legacy_logs)}._"
+        )
         lines.append("")
 
     return "\n".join(lines) + "\n"

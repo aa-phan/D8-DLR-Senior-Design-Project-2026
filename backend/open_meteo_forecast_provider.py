@@ -457,7 +457,7 @@ def fetch_single_run(lat: float, lon: float, run, hourly_vars=None, forecast_day
         timeout=config.FORECAST_EXPERIMENT_HTTP_TIMEOUT_S,
         # `Connection: close` (2026-10-07): confirmed via an isolated-runner
         # diagnostic that calling this endpoint twice within the SAME
-        # process -- once per corridor, back-to-back, in
+        # process -- once per city, back-to-back, in
         # forecast_shadow_collect.py's own loop -- reproducibly times out
         # on the second call, while the identical request from two
         # separate processes (or two separate GitHub Actions runners)
@@ -471,7 +471,7 @@ def fetch_single_run(lat: float, lon: float, run, hourly_vars=None, forecast_day
         # reused across calls at a lower layer) as the most likely
         # mechanism. Forcing the connection closed after this response is
         # the direct, minimal mitigation for that specific hypothesis --
-        # if repeated-corridor runs still fail after this, that hypothesis
+        # if repeated-city runs still fail after this, that hypothesis
         # itself needs revisiting, the same discipline applied to the
         # now-abandoned rate-limit theory.
         headers={"Connection": "close"},

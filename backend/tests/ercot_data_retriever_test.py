@@ -2,7 +2,7 @@
 Tests for backend/ercot_data_retriever.py (v1.3 Phase 2 Plan 02-03, D-02).
 
 Covers the additive extension that makes `pull_ercot_data` usable in
-process: a real return value, an explicit per-corridor zone selection, a
+process: a real return value, an explicit per-city zone selection, a
 per-calendar-year download loop that works around the installed
 `gridstatus` client's single-year-only post-settlements load download
 (02-RESEARCH.md Pitfall 2), and the fallback to the total ERCOT column
@@ -203,20 +203,20 @@ def test_concatenated_frame_is_sorted_by_time_with_duplicates_dropped(monkeypatc
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# config coverage -- every corridor has an explicit zone selection
+# config coverage -- every city has an explicit zone selection
 # ──────────────────────────────────────────────────────────────────────────────
 
-def test_every_corridor_has_an_explicit_zone_substring_selection():
-    assert sorted(config.ANOMALY_ML_ERCOT_ZONE_SUBSTRINGS_BY_CORRIDOR) == sorted(
-        config.CORRIDOR_ENDPOINTS
+def test_every_city_has_an_explicit_zone_substring_selection():
+    assert sorted(config.ANOMALY_ML_ERCOT_ZONE_SUBSTRINGS_BY_CITY) == sorted(
+        config.LOCATIONS
     )
 
 
-def test_the_two_corridors_zone_selections_differ():
-    selections = [
-        tuple(v) for v in config.ANOMALY_ML_ERCOT_ZONE_SUBSTRINGS_BY_CORRIDOR.values()
-    ]
-    assert len(set(selections)) == len(selections)
+def test_the_two_zone_groups_differ():
+    selections = {
+        tuple(v) for v in config.ANOMALY_ML_ERCOT_ZONE_SUBSTRINGS_BY_CITY.values()
+    }
+    assert selections == {("SOUTH",), ("WEST",)}
 
 
 # ──────────────────────────────────────────────────────────────────────────────

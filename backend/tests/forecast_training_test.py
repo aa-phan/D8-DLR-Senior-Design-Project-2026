@@ -28,14 +28,14 @@ from sklearn.model_selection import TimeSeriesSplit
 
 import ampacity_forecast
 import config
-import corridor_discretization
+import city_point
 import forecast_training as ft
 import thermal_model
 
 
-def _synthetic_corridor_frame(n=150, seed=20260924):
+def _synthetic_city_frame(n=150, seed=20260924):
     """
-    A deterministic, `corridor_training_frame`-shaped synthetic frame (no
+    A deterministic, `city_training_frame`-shaped synthetic frame (no
     network, no `fetch_city_weather` call) for the bake-off tests: hourly
     `datetime_utc` strings, a `dlr_amps` series, and the three
     `config.FORECAST_ML_FEATURE_WEATHER_COLUMNS` weather columns, all
@@ -57,7 +57,7 @@ def _synthetic_corridor_frame(n=150, seed=20260924):
 def _synthetic_training_matrix(n=150, seed=20260924):
     """(X, y) built the same way `forecast_training.main` builds it, from
     a deterministic synthetic frame."""
-    return ft.build_training_matrix(_synthetic_corridor_frame(n=n, seed=seed))
+    return ft.build_training_matrix(_synthetic_city_frame(n=n, seed=seed))
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -113,7 +113,7 @@ def test_build_training_matrix_default_path_is_bit_identical_to_pre_horizon_para
     golden_horizon_fixture,
 ):
     g = golden_horizon_fixture
-    frame = _synthetic_corridor_frame(n=150, seed=20260924)
+    frame = _synthetic_city_frame(n=150, seed=20260924)
 
     X, y = ft.build_training_matrix(frame)
 
@@ -145,7 +145,7 @@ def test_build_training_matrix_1440_minute_horizon_shifts_target_by_exactly_24_h
     # would produce a plausible-looking arm-5 score that means nothing.
     # Asserting on the returned index values -- not merely on prose -- is
     # what makes the 24-hour shift inspectable.
-    frame = _synthetic_corridor_frame(n=150, seed=20260924)
+    frame = _synthetic_city_frame(n=150, seed=20260924)
 
     X, y = ft.build_training_matrix(frame, horizon_minutes=1440)
 
@@ -176,7 +176,7 @@ def test_build_training_matrix_1440_minute_horizon_drops_exactly_23_more_rows_th
     assumption explicitly, don't trust it" discipline this phase has
     already applied twice before (thermal_model, corridor_weakest_link).
     """
-    frame = _synthetic_corridor_frame(n=150, seed=20260924)
+    frame = _synthetic_city_frame(n=150, seed=20260924)
 
     X_60, y_60 = ft.build_training_matrix(frame)
     X_1440, y_1440 = ft.build_training_matrix(frame, horizon_minutes=1440)
@@ -186,7 +186,7 @@ def test_build_training_matrix_1440_minute_horizon_drops_exactly_23_more_rows_th
 
 
 def test_build_training_matrix_non_whole_multiple_horizon_raises_and_names_value():
-    frame = _synthetic_corridor_frame(n=150, seed=20260924)
+    frame = _synthetic_city_frame(n=150, seed=20260924)
 
     with pytest.raises(ValueError, match="90"):
         ft.build_training_matrix(frame, horizon_minutes=90)
@@ -212,163 +212,7 @@ def test_build_training_matrix_production_call_sites_remain_single_positional():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# corridor_training_frame — weakest-link min() reduction (RESEARCH.md
-# Pattern 3) and the drop-invalid-row-before-fit invariant (T-01-01)
-# ──────────────────────────────────────────────────────────────────────────────
-
-def _alternating_weather_frames(corridor, n=20, hot_temp=40.0, mild_temp=20.0):
-    """
-    Build two endpoint-city weather frames whose ambient temperature
-    alternates which one is hotter (and therefore, holding wind/solar
-    constant, which one has the LOWER ieee738_ampacity -- the corridor's
-    bottleneck) at each timestamp, so a weakest-link test exercises both
-    directions rather than a single, possibly-degenerate case.
-    """
-    city_a, city_b = config.CORRIDOR_ENDPOINTS[corridor]
-    base_dt = datetime(2024, 6, 1, 0, 0, 0)
-    timestamps = pd.to_datetime(
-        [(base_dt + timedelta(hours=i)).isoformat() + "Z" for i in range(n)], utc=True
-    )
-
-    temp_a = np.array([hot_temp if i % 2 == 0 else mild_temp for i in range(n)])
-    temp_b = np.array([mild_temp if i % 2 == 0 else hot_temp for i in range(n)])
-    wind_speed = np.full(n, 5.0)
-    wind_direction = np.full(n, 90.0)
-    solar_radiation = np.full(n, 500.0)
-    relative_humidity = np.full(n, 50.0)
-
-    def _frame(temp):
-        return pd.DataFrame({
-            "datetime_utc": timestamps,
-            "air_temp": temp,
-            "wind_speed": wind_speed,
-            "wind_direction": wind_direction,
-            "solar_radiation": solar_radiation,
-            "relative_humidity": relative_humidity,
-        })
-
-    return city_a, city_b, timestamps, temp_a, temp_b, wind_speed, wind_direction, \
-        solar_radiation, _frame(temp_a), _frame(temp_b)
-
-
-def test_corridor_training_frame_weakest_link_min_matches_convention(monkeypatch):
-    corridor = "AUSTIN_CORPUS_CHRISTI"
-    (city_a, city_b, timestamps, temp_a, temp_b, wind_speed, wind_direction,
-     solar_radiation, frame_a, frame_b) = _alternating_weather_frames(corridor)
-
-    def _fake_fetch(city, years):
-        if city == city_a:
-            return frame_a.copy()
-        if city == city_b:
-            return frame_b.copy()
-        raise AssertionError(f"unexpected city {city!r}")
-
-    monkeypatch.setattr(ft, "fetch_city_weather", _fake_fetch)
-
-    result = ft.corridor_training_frame(corridor, years=1)
-
-    # Ground truth from the SAME thermal_model functions the code under
-    # test calls -- not independently hand-computed numbers.
-    geometry = corridor_discretization.corridor_geometry(corridor)
-    perp = thermal_model.perpendicular_wind(wind_speed, wind_direction, geometry.bearing_deg)
-    amps_a = np.asarray(
-        thermal_model.ieee738_ampacity(temp_a, perp, solar_radiation, geometry.conductor),
-        dtype=float,
-    )
-    amps_b = np.asarray(
-        thermal_model.ieee738_ampacity(temp_b, perp, solar_radiation, geometry.conductor),
-        dtype=float,
-    )
-    expected_dlr = np.minimum(amps_a, amps_b)
-    expected_bottleneck = np.where(amps_a <= amps_b, 0, 1)
-    expected_air_temp = np.where(expected_bottleneck == 0, temp_a, temp_b)
-
-    assert len(result) == len(timestamps)
-    np.testing.assert_allclose(result["dlr_amps"].to_numpy(), expected_dlr, rtol=1e-9)
-    assert (result["bottleneck_index"].to_numpy() == expected_bottleneck).all()
-    np.testing.assert_allclose(result["air_temp"].to_numpy(), expected_air_temp, rtol=1e-9)
-    # Both directions are actually exercised, not a degenerate single-city case.
-    assert set(expected_bottleneck.tolist()) == {0, 1}
-
-
-def test_corridor_training_frame_matches_pre_refactor_golden_capture(monkeypatch):
-    """
-    Rebuild `corridor_training_frame` from the SAME deterministic synthetic
-    fixture the golden capture used (Phase 3 Plan 02, D-03) and assert its
-    `dlr_amps` and `bottleneck_index` columns are exactly equal to the
-    golden CSV's, including the tie row -- the equality gate for the
-    `corridor_weakest_link` extraction.
-    """
-    corridor = "AUSTIN_CORPUS_CHRISTI"
-    city_a, city_b = config.CORRIDOR_ENDPOINTS[corridor]
-
-    n = 24
-    base_dt = datetime(2024, 6, 1, 0, 0, 0)
-    timestamps = pd.to_datetime(
-        [(base_dt + timedelta(hours=i)).isoformat() + "Z" for i in range(n)], utc=True
-    )
-
-    hot_temp, mild_temp = 40.0, 20.0
-    temp_a = np.array([hot_temp if i % 2 == 0 else mild_temp for i in range(n)])
-    temp_b = np.array([mild_temp if i % 2 == 0 else hot_temp for i in range(n)])
-    # Exact tie at index 5, matching the golden capture's own fixture.
-    temp_a[5] = 30.0
-    temp_b[5] = 30.0
-
-    wind_speed = np.full(n, 5.0)
-    wind_direction = np.full(n, 90.0)
-    solar_radiation = np.full(n, 500.0)
-    relative_humidity = np.full(n, 50.0)
-
-    def _frame(temp):
-        return pd.DataFrame({
-            "datetime_utc": timestamps,
-            "air_temp": temp,
-            "wind_speed": wind_speed,
-            "wind_direction": wind_direction,
-            "solar_radiation": solar_radiation,
-            "relative_humidity": relative_humidity,
-        })
-
-    frame_a = _frame(temp_a)
-    frame_b = _frame(temp_b)
-
-    def _fake_fetch(city, years):
-        if city == city_a:
-            return frame_a.copy()
-        if city == city_b:
-            return frame_b.copy()
-        raise AssertionError(f"unexpected city {city!r}")
-
-    monkeypatch.setattr(ft, "fetch_city_weather", _fake_fetch)
-
-    result = ft.corridor_training_frame(corridor, years=1)
-
-    golden_path = __file__.rsplit("/", 1)[0] + "/forecast_training_pre_refactor_golden.csv"
-    # `float_precision="round_trip"`: pandas' default C float parser can
-    # introduce a 1-ULP rounding error versus the exact value the text
-    # represents (confirmed live: the default parser reads this fixture's
-    # own bit-exact values back 1 ULP off, which would make an honest
-    # exact-equality gate fail on a parsing artifact rather than a real
-    # extraction defect -- the "round_trip" parser matches Python's own
-    # correctly-rounded `float()`).
-    golden = pd.read_csv(golden_path, float_precision="round_trip")
-
-    assert len(result) == len(golden)
-    np.testing.assert_array_equal(
-        result["dlr_amps"].to_numpy(dtype=float), golden["dlr_amps"].to_numpy(dtype=float)
-    )
-    np.testing.assert_array_equal(
-        result["bottleneck_index"].to_numpy(dtype=int),
-        golden["bottleneck_index"].to_numpy(dtype=int),
-    )
-    # The tie row (index 5) must resolve to city A (index 0), exactly as
-    # the golden capture recorded.
-    assert result.iloc[5]["bottleneck_index"] == 0
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# corridor_weakest_link — direct unit tests of the extracted helper
+# corridor_weakest_link — FROZEN legacy helper (frozen experiment only)
 # (Phase 3 Plan 02, D-03)
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -405,61 +249,85 @@ def test_corridor_weakest_link_returns_winning_citys_own_weather():
     )
 
 
-def test_corridor_training_frame_has_no_duplicate_reduction():
-    """`corridor_training_frame`'s own body must not keep a second,
-    independent elementwise-minimum reduction alongside the extracted
-    helper call -- two copies of a non-obvious tie-break rule will drift."""
-    import inspect
+# ──────────────────────────────────────────────────────────────────────────────
+# city_training_frame — one city's OWN ampacity, no cross-city reduction, and
+# the drop-invalid-row-before-fit invariant (T-01-01)
+# ──────────────────────────────────────────────────────────────────────────────
 
-    source = inspect.getsource(ft.corridor_training_frame)
-    assert "np.minimum" not in source
-
-
-def test_corridor_training_frame_invalid_row_dropped_before_fit(monkeypatch, caplog):
-    corridor = "AUSTIN_CORPUS_CHRISTI"
-    city_a, city_b = config.CORRIDOR_ENDPOINTS[corridor]
-
-    n = 5
+def _city_weather(n=20, temp=None):
     base_dt = datetime(2024, 6, 1, 0, 0, 0)
     timestamps = pd.to_datetime(
         [(base_dt + timedelta(hours=i)).isoformat() + "Z" for i in range(n)], utc=True
     )
+    if temp is None:
+        temp = np.array([40.0 if i % 2 == 0 else 20.0 for i in range(n)])
+    return timestamps, pd.DataFrame({
+        "datetime_utc": timestamps,
+        "air_temp": temp,
+        "wind_speed": np.full(n, 5.0),
+        "wind_direction": np.full(n, 90.0),
+        "solar_radiation": np.full(n, 500.0),
+        "relative_humidity": np.full(n, 50.0),
+    })
 
-    temp_a = np.full(n, 25.0)
-    # 65C stays comfortably below the conductor's 75C max (so the ieee738
-    # heat-balance stays finite, not NaN-from-negative-fractional-power),
-    # while still being outside units_def.PIPELINE_SCHEMA's air_temp range
-    # (-20, 60) and low enough an ampacity that city A remains the
-    # bottleneck (winning) city at this timestamp -- so its own (invalid)
-    # air_temp is what reaches the output row, not silently swapped for
-    # city B's valid one.
-    temp_a[2] = 65.0
-    temp_b = np.full(n, 30.0)
-    wind_speed = np.full(n, 5.0)
-    wind_direction = np.full(n, 90.0)
-    solar_radiation = np.full(n, 500.0)
-    relative_humidity = np.full(n, 50.0)
 
-    def _frame(temp):
-        return pd.DataFrame({
-            "datetime_utc": timestamps,
-            "air_temp": temp,
-            "wind_speed": wind_speed,
-            "wind_direction": wind_direction,
-            "solar_radiation": solar_radiation,
-            "relative_humidity": relative_humidity,
-        })
+@pytest.mark.parametrize("city", sorted(config.LOCATIONS))
+def test_city_training_frame_uses_own_ampacity(monkeypatch, city):
+    timestamps, weather = _city_weather()
+    fetched = []
 
-    frame_a = _frame(temp_a)
-    frame_b = _frame(temp_b)
-
-    def _fake_fetch(city, years):
-        return frame_a.copy() if city == city_a else frame_b.copy()
+    def _fake_fetch(c, years):
+        fetched.append(c)
+        return weather.copy()
 
     monkeypatch.setattr(ft, "fetch_city_weather", _fake_fetch)
+    result = ft.city_training_frame(city, years=1)
+
+    assert fetched == [city]  # exactly one city's weather, no pairing
+    point = city_point.city_point(city)
+    perp = thermal_model.perpendicular_wind(
+        weather["wind_speed"].to_numpy(), weather["wind_direction"].to_numpy(),
+        point.bearing_deg,
+    )
+    expected = np.asarray(thermal_model.ieee738_ampacity(
+        weather["air_temp"].to_numpy(), perp,
+        weather["solar_radiation"].to_numpy(), point.conductor,
+    ), dtype=float)
+
+    assert len(result) == len(timestamps)
+    np.testing.assert_allclose(result["dlr_amps"].to_numpy(), expected, rtol=1e-9)
+    np.testing.assert_allclose(
+        result["air_temp"].to_numpy(), weather["air_temp"].to_numpy(), rtol=1e-9
+    )
+    assert (result["city"] == city).all()
+    assert "corridor" not in result.columns
+    assert result["static_rating"].iloc[0] == float(point.static_rating)
+
+
+def test_city_training_frame_has_no_min_reduction():
+    import inspect
+
+    source = inspect.getsource(ft.city_training_frame)
+    assert "np.minimum" not in source
+    assert "weakest_link" not in source
+
+
+def test_city_training_frame_unknown_city_raises():
+    with pytest.raises(KeyError):
+        ft.city_training_frame("NOT_A_CITY", years=1)
+
+
+def test_city_training_frame_invalid_row_dropped_before_fit(monkeypatch, caplog):
+    n = 5
+    temp = np.full(n, 25.0)
+    # 65C is outside units_def.PIPELINE_SCHEMA's air_temp range (-20, 60) yet
+    # below the conductor's 75C max so the heat balance stays finite.
+    temp[2] = 65.0
+    timestamps, weather = _city_weather(n=n, temp=temp)
+    monkeypatch.setattr(ft, "fetch_city_weather", lambda c, y: weather.copy())
 
     with caplog.at_level(logging.WARNING):
-        result = ft.corridor_training_frame(corridor, years=1)
+        result = ft.city_training_frame("AUSTIN", years=1)
 
     assert len(result) == n - 1
     assert timestamps[2] not in set(pd.to_datetime(result["datetime_utc"]))
@@ -469,14 +337,14 @@ def test_corridor_training_frame_invalid_row_dropped_before_fit(monkeypatch, cap
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# bakeoff_corridor — two-candidate comparison via TimeSeriesSplit (D-01)
+# bakeoff_city — two-candidate comparison via TimeSeriesSplit (D-01)
 # ──────────────────────────────────────────────────────────────────────────────
 
-def test_bakeoff_corridor_shape_and_finiteness(monkeypatch):
+def test_bakeoff_city_shape_and_finiteness(monkeypatch):
     monkeypatch.setattr(config, "FORECAST_ML_BAKEOFF_SPLITS", 2)
     X, y = _synthetic_training_matrix()
 
-    result = ft.bakeoff_corridor(X, y)
+    result = ft.bakeoff_city(X, y)
 
     assert set(result) == set(ft.CANDIDATE_ESTIMATORS)
     for name, scores in result.items():
@@ -485,7 +353,7 @@ def test_bakeoff_corridor_shape_and_finiteness(monkeypatch):
         assert scores["rows"] > 0, (name, scores)
 
 
-def test_bakeoff_corridor_folds_never_overlap(monkeypatch):
+def test_bakeoff_city_folds_never_overlap(monkeypatch):
     monkeypatch.setattr(config, "FORECAST_ML_BAKEOFF_SPLITS", 3)
     X, _ = _synthetic_training_matrix()
 
@@ -503,7 +371,7 @@ def test_bakeoff_corridor_folds_never_overlap(monkeypatch):
 # ──────────────────────────────────────────────────────────────────────────────
 
 def test_baseline_scores_matches_backtest_residuals_directly():
-    frame = _synthetic_corridor_frame()
+    frame = _synthetic_city_frame()
 
     result = ft.baseline_scores(frame)
 
@@ -531,15 +399,15 @@ def test_baseline_scores_matches_backtest_residuals_directly():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# corridor_report — the four-row comparison (this plan's core deliverable)
+# city_report — the four-row comparison (this plan's core deliverable)
 # ──────────────────────────────────────────────────────────────────────────────
 
-def test_corridor_report_has_exactly_four_candidates_and_window_fields(monkeypatch):
+def test_city_report_has_exactly_four_candidates_and_window_fields(monkeypatch):
     monkeypatch.setattr(config, "FORECAST_ML_BAKEOFF_SPLITS", 2)
-    frame = _synthetic_corridor_frame()
+    frame = _synthetic_city_frame()
     X, y = ft.build_training_matrix(frame)
 
-    report = ft.corridor_report("AUSTIN_CORPUS_CHRISTI", frame, X, y)
+    report = ft.city_report("AUSTIN", frame, X, y)
 
     expected_names = set(ft.CANDIDATE_ESTIMATORS) | {"naive", "ewm"}
     assert set(report["candidates"]) == expected_names
@@ -550,7 +418,7 @@ def test_corridor_report_has_exactly_four_candidates_and_window_fields(monkeypat
         assert math.isfinite(scores["rmse"]), name
         assert scores["rows"] > 0, name
 
-    assert report["corridor"] == "AUSTIN_CORPUS_CHRISTI"
+    assert report["city"] == "AUSTIN"
     assert report["rows"] == len(frame)
     assert report["window_start"]
     assert report["window_end"]

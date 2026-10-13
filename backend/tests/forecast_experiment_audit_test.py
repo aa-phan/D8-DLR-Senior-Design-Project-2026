@@ -28,7 +28,7 @@ import pandas as pd
 import pytest
 
 import config
-import corridor_discretization
+import legacy_corridor
 import forecast_experiment_audit as fea
 
 
@@ -154,7 +154,7 @@ def test_synthetic_returns_immediately_with_no_real_corridor_marker():
 
 
 def test_synthetic_raises_on_real_corridor_marker():
-    real_corridor = next(iter(config.CORRIDOR_ENDPOINTS))
+    real_corridor = next(iter(config.LEGACY_CORRIDOR_ENDPOINTS))
     frame = pd.DataFrame({
         "datetime_utc": pd.to_datetime(["2025-01-01T00:00:00Z"]),
         "corridor": [real_corridor],
@@ -267,7 +267,7 @@ def test_build_basis_manifest_refuses_unknown_corridor():
     with pytest.raises(ValueError) as exc_info:
         fea.build_basis_manifest(corridors=["NOT_A_REAL_CORRIDOR"])
     message = str(exc_info.value)
-    for name in config.CORRIDOR_ENDPOINTS:
+    for name in config.LEGACY_CORRIDOR_ENDPOINTS:
         assert name in message, message
 
 
@@ -276,7 +276,7 @@ def test_fresh_basis_zero_row_branch_carries_explicit_reason(monkeypatch):
     resolved = fea.forecast_experiment._resolve_window_end(None)
     assert resolved == fea.FROZEN_WINDOW_END
     entry = fea._build_fresh_basis_entry(
-        next(iter(config.CORRIDOR_ENDPOINTS)), lead_hours=24, resolved_window_end=resolved,
+        next(iter(config.LEGACY_CORRIDOR_ENDPOINTS)), lead_hours=24, resolved_window_end=resolved,
     )
     assert entry["rows"] == 0
     assert entry.get("reason"), "a zero-row FRESH basis must carry an explicit reason string"
@@ -287,7 +287,7 @@ def test_fresh_basis_nonzero_when_resolved_end_is_later(monkeypatch):
     later_end = "2027-01-15"
     _patch_harness_assembly(monkeypatch, resolved_end=later_end)
     entry = fea._build_fresh_basis_entry(
-        next(iter(config.CORRIDOR_ENDPOINTS)), lead_hours=24, resolved_window_end=later_end,
+        next(iter(config.LEGACY_CORRIDOR_ENDPOINTS)), lead_hours=24, resolved_window_end=later_end,
     )
     assert entry["rows"] > 0
     assert entry["frozen_window_guard_passed"] is True
@@ -296,7 +296,7 @@ def test_fresh_basis_nonzero_when_resolved_end_is_later(monkeypatch):
 def test_build_basis_manifest_atomic_merge_preserves_prior_corridor(tmp_path, monkeypatch):
     _patch_harness_assembly(monkeypatch, resolved_end=fea.FROZEN_WINDOW_END)
     manifest_path = str(tmp_path / "audit_basis_manifest.json")
-    corridor_a, corridor_b = sorted(config.CORRIDOR_ENDPOINTS)
+    corridor_a, corridor_b = sorted(config.LEGACY_CORRIDOR_ENDPOINTS)
 
     fea.build_basis_manifest(corridors=[corridor_a], manifest_path=manifest_path)
     first = json.load(open(manifest_path))
@@ -314,7 +314,7 @@ def test_build_basis_manifest_atomic_merge_preserves_prior_corridor(tmp_path, mo
 def test_build_basis_manifest_roundtrips_with_documented_keys(tmp_path, monkeypatch):
     _patch_harness_assembly(monkeypatch, resolved_end=fea.FROZEN_WINDOW_END)
     manifest_path = str(tmp_path / "audit_basis_manifest.json")
-    corridor = next(iter(config.CORRIDOR_ENDPOINTS))
+    corridor = next(iter(config.LEGACY_CORRIDOR_ENDPOINTS))
 
     fea.build_basis_manifest(corridors=[corridor], manifest_path=manifest_path)
     loaded = json.load(open(manifest_path))
@@ -526,9 +526,9 @@ def _synthetic_anchored_pair_frame(city: str, *, periods=24 * 220, start="2024-0
     lead_td = pd.Timedelta(hours=_LEAKAGE_TEST_LEAD_HOURS)
 
     corridor = next(
-        c for c, cities in config.CORRIDOR_ENDPOINTS.items() if city in cities
+        c for c, cities in config.LEGACY_CORRIDOR_ENDPOINTS.items() if city in cities
     )
-    geometry = corridor_discretization.corridor_geometry(corridor)
+    geometry = legacy_corridor.corridor_geometry(corridor)
 
     truth_air_temp = 25.0 + 8.0 * np.sin(t / 24.0)
     truth_wind_speed = 3.0 + rng.random(len(idx)) * 2.0
@@ -567,7 +567,7 @@ def _synthetic_anchored_pair_frame(city: str, *, periods=24 * 220, start="2024-0
 
 
 def _patch_leakage_test_assembly(monkeypatch, *, periods=24 * 220):
-    city_a, city_b = config.CORRIDOR_ENDPOINTS[_LEAKAGE_TEST_CORRIDOR]
+    city_a, city_b = config.LEGACY_CORRIDOR_ENDPOINTS[_LEAKAGE_TEST_CORRIDOR]
     frames = {
         city_a: _synthetic_anchored_pair_frame(city_a, periods=periods, seed=20260930),
         city_b: _synthetic_anchored_pair_frame(city_b, periods=periods, seed=20260931),
@@ -583,7 +583,7 @@ def test_leakage_probe_coverage_report_refuses_unknown_corridor():
     with pytest.raises(ValueError) as exc_info:
         fea.leakage_probe_coverage_report("NOT_A_REAL_CORRIDOR")
     message = str(exc_info.value)
-    for name in config.CORRIDOR_ENDPOINTS:
+    for name in config.LEGACY_CORRIDOR_ENDPOINTS:
         assert name in message, message
 
 
@@ -761,7 +761,7 @@ def test_arm5_lag_offset_finding_disagrees_and_reports_unbroken_cadence(monkeypa
 
 def test_arm5_lag_offset_finding_gap_detector_detects_a_deliberately_removed_hour(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "FORECAST_EXPERIMENT_CACHE_DIR", str(tmp_path))
-    city_a, city_b = config.CORRIDOR_ENDPOINTS[_LEAKAGE_TEST_CORRIDOR]
+    city_a, city_b = config.LEGACY_CORRIDOR_ENDPOINTS[_LEAKAGE_TEST_CORRIDOR]
     frame_a = _synthetic_anchored_pair_frame(city_a, periods=24 * 220, seed=20260930)
     frame_b = _synthetic_anchored_pair_frame(city_b, periods=24 * 220, seed=20260931)
     # Deliberately remove one interior hour from city_a's frame to create a
@@ -1058,7 +1058,7 @@ def test_ablation_basis_report_refuses_unknown_corridor():
     with pytest.raises(ValueError) as exc_info:
         fea.ablation_basis_report("NOT_A_REAL_CORRIDOR")
     message = str(exc_info.value)
-    for name in config.CORRIDOR_ENDPOINTS:
+    for name in config.LEGACY_CORRIDOR_ENDPOINTS:
         assert name in message, message
 
 
@@ -1240,7 +1240,7 @@ def test_fresh_basis_attempt_refuses_unknown_corridor():
     with pytest.raises(ValueError) as exc_info:
         fea.fresh_basis_attempt("NOT_A_REAL_CORRIDOR")
     message = str(exc_info.value)
-    for name in config.CORRIDOR_ENDPOINTS:
+    for name in config.LEGACY_CORRIDOR_ENDPOINTS:
         assert name in message, message
 
 
@@ -1280,7 +1280,7 @@ def test_fresh_basis_attempt_confirmation_capable_branch_scores_fresh_rows(monke
         city: _synthetic_anchored_pair_frame(
             city, periods=24 * 20, start=fresh_start.strftime("%Y-%m-%d"), seed=seed,
         )
-        for city, seed in zip(config.CORRIDOR_ENDPOINTS[_LEAKAGE_TEST_CORRIDOR], (555, 556))
+        for city, seed in zip(config.LEGACY_CORRIDOR_ENDPOINTS[_LEAKAGE_TEST_CORRIDOR], (555, 556))
     }
 
     def fake_anchored_pair_frame(city, start=None, end=None, *, lead_hours):
@@ -1404,7 +1404,7 @@ def test_overrating_profile_mismatched_lengths_raises():
 
 
 def test_convection_crossover_wind_speed_verified_both_sides():
-    for corridor in sorted(config.CORRIDOR_ENDPOINTS):
+    for corridor in sorted(config.LEGACY_CORRIDOR_ENDPOINTS):
         result = fea.convection_crossover_wind_speed(corridor)
         assert result["crossover_wind_perp_ms"] > 0.0
         assert result["below_equals_natural"] is True
@@ -1730,7 +1730,7 @@ def test_overrating_basis_report_refuses_unknown_corridor():
     with pytest.raises(ValueError) as exc_info:
         fea.overrating_basis_report("NOT_A_REAL_CORRIDOR")
     message = str(exc_info.value)
-    for name in config.CORRIDOR_ENDPOINTS:
+    for name in config.LEGACY_CORRIDOR_ENDPOINTS:
         assert name in message, message
 
 
@@ -1805,7 +1805,7 @@ def test_overrating_basis_report_runs_and_returns_documented_shape(monkeypatch, 
 # ──────────────────────────────────────────────────────────────────────────
 
 def test_low_wind_sensitivity_sweep_finite_and_monotone_both_corridors():
-    for corridor in sorted(config.CORRIDOR_ENDPOINTS):
+    for corridor in sorted(config.LEGACY_CORRIDOR_ENDPOINTS):
         s = fea.low_wind_sensitivity_sweep(corridor)
         amps = np.asarray(s["ampacity_amps"], dtype=float)
         grid = np.asarray(s["wind_perp_ms"], dtype=float)
@@ -1821,7 +1821,7 @@ def test_low_wind_sensitivity_sweep_finite_and_monotone_both_corridors():
 
 
 def test_low_wind_sensitivity_sweep_below_crossover_flat_above_crossover_rises():
-    for corridor in sorted(config.CORRIDOR_ENDPOINTS):
+    for corridor in sorted(config.LEGACY_CORRIDOR_ENDPOINTS):
         s = fea.low_wind_sensitivity_sweep(corridor)
         amps = np.asarray(s["ampacity_amps"], dtype=float)
         i = s["crossover_index"]
@@ -1842,7 +1842,7 @@ def test_low_wind_sensitivity_sweep_unknown_corridor_raises():
 
 
 def test_low_wind_sensitivity_sweep_zero_wind_ampacity_matches_crossover_region_flat_value():
-    corridor = next(iter(config.CORRIDOR_ENDPOINTS))
+    corridor = next(iter(config.LEGACY_CORRIDOR_ENDPOINTS))
     s = fea.low_wind_sensitivity_sweep(corridor)
     amps = np.asarray(s["ampacity_amps"], dtype=float)
     i = s["crossover_index"]
@@ -1853,7 +1853,7 @@ def test_low_wind_sensitivity_sweep_zero_wind_ampacity_matches_crossover_region_
 
 
 def test_sensitivity_vs_instability_finding_states_physics_with_three_citations():
-    for corridor in sorted(config.CORRIDOR_ENDPOINTS):
+    for corridor in sorted(config.LEGACY_CORRIDOR_ENDPOINTS):
         f = fea.sensitivity_vs_instability_finding(corridor)
         blob = repr(f)
         assert f["verdict"] == "physics"
@@ -1918,7 +1918,7 @@ def test_cooling_correction_ceiling_finding_refuses_unknown_corridor():
     with pytest.raises(ValueError) as exc_info:
         fea.cooling_correction_ceiling_finding("NOT_A_REAL_CORRIDOR")
     message = str(exc_info.value)
-    for name in config.CORRIDOR_ENDPOINTS:
+    for name in config.LEGACY_CORRIDOR_ENDPOINTS:
         assert name in message, message
 
 
@@ -1959,7 +1959,7 @@ def test_cooling_correction_ceiling_finding_measures_the_upward_gap(monkeypatch)
 
 
 def test_low_wind_sensitivity_sweep_custom_wind_grid_still_locates_crossover():
-    corridor = next(iter(config.CORRIDOR_ENDPOINTS))
+    corridor = next(iter(config.LEGACY_CORRIDOR_ENDPOINTS))
     crossover = fea.convection_crossover_wind_speed(corridor)["crossover_wind_perp_ms"]
     custom_grid = [0.01, crossover * 0.5, crossover * 4.0, crossover * 8.0]
     s = fea.low_wind_sensitivity_sweep(corridor, wind_grid=custom_grid)
@@ -2021,7 +2021,7 @@ def test_lag_vs_covariate_ablation_refuses_unknown_corridor():
     with pytest.raises(ValueError) as exc_info:
         fea.lag_vs_covariate_ablation("NOT_A_REAL_CORRIDOR")
     message = str(exc_info.value)
-    for name in config.CORRIDOR_ENDPOINTS:
+    for name in config.LEGACY_CORRIDOR_ENDPOINTS:
         assert name in message, message
 
 
@@ -2029,7 +2029,7 @@ def test_cooling_rediscovery_hypothesis_refuses_unknown_corridor():
     with pytest.raises(ValueError) as exc_info:
         fea.cooling_rediscovery_hypothesis("NOT_A_REAL_CORRIDOR")
     message = str(exc_info.value)
-    for name in config.CORRIDOR_ENDPOINTS:
+    for name in config.LEGACY_CORRIDOR_ENDPOINTS:
         assert name in message, message
 
 
@@ -2260,7 +2260,7 @@ def _patch_dual_window_assembly(monkeypatch, *, ablation_periods=24 * 220, fresh
     the FRESH-dated rows would fail `assert_basis_excludes_frozen_test_
     rows(basis='FRESH')` if the fake quietly reused ABLATION-window dates.
     """
-    city_a, city_b = config.CORRIDOR_ENDPOINTS[_LEAKAGE_TEST_CORRIDOR]
+    city_a, city_b = config.LEGACY_CORRIDOR_ENDPOINTS[_LEAKAGE_TEST_CORRIDOR]
     fresh_start = (pd.Timestamp(fea.FROZEN_WINDOW_END, tz="UTC") + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
     ablation_frames = {
         city_a: _synthetic_anchored_pair_frame(city_a, periods=ablation_periods, seed=20260930),

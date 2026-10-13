@@ -3,8 +3,9 @@ Historical Archive (Phase 4 Wave 0 support for C9, C10)
 ==================================================
 This module is shared support for C9 (ampacity forecasting) and C10
 (learned anomaly detection) — it is not a spec component of its own. It
-holds one row per corridor per run (D-08's per-corridor granularity), and
-it has exactly one write call site, wired in Plan 04-03.
+holds one row per city per run (one rating point per city, see
+`docs/data-science/decisions/point_scope.md`), and it has exactly one write
+call site, `city_rating._archive_city_result`.
 
 The row shape (`ARCHIVE_COLUMNS`) reuses `units_def.PIPELINE_SCHEMA`'s
 column spellings for every numeric field so `validate_pipeline_row` vets
@@ -16,9 +17,16 @@ this phase (D-09) — this module does not implement rotation/compaction.
 Column list locked at the Plan 04-01 Task 1 checkpoint (D-07 — one-way:
 once `ampacity_forecast.py`/`anomaly_detector.py` read this shape and rows
 accumulate, changing it means migrating or discarding real history):
-    datetime_utc, corridor, air_temp, wind_speed, solar_radiation,
+    datetime_utc, city, air_temp, wind_speed, solar_radiation,
     dlr_amps, static_rating, status, fallback, bottleneck_index,
     schema_version
+
+Point-scope change: the `corridor` column is now `city` (same position). The
+`bottleneck_index` column is retained only so existing readers/builders of
+this shape keep working; per-city rows always write it as null. Archive files
+written in the corridor era (header has `corridor`) are still readable:
+`read_history` exposes that column as `city`, and `append_observation`
+appends in the file's existing header order so columns never misalign.
 """
 
 import logging
@@ -37,7 +45,7 @@ ARCHIVE_SCHEMA_VERSION: int = 1
 
 ARCHIVE_COLUMNS: list[str] = [
     "datetime_utc",
-    "corridor",
+    "city",
     "air_temp",
     "wind_speed",
     "solar_radiation",
@@ -51,7 +59,7 @@ ARCHIVE_COLUMNS: list[str] = [
 
 
 def build_archive_row(
-    corridor: str,
+    city: str,
     datetime_utc,
     observation: dict,
     check_result: dict,
@@ -62,7 +70,7 @@ def build_archive_row(
     Assemble one archive row from a `DLRSafetyMonitor.run_check` cycle.
 
     `observation` is the reading dict `run_check` consumes (keys `temp`,
-    `wind`, `solar` per `corridor_discretization._OBSERVATION_FIELD_MAP`);
+    `wind`, `solar` per `city_rating._OBSERVATION_FIELD_MAP`);
     translated here back to the `PIPELINE_SCHEMA` spellings `air_temp`,
     `wind_speed`, `solar_radiation`. `check_result` is the mapping
     `run_check` returned — its rating, status and fallback flag are read
@@ -73,7 +81,7 @@ def build_archive_row(
     """
     row = {
         "datetime_utc": datetime_utc,
-        "corridor": corridor,
+        "city": city,
         "air_temp": float(observation["temp"]),
         "wind_speed": float(observation["wind"]),
         "solar_radiation": float(observation["solar"]),
@@ -94,7 +102,7 @@ def _validation_row(row: dict) -> dict:
     Build a validation-only copy of an archive row with a placeholder
     `wind_direction`, satisfying `units_def.PIPELINE_SCHEMA`'s
     required-column check for a column this archive never stores or
-    reads (corridor observations only ever carry the already-resolved
+    reads (city observations only ever carry the already-resolved
     perpendicular wind component, `wind_speed`, never a raw direction).
     Shared by `append_observation` and `read_history` so the placeholder
     has exactly one definition.
@@ -102,6 +110,21 @@ def _validation_row(row: dict) -> dict:
     validation_row = dict(row)
     validation_row.setdefault("wind_direction", 0.0)
     return validation_row
+
+
+def _normalize_row_keys(row: dict) -> dict:
+    """Accept a corridor-era row (`corridor` key) by exposing it as `city`."""
+    if "city" not in row and "corridor" in row:
+        row = dict(row)
+        row["city"] = row.pop("corridor")
+    return row
+
+
+def _existing_header(path: str):
+    """Header columns of an existing non-empty CSV at `path`, else None."""
+    if not os.path.exists(path) or os.path.getsize(path) == 0:
+        return None
+    return list(pd.read_csv(path, nrows=0).columns)
 
 
 def append_observation(row: dict, path: str = None) -> bool:
@@ -128,34 +151,48 @@ def append_observation(row: dict, path: str = None) -> bool:
     # degrades to "not archived this cycle," never to "no rating this
     # cycle."
     try:
+        row = _normalize_row_keys(row)
         # PIPELINE_SCHEMA marks wind_direction required=True, but the
         # archive row (ARCHIVE_COLUMNS) deliberately has no direction
         # column at all -- see _validation_row's docstring. The placeholder
         # it adds is never persisted to the actual archive row.
         violations = units_def.validate_pipeline_row(_validation_row(row), strict=False)
         if violations:
-            corridor = row.get("corridor", "<unknown corridor>")
+            city = row.get("city", "<unknown city>")
             for msg in violations:
-                logger.warning("historical_archive rejected row for %s: %s", corridor, msg)
+                logger.warning("historical_archive rejected row for %s: %s", city, msg)
             return False
 
         parent = os.path.dirname(path)
         if parent:
             os.makedirs(parent, exist_ok=True)
 
-        pd.DataFrame([row], columns=ARCHIVE_COLUMNS).to_csv(
-            path, mode="a", header=not os.path.exists(path), index=False
-        )
+        existing_header = _existing_header(path)
+        if existing_header is None:
+            pd.DataFrame([row], columns=ARCHIVE_COLUMNS).to_csv(
+                path, mode="a", header=True, index=False
+            )
+        else:
+            # Append in the file's own column order. A corridor-era file has
+            # `corridor` where `city` now sits; write the city under it.
+            legacy_row = dict(row)
+            if "corridor" in existing_header and "city" not in existing_header:
+                legacy_row["corridor"] = legacy_row.pop("city")
+            pd.DataFrame([legacy_row], columns=existing_header).to_csv(
+                path, mode="a", header=False, index=False
+            )
         return True
     except Exception as exc:
         # str(exc) only, never repr — matches the T-03-02 precedent in
-        # corridor_discretization.resolve_point_observation, where a repr
+        # city_rating.resolve_point_observation, where a repr
         # could echo request state including a provider token.
         logger.warning("historical_archive append failed (non-fatal): %s", str(exc))
         return False
 
 
-def read_history(path: str = None, corridor: str = None, validate: bool = True) -> pd.DataFrame:
+def read_history(
+    path: str = None, city: str = None, validate: bool = True, corridor: str = None
+) -> pd.DataFrame:
     """
     Read the archive back as a DataFrame, sorted ascending by
     `datetime_utc` so downstream time-series code never depends on file
@@ -178,7 +215,14 @@ def read_history(path: str = None, corridor: str = None, validate: bool = True) 
     offending message -- one line per call, not one per row, so a
     corrupted file cannot flood the log. `validate=False` returns the
     frame unfiltered, preserving an escape hatch for forensic inspection.
+
+    `city` filters to one city's rows. Corridor-era files (a `corridor`
+    column instead of `city`) are read with that column exposed as `city`;
+    their values are corridor names, so a per-city filter matches none of
+    them. `corridor` is a deprecated alias for `city`.
     """
+    if city is None:
+        city = corridor
     if path is None:
         path = config.HISTORICAL_ARCHIVE_PATH
 
@@ -186,6 +230,8 @@ def read_history(path: str = None, corridor: str = None, validate: bool = True) 
         return pd.DataFrame(columns=ARCHIVE_COLUMNS)
 
     df = pd.read_csv(path)
+    if "city" not in df.columns and "corridor" in df.columns:
+        df = df.rename(columns={"corridor": "city"})
 
     if validate and len(df) > 0:
         row_dicts = df.to_dict(orient="records")
@@ -203,7 +249,7 @@ def read_history(path: str = None, corridor: str = None, validate: bool = True) 
             )
         df = df[keep_mask]
 
-    if corridor is not None and "corridor" in df.columns:
-        df = df[df["corridor"] == corridor]
+    if city is not None and "city" in df.columns:
+        df = df[df["city"] == city]
 
     return df.sort_values("datetime_utc", ascending=True).reset_index(drop=True)

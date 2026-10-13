@@ -30,7 +30,7 @@ import pytest
 
 import ampacity_forecast
 import config
-import corridor_discretization
+import legacy_corridor
 import forecast_experiment as fe
 import forecast_training
 
@@ -207,7 +207,7 @@ def test_corridor_for_city_raises_for_unknown_city():
 
 
 def test_corridor_for_city_resolves_known_endpoints():
-    for corridor, (city_a, city_b) in config.CORRIDOR_ENDPOINTS.items():
+    for corridor, (city_a, city_b) in config.LEGACY_CORRIDOR_ENDPOINTS.items():
         assert fe._corridor_for_city(city_a) == corridor
         assert fe._corridor_for_city(city_b) == corridor
 
@@ -302,7 +302,7 @@ def test_persistence_arm_agrees_with_backtest_residuals(monkeypatch, tmp_path):
     # every arm uses) fed through ampacity_forecast.backtest_residuals on
     # the FULL, unfiltered hourly series, restricted to the timestamps
     # this test actually scored.
-    geometry = corridor_discretization.corridor_geometry(fe._corridor_for_city(CITY))
+    geometry = legacy_corridor.corridor_geometry(fe._corridor_for_city(CITY))
     dlr_amps = fe._city_ampacity(
         truth["air_temp"], truth["wind_speed"], truth["wind_direction"],
         truth["solar_radiation"], geometry,
@@ -549,7 +549,7 @@ def test_24h_persistence_prediction_equals_hand_computed_24h_shift(monkeypatch, 
     filtered = fe.filter_to_exact_lead(frame, lead_hours=PRIMARY_LEAD)
     assert len(filtered) > 0
 
-    geometry = corridor_discretization.corridor_geometry(fe._corridor_for_city(CITY))
+    geometry = legacy_corridor.corridor_geometry(fe._corridor_for_city(CITY))
     dlr_amps = fe._city_ampacity(
         truth["air_temp"], truth["wind_speed"], truth["wind_direction"],
         truth["solar_radiation"], geometry,
@@ -666,7 +666,7 @@ def _synthetic_24h_frame(monkeypatch, tmp_path, *, truth=None, fcst=None, period
 def test_non_fitted_arms_registry_has_exactly_four_entries_all_factories():
     assert len(fe.NON_FITTED_ARMS) == 4
     assert fe.ORACLE_ARM_NAME in fe.NON_FITTED_ARMS
-    geometry = corridor_discretization.corridor_geometry(fe._corridor_for_city(CITY))
+    geometry = legacy_corridor.corridor_geometry(fe._corridor_for_city(CITY))
     for name, factory in fe.NON_FITTED_ARMS.items():
         arm = factory(geometry)
         assert callable(arm), f"{name!r} is not a factory returning a callable"
@@ -674,7 +674,7 @@ def test_non_fitted_arms_registry_has_exactly_four_entries_all_factories():
 
 def test_persistence_24h_arm_equals_anchor_dlr_amps_column(monkeypatch, tmp_path):
     truth, fcst, filtered = _synthetic_24h_frame(monkeypatch, tmp_path)
-    geometry = corridor_discretization.corridor_geometry(fe._corridor_for_city(CITY))
+    geometry = legacy_corridor.corridor_geometry(fe._corridor_for_city(CITY))
     arm = fe._make_persistence_24h_arm(geometry)
     pred = arm(filtered)
     np.testing.assert_allclose(pred, filtered["anchor_dlr_amps"].to_numpy(dtype=float))
@@ -687,7 +687,7 @@ def test_persistence_24h_arm_matches_independent_24h_shift_of_truth(monkeypatch,
     self-consistent with anchored_pair_frame's own anchor column.
     """
     truth, fcst, filtered = _synthetic_24h_frame(monkeypatch, tmp_path)
-    geometry = corridor_discretization.corridor_geometry(fe._corridor_for_city(CITY))
+    geometry = legacy_corridor.corridor_geometry(fe._corridor_for_city(CITY))
     dlr_amps = fe._city_ampacity(
         truth["air_temp"], truth["wind_speed"], truth["wind_direction"],
         truth["solar_radiation"], geometry,
@@ -720,7 +720,7 @@ def test_nwp_wind_delta_arm_reduces_to_persistence_when_forecast_anchor_equals_v
     truth_frame, fcst_frame, filtered = _synthetic_24h_frame(
         monkeypatch, tmp_path, truth=truth, fcst=fcst,
     )
-    geometry = corridor_discretization.corridor_geometry(fe._corridor_for_city(CITY))
+    geometry = legacy_corridor.corridor_geometry(fe._corridor_for_city(CITY))
 
     arm0 = fe._make_persistence_24h_arm(geometry)
     arm1 = fe._make_nwp_wind_delta_arm(geometry)
@@ -744,7 +744,7 @@ def test_nwp_wind_delta_arm_clamps_negative_wind_at_the_physical_zero_bound(
         monkeypatch, tmp_path, truth=truth, fcst=fcst,
     )
 
-    geometry = corridor_discretization.corridor_geometry(fe._corridor_for_city(CITY))
+    geometry = legacy_corridor.corridor_geometry(fe._corridor_for_city(CITY))
     raw = fe._nwp_wind_delta_raw_wind_speed(filtered)
     assert (raw < 0.0).any(), "test setup did not actually produce a negative raw wind speed"
 
@@ -767,7 +767,7 @@ def test_nwp_wind_delta_arm_clamps_negative_wind_at_the_physical_zero_bound(
 
 def test_raw_forecast_arm_equals_city_ampacity_on_forecast_columns(monkeypatch, tmp_path):
     truth, fcst, filtered = _synthetic_24h_frame(monkeypatch, tmp_path)
-    geometry = corridor_discretization.corridor_geometry(fe._corridor_for_city(CITY))
+    geometry = legacy_corridor.corridor_geometry(fe._corridor_for_city(CITY))
     arm = fe._make_raw_forecast_arm(geometry)
     expected = fe._city_ampacity(
         filtered["fcst_air_temp"], filtered["fcst_wind_speed"], filtered["fcst_wind_direction"],
@@ -778,7 +778,7 @@ def test_raw_forecast_arm_equals_city_ampacity_on_forecast_columns(monkeypatch, 
 
 def test_oracle_arm_uses_truth_wind_and_forecast_thermal_inputs(monkeypatch, tmp_path):
     truth, fcst, filtered = _synthetic_24h_frame(monkeypatch, tmp_path)
-    geometry = corridor_discretization.corridor_geometry(fe._corridor_for_city(CITY))
+    geometry = legacy_corridor.corridor_geometry(fe._corridor_for_city(CITY))
     arm = fe._make_oracle_arm(geometry)
     expected = fe._city_ampacity(
         filtered["fcst_air_temp"], filtered["truth_wind_speed"], filtered["truth_wind_direction"],
@@ -803,7 +803,7 @@ def test_oracle_and_raw_forecast_agree_and_equal_truth_when_forecast_equals_trut
     truth_frame, fcst_frame, filtered = _synthetic_24h_frame(
         monkeypatch, tmp_path, truth=truth, fcst=fcst,
     )
-    geometry = corridor_discretization.corridor_geometry(fe._corridor_for_city(CITY))
+    geometry = legacy_corridor.corridor_geometry(fe._corridor_for_city(CITY))
 
     raw_forecast_arm = fe._make_raw_forecast_arm(geometry)
     oracle_arm = fe._make_oracle_arm(geometry)
@@ -823,7 +823,7 @@ def test_every_registry_arm_returns_full_length_array_for_the_scored_frame(
     monkeypatch, tmp_path
 ):
     truth, fcst, filtered = _synthetic_24h_frame(monkeypatch, tmp_path)
-    geometry = corridor_discretization.corridor_geometry(fe._corridor_for_city(CITY))
+    geometry = legacy_corridor.corridor_geometry(fe._corridor_for_city(CITY))
     for name, factory in fe.NON_FITTED_ARMS.items():
         arm = factory(geometry)
         pred = np.asarray(arm(filtered), dtype=float)
@@ -835,7 +835,7 @@ def test_score_arms_scores_the_full_non_fitted_arm_registry(monkeypatch, tmp_pat
     scoring the real four-arm registry (not just the minimal hand-built
     frames the pre-existing score_arms tests use)."""
     truth, fcst, filtered = _synthetic_24h_frame(monkeypatch, tmp_path)
-    geometry = corridor_discretization.corridor_geometry(fe._corridor_for_city(CITY))
+    geometry = legacy_corridor.corridor_geometry(fe._corridor_for_city(CITY))
     arms = {name: factory(geometry) for name, factory in fe.NON_FITTED_ARMS.items()}
     scored = fe.score_arms(filtered, arms)
     assert set(scored["candidates"]) == set(fe.NON_FITTED_ARMS)
@@ -964,7 +964,7 @@ def test_corridor_truth_reduction_matches_forecast_training_corridor_weakest_lin
 def test_corridor_truth_tie_resolves_to_the_first_endpoint_city(monkeypatch, tmp_path):
     """When both endpoint cities' truth ampacity is IDENTICAL on every row
     (an exact tie), the bottleneck must resolve to the first endpoint city
-    (AUSTIN, index 0 in config.CORRIDOR_ENDPOINTS[CORRIDOR]) -- matching
+    (AUSTIN, index 0 in config.LEGACY_CORRIDOR_ENDPOINTS[CORRIDOR]) -- matching
     forecast_training.corridor_weakest_link's own documented tie-break."""
     monkeypatch.setattr(config, "FORECAST_EXPERIMENT_CACHE_DIR", str(tmp_path))
     identical_truth = _flat_weather_frame(wind_speed=np.full(24 * 10, 5.0), periods=24 * 10)
@@ -1128,14 +1128,14 @@ def test_main_scores_both_corridors_from_one_invocation(monkeypatch, tmp_path, c
     ])
 
     captured = capsys.readouterr()
-    assert captured.out.count("SUMMARY: ") == len(config.CORRIDOR_ENDPOINTS)
-    for corridor in config.CORRIDOR_ENDPOINTS:
+    assert captured.out.count("SUMMARY: ") == len(config.LEGACY_CORRIDOR_ENDPOINTS)
+    for corridor in config.LEGACY_CORRIDOR_ENDPOINTS:
         assert corridor in captured.out
     assert "split=val" in captured.out
     assert fe.ORACLE_ARM_NAME in captured.out
     assert "NON-FORECAST DIAGNOSTIC" in captured.out
 
-    for corridor in config.CORRIDOR_ENDPOINTS:
+    for corridor in config.LEGACY_CORRIDOR_ENDPOINTS:
         report_path = os.path.join(str(tmp_path), f"experiment_report_{corridor}.json")
         assert os.path.exists(report_path)
         with open(report_path) as fh:
@@ -1369,7 +1369,7 @@ def test_candidate_mapping_derived_from_all_arms_excludes_oracle_and_has_six():
 
 
 def test_all_arms_fitted_placeholder_entries_raise_naming_fit_fitted_arms():
-    geometry = corridor_discretization.corridor_geometry(CORRIDOR)
+    geometry = legacy_corridor.corridor_geometry(CORRIDOR)
     for name in fe.FITTED_ARM_NAMES:
         callable_ = fe.ALL_ARMS[name](geometry)
         with pytest.raises(RuntimeError) as excinfo:
@@ -1408,7 +1408,7 @@ def test_stacked_pair_frame_has_endpoint_city_column_with_exactly_two_cities(
 
 def test_fit_fitted_arms_returns_three_fitted_objects(monkeypatch, tmp_path):
     stacked = _build_stacked_train_val_frame(monkeypatch, tmp_path)
-    geometry = corridor_discretization.corridor_geometry(CORRIDOR)
+    geometry = legacy_corridor.corridor_geometry(CORRIDOR)
 
     fitted = fe.fit_fitted_arms(
         stacked, geometry,
@@ -1440,7 +1440,7 @@ def test_fit_fitted_arms_arm5_never_touches_production_model_loader_or_cache(
     import ampacity_forecast as af
 
     stacked = _build_stacked_train_val_frame(monkeypatch, tmp_path)
-    geometry = corridor_discretization.corridor_geometry(CORRIDOR)
+    geometry = legacy_corridor.corridor_geometry(CORRIDOR)
 
     def _raise(*args, **kwargs):
         raise AssertionError(
@@ -1475,7 +1475,7 @@ def test_wind_and_cooling_corrected_ampacity_are_finite_and_differ_from_raw_fore
     monkeypatch, tmp_path
 ):
     stacked = _build_stacked_train_val_frame(monkeypatch, tmp_path)
-    geometry = corridor_discretization.corridor_geometry(CORRIDOR)
+    geometry = legacy_corridor.corridor_geometry(CORRIDOR)
     city_a = "AUSTIN"
 
     fitted = fe.fit_fitted_arms(
@@ -1514,7 +1514,7 @@ def test_leakage_probe_passes_on_real_arms_flags_oracle_and_flags_a_sabotaged_ar
     directly.
     """
     stacked = _build_stacked_train_val_frame(monkeypatch, tmp_path)
-    geometry = corridor_discretization.corridor_geometry(CORRIDOR)
+    geometry = legacy_corridor.corridor_geometry(CORRIDOR)
     city_a, city_b = "AUSTIN", "CORPUS_CHRISTI"
 
     fitted = fe.fit_fitted_arms(

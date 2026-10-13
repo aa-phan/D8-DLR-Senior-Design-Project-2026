@@ -163,7 +163,7 @@ def resolve_station_city(lat, lon) -> str | None:
         if `lat`/`lon` is absent, null, non-numeric, or non-finite. Never
         falls back to a default or nearest-guess-regardless-of-validity
         city -- an unresolved coordinate must not be silently attributed to
-        the wrong corridor's static rating.
+        the wrong city's static rating.
     """
     for v in (lat, lon):
         if not isinstance(v, (int, float)) or isinstance(v, bool):

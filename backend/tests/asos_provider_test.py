@@ -4,7 +4,7 @@ Tests for backend/asos_provider.py (C4, Phase 7 / WX-02).
 Covers the ASOS 1-minute fetch-and-normalize module: CSV parsing into
 PIPELINE_SCHEMA-named columns, unit conversion via units_def.Q (never
 hand-rolled), tz-aware UTC timestamps, and the bare-date request-window
-shape corridor_discretization.rate_corridor passes today. Task 3 adds the
+shape city_rating.rate_city passes today. Task 3 adds the
 fail-loud / outage-carve-out test group below.
 
 Follows backend/tests/dlr_pipeline_test.py's `_FakeResponse` +

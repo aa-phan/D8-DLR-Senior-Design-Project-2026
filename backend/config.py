@@ -141,17 +141,17 @@ DEFAULT_CONDUCTOR_CONFIG_KWARGS: dict = {
 def conductor_kwargs_for(line_azimuth: float) -> dict:
     """
     `DEFAULT_CONDUCTOR_CONFIG_KWARGS` with `line_azimuth` overridden to a
-    specific corridor's computed bearing. The module-level default of 90.0
-    stays as the documented default for callers with no corridor (e.g. this
-    module's own DEFAULT_CONDUCTOR_CONFIG_KWARGS, still valid standalone).
-    Consumed by Plan 03-02's per-corridor construction, one call per corridor.
+    specific city's line bearing (`CITY_LINE_BEARING_DEG`). The module-level
+    default of 90.0 stays as the documented default for callers with no
+    city (e.g. this module's own DEFAULT_CONDUCTOR_CONFIG_KWARGS, still
+    valid standalone). Consumed by `city_point.city_point`.
     """
     kwargs = dict(DEFAULT_CONDUCTOR_CONFIG_KWARGS)
     kwargs["line_azimuth"] = line_azimuth
     return kwargs
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Corridor geographic model (C8, Plan 03-02)
+# Location geographic model (C8, per-city points)
 # ──────────────────────────────────────────────────────────────────────────────
 # City-center lat/lon for the four D-00 cities, keyed identically to
 # STATIC_RATINGS so this dict — together with STATIC_RATINGS and
@@ -173,7 +173,7 @@ def conductor_kwargs_for(line_azimuth: float) -> dict:
 #      city limits include ~329 sq mi of bay/gulf water vs only 162 sq mi
 #      of land; El Paso's stretch north into the Franklin Mountains), which
 #      skews the Gazetteer's polygon-internal-point algorithm away from the
-#      conventional "city center" this project's other 3 corridors imply.
+#      conventional "city center" this project's other 3 cities imply.
 #   2. OpenStreetMap Nominatim administrative-boundary centroid (live query,
 #      https://nominatim.openstreetmap.org/search, 2026-09-03), used as the
 #      final value below because it agrees with the Census Gazetteer for
@@ -188,14 +188,33 @@ CITY_COORDINATES: dict[str, tuple[float, float]] = {
     "EL_PASO": (31.7601, -106.4870),        # OSM Nominatim admin centroid; Census Gazetteer internal point (31.8478,-106.4311) rejected as mountain-skewed
 }
 
-# The two D-01 corridors: south-central (Austin<->Corpus Christi) and West
-# Texas (Midland<->El Paso), chosen over a full 6-pair mesh or a single
-# 4-city chain. Values are city *keys* into CITY_COORDINATES/STATIC_RATINGS/
-# RATING_BOUNDS_BY_LOCATION, not raw coordinates, so a corridor cannot drift
-# out of agreement with those tables. This dict — not the legacy
-# station_explorer.CORRIDORS five-point proximity list — is the authoritative
-# corridor model per docs/data-science/decisions/geographic_scope.md.
-CORRIDOR_ENDPOINTS: dict[str, tuple[str, str]] = {
+# The rating locations: each of the four project cities is one independent
+# point (CITY_COORDINATES[city]) with its own STATIC_RATINGS and
+# RATING_BOUNDS_BY_LOCATION entry. There is no corridor, no pairing of cities
+# and no min()-reduction across points (docs/data-science/decisions/
+# point_scope.md retired the corridor model on 2026-10-12). Keys are city
+# keys, so every per-location table stays in agreement by construction.
+LOCATIONS: tuple[str, ...] = tuple(CITY_COORDINATES)
+
+# Transmission-line azimuth (degrees clockwise from north) used for each
+# city's perpendicular-wind component. A point has no line direction of its
+# own; these values are CARRIED OVER from the retired corridor bearings
+# (Austin->Corpus Christi 173.15, Midland->El Paso 267.54) so wind-cooling
+# behaviour is unchanged by the corridor retirement. ASSUMPTION: replace
+# with each city's real line orientation when known (see point_scope.md,
+# Open Questions).
+CITY_LINE_BEARING_DEG: dict[str, float] = {
+    "AUSTIN": 173.15,
+    "CORPUS_CHRISTI": 173.15,
+    "MIDLAND": 267.54,
+    "EL_PASO": 267.54,
+}
+
+# Retired corridor pairing, retained ONLY for the frozen 2026-09/10
+# forecast-correction experiment modules (forecast_experiment*.py,
+# legacy_corridor.py), which reproduce a completed study. No production,
+# shadow, training or documentation path should read this.
+LEGACY_CORRIDOR_ENDPOINTS: dict[str, tuple[str, str]] = {
     "AUSTIN_CORPUS_CHRISTI": ("AUSTIN", "CORPUS_CHRISTI"),
     "MIDLAND_EL_PASO": ("MIDLAND", "EL_PASO"),
 }
@@ -261,21 +280,21 @@ HISTORICAL_ARCHIVE_PATH: str = "data/historical/ampacity_history.csv"
 # Tunables for the new fitted-model Tier-2 method, mirroring this file's own
 # centralization discipline for the predictive layer above.
 
-# Directory for persisted per-corridor model artifacts and the assembled
+# Directory for persisted per-city model artifacts and the assembled
 # training frame that produced them, mirroring DEFAULT_STATION_SOURCE's
 # relative-to-cwd convention. Git-ignored (/data/models/), generated data.
 FORECAST_ML_MODEL_DIR: str = "data/models"
 
-# {corridor} is formatted in by `ampacity_forecast._model_path_for` after
-# `_corridor_of` has already validated it against `CORRIDOR_ENDPOINTS` --
-# never a caller-supplied path (T-01-03).
-FORECAST_ML_MODEL_FILENAME_TEMPLATE: str = "forecast_{corridor}.joblib"
+# {city} is formatted in by `ampacity_forecast._model_path_for` after the
+# city has already been validated against `LOCATIONS` -- never a
+# caller-supplied path (T-01-03).
+FORECAST_ML_MODEL_FILENAME_TEMPLATE: str = "forecast_{city}.joblib"
 
-# The exact real frame that trained a corridor's model, written by
+# The exact real frame that trained a city's model, written by
 # `forecast_training.main` so the training run can be replayed through
 # `forecast_ampacity` (e.g. for the Task 1 E2E verify and the FCST-02
 # validation record).
-FORECAST_ML_TRAINING_FRAME_TEMPLATE: str = "training_frame_{corridor}.csv"
+FORECAST_ML_TRAINING_FRAME_TEMPLATE: str = "training_frame_{city}.csv"
 
 # D-04's multivariate weather inputs, spelled with the PIPELINE_SCHEMA
 # column names already used throughout this file/module.
@@ -524,21 +543,21 @@ DEFAULT_ANOMALY_CONTROL_LIMIT_K: float = 4.0
 # anomaly_detector.py, mirroring this file's FORECAST_ML_* block structure
 # and centralization discipline directly above.
 
-# Directory for persisted per-corridor anomaly model artifacts and the
+# Directory for persisted per-city anomaly model artifacts and the
 # observation frame that produced them. Currently resolves to the same
 # git-ignored directory as FORECAST_ML_MODEL_DIR, but kept as its own
 # constant so the forecasting and anomaly-detection subsystems stay
 # independently configurable if their storage needs ever diverge.
 ANOMALY_ML_MODEL_DIR: str = "data/models"
 
-# {corridor} is formatted in by `anomaly_detector._model_path_for` only
-# after the corridor key has been checked against `CORRIDOR_ENDPOINTS` --
+# {city} is formatted in by `anomaly_detector._model_path_for` only
+# after the city key has been checked against `LOCATIONS` --
 # never a caller-supplied path (T-02-02).
-ANOMALY_ML_MODEL_FILENAME_TEMPLATE: str = "anomaly_{corridor}.joblib"
+ANOMALY_ML_MODEL_FILENAME_TEMPLATE: str = "anomaly_{city}.joblib"
 
-# The exact real pooled observation frame that fitted a corridor's model,
+# The exact real observation frame that fitted a city's model,
 # written by `anomaly_training.main` so a training run can be replayed.
-ANOMALY_ML_OBSERVATION_FRAME_TEMPLATE: str = "anomaly_observations_{corridor}.csv"
+ANOMALY_ML_OBSERVATION_FRAME_TEMPLATE: str = "anomaly_observations_{city}.csv"
 
 # D-01's raw per-variable inputs, spelled with the PIPELINE_SCHEMA/
 # Open-Meteo column names -- the training-time column names the estimator
@@ -628,20 +647,21 @@ ANOMALY_ML_VALIDATION_REPORT_NAME: str = "anomaly_validation_report.json"
 # baseline to training-time-only: raw_data does not carry load at the live
 # check() call site, so none of this reaches the runtime decision path.
 
-# Per-corridor ERCOT weather-zone substring selection for
+# Per-city ERCOT weather-zone substring selection for
 # ercot_data_retriever.pull_ercot_data's zone_substrings parameter. These
 # are uppercased substrings matched against ERCOT's real weather-zone
 # column names (Coast, East, Far West, North, North Central, South, South
 # Central, West, ERCOT) -- SOUTH deliberately catches both South and
 # South Central, WEST deliberately catches both West and Far West.
-# Austin and Corpus Christi are nowhere near the west zones, so reusing
-# one filter for both corridors would produce fabricated evidence
-# (02-RESEARCH.md Pitfall 3). Every key in CORRIDOR_ENDPOINTS must appear
-# here -- a test asserts it, so no corridor can silently fall through to
-# a default zone selection.
-ANOMALY_ML_ERCOT_ZONE_SUBSTRINGS_BY_CORRIDOR: dict[str, tuple[str, ...]] = {
-    "AUSTIN_CORPUS_CHRISTI": ("SOUTH",),
-    "MIDLAND_EL_PASO": ("WEST",),
+# Austin and Corpus Christi are nowhere near the west zones, so one filter
+# for every city would produce fabricated evidence (02-RESEARCH.md
+# Pitfall 3). Every key in LOCATIONS must appear here -- a test asserts it,
+# so no city can silently fall through to a default zone selection.
+ANOMALY_ML_ERCOT_ZONE_SUBSTRINGS_BY_CITY: dict[str, tuple[str, ...]] = {
+    "AUSTIN": ("SOUTH",),
+    "CORPUS_CHRISTI": ("SOUTH",),
+    "MIDLAND": ("WEST",),
+    "EL_PASO": ("WEST",),
 }
 
 # The load characterization window depth, in complete calendar years.

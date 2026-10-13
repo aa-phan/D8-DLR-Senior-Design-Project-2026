@@ -4,7 +4,7 @@ Offline Anomaly Model Training (v1.3 Phase 2 Plan 02-01, ANOM-01)
 Standalone entry point -- NOT imported by the runtime pipeline, mirroring
 `forecast_training.py`'s own offline-data-pull convention. It imports
 `anomaly_detector` for `_model_path_for`, so training and runtime cannot
-disagree on where a corridor's artifact lives, and `forecast_training` for
+disagree on where a city's artifact lives, and `forecast_training` for
 `fetch_city_weather`, so exactly one per-calendar-year Open-Meteo loop
 exists in this repo. It also imports `DLRSafetyMonitor` solely to read its
 `WIND_BOUNDS`/`TEMP_BOUNDS`/`SOLAR_BOUNDS` class attributes -- this import
@@ -12,12 +12,12 @@ is legal here, in the offline trainer, and remains forbidden inside
 `anomaly_detector.py` itself (that module must never import
 `DLRSafetyMonitor`).
 
-Assembles a real, non-synthetic per-corridor raw-weather observation frame
-by POOLING (not weakest-link-reducing) both endpoint cities' Open-Meteo
-Archive backfill, drops rows outside `DLRSafetyMonitor`'s G3 physical
+Assembles a real, non-synthetic per-city raw-weather observation frame
+from ONE city's own Open-Meteo Archive backfill (no pooling across
+cities), drops rows outside `DLRSafetyMonitor`'s G3 physical
 bounds or carrying a null/non-finite feature value, fits a `scikit-learn`
 outlier estimator on the survivors, and persists the result atomically for
-`anomaly_detector._load_corridor_model` to load.
+`anomaly_detector._load_city_model` to load.
 
 v1.3 Phase 2 (02-03, ANOM-01/D-02) also imports `ercot_data_retriever` at
 module scope: `characterize_load` runs D-02's training-time-only ERCOT
@@ -29,7 +29,7 @@ this boundary holds, since `raw_data` carries no load value at the live
 workstream's.
 
 Run directly:
-    .venv/bin/python3 backend/anomaly_training.py --corridor AUSTIN_CORPUS_CHRISTI --years 1
+    .venv/bin/python3 backend/anomaly_training.py --city AUSTIN --years 1
 """
 
 import argparse
@@ -45,7 +45,7 @@ import pandas as pd
 
 import anomaly_detector
 import config
-import corridor_discretization
+import city_point
 import ercot_data_retriever
 import forecast_training
 import thermal_model
@@ -98,21 +98,16 @@ def _make_isolation_forest_candidate(contamination):
     )
 
 
-def corridor_observation_frame(corridor: str, years: int) -> pd.DataFrame:
+def city_observation_frame(city: str, years: int) -> pd.DataFrame:
     """
-    The phase's real-data spine. For each of `corridor`'s two endpoint
-    cities in `config.CORRIDOR_ENDPOINTS`, calls
-    `forecast_training.fetch_city_weather(city, years)` and POOLS the two
-    cities' rows by concatenation -- deliberately NOT the weakest-link
-    `min()` reduction `forecast_training.corridor_training_frame`
-    performs, because D-01 judges each city's own raw sensor reading
-    against a plausible envelope, so both cities' readings are training
-    examples in their own right and reducing them would discard half the
-    envelope.
+    The phase's real-data spine. Calls
+    `forecast_training.fetch_city_weather(city, years)` for the ONE city
+    and uses that city's own Open-Meteo backfill rows -- no pooling across
+    cities, since each city is an independent rating point
+    (`docs/data-science/decisions/point_scope.md`).
 
-    Returns a frame with columns `datetime_utc`, `corridor`, `city`, and
-    the three `config.ANOMALY_ML_FEATURE_COLUMNS`, sorted by
-    `datetime_utc` then `city`.
+    Returns a frame with columns `datetime_utc`, `city`, and the three
+    `config.ANOMALY_ML_FEATURE_COLUMNS`, sorted by `datetime_utc`.
 
     Before returning, drops two row classes and emits one aggregated
     warning line per class naming the dropped count: rows where any of
@@ -125,21 +120,19 @@ def corridor_observation_frame(corridor: str, years: int) -> pd.DataFrame:
     and never clips a value into range -- a dropped row is the only
     correct response.
     """
-    city_a, city_b = config.CORRIDOR_ENDPOINTS[corridor]
+    if city not in config.LOCATIONS:
+        raise KeyError(
+            f"Unknown city {city!r}. Valid cities: {sorted(config.LOCATIONS)}"
+        )
 
-    frames = []
-    for city in (city_a, city_b):
-        weather = forecast_training.fetch_city_weather(city, years)
-        frames.append(pd.DataFrame({
-            "datetime_utc": weather["datetime_utc"],
-            "corridor": corridor,
-            "city": city,
-            "air_temp": weather["air_temp"],
-            "wind_speed": weather["wind_speed"],
-            "solar_radiation": weather["solar_radiation"],
-        }))
-
-    pooled = pd.concat(frames, ignore_index=True)
+    weather = forecast_training.fetch_city_weather(city, years)
+    pooled = pd.DataFrame({
+        "datetime_utc": weather["datetime_utc"],
+        "city": city,
+        "air_temp": weather["air_temp"],
+        "wind_speed": weather["wind_speed"],
+        "solar_radiation": weather["solar_radiation"],
+    })
     feature_cols = list(config.ANOMALY_ML_FEATURE_COLUMNS)
 
     finite_mask = pd.Series(True, index=pooled.index)
@@ -163,20 +156,20 @@ def corridor_observation_frame(corridor: str, years: int) -> pd.DataFrame:
 
     if null_or_nonfinite_dropped:
         logger.warning(
-            "corridor_observation_frame: dropped %d row(s) for %s with a "
+            "city_observation_frame: dropped %d row(s) for %s with a "
             "null or non-finite feature value",
-            null_or_nonfinite_dropped, corridor,
+            null_or_nonfinite_dropped, city,
         )
     if out_of_bounds_dropped:
         logger.warning(
-            "corridor_observation_frame: dropped %d row(s) for %s outside "
+            "city_observation_frame: dropped %d row(s) for %s outside "
             "DLRSafetyMonitor's G3 physical bounds",
-            out_of_bounds_dropped, corridor,
+            out_of_bounds_dropped, city,
         )
 
     keep = finite_mask & bounds_mask
-    result = pooled.loc[keep, ["datetime_utc", "corridor", "city"] + feature_cols]
-    return result.sort_values(["datetime_utc", "city"]).reset_index(drop=True)
+    result = pooled.loc[keep, ["datetime_utc", "city"] + feature_cols]
+    return result.sort_values(["datetime_utc"]).reset_index(drop=True)
 
 
 def build_feature_matrix(frame: pd.DataFrame) -> np.ndarray:
@@ -198,7 +191,7 @@ def build_feature_matrix(frame: pd.DataFrame) -> np.ndarray:
     return frame[feature_cols].to_numpy(dtype=float)
 
 
-def fit_corridor_model(X: np.ndarray, estimator):
+def fit_city_model(X: np.ndarray, estimator):
     """
     Invoke `estimator`'s (already-constructed, unfitted) training entry
     point on `X` and return it fitted. This module is the only place in
@@ -208,9 +201,9 @@ def fit_corridor_model(X: np.ndarray, estimator):
     return estimator
 
 
-def persist_corridor_model(model, corridor: str) -> str:
+def persist_city_model(model, city: str) -> str:
     """
-    Persist `model` for `corridor` atomically: create
+    Persist `model` for `city` atomically: create
     `config.ANOMALY_ML_MODEL_DIR` if absent, resolve the final path
     through `anomaly_detector._model_path_for` (so training and runtime
     agree on one path convention), `joblib.dump` to a temp file in that
@@ -225,7 +218,7 @@ def persist_corridor_model(model, corridor: str) -> str:
     import joblib
 
     os.makedirs(config.ANOMALY_ML_MODEL_DIR, exist_ok=True)
-    final_path = anomaly_detector._model_path_for(corridor)
+    final_path = anomaly_detector._model_path_for(city)
 
     fd, tmp_path = tempfile.mkstemp(
         dir=config.ANOMALY_ML_MODEL_DIR, suffix=".joblib.tmp"
@@ -242,21 +235,20 @@ def persist_corridor_model(model, corridor: str) -> str:
     return final_path
 
 
-def merge_corridor_report(report_name: str, new_entries: dict, produced_by: str) -> str:
+def merge_city_report(report_name: str, new_entries: dict, produced_by: str) -> str:
     """
-    The single load-merge-atomic-write path for every corridor-scopable
+    The single load-merge-atomic-write path for every city-scopable
     report writer in this module (`_run_bakeoff`, `_run_validate`,
     `_run_characterize_load`). Resolves the final path as
     `os.path.join(config.ANOMALY_ML_MODEL_DIR, report_name)`, reading
     `config` at call time so a test redirecting `ANOMALY_ML_MODEL_DIR` is
     honored.
 
-    Why the read-merge exists at all: `main`'s `--corridor` flag makes a
-    corridor subset a first-class supported invocation (`corridors =
-    [args.corridor] if args.corridor else sorted(config.CORRIDOR_
-    ENDPOINTS)`), so a writer that builds a fresh accumulator scoped only
-    to the corridors it just processed and unconditionally overwrites the
-    persisted report with it silently destroys every OTHER corridor's
+    Why the read-merge exists at all: `main`'s `--city` flag makes a
+    city subset a first-class supported invocation (`cities =
+    [args.city] if args.city else list(config.LOCATIONS)`), so a writer that builds a fresh accumulator scoped only
+    to the cities it just processed and unconditionally overwrites the
+    persisted report with it silently destroys every OTHER city's
     measurement history on every scoped re-run -- no warning, no error,
     just a smaller file (02-REVIEW.md CR-01, confirmed live in
     02-VERIFICATION.md). That is the exact opposite of the visibility
@@ -276,7 +268,7 @@ def merge_corridor_report(report_name: str, new_entries: dict, produced_by: str)
        paths and stating the run continues from an empty base. Silently
        substituting an empty mapping for an unreadable file would
        reproduce this exact evidence-loss bug, just triggered by
-       corruption instead of by `--corridor`.
+       corruption instead of by `--city`.
     2. Stamp provenance. Every entry in `new_entries` gets two keys set
        INSIDE that entry -- never at the top level, since Plan 02-04's
        `TRANSCRIPTION_OK` gate iterates the loaded report's top-level
@@ -289,9 +281,9 @@ def merge_corridor_report(report_name: str, new_entries: dict, produced_by: str)
     3. Prune, then merge. The loaded base's keys partition into three
        groups: also present in `new_entries` (refreshed this run),
        absent from `new_entries` but present in
-       `config.CORRIDOR_ENDPOINTS` (carried forward untouched), and
-       absent from both (no longer a configured corridor -- dropped
-       rather than accumulated forever as a zombie entry). A corridor
+       `config.LOCATIONS` (carried forward untouched), and
+       absent from both (no longer a configured city -- dropped
+       rather than accumulated forever as a zombie entry). A city
        processed by this invocation gets its entry REPLACED wholesale;
        fields from an old entry are never spliced onto a new one, because
        the result would describe a measurement run that never happened.
@@ -300,7 +292,7 @@ def merge_corridor_report(report_name: str, new_entries: dict, produced_by: str)
        forward / dropped) -- the operator-facing half of "a shortened run
        is visible in the evidence"; the provenance keys are the file-
        facing half.
-    5. Write atomically. Mirrors `persist_corridor_model`'s T-02-06
+    5. Write atomically. Mirrors `persist_city_model`'s T-02-06
        discipline exactly: `os.makedirs` the model directory,
        `tempfile.mkstemp` into that same directory with a `.json.tmp`
        suffix, serialize the merged mapping with `indent=2`, then
@@ -333,7 +325,7 @@ def merge_corridor_report(report_name: str, new_entries: dict, produced_by: str)
             quarantine_path = f"{final_path}.unreadable-{timestamp}"
             os.replace(final_path, quarantine_path)
             message = (
-                f"merge_corridor_report: {final_path} is unreadable "
+                f"merge_city_report: {final_path} is unreadable "
                 f"({quarantine_reason}); preserved at {quarantine_path} -- "
                 f"continuing this run from an empty base"
             )
@@ -344,20 +336,20 @@ def merge_corridor_report(report_name: str, new_entries: dict, produced_by: str)
 
     generated_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
     stamped_entries = {}
-    for corridor, entry in new_entries.items():
+    for city, entry in new_entries.items():
         stamped = dict(entry)
         stamped["produced_by"] = produced_by
         stamped["generated_at"] = generated_at
-        stamped_entries[corridor] = stamped
+        stamped_entries[city] = stamped
 
     refreshed = sorted(stamped_entries)
     carried_forward = sorted(
         key for key in base
-        if key not in stamped_entries and key in config.CORRIDOR_ENDPOINTS
+        if key not in stamped_entries and key in config.LOCATIONS
     )
     dropped = sorted(
         key for key in base
-        if key not in stamped_entries and key not in config.CORRIDOR_ENDPOINTS
+        if key not in stamped_entries and key not in config.LOCATIONS
     )
 
     merged = {key: base[key] for key in carried_forward}
@@ -555,10 +547,10 @@ def inject_anomalies(
     return injected, mask
 
 
-def _dlr_amps_for(frame: pd.DataFrame, corridor: str) -> np.ndarray:
+def _dlr_amps_for(frame: pd.DataFrame, city: str) -> np.ndarray:
     """
     Converts `frame`'s three raw feature columns into a `dlr_amps` series
-    using `corridor_discretization.corridor_geometry(corridor)`'s
+    using `city_point.city_point(city)`'s
     `ConductorConfig` and `thermal_model.ieee738_ampacity`, reproducing
     `DLRSafetyMonitor._compute_ampacity`'s exact call (`T_amb_c=air_temp`,
     `wind_perp_ms=wind_speed`, `ghi_wm2=solar_radiation`, default
@@ -571,12 +563,12 @@ def _dlr_amps_for(frame: pd.DataFrame, corridor: str) -> np.ndarray:
     same physics. Explicit float cast -- `ieee738_ampacity` returns an
     array even for scalar input (RESEARCH.md Pitfall 2).
     """
-    geometry = corridor_discretization.corridor_geometry(corridor)
+    point = city_point.city_point(city)
     amps = thermal_model.ieee738_ampacity(
         T_amb_c=frame["air_temp"].to_numpy(dtype=float),
         wind_perp_ms=frame["wind_speed"].to_numpy(dtype=float),
         ghi_wm2=frame["solar_radiation"].to_numpy(dtype=float),
-        conductor=geometry.conductor,
+        conductor=point.conductor,
     )
     return np.asarray(amps, dtype=float)
 
@@ -594,12 +586,12 @@ def score_model(model, frame: pd.DataFrame) -> np.ndarray:
 
 
 def score_rolling_baseline(
-    corridor: str, fit_frame: pd.DataFrame, frame: pd.DataFrame
+    city: str, fit_frame: pd.DataFrame, frame: pd.DataFrame
 ) -> np.ndarray:
     """
     Scores `frame` through the EXISTING `AnomalyDetector._check_against_
     rolling_baseline` branch -- never a reimplementation of its band
-    arithmetic. Builds `AnomalyDetector.for_corridor(corridor, history=
+    arithmetic. Builds `AnomalyDetector.for_city(city, history=
     <fit_frame with its derived dlr_amps column>, load_model=False)` (so
     `self.model` stays `None` and only the heuristic baseline can fire),
     then for each row of `frame` converts that row's raw readings through
@@ -610,13 +602,13 @@ def score_rolling_baseline(
     the boolean verdicts, one per row of `frame`.
     """
     history = fit_frame.copy()
-    history["dlr_amps"] = _dlr_amps_for(fit_frame, corridor)
+    history["dlr_amps"] = _dlr_amps_for(fit_frame, city)
 
-    detector = anomaly_detector.AnomalyDetector.for_corridor(
-        corridor, history=history, load_model=False,
+    detector = anomaly_detector.AnomalyDetector.for_city(
+        city, history=history, load_model=False,
     )
 
-    ratings = _dlr_amps_for(frame, corridor)
+    ratings = _dlr_amps_for(frame, city)
     verdicts = np.empty(len(frame), dtype=bool)
     for i, rating in enumerate(ratings):
         is_anomalous, _ = detector.check({}, float(rating))
@@ -625,7 +617,7 @@ def score_rolling_baseline(
 
 
 def validate_candidate(
-    corridor: str,
+    city: str,
     fit_frame: pd.DataFrame,
     holdout_frame: pd.DataFrame,
     name: str,
@@ -666,11 +658,11 @@ def validate_candidate(
     train_rows_used = len(fit_for_training)
 
     X_fit = build_feature_matrix(fit_for_training)
-    estimator = fit_corridor_model(X_fit, factory(contamination))
+    estimator = fit_city_model(X_fit, factory(contamination))
 
     # Clean false-positive rate -- the un-injected holdout only.
     model_fp_flags = score_model(estimator, holdout_frame)
-    baseline_fp_flags = score_rolling_baseline(corridor, fit_frame, holdout_frame)
+    baseline_fp_flags = score_rolling_baseline(city, fit_frame, holdout_frame)
     clean_rows = len(holdout_frame)
 
     seed_rng = np.random.default_rng(config.ANOMALY_ML_RANDOM_SEED)
@@ -690,10 +682,10 @@ def validate_candidate(
         mask_implausible_np
     ]
     baseline_out_flags = score_rolling_baseline(
-        corridor, fit_frame, injected_out
+        city, fit_frame, injected_out
     )[mask_out_np]
     baseline_implausible_flags = score_rolling_baseline(
-        corridor, fit_frame, injected_implausible
+        city, fit_frame, injected_implausible
     )[mask_implausible_np]
 
     pooled_model_flags = np.concatenate([model_out_flags, model_implausible_flags])
@@ -723,17 +715,17 @@ def validate_candidate(
     }
 
 
-def _run_validate(corridors, years):
+def _run_validate(cities, years):
     """
     Task 1's single-candidate (`IsolationForest`) measurement loop across
     `config.ANOMALY_ML_CONTAMINATION_GRID` -- Task 2's `--bakeoff` extends
-    this to the full three-candidate comparison via `corridor_report`/
-    `select_winner`. For each corridor: assemble the real observation
+    this to the full three-candidate comparison via `city_report`/
+    `select_winner`. For each city: assemble the real observation
     frame (written to disk exactly like `main`'s plain training loop),
     split it chronologically, measure every contamination grid point,
     print a fixed-width table, and accumulate one JSON report. Persistence
-    goes through `merge_corridor_report` (v1.3 Phase 2 Plan 02-05, CR-01),
-    same as `_run_bakeoff`: a corridor absent from `corridors` is carried
+    goes through `merge_city_report` (v1.3 Phase 2 Plan 02-05, CR-01),
+    same as `_run_bakeoff`: a city absent from `cities` is carried
     forward, not deleted.
 
     One consequence of sharing the merge helper with `_run_bakeoff`,
@@ -741,11 +733,11 @@ def _run_validate(corridors, years):
     `--bakeoff` write structurally different entries into the same file
     (this function's entries carry no `winner`/`selected_contamination`/
     `ceiling_met`/`model_path`). Merging a `--validate` run over a
-    corridor whose entry came from `--bakeoff` REPLACES that winner-
+    city whose entry came from `--bakeoff` REPLACES that winner-
     bearing entry with one that has no winner -- a correct wholesale
-    replacement of that corridor's record by the command the operator
+    replacement of that city's record by the command the operator
     actually ran, made legible afterwards by the `produced_by` stamp. It
-    will make Plan 02-04's `TRANSCRIPTION_OK` gate fail for that corridor,
+    will make Plan 02-04's `TRANSCRIPTION_OK` gate fail for that city,
     which is the gate doing its job: telling the operator the tracked
     record no longer matches the evidence. This function does not add a
     shape-compatibility shim, a field backfill, or a refusal to merge
@@ -754,21 +746,21 @@ def _run_validate(corridors, years):
     """
     reports = {}
 
-    for corridor in corridors:
+    for city in cities:
         try:
-            frame = corridor_observation_frame(corridor, years)
+            frame = city_observation_frame(city, years)
         except Exception:
             logger.exception(
-                "anomaly_training --validate: failed assembling corridor "
-                "%s -- continuing to the next corridor", corridor,
+                "anomaly_training --validate: failed assembling city "
+                "%s -- continuing to the next city", city,
             )
-            print(f"{corridor}: FAILED to assemble observation frame -- see log")
+            print(f"{city}: FAILED to assemble observation frame -- see log")
             continue
 
         os.makedirs(config.ANOMALY_ML_MODEL_DIR, exist_ok=True)
         frame_path = os.path.join(
             config.ANOMALY_ML_MODEL_DIR,
-            config.ANOMALY_ML_OBSERVATION_FRAME_TEMPLATE.format(corridor=corridor),
+            config.ANOMALY_ML_OBSERVATION_FRAME_TEMPLATE.format(city=city),
         )
         frame.to_csv(frame_path, index=False)
 
@@ -776,14 +768,14 @@ def _run_validate(corridors, years):
 
         measurements = [
             validate_candidate(
-                corridor, fit_frame, holdout_frame,
+                city, fit_frame, holdout_frame,
                 "IsolationForest", _make_isolation_forest_candidate, contamination,
             )
             for contamination in config.ANOMALY_ML_CONTAMINATION_GRID
         ]
 
-        reports[corridor] = {
-            "corridor": corridor,
+        reports[city] = {
+            "city": city,
             "rows": int(len(frame)),
             "window_start": pd.Timestamp(frame["datetime_utc"].min()).isoformat(),
             "window_end": pd.Timestamp(frame["datetime_utc"].max()).isoformat(),
@@ -792,7 +784,7 @@ def _run_validate(corridors, years):
             "measurements": measurements,
         }
 
-        print(f"\n{corridor}: {len(frame)} rows")
+        print(f"\n{city}: {len(frame)} rows")
         print(
             f"{'contamination':<15}{'fp_rate':>10}{'baseline_fp':>13}"
             f"{'recall_oor':>12}{'recall_irp':>12}{'recall_pooled':>15}"
@@ -806,7 +798,7 @@ def _run_validate(corridors, years):
                 f"{m['recall_pooled']:>15.4f}"
             )
 
-    report_path = merge_corridor_report(
+    report_path = merge_city_report(
         config.ANOMALY_ML_VALIDATION_REPORT_NAME, reports, "validate",
     )
     print(f"\nvalidation report written to {report_path}")
@@ -870,20 +862,20 @@ CANDIDATE_ESTIMATORS: dict = {
 }
 
 
-def corridor_report(
-    corridor: str, fit_frame: pd.DataFrame, holdout_frame: pd.DataFrame
+def city_report(
+    city: str, fit_frame: pd.DataFrame, holdout_frame: pd.DataFrame
 ) -> dict:
     """
     Runs `validate_candidate` for every (candidate, contamination) pair in
     the cross product of `CANDIDATE_ESTIMATORS` x `config.ANOMALY_ML_
-    CONTAMINATION_GRID`, returning one mapping carrying the corridor name,
+    CONTAMINATION_GRID`, returning one mapping carrying the city name,
     the assembled row count, the window start/end (ISO strings), the fit/
     holdout row counts, the injection rate, the feature column list, and a
     `measurements` list holding every pair's FULL measurement -- losers
     included. Recording every attempted pair (and the window span
     alongside them) is what makes a shortened run or a dropped arm
     visible in the evidence rather than hidden behind a single score
-    (T-02-09), exactly as `forecast_training.corridor_report` does.
+    (T-02-09), exactly as `forecast_training.city_report` does.
     """
     combined = pd.concat([fit_frame, holdout_frame], ignore_index=True)
 
@@ -892,12 +884,12 @@ def corridor_report(
         for contamination in config.ANOMALY_ML_CONTAMINATION_GRID:
             measurements.append(
                 validate_candidate(
-                    corridor, fit_frame, holdout_frame, name, factory, contamination,
+                    city, fit_frame, holdout_frame, name, factory, contamination,
                 )
             )
 
     return {
-        "corridor": corridor,
+        "city": city,
         "rows": int(len(combined)),
         "window_start": pd.Timestamp(combined["datetime_utc"].min()).isoformat(),
         "window_end": pd.Timestamp(combined["datetime_utc"].max()).isoformat(),
@@ -1021,74 +1013,74 @@ def select_winner(report: dict) -> tuple[str, float, bool]:
     return winner["candidate"], winner["contamination"], False
 
 
-def _run_bakeoff(corridors, years):
+def _run_bakeoff(cities, years):
     """
-    D-03/D-04's full bake-off entry point, one corridor at a time:
+    D-03/D-04's full bake-off entry point, one city at a time:
     assemble the real observation frame, split it chronologically, build
-    the corridor report (every candidate x contamination pair, losers
+    the city report (every candidate x contamination pair, losers
     included), select the winner via `select_winner`, refit that winner's
     factory at its selected contamination on the FULL frame (fit slice
     plus holdout -- A-08: the persisted artifact uses every real row
     available, while the report's own scores remain the strictly
     out-of-sample ones the holdout produced), persist it, and accumulate
-    the report. A failure assembling or scoring one corridor is reported
-    by name and the run continues to the next corridor (mirrors
+    the report. A failure assembling or scoring one city is reported
+    by name and the run continues to the next city (mirrors
     `forecast_training._run_bakeoff`'s own try-and-continue handling).
-    Each corridor also gets one final `SUMMARY:` line. Persistence goes
-    through `merge_corridor_report` (v1.3 Phase 2 Plan 02-05, CR-01): this
+    Each city also gets one final `SUMMARY:` line. Persistence goes
+    through `merge_city_report` (v1.3 Phase 2 Plan 02-05, CR-01): this
     function no longer builds the report path or serializes it itself --
-    a corridor absent from `corridors` (e.g. a `--corridor`-scoped re-run)
+    a city absent from `cities` (e.g. a `--city`-scoped re-run)
     is carried forward from the existing report rather than silently
     dropped.
     """
     reports = {}
     summary_lines = []
 
-    for corridor in corridors:
+    for city in cities:
         try:
-            frame = corridor_observation_frame(corridor, years)
+            frame = city_observation_frame(city, years)
         except Exception:
             logger.exception(
-                "anomaly_training --bakeoff: failed assembling corridor "
-                "%s -- continuing to the next corridor", corridor,
+                "anomaly_training --bakeoff: failed assembling city "
+                "%s -- continuing to the next city", city,
             )
-            print(f"{corridor}: FAILED to assemble observation frame -- see log")
+            print(f"{city}: FAILED to assemble observation frame -- see log")
             continue
 
         os.makedirs(config.ANOMALY_ML_MODEL_DIR, exist_ok=True)
         frame_path = os.path.join(
             config.ANOMALY_ML_MODEL_DIR,
-            config.ANOMALY_ML_OBSERVATION_FRAME_TEMPLATE.format(corridor=corridor),
+            config.ANOMALY_ML_OBSERVATION_FRAME_TEMPLATE.format(city=city),
         )
         frame.to_csv(frame_path, index=False)
 
         try:
             fit_frame, holdout_frame = chronological_split(frame)
-            report = corridor_report(corridor, fit_frame, holdout_frame)
+            report = city_report(city, fit_frame, holdout_frame)
             winner_name, winner_contamination, ceiling_met = select_winner(report)
 
             X_full = build_feature_matrix(frame)
-            winner_estimator = fit_corridor_model(
+            winner_estimator = fit_city_model(
                 X_full, CANDIDATE_ESTIMATORS[winner_name](winner_contamination),
             )
-            model_path = persist_corridor_model(winner_estimator, corridor)
+            model_path = persist_city_model(winner_estimator, city)
         except Exception:
             logger.exception(
                 "anomaly_training --bakeoff: failed scoring/selecting for "
-                "corridor %s -- continuing to the next corridor", corridor,
+                "city %s -- continuing to the next city", city,
             )
-            print(f"{corridor}: FAILED to score/select -- see log")
+            print(f"{city}: FAILED to score/select -- see log")
             continue
 
         report["winner"] = winner_name
         report["selected_contamination"] = winner_contamination
         report["ceiling_met"] = ceiling_met
         report["model_path"] = model_path
-        reports[corridor] = report
+        reports[city] = report
 
         start = frame["datetime_utc"].min()
         end = frame["datetime_utc"].max()
-        print(f"\n{corridor}: {len(frame)} rows, {start} -> {end}")
+        print(f"\n{city}: {len(frame)} rows, {start} -> {end}")
         print(
             f"{'candidate':<20}{'contamination':>14}{'fp_rate':>10}"
             f"{'baseline_fp':>13}{'recall_pooled':>15}"
@@ -1105,12 +1097,12 @@ def _run_bakeoff(corridors, years):
             f"ceiling_met={ceiling_met} -> persisted to {model_path}"
         )
         summary_lines.append(
-            f"SUMMARY: {corridor} rows={len(frame)} window={start}->{end} "
+            f"SUMMARY: {city} rows={len(frame)} window={start}->{end} "
             f"winner={winner_name} contamination={winner_contamination} "
             f"ceiling_met={ceiling_met} path={model_path}"
         )
 
-    report_path = merge_corridor_report(
+    report_path = merge_city_report(
         config.ANOMALY_ML_VALIDATION_REPORT_NAME, reports, "bakeoff",
     )
     print(f"\nbake-off report written to {report_path}")
@@ -1127,14 +1119,14 @@ def _run_bakeoff(corridors, years):
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-def characterize_load(corridor: str, years: int = None) -> dict:
+def characterize_load(city: str, years: int = None) -> dict:
     """
-    D-02's training-time-only load characterization for one corridor:
+    D-02's training-time-only load characterization for one city:
     pulls `years` complete calendar years (default
-    `config.ANOMALY_ML_LOAD_YEARS`) of the corridor's OWN ERCOT zone
+    `config.ANOMALY_ML_LOAD_YEARS`) of the city's OWN ERCOT zone
     load -- resolved from `config.ANOMALY_ML_ERCOT_ZONE_SUBSTRINGS_BY_
-    CORRIDOR`, never a substring shared with the other corridor -- joins
-    it to the corridor's pooled weather observation frame on
+    CITY`, never a substring borrowed from another city -- joins
+    it to the city's weather observation frame on
     `datetime_utc`, and reports the Pearson correlation between the load
     series and each of `config.ANOMALY_ML_FEATURE_COLUMNS`.
 
@@ -1145,13 +1137,8 @@ def characterize_load(corridor: str, years: int = None) -> dict:
 
     The observation frame is loaded from its CSV path
     (`config.ANOMALY_ML_OBSERVATION_FRAME_TEMPLATE`) when present,
-    otherwise assembled fresh via `corridor_observation_frame`. Because
-    that frame is POOLED over both endpoint cities, it is collapsed to
-    one row per timestamp by AVERAGING the three feature columns across
-    cities before the join -- this averaging exists ONLY for this
-    correlation summary and never touches the fitted feature matrix
-    (`build_feature_matrix`), which uses each city's own unaveraged
-    reading per D-01.
+    otherwise assembled fresh via `city_observation_frame`. Because
+    that frame is already one row per timestamp (a single city).
 
     The reported window (`window_start`/`window_end`/`load_rows`) always
     comes from the RETURNED load frame's own extremes, never from the
@@ -1159,7 +1146,7 @@ def characterize_load(corridor: str, years: int = None) -> dict:
     for is visible in the evidence this way (T-02-12).
 
     Only the load pull itself is wrapped in a failure path: a raised
-    exception there resolves to a mapping recording the corridor, the
+    exception there resolves to a mapping recording the city, the
     zone substrings that were about to be used, the exception text, and
     `available: False` -- never a bare `except` around the whole
     function, and never a silently empty result. D-02 scopes ERCOT
@@ -1174,7 +1161,7 @@ def characterize_load(corridor: str, years: int = None) -> dict:
     start = f"{last_complete_year - years + 1}-01-01"
     end = f"{last_complete_year}-12-31"
 
-    zone_substrings = config.ANOMALY_ML_ERCOT_ZONE_SUBSTRINGS_BY_CORRIDOR[corridor]
+    zone_substrings = config.ANOMALY_ML_ERCOT_ZONE_SUBSTRINGS_BY_CITY[city]
 
     try:
         load_frame = ercot_data_retriever.pull_ercot_data(
@@ -1182,7 +1169,7 @@ def characterize_load(corridor: str, years: int = None) -> dict:
         )
     except Exception as exc:
         return {
-            "corridor": corridor,
+            "city": city,
             "zone_substrings": list(zone_substrings),
             "available": False,
             "error": str(exc),
@@ -1200,18 +1187,16 @@ def characterize_load(corridor: str, years: int = None) -> dict:
 
     obs_path = os.path.join(
         config.ANOMALY_ML_MODEL_DIR,
-        config.ANOMALY_ML_OBSERVATION_FRAME_TEMPLATE.format(corridor=corridor),
+        config.ANOMALY_ML_OBSERVATION_FRAME_TEMPLATE.format(city=city),
     )
     if os.path.exists(obs_path):
         obs_frame = pd.read_csv(obs_path)
     else:
-        obs_frame = corridor_observation_frame(corridor, years)
+        obs_frame = city_observation_frame(city, years)
 
     feature_cols = list(config.ANOMALY_ML_FEATURE_COLUMNS)
-    # Collapse the pooled (two-cities-per-timestamp) observation frame to
-    # one row per timestamp via averaging -- presentation-only for this
-    # correlation summary (A-10), never used to fit the model.
-    collapsed = obs_frame.groupby("datetime_utc", as_index=False)[feature_cols].mean()
+    # One city, one row per timestamp: no collapsing needed.
+    collapsed = obs_frame[["datetime_utc"] + feature_cols].copy()
     collapsed["datetime_utc"] = pd.to_datetime(collapsed["datetime_utc"], utc=True)
 
     joined = pd.merge(load_frame, collapsed, on="datetime_utc", how="inner")
@@ -1222,7 +1207,7 @@ def characterize_load(corridor: str, years: int = None) -> dict:
     }
 
     return {
-        "corridor": corridor,
+        "city": city,
         "zone_substrings": list(zone_substrings),
         "zone_columns": zone_columns_matched,
         "window_start": window_start,
@@ -1234,48 +1219,48 @@ def characterize_load(corridor: str, years: int = None) -> dict:
     }
 
 
-def _run_characterize_load(corridors):
+def _run_characterize_load(cities):
     """
     D-02's training-time-only load characterization entry point
-    (`--characterize-load`): for each selected corridor, calls
+    (`--characterize-load`): for each selected city, calls
     `characterize_load` (always with `years=None`, so the load window
     depth resolves from `config.ANOMALY_ML_LOAD_YEARS` rather than the
     shared `--years` flag, which governs the weather-training window
     depth instead), prints one summary line naming the matched zones,
     the true retrieved window, the joined row count, and the
     per-variable correlations (or the unavailability message), and
-    writes the accumulated per-corridor mapping to
+    writes the accumulated per-city mapping to
     `config.ANOMALY_ML_LOAD_REPORT_NAME` under `config.ANOMALY_ML_MODEL_
-    DIR`. Exits 0 regardless of whether any corridor's load pull
+    DIR`. Exits 0 regardless of whether any city's load pull
     succeeded -- D-02 scopes ERCOT network access as training-time-only
     and non-blocking (02-RESEARCH.md Environment Availability); ANOM-01's
     interface deliverable does not depend on it. Persistence goes through
-    `merge_corridor_report` (v1.3 Phase 2 Plan 02-05, CR-01), same as
-    `_run_bakeoff`/`_run_validate`: a corridor absent from `corridors` is
-    carried forward, not deleted. An unavailable-corridor entry (the ones
+    `merge_city_report` (v1.3 Phase 2 Plan 02-05, CR-01), same as
+    `_run_bakeoff`/`_run_validate`: a city absent from `cities` is
+    carried forward, not deleted. An unavailable-city entry (the ones
     carrying `available: False` and an error string) merges exactly like
-    any other entry -- a corridor whose ERCOT pull failed this run
+    any other entry -- a city whose ERCOT pull failed this run
     replaces its own previous entry, which is correct: the current truth
-    about that corridor is that the pull failed, and the provenance stamp
+    about that city is that the pull failed, and the provenance stamp
     dates it.
     """
     reports = {}
-    for corridor in corridors:
-        result = characterize_load(corridor, years=None)
-        reports[corridor] = result
+    for city in cities:
+        result = characterize_load(city, years=None)
+        reports[city] = result
 
         if result.get("available", False):
             print(
-                f"{corridor}: zones={result['zone_columns']} "
+                f"{city}: zones={result['zone_columns']} "
                 f"window={result['window_start']}->{result['window_end']} "
                 f"load_rows={result['load_rows']} "
                 f"joined_rows={result['joined_rows']} "
                 f"correlations={result['correlations']}"
             )
         else:
-            print(f"{corridor}: UNAVAILABLE -- {result.get('error')}")
+            print(f"{city}: UNAVAILABLE -- {result.get('error')}")
 
-    report_path = merge_corridor_report(
+    report_path = merge_city_report(
         config.ANOMALY_ML_LOAD_REPORT_NAME, reports, "characterize_load",
     )
     print(f"\nload characterization report written to {report_path}")
@@ -1284,28 +1269,28 @@ def _run_characterize_load(corridors):
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description=(
-            "Assemble a real, Open-Meteo-derived pooled per-corridor raw "
+            "Assemble a real, Open-Meteo-derived per-city raw "
             "weather observation frame, fit, and atomically persist an "
             "anomaly-detection outlier estimator."
         )
     )
     parser.add_argument(
-        "--corridor",
-        choices=sorted(config.CORRIDOR_ENDPOINTS),
+        "--city",
+        choices=sorted(config.LOCATIONS),
         default=None,
-        help="Corridor to train. Default: every corridor in config.CORRIDOR_ENDPOINTS.",
+        help="City to train. Default: every city in config.LOCATIONS.",
     )
     parser.add_argument(
         "--years",
         type=int,
         default=config.ANOMALY_ML_TRAINING_YEARS,
-        help="Complete calendar years of Open-Meteo backfill per endpoint "
+        help="Complete calendar years of Open-Meteo backfill for the "
              "city (default: config.ANOMALY_ML_TRAINING_YEARS).",
     )
     parser.add_argument(
         "--validate",
         action="store_true",
-        help="For each selected corridor, chronologically split the "
+        help="For each selected city, chronologically split the "
              "observation frame and measure the default IsolationForest "
              "candidate's false-positive rate and per-category recall "
              "(against the rolling baseline) across "
@@ -1317,7 +1302,7 @@ def main(argv=None):
         action="store_true",
         help="Run the D-03 three-candidate, contamination-swept bake-off "
              "(IsolationForest/EllipticEnvelope/OneClassSVM) against the "
-             "rolling baseline, per corridor, select each corridor's own "
+             "rolling baseline, per city, select each city's own "
              "measured winner per this plan's stated deterministic rule, "
              "persist it, and write the accumulated comparison -- losers "
              "included -- to config.ANOMALY_ML_VALIDATION_REPORT_NAME.",
@@ -1325,10 +1310,10 @@ def main(argv=None):
     parser.add_argument(
         "--characterize-load",
         action="store_true",
-        help="For each selected corridor, run D-02's training-time-only "
-             "ERCOT load characterization (zone-aware per corridor -- "
-             "config.ANOMALY_ML_ERCOT_ZONE_SUBSTRINGS_BY_CORRIDOR), joined "
-             "to the corridor's pooled weather observations, reporting the "
+        help="For each selected city, run D-02's training-time-only "
+             "ERCOT load characterization (zone-aware per city -- "
+             "config.ANOMALY_ML_ERCOT_ZONE_SUBSTRINGS_BY_CITY), joined "
+             "to the city's weather observations, reporting the "
              "true retrieved window and the Pearson correlation between "
              "load and each fitted variable to "
              "config.ANOMALY_ML_LOAD_REPORT_NAME. Exits 0 whether or not "
@@ -1337,48 +1322,48 @@ def main(argv=None):
     )
     args = parser.parse_args(argv)
 
-    corridors = [args.corridor] if args.corridor else sorted(config.CORRIDOR_ENDPOINTS)
+    cities = [args.city] if args.city else list(config.LOCATIONS)
 
     if args.characterize_load:
-        _run_characterize_load(corridors)
+        _run_characterize_load(cities)
         return
 
     if args.bakeoff:
-        _run_bakeoff(corridors, args.years)
+        _run_bakeoff(cities, args.years)
         return
 
     if args.validate:
-        _run_validate(corridors, args.years)
+        _run_validate(cities, args.years)
         return
 
-    for corridor in corridors:
+    for city in cities:
         try:
-            frame = corridor_observation_frame(corridor, args.years)
+            frame = city_observation_frame(city, args.years)
         except Exception:
             logger.exception(
-                "anomaly_training: failed assembling corridor %s -- "
-                "continuing to the next corridor", corridor,
+                "anomaly_training: failed assembling city %s -- "
+                "continuing to the next city", city,
             )
-            print(f"{corridor}: FAILED to assemble observation frame -- see log")
+            print(f"{city}: FAILED to assemble observation frame -- see log")
             continue
 
         os.makedirs(config.ANOMALY_ML_MODEL_DIR, exist_ok=True)
         frame_path = os.path.join(
             config.ANOMALY_ML_MODEL_DIR,
-            config.ANOMALY_ML_OBSERVATION_FRAME_TEMPLATE.format(corridor=corridor),
+            config.ANOMALY_ML_OBSERVATION_FRAME_TEMPLATE.format(city=city),
         )
         frame.to_csv(frame_path, index=False)
 
         X = build_feature_matrix(frame)
-        model = fit_corridor_model(
+        model = fit_city_model(
             X, _make_isolation_forest_candidate(config.ANOMALY_ML_CONTAMINATION)
         )
-        model_path = persist_corridor_model(model, corridor)
+        model_path = persist_city_model(model, city)
 
         start = frame["datetime_utc"].min()
         end = frame["datetime_utc"].max()
         print(
-            f"{corridor}: {len(frame)} rows, {start} -> {end}, "
+            f"{city}: {len(frame)} rows, {start} -> {end}, "
             f"model persisted to {model_path}"
         )
 

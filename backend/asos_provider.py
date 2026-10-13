@@ -34,7 +34,7 @@ _RETURN_COLUMNS = ["datetime_utc", "air_temp", "wind_speed", "wind_direction"]
 def _to_asos_timestamp(value: str) -> str:
     """
     Coerce an ISO-8601 or bare-date string (both shapes
-    `corridor_discretization.rate_corridor` passes today) into the ASOS
+    `city_rating.rate_city` passes today) into the ASOS
     CGI's `sts`/`ets` timestamp format ("YYYY-MM-DDTHH:MMZ"), UTC.
 
     Raises:

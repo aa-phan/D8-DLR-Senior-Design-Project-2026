@@ -50,6 +50,23 @@ import wind_vector
 _VALID_WIND_POOLING = ("pooled", "per_city")
 
 
+def _city_column(frame: pd.DataFrame) -> str:
+    """
+    Name of the column identifying each row's city for `per_city` fitting
+    and prediction: `city` (the per-city convention, one city per frame in
+    production) when present, else `endpoint_city` (the frozen two-city
+    experiment frames). `per_city` fits one model per distinct value, so a
+    single-city frame fits exactly one city.
+    """
+    for name in ("city", "endpoint_city"):
+        if name in frame.columns:
+            return name
+    raise ValueError(
+        "per_city wind correction needs a 'city' column (or the frozen "
+        "experiment's 'endpoint_city'); frame has neither"
+    )
+
+
 def _make_wind_linear_regression():
     """
     `LinearRegression` has no stochastic component and therefore no
@@ -180,8 +197,12 @@ def fit_wind_correction(
 
     `pooling="pooled"` fits ONE model per component over both endpoint
     cities' rows stacked, with a binary endpoint indicator feature.
-    `pooling="per_city"` fits one model per component PER CITY. Both are
-    implemented; `select_wind_configuration` decides between them on the
+    `pooling="per_city"` fits one model per component PER CITY (production
+    use: one city's own rows, grouped by the frame's `city` column). The
+    `pooled` two-city mode and its `endpoint_indicator` feature are retained
+    UNCHANGED only because the frozen forecast-correction experiment
+    (`forecast_experiment.py`, `forecast_experiment_audit.py`) still calls
+    it; no per-city path uses it. Both are implemented; `select_wind_configuration` decides between them on the
     validation set. This function never sees a test frame -- it fits
     whatever frame it is given.
     """
@@ -221,7 +242,7 @@ def fit_wind_correction(
     models = {}
     feature_names = None
     total_rows = 0
-    for city, group in train_frame.groupby("endpoint_city"):
+    for city, group in train_frame.groupby(_city_column(train_frame)):
         features = _wind_feature_frame(group, pooling="per_city")
         if feature_names is None:
             feature_names = list(features.columns)
@@ -279,7 +300,7 @@ def predict_wind_correction(
     else:
         corrected_u = np.empty(len(frame), dtype=float)
         corrected_v = np.empty(len(frame), dtype=float)
-        for city, group in frame.groupby("endpoint_city"):
+        for city, group in frame.groupby(_city_column(frame)):
             features = _wind_feature_frame(group, pooling="per_city")[model.feature_names]
             u_estimator, v_estimator = model.models[city]
             positions = frame.index.get_indexer(group.index)
@@ -308,9 +329,19 @@ def select_wind_configuration(
     was tried rather than only what won. This function's signature accepts
     only train and validation frames -- it never sees a test frame.
     """
+    # `pooled` needs the frozen experiment's two-city `endpoint_city` frame;
+    # a single-city frame (the per-city case) is fit `per_city` only.
+    if (
+        "endpoint_city" in train_frame.columns
+        and train_frame["endpoint_city"].nunique() == 2
+    ):
+        poolings = _VALID_WIND_POOLING
+    else:
+        poolings = ("per_city",)
+
     scores = {}
     for estimator_name, factory in WIND_CORRECTION_ESTIMATORS.items():
-        for pooling in _VALID_WIND_POOLING:
+        for pooling in poolings:
             model = fit_wind_correction(train_frame, factory, pooling=pooling)
             prediction = predict_wind_correction(model, val_frame)
             perp = thermal_model.perpendicular_wind(

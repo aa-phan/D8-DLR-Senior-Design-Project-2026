@@ -35,7 +35,7 @@ uncaught, all the way to `DLRSafetyMonitor.run_check`'s existing G6
 `except Exception -> _fallback` handler, the single fail-safe boundary
 this module relies on. Handling it one layer lower would make a broken
 model fail OPEN (silently report not-anomalous) instead of failing SAFE
-(resolve to the corridor's static rating).
+(resolve to the city's static rating).
 """
 
 import logging
@@ -52,39 +52,39 @@ logger = logging.getLogger(__name__)
 ROLLING_BASELINE_MIN_ROWS: int = 24
 
 
-def _model_path_for(corridor: str) -> str:
+def _model_path_for(city: str) -> str:
     """
-    Resolve `corridor`'s persisted anomaly-model artifact path.
+    Resolve `city`'s persisted anomaly-model artifact path.
 
-    Raises `ValueError` naming the sorted valid corridors when `corridor`
-    is absent from `config.CORRIDOR_ENDPOINTS` -- the closed-set check
+    Raises `ValueError` naming the sorted valid cities when `city`
+    is absent from `config.LOCATIONS` -- the closed-set check
     happens unconditionally, as the very first thing this function does,
     so a caller can never coax a filesystem path out of an unvalidated
     string (T-02-02). Only then is the path built, and only from
     `config.ANOMALY_ML_MODEL_DIR` joined with `config.ANOMALY_ML_MODEL_
-    FILENAME_TEMPLATE` formatted with the now-validated corridor -- no
+    FILENAME_TEMPLATE` formatted with the now-validated city -- no
     function on this path ever accepts a caller-supplied filesystem path.
     """
-    if corridor not in config.CORRIDOR_ENDPOINTS:
+    if city not in config.LOCATIONS:
         raise ValueError(
-            f"_model_path_for: unknown corridor {corridor!r}; valid "
-            f"corridors: {sorted(config.CORRIDOR_ENDPOINTS)}"
+            f"_model_path_for: unknown city {city!r}; valid "
+            f"cities: {sorted(config.LOCATIONS)}"
         )
-    filename = config.ANOMALY_ML_MODEL_FILENAME_TEMPLATE.format(corridor=corridor)
+    filename = config.ANOMALY_ML_MODEL_FILENAME_TEMPLATE.format(city=city)
     return os.path.join(config.ANOMALY_ML_MODEL_DIR, filename)
 
 
-# Per-corridor fitted-anomaly-model cache, populated by
-# `_load_corridor_model`. Mirrors `ampacity_forecast._MODEL_CACHE`'s
+# Per-city fitted-anomaly-model cache, populated by
+# `_load_city_model`. Mirrors `ampacity_forecast._MODEL_CACHE`'s
 # load-once-then-cache discipline (RESEARCH.md "Don't Hand-Roll") -- no
 # per-call reload, no per-request refit.
 _MODEL_CACHE: dict = {}
 
 
-def _load_corridor_model(corridor: str):
+def _load_city_model(city: str):
     """
     Load (and cache) the persisted fitted anomaly estimator for
-    `corridor`. Strict: raises `FileNotFoundError` naming the corridor,
+    `city`. Strict: raises `FileNotFoundError` naming the city,
     the expected path, and the exact training command when the artifact
     does not exist on disk. Any other failure -- a corrupt artifact, a
     deserialization error -- propagates unmodified.
@@ -94,50 +94,50 @@ def _load_corridor_model(corridor: str):
     any `sklearn`/`joblib` import -- the two heuristic branches keep
     working in an environment where `scikit-learn` is absent.
     """
-    if corridor in _MODEL_CACHE:
-        return _MODEL_CACHE[corridor]
+    if city in _MODEL_CACHE:
+        return _MODEL_CACHE[city]
 
-    path = _model_path_for(corridor)
+    path = _model_path_for(city)
     if not os.path.exists(path):
         raise FileNotFoundError(
-            f"_load_corridor_model: no trained anomaly model for corridor "
-            f"{corridor!r} at {path!r}. Train one with: "
-            f".venv/bin/python3 backend/anomaly_training.py --corridor {corridor}"
+            f"_load_city_model: no trained anomaly model for city "
+            f"{city!r} at {path!r}. Train one with: "
+            f".venv/bin/python3 backend/anomaly_training.py --city {city}"
         )
 
     import joblib  # lazy -- keeps `import anomaly_detector` sklearn-free
 
     model = joblib.load(path)
-    _MODEL_CACHE[corridor] = model
+    _MODEL_CACHE[city] = model
     return model
 
 
-def _load_corridor_model_or_none(corridor: str):
+def _load_city_model_or_none(city: str):
     """
-    `_load_corridor_model`, but an absent artifact resolves to `None`
-    (emitting exactly one `logger.warning` naming the corridor, the
+    `_load_city_model`, but an absent artifact resolves to `None`
+    (emitting exactly one `logger.warning` naming the city, the
     expected path, and the training command) instead of raising --
-    an unprovisioned model leaves `for_corridor`'s behavior identical to
+    an unprovisioned model leaves `for_city`'s behavior identical to
     today's two-branch detector, since the additive branch was never
     provisioned in the first place (A-04).
 
     Any OTHER failure -- a corrupt artifact, a deserialization error, an
-    unknown corridor -- is NOT converted to `None`; it propagates
+    unknown city -- is NOT converted to `None`; it propagates
     unmodified. The split is deliberate: an absent file means the branch
     was never provisioned; a present-but-broken file is a real failure
     that must reach G6, not a silently skipped branch.
     """
-    path = _model_path_for(corridor)
+    path = _model_path_for(city)
     if not os.path.exists(path):
         logger.warning(
-            "_load_corridor_model_or_none: no trained anomaly model for "
-            "corridor %r at %r -- model branch not provisioned. Train "
+            "_load_city_model_or_none: no trained anomaly model for "
+            "city %r at %r -- model branch not provisioned. Train "
             "one with: .venv/bin/python3 backend/anomaly_training.py "
-            "--corridor %s",
-            corridor, path, corridor,
+            "--city %s",
+            city, path, city,
         )
         return None
-    return _load_corridor_model(corridor)
+    return _load_city_model(city)
 
 
 class AnomalyDetector:
@@ -153,10 +153,10 @@ class AnomalyDetector:
         self.history = history
         # v1.3 Phase 2 (ANOM-01): a fitted scikit-learn outlier estimator,
         # or None when the additive model branch is not provisioned.
-        # `model_source` names the artifact path `for_corridor` actually
+        # `model_source` names the artifact path `for_city` actually
         # loaded, so a caller/test can see whether the branch is real
         # without re-deriving the path itself. Stays `None` for a bare
-        # constructor call and for `for_corridor(..., load_model=False)`.
+        # constructor call and for `for_city(..., load_model=False)`.
         self.model = model
         self.model_source = None
         self.location_key = location_key
@@ -173,28 +173,20 @@ class AnomalyDetector:
         self.signal = "not_yet_evaluated"
 
     @classmethod
-    def for_corridor(cls, corridor_name, forecast=None, history=None, logger=None,
+    def for_city(cls, city, forecast=None, history=None, logger=None,
                       model=None, load_model=True):
         """
-        Build a detector for a named corridor (a key in
-        `config.CORRIDOR_ENDPOINTS` -- the same mapping
-        `corridor_discretization.corridor_geometry` uses, so a corridor's
-        cities can never be defined twice).
+        Build a detector for one city (a key in `config.LOCATIONS`).
 
         Resolves `k` from `config.ANOMALY_CONTROL_LIMIT_K_BY_LOCATION` for
-        each of the corridor's two endpoint cities (falling back to
-        `config.DEFAULT_ANOMALY_CONTROL_LIMIT_K` for either), then takes
-        the LARGER of the two. This deliberately runs opposite to
-        `corridor_geometry`'s `min()` weakest-link reduction: there,
-        conservative means the lower rating; here, per D-06, conservative
-        means the wider band and fewer false trips. Either direction, a
-        G6 trip still resolves to the corridor's static rating -- the
-        fallback target is unaffected by which endpoint's k dominates.
+        that city alone, falling back to
+        `config.DEFAULT_ANOMALY_CONTROL_LIMIT_K`. A G6 trip resolves to the
+        city's own static rating.
 
         `model`/`load_model` (v1.3 Phase 2, ANOM-01): when `model` is not
         supplied and `load_model` is true (the default), this method
-        attempts to lazily load a fitted per-corridor outlier estimator
-        via `_load_corridor_model_or_none` and passes it into the
+        attempts to lazily load a fitted per-city outlier estimator
+        via `_load_city_model_or_none` and passes it into the
         constructed instance. `load_model=False` is the explicit opt-out
         for a caller that wants a heuristics-only detector regardless of
         whether an artifact exists on disk. The returned instance's
@@ -202,39 +194,33 @@ class AnomalyDetector:
         model was actually loaded, or stays `None` otherwise.
 
         Raises:
-            KeyError: if `corridor_name` is not in
-                `config.CORRIDOR_ENDPOINTS`, naming the valid corridor
-                names -- matches `corridor_geometry`'s existing error
+            KeyError: if `city` is not in `config.LOCATIONS`, naming the
+                valid city keys -- matches `city_point.city_point`'s error
                 shape. This check fires before any model-loading attempt.
         """
-        if corridor_name not in config.CORRIDOR_ENDPOINTS:
+        if city not in config.LOCATIONS:
             raise KeyError(
-                f"Unknown corridor {corridor_name!r}. Valid corridors: "
-                f"{sorted(config.CORRIDOR_ENDPOINTS)}"
+                f"Unknown city {city!r}. Valid cities: "
+                f"{sorted(config.LOCATIONS)}"
             )
 
-        city_a, city_b = config.CORRIDOR_ENDPOINTS[corridor_name]
-        k_a = config.ANOMALY_CONTROL_LIMIT_K_BY_LOCATION.get(
-            city_a, config.DEFAULT_ANOMALY_CONTROL_LIMIT_K
+        k = config.ANOMALY_CONTROL_LIMIT_K_BY_LOCATION.get(
+            city, config.DEFAULT_ANOMALY_CONTROL_LIMIT_K
         )
-        k_b = config.ANOMALY_CONTROL_LIMIT_K_BY_LOCATION.get(
-            city_b, config.DEFAULT_ANOMALY_CONTROL_LIMIT_K
-        )
-        k = max(k_a, k_b)
 
         if model is None and load_model:
-            model = _load_corridor_model_or_none(corridor_name)
+            model = _load_city_model_or_none(city)
 
         instance = cls(
             forecast=forecast,
             history=history,
             model=model,
             k=k,
-            location_key=corridor_name,
+            location_key=city,
             logger=logger,
         )
         if model is not None:
-            instance.model_source = _model_path_for(corridor_name)
+            instance.model_source = _model_path_for(city)
         return instance
 
     def check(self, raw_data: dict, rating: float) -> tuple[bool, str]:

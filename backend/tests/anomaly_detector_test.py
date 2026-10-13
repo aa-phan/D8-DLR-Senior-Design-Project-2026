@@ -4,7 +4,7 @@ requirement DS-F12).
 
 Covers the detector in isolation: the D-04 forecast-residual primary
 signal, the D-04 rolling-baseline cold-start fallback, the D-06
-per-location control-limit resolution via `for_corridor`, and the D-05
+per-location control-limit resolution via `for_city`, and the D-05
 guarantee that a trip resolves only through `DLRSafetyMonitor`'s existing
 `_fallback` helper -- never a second, competing result shape.
 `backend/tests/predictive_tracer_test.py` covers this detector's path
@@ -194,25 +194,27 @@ def test_check_always_returns_two_tuple_of_bool_and_str():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# for_corridor (D-06 per-location control limit)
+# for_city (D-06 per-location control limit)
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-def test_corridor_k_is_the_wider_of_two_endpoints():
-    detector = AnomalyDetector.for_corridor("MIDLAND_EL_PASO")
+@pytest.mark.parametrize("city", list(config.LOCATIONS))
+def test_city_k_is_that_citys_own_limit(city):
+    detector = AnomalyDetector.for_city(city, load_model=False)
 
-    expected = max(
-        config.ANOMALY_CONTROL_LIMIT_K_BY_LOCATION["MIDLAND"],
-        config.ANOMALY_CONTROL_LIMIT_K_BY_LOCATION["EL_PASO"],
+    expected = config.ANOMALY_CONTROL_LIMIT_K_BY_LOCATION.get(
+        city, config.DEFAULT_ANOMALY_CONTROL_LIMIT_K
     )
     assert detector.k == expected
+    assert detector.location_key == city
 
 
-def test_for_corridor_unknown_corridor_raises_key_error():
+def test_for_city_unknown_city_raises_key_error():
     with pytest.raises(KeyError) as exc_info:
-        AnomalyDetector.for_corridor("NOT_A_CORRIDOR")
+        AnomalyDetector.for_city("NOT_A_CITY")
 
-    assert "AUSTIN_CORPUS_CHRISTI" in str(exc_info.value)
+    assert "AUSTIN" in str(exc_info.value)
+    assert "EL_PASO" in str(exc_info.value)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -253,13 +255,13 @@ def test_anomaly_resolves_through_existing_fallback_contract():
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-def test_model_path_rejects_unknown_corridor_naming_valid_corridors():
+def test_model_path_rejects_unknown_city_naming_valid_cities():
     with pytest.raises(ValueError) as exc_info:
         anomaly_detector._model_path_for("../../etc/passwd")
 
     message = str(exc_info.value)
-    assert "AUSTIN_CORPUS_CHRISTI" in message
-    assert "MIDLAND_EL_PASO" in message
+    for city in config.LOCATIONS:
+        assert city in message
 
 
 def test_model_branch_returns_two_tuple_of_bool_and_str(fitted_anomaly_model):

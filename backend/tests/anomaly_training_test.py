@@ -2,8 +2,8 @@
 Tests for backend/anomaly_training.py (v1.3 Phase 2 Plan 02-01, ANOM-01).
 
 Covers the offline assembly invariants that separate a real, honest
-training pipeline from one that silently manufactures data: pooling both
-endpoint cities' raw readings rather than reducing them to one series,
+training pipeline from one that silently manufactures data: using one
+city's own raw readings with no cross-city pooling or reduction,
 dropping out-of-bounds/null rows without ever imputing a replacement
 value, and an atomic persist/load round-trip through the runtime's own
 loader. Follows this suite's established conventions: module-level
@@ -34,21 +34,20 @@ from DLRSafetyMonitor import DLRSafetyMonitor
 
 def _synthetic_observation_frame(n=100, seed=1):
     """
-    A deterministic, `corridor_observation_frame`-shaped pooled frame
-    (`datetime_utc`, `corridor`, `city`, the three `config.ANOMALY_ML_
+    A deterministic, `city_observation_frame`-shaped frame
+    (`datetime_utc`, `city`, the three `config.ANOMALY_ML_
     FEATURE_COLUMNS`), comfortably inside `DLRSafetyMonitor`'s G3 bounds,
     for the measurement-machinery tests below that don't need a live
     network fetch -- only `chronological_split`/`inject_anomalies`/
     `score_rolling_baseline`/`validate_candidate`'s own logic, never
-    `corridor_observation_frame` itself.
+    `city_observation_frame` itself.
     """
     rng = np.random.default_rng(seed)
     base = pd.Timestamp("2026-01-01T00:00:00Z")
     timestamps = pd.date_range(base, periods=n, freq="h")
     return pd.DataFrame({
         "datetime_utc": timestamps,
-        "corridor": "AUSTIN_CORPUS_CHRISTI",
-        "city": np.where(np.arange(n) % 2 == 0, "AUSTIN", "CORPUS_CHRISTI"),
+        "city": "AUSTIN",
         "air_temp": 25.0 + rng.normal(0.0, 2.0, n),
         "wind_speed": 8.0 + rng.normal(0.0, 1.5, n),
         "solar_radiation": 400.0 + rng.normal(0.0, 50.0, n),
@@ -61,7 +60,7 @@ def _synthetic_city_weather_frame(city, n=48, seed=20260924, spike_index=None,
     A deterministic, `open_meteo_provider.fetch_open_meteo`-shaped weather
     frame for one city: `datetime_utc`, `air_temp`, `wind_speed`,
     `solar_radiation` (plus the columns `fetch_city_weather` also returns
-    but `corridor_observation_frame` does not read), all comfortably
+    but `city_observation_frame` does not read), all comfortably
     inside `DLRSafetyMonitor`'s G3 bounds except for the two deliberately
     injected rows named by `spike_index`/`null_index`.
     """
@@ -88,61 +87,59 @@ def _synthetic_city_weather_frame(city, n=48, seed=20260924, spike_index=None,
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# corridor_observation_frame — pooling (not weakest-link reduction)
+# city_observation_frame — pooling (not weakest-link reduction)
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-def test_corridor_observation_frame_pools_both_endpoint_cities(monkeypatch):
-    corridor = "AUSTIN_CORPUS_CHRISTI"
-    city_a, city_b = config.CORRIDOR_ENDPOINTS[corridor]
+def test_city_observation_frame_uses_only_that_citys_own_backfill(monkeypatch):
+    city = "AUSTIN"
+    frame = _synthetic_city_weather_frame(city, n=48, seed=1)
+    fetched = []
 
-    frame_a = _synthetic_city_weather_frame(city_a, n=48, seed=1)
-    frame_b = _synthetic_city_weather_frame(city_b, n=48, seed=2)
-
-    def _fake_fetch(city, years):
-        if city == city_a:
-            return frame_a.copy()
-        if city == city_b:
-            return frame_b.copy()
-        raise AssertionError(f"unexpected city {city!r}")
+    def _fake_fetch(requested, years):
+        fetched.append(requested)
+        return frame.copy()
 
     monkeypatch.setattr(forecast_training, "fetch_city_weather", _fake_fetch)
 
-    result = at.corridor_observation_frame(corridor, years=1)
+    result = at.city_observation_frame(city, years=1)
 
-    assert set(result["city"].unique()) == {city_a, city_b}
-    assert len(result) == len(frame_a) + len(frame_b)
+    assert fetched == [city]
+    assert set(result["city"].unique()) == {city}
+    assert len(result) == len(frame)
+
+
+def test_city_observation_frame_rejects_unknown_city(monkeypatch):
+    def _fake_fetch(city, years):
+        raise AssertionError("must not fetch for an unknown city")
+
+    monkeypatch.setattr(forecast_training, "fetch_city_weather", _fake_fetch)
+
+    with pytest.raises(KeyError):
+        at.city_observation_frame("NOT_A_CITY", years=1)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# corridor_observation_frame — drop out-of-bounds/null rows, never impute
+# city_observation_frame — drop out-of-bounds/null rows, never impute
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-def test_corridor_observation_frame_drops_out_of_bounds_and_null_rows_without_imputing(
+def test_city_observation_frame_drops_out_of_bounds_and_null_rows_without_imputing(
     monkeypatch,
 ):
-    corridor = "AUSTIN_CORPUS_CHRISTI"
-    city_a, city_b = config.CORRIDOR_ENDPOINTS[corridor]
+    city = "AUSTIN"
+    frame = _synthetic_city_weather_frame(city, n=48, seed=3, spike_index=5, null_index=10)
 
-    frame_a = _synthetic_city_weather_frame(city_a, n=48, seed=3, spike_index=5)
-    frame_b = _synthetic_city_weather_frame(city_b, n=48, seed=4, null_index=10)
+    monkeypatch.setattr(
+        forecast_training, "fetch_city_weather", lambda c, years: frame.copy()
+    )
 
-    def _fake_fetch(city, years):
-        if city == city_a:
-            return frame_a.copy()
-        if city == city_b:
-            return frame_b.copy()
-        raise AssertionError(f"unexpected city {city!r}")
+    result = at.city_observation_frame(city, years=1)
 
-    monkeypatch.setattr(forecast_training, "fetch_city_weather", _fake_fetch)
-
-    result = at.corridor_observation_frame(corridor, years=1)
-
-    # Exactly the two injected rows are gone -- one wind-speed spike from
-    # city_a, one null air_temp from city_b -- and no value in the
-    # surviving frame is a substituted replacement for either.
-    assert len(result) == len(frame_a) + len(frame_b) - 2
+    # Exactly the two injected rows are gone -- one wind-speed spike, one
+    # null air_temp -- and no value in the surviving frame is a substituted
+    # replacement for either.
+    assert len(result) == len(frame) - 2
     assert not (result["wind_speed"] == 999.0).any()
     assert not result["air_temp"].isna().any()
     assert result["air_temp"].between(*DLRSafetyMonitor.TEMP_BOUNDS).all()
@@ -181,7 +178,7 @@ def test_build_feature_matrix_column_order_matches_config():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# persist_corridor_model — atomic round-trip through the detector's loader
+# persist_city_model — atomic round-trip through the detector's loader
 # ──────────────────────────────────────────────────────────────────────────────
 
 
@@ -189,7 +186,7 @@ def test_persist_round_trips_through_detector_loader(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "ANOMALY_ML_MODEL_DIR", str(tmp_path))
     anomaly_detector._MODEL_CACHE.clear()
 
-    corridor = "AUSTIN_CORPUS_CHRISTI"
+    city = "AUSTIN"
     rng = np.random.default_rng(20260924)
     X = np.column_stack([
         25.0 + rng.normal(0.0, 2.0, 100),
@@ -197,15 +194,15 @@ def test_persist_round_trips_through_detector_loader(tmp_path, monkeypatch):
         400.0 + rng.normal(0.0, 50.0, 100),
     ])
     estimator = at._make_isolation_forest_candidate(config.ANOMALY_ML_CONTAMINATION)
-    fitted = at.fit_corridor_model(X, estimator)
+    fitted = at.fit_city_model(X, estimator)
 
-    path = at.persist_corridor_model(fitted, corridor)
+    path = at.persist_city_model(fitted, city)
 
     assert os.path.exists(path)
     leftover_tmp_files = [f for f in os.listdir(tmp_path) if f.endswith(".joblib.tmp")]
     assert leftover_tmp_files == []
 
-    loaded = anomaly_detector._load_corridor_model(corridor)
+    loaded = anomaly_detector._load_city_model(city)
 
     probe_row = X[:1]
     np.testing.assert_array_equal(fitted.predict(probe_row), loaded.predict(probe_row))
@@ -350,27 +347,27 @@ def test_inject_anomalies_reproducible_with_same_seed():
 
 
 def test_score_rolling_baseline_arm_uses_real_branch_and_bare_model(monkeypatch):
-    corridor = "AUSTIN_CORPUS_CHRISTI"
+    city = "AUSTIN"
     frame = _synthetic_observation_frame(n=200, seed=121)
     fit_frame, holdout_frame = at.chronological_split(frame, holdout_fraction=0.25)
 
     anomaly_detector._MODEL_CACHE.clear()
 
     captured = {}
-    original_for_corridor = anomaly_detector.AnomalyDetector.for_corridor.__func__
+    original_for_city = anomaly_detector.AnomalyDetector.for_city.__func__
 
-    def _capturing_for_corridor(cls, *args, **kwargs):
-        detector = original_for_corridor(cls, *args, **kwargs)
+    def _capturing_for_city(cls, *args, **kwargs):
+        detector = original_for_city(cls, *args, **kwargs)
         captured["detector"] = detector
         return detector
 
     monkeypatch.setattr(
         anomaly_detector.AnomalyDetector,
-        "for_corridor",
-        classmethod(_capturing_for_corridor),
+        "for_city",
+        classmethod(_capturing_for_city),
     )
 
-    flags = at.score_rolling_baseline(corridor, fit_frame, holdout_frame)
+    flags = at.score_rolling_baseline(city, fit_frame, holdout_frame)
 
     assert captured["detector"].model is None
     assert captured["detector"].signal == "rolling_baseline"
@@ -387,13 +384,13 @@ def test_score_rolling_baseline_arm_uses_real_branch_and_bare_model(monkeypatch)
 
 
 def test_validate_candidate_returns_all_expected_finite_rate_keys():
-    corridor = "AUSTIN_CORPUS_CHRISTI"
+    city = "AUSTIN"
     frame = _synthetic_observation_frame(n=400, seed=131)
     fit_frame, holdout_frame = at.chronological_split(frame, holdout_fraction=0.25)
 
     anomaly_detector._MODEL_CACHE.clear()
     result = at.validate_candidate(
-        corridor, fit_frame, holdout_frame,
+        city, fit_frame, holdout_frame,
         "IsolationForest", at._make_isolation_forest_candidate, 0.02,
     )
 
@@ -412,13 +409,13 @@ def test_validate_candidate_returns_all_expected_finite_rate_keys():
 
 
 def test_validate_candidate_false_positive_and_recall_denominators_are_disjoint():
-    corridor = "AUSTIN_CORPUS_CHRISTI"
+    city = "AUSTIN"
     frame = _synthetic_observation_frame(n=400, seed=132)
     fit_frame, holdout_frame = at.chronological_split(frame, holdout_fraction=0.25)
 
     anomaly_detector._MODEL_CACHE.clear()
     result = at.validate_candidate(
-        corridor, fit_frame, holdout_frame,
+        city, fit_frame, holdout_frame,
         "IsolationForest", at._make_isolation_forest_candidate, 0.02,
     )
 
@@ -623,14 +620,14 @@ def test_characterize_load_reports_the_retrieved_window_not_the_requested_one(
     monkeypatch, tmp_path,
 ):
     monkeypatch.setattr(config, "ANOMALY_ML_MODEL_DIR", str(tmp_path))
-    corridor = "AUSTIN_CORPUS_CHRISTI"
+    city = "AUSTIN"
 
     # Pre-seed the pooled observation frame on disk so characterize_load
-    # never calls corridor_observation_frame (no live Open-Meteo fetch).
+    # never calls city_observation_frame (no live Open-Meteo fetch).
     obs_frame = _synthetic_observation_frame(n=48)
     obs_path = os.path.join(
         config.ANOMALY_ML_MODEL_DIR,
-        config.ANOMALY_ML_OBSERVATION_FRAME_TEMPLATE.format(corridor=corridor),
+        config.ANOMALY_ML_OBSERVATION_FRAME_TEMPLATE.format(city=city),
     )
     obs_frame.to_csv(obs_path, index=False)
 
@@ -650,7 +647,7 @@ def test_characterize_load_reports_the_retrieved_window_not_the_requested_one(
 
     monkeypatch.setattr(at.ercot_data_retriever, "pull_ercot_data", _fake_pull)
 
-    result = at.characterize_load(corridor, years=1)
+    result = at.characterize_load(city, years=1)
 
     assert result["available"] is True
     assert result["load_rows"] == 5
@@ -664,32 +661,32 @@ def test_characterize_load_reports_the_retrieved_window_not_the_requested_one(
 
 def test_characterize_load_records_unavailability_without_raising(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "ANOMALY_ML_MODEL_DIR", str(tmp_path))
-    corridor = "MIDLAND_EL_PASO"
+    city = "MIDLAND"
 
     def _raising_pull(start, end, zone_substrings=None, save=True):
         raise RuntimeError("simulated ERCOT network failure")
 
     monkeypatch.setattr(at.ercot_data_retriever, "pull_ercot_data", _raising_pull)
 
-    result = at.characterize_load(corridor, years=1)
+    result = at.characterize_load(city, years=1)
 
     assert result["available"] is False
-    assert result["corridor"] == corridor
+    assert result["city"] == city
     assert "simulated ERCOT network failure" in result["error"]
     assert "zone_substrings" in result
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# merge_corridor_report (v1.3 Phase 2 Plan 02-05, CR-01): a corridor-scoped
-# re-run must carry forward, never delete, the other corridor's evidence.
+# merge_city_report (v1.3 Phase 2 Plan 02-05, CR-01): a city-scoped
+# re-run must carry forward, never delete, the other city's evidence.
 # ──────────────────────────────────────────────────────────────────────────────
 
 
 def _fake_fetch_city_weather_factory(n=150, seed_offset=0):
     """
     A `forecast_training.fetch_city_weather`-shaped stand-in covering all
-    four endpoint cities in `config.CORRIDOR_ENDPOINTS`, so `_run_bakeoff`/
-    `_run_validate` can run for both corridors with no network access.
+    four cities in `config.LOCATIONS`, so `_run_bakeoff`/
+    `_run_validate` can run for both cities with no network access.
     """
     frames_by_city = {
         "AUSTIN": _synthetic_city_weather_frame("AUSTIN", n=n, seed=500 + seed_offset),
@@ -706,7 +703,7 @@ def _fake_fetch_city_weather_factory(n=150, seed_offset=0):
     return _fetch
 
 
-def test_merge_corridor_report_carries_forward_corridors_absent_from_this_run(
+def test_merge_city_report_carries_forward_cities_absent_from_this_run(
     monkeypatch, tmp_path,
 ):
     monkeypatch.setattr(config, "ANOMALY_ML_MODEL_DIR", str(tmp_path))
@@ -714,33 +711,33 @@ def test_merge_corridor_report_carries_forward_corridors_absent_from_this_run(
     report_path = os.path.join(str(tmp_path), report_name)
 
     seeded = {
-        "AUSTIN_CORPUS_CHRISTI": {"measurements": [1, 2, 3], "winner": "OneClassSVM"},
-        "MIDLAND_EL_PASO": {"measurements": [4, 5], "winner": "IsolationForest"},
+        "AUSTIN": {"measurements": [1, 2, 3], "winner": "OneClassSVM"},
+        "MIDLAND": {"measurements": [4, 5], "winner": "IsolationForest"},
     }
     with open(report_path, "w") as fh:
         json.dump(seeded, fh)
 
     new_entries = {
-        "MIDLAND_EL_PASO": {"measurements": [9, 9, 9], "winner": "EllipticEnvelope"},
+        "MIDLAND": {"measurements": [9, 9, 9], "winner": "EllipticEnvelope"},
     }
 
-    result_path = at.merge_corridor_report(report_name, new_entries, "bakeoff")
+    result_path = at.merge_city_report(report_name, new_entries, "bakeoff")
 
     assert result_path == report_path
     with open(report_path) as fh:
         written = json.load(fh)
 
-    assert set(written) == {"AUSTIN_CORPUS_CHRISTI", "MIDLAND_EL_PASO"}
-    # Untouched corridor carried forward verbatim.
-    assert written["AUSTIN_CORPUS_CHRISTI"] == seeded["AUSTIN_CORPUS_CHRISTI"]
-    # Processed corridor replaced wholesale, not field-blended with the old entry.
-    assert written["MIDLAND_EL_PASO"]["measurements"] == [9, 9, 9]
-    assert written["MIDLAND_EL_PASO"]["winner"] == "EllipticEnvelope"
-    assert written["MIDLAND_EL_PASO"]["produced_by"] == "bakeoff"
-    assert "generated_at" in written["MIDLAND_EL_PASO"]
+    assert set(written) == {"AUSTIN", "MIDLAND"}
+    # Untouched city carried forward verbatim.
+    assert written["AUSTIN"] == seeded["AUSTIN"]
+    # Processed city replaced wholesale, not field-blended with the old entry.
+    assert written["MIDLAND"]["measurements"] == [9, 9, 9]
+    assert written["MIDLAND"]["winner"] == "EllipticEnvelope"
+    assert written["MIDLAND"]["produced_by"] == "bakeoff"
+    assert "generated_at" in written["MIDLAND"]
 
 
-def test_bakeoff_rerun_for_one_corridor_preserves_the_other_corridors_entry(
+def test_bakeoff_rerun_for_one_city_preserves_the_other_cities_entry(
     monkeypatch, tmp_path,
 ):
     monkeypatch.setattr(config, "ANOMALY_ML_MODEL_DIR", str(tmp_path))
@@ -751,8 +748,8 @@ def test_bakeoff_rerun_for_one_corridor_preserves_the_other_corridors_entry(
     )
     anomaly_detector._MODEL_CACHE.clear()
 
-    corridors = ["AUSTIN_CORPUS_CHRISTI", "MIDLAND_EL_PASO"]
-    at._run_bakeoff(corridors, years=1)
+    cities = ["AUSTIN", "MIDLAND"]
+    at._run_bakeoff(cities, years=1)
 
     report_path = os.path.join(
         str(tmp_path), config.ANOMALY_ML_VALIDATION_REPORT_NAME
@@ -760,37 +757,37 @@ def test_bakeoff_rerun_for_one_corridor_preserves_the_other_corridors_entry(
     with open(report_path) as fh:
         snapshot = json.load(fh)
 
-    assert set(snapshot) == set(corridors)
-    for corridor in corridors:
-        assert "measurements" in snapshot[corridor]
-        assert "winner" in snapshot[corridor]
-        assert "selected_contamination" in snapshot[corridor]
+    assert set(snapshot) == set(cities)
+    for city in cities:
+        assert "measurements" in snapshot[city]
+        assert "winner" in snapshot[city]
+        assert "selected_contamination" in snapshot[city]
 
     time.sleep(0.01)
-    at._run_bakeoff(["MIDLAND_EL_PASO"], years=1)
+    at._run_bakeoff(["MIDLAND"], years=1)
 
     with open(report_path) as fh:
         after = json.load(fh)
 
-    assert set(after) == set(corridors)
-    # The unprocessed corridor's entry is identical to the snapshot -- carried
+    assert set(after) == set(cities)
+    # The unprocessed city's entry is identical to the snapshot -- carried
     # forward, not regenerated and not field-blended.
-    assert after["AUSTIN_CORPUS_CHRISTI"] == snapshot["AUSTIN_CORPUS_CHRISTI"]
-    # The re-measured corridor is stamped with this run's provenance, and its
+    assert after["AUSTIN"] == snapshot["AUSTIN"]
+    # The re-measured city is stamped with this run's provenance, and its
     # transcription-gate fields (Plan 02-04's TRANSCRIPTION_OK) survive.
-    assert after["MIDLAND_EL_PASO"]["produced_by"] == "bakeoff"
+    assert after["MIDLAND"]["produced_by"] == "bakeoff"
     assert (
-        after["MIDLAND_EL_PASO"]["generated_at"]
-        > after["AUSTIN_CORPUS_CHRISTI"]["generated_at"]
+        after["MIDLAND"]["generated_at"]
+        > after["AUSTIN"]["generated_at"]
     )
-    assert "measurements" in after["MIDLAND_EL_PASO"]
-    assert "winner" in after["MIDLAND_EL_PASO"]
-    assert "selected_contamination" in after["MIDLAND_EL_PASO"]
+    assert "measurements" in after["MIDLAND"]
+    assert "winner" in after["MIDLAND"]
+    assert "selected_contamination" in after["MIDLAND"]
 
     anomaly_detector._MODEL_CACHE.clear()
 
 
-def test_validate_rerun_for_one_corridor_preserves_the_other_corridors_entry(
+def test_validate_rerun_for_one_city_preserves_the_other_cities_entry(
     monkeypatch, tmp_path,
 ):
     monkeypatch.setattr(config, "ANOMALY_ML_MODEL_DIR", str(tmp_path))
@@ -801,8 +798,8 @@ def test_validate_rerun_for_one_corridor_preserves_the_other_corridors_entry(
     )
     anomaly_detector._MODEL_CACHE.clear()
 
-    corridors = ["AUSTIN_CORPUS_CHRISTI", "MIDLAND_EL_PASO"]
-    at._run_validate(corridors, years=1)
+    cities = ["AUSTIN", "MIDLAND"]
+    at._run_validate(cities, years=1)
 
     report_path = os.path.join(
         str(tmp_path), config.ANOMALY_ML_VALIDATION_REPORT_NAME
@@ -810,36 +807,36 @@ def test_validate_rerun_for_one_corridor_preserves_the_other_corridors_entry(
     with open(report_path) as fh:
         snapshot = json.load(fh)
 
-    assert set(snapshot) == set(corridors)
+    assert set(snapshot) == set(cities)
 
     time.sleep(0.01)
-    at._run_validate(["MIDLAND_EL_PASO"], years=1)
+    at._run_validate(["MIDLAND"], years=1)
 
     with open(report_path) as fh:
         after = json.load(fh)
 
-    assert set(after) == set(corridors)
-    assert after["AUSTIN_CORPUS_CHRISTI"] == snapshot["AUSTIN_CORPUS_CHRISTI"]
-    assert after["MIDLAND_EL_PASO"]["produced_by"] == "validate"
+    assert set(after) == set(cities)
+    assert after["AUSTIN"] == snapshot["AUSTIN"]
+    assert after["MIDLAND"]["produced_by"] == "validate"
     assert (
-        after["MIDLAND_EL_PASO"]["generated_at"]
-        > after["AUSTIN_CORPUS_CHRISTI"]["generated_at"]
+        after["MIDLAND"]["generated_at"]
+        > after["AUSTIN"]["generated_at"]
     )
 
     anomaly_detector._MODEL_CACHE.clear()
 
 
-def test_characterize_load_rerun_for_one_corridor_preserves_the_other_corridors_entry(
+def test_characterize_load_rerun_for_one_city_preserves_the_other_cities_entry(
     monkeypatch, tmp_path,
 ):
     monkeypatch.setattr(config, "ANOMALY_ML_MODEL_DIR", str(tmp_path))
 
-    corridors = ["AUSTIN_CORPUS_CHRISTI", "MIDLAND_EL_PASO"]
-    for i, corridor in enumerate(corridors):
+    cities = ["AUSTIN", "MIDLAND"]
+    for i, city in enumerate(cities):
         obs_frame = _synthetic_observation_frame(n=48, seed=300 + i)
         obs_path = os.path.join(
             str(tmp_path),
-            config.ANOMALY_ML_OBSERVATION_FRAME_TEMPLATE.format(corridor=corridor),
+            config.ANOMALY_ML_OBSERVATION_FRAME_TEMPLATE.format(city=city),
         )
         obs_frame.to_csv(obs_path, index=False)
 
@@ -855,30 +852,30 @@ def test_characterize_load_rerun_for_one_corridor_preserves_the_other_corridors_
 
     monkeypatch.setattr(at.ercot_data_retriever, "pull_ercot_data", _fake_pull)
 
-    at._run_characterize_load(corridors)
+    at._run_characterize_load(cities)
 
     report_path = os.path.join(str(tmp_path), config.ANOMALY_ML_LOAD_REPORT_NAME)
     with open(report_path) as fh:
         snapshot = json.load(fh)
 
-    assert set(snapshot) == set(corridors)
+    assert set(snapshot) == set(cities)
 
     time.sleep(0.01)
-    at._run_characterize_load(["MIDLAND_EL_PASO"])
+    at._run_characterize_load(["MIDLAND"])
 
     with open(report_path) as fh:
         after = json.load(fh)
 
-    assert set(after) == set(corridors)
-    assert after["AUSTIN_CORPUS_CHRISTI"] == snapshot["AUSTIN_CORPUS_CHRISTI"]
-    assert after["MIDLAND_EL_PASO"]["produced_by"] == "characterize_load"
+    assert set(after) == set(cities)
+    assert after["AUSTIN"] == snapshot["AUSTIN"]
+    assert after["MIDLAND"]["produced_by"] == "characterize_load"
     assert (
-        after["MIDLAND_EL_PASO"]["generated_at"]
-        > after["AUSTIN_CORPUS_CHRISTI"]["generated_at"]
+        after["MIDLAND"]["generated_at"]
+        > after["AUSTIN"]["generated_at"]
     )
 
 
-def test_merge_corridor_report_quarantines_an_unreadable_existing_report(
+def test_merge_city_report_quarantines_an_unreadable_existing_report(
     monkeypatch, tmp_path, capsys,
 ):
     monkeypatch.setattr(config, "ANOMALY_ML_MODEL_DIR", str(tmp_path))
@@ -889,13 +886,13 @@ def test_merge_corridor_report_quarantines_an_unreadable_existing_report(
     with open(report_path, "wb") as fh:
         fh.write(corrupt_bytes)
 
-    new_entries = {"AUSTIN_CORPUS_CHRISTI": {"measurements": []}}
+    new_entries = {"AUSTIN": {"measurements": []}}
 
-    result_path = at.merge_corridor_report(report_name, new_entries, "bakeoff")
+    result_path = at.merge_city_report(report_name, new_entries, "bakeoff")
 
     with open(result_path) as fh:
         written = json.load(fh)
-    assert set(written) == {"AUSTIN_CORPUS_CHRISTI"}
+    assert set(written) == {"AUSTIN"}
 
     quarantine_candidates = [
         f for f in os.listdir(str(tmp_path)) if ".unreadable-" in f
@@ -910,7 +907,7 @@ def test_merge_corridor_report_quarantines_an_unreadable_existing_report(
     assert quarantine_path in captured.out
 
 
-def test_merge_corridor_report_drops_entries_for_corridors_absent_from_config(
+def test_merge_city_report_drops_entries_for_citys_absent_from_config(
     monkeypatch, tmp_path, capsys,
 ):
     monkeypatch.setattr(config, "ANOMALY_ML_MODEL_DIR", str(tmp_path))
@@ -918,21 +915,24 @@ def test_merge_corridor_report_drops_entries_for_corridors_absent_from_config(
     report_path = os.path.join(str(tmp_path), report_name)
 
     seeded = {
-        "AUSTIN_CORPUS_CHRISTI": {"measurements": ["real"]},
+        "AUSTIN": {"measurements": ["real"]},
         "ZOMBIE_CORRIDOR": {"measurements": ["stale"]},
+        "AUSTIN": {"measurements": ["legacy city-era"]},
     }
     with open(report_path, "w") as fh:
         json.dump(seeded, fh)
 
-    new_entries = {"MIDLAND_EL_PASO": {"measurements": ["new"]}}
+    new_entries = {"MIDLAND": {"measurements": ["new"]}}
 
-    at.merge_corridor_report(report_name, new_entries, "bakeoff")
+    at.merge_city_report(report_name, new_entries, "bakeoff")
 
     with open(report_path) as fh:
         written = json.load(fh)
 
-    assert set(written) == {"AUSTIN_CORPUS_CHRISTI", "MIDLAND_EL_PASO"}
-    assert written["AUSTIN_CORPUS_CHRISTI"] == seeded["AUSTIN_CORPUS_CHRISTI"]
+    # Non-city keys (including legacy city-named ones) are dropped.
+    assert set(written) == {"AUSTIN", "MIDLAND"}
+    assert written["AUSTIN"] == seeded["AUSTIN"]
 
     captured = capsys.readouterr()
     assert "ZOMBIE_CORRIDOR" in captured.out
+    assert "AUSTIN" in captured.out
