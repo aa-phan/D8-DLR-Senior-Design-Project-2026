@@ -2,6 +2,8 @@
 
 ## v1.0 MVP (Shipped: 2026-09-10)
 
+> History. The corridor items below were retired on 2026-10-12 and replaced by one independent rating point per city (`docs/data-science/decisions/point_scope.md`).
+
 **Phases completed:** 3 phases, 7 plans, 19 tasks
 
 **Key accomplishments:**

@@ -141,7 +141,7 @@ source instead of trusting a stale copy here:
 | Cross-milestone lessons learned | [`.planning/RETROSPECTIVE.md`](../../.planning/RETROSPECTIVE.md) |
 | Track 1 roadmap/requirements/state | `.planning/workstreams/pipeline-integration/` |
 | Track 2 roadmap/requirements/state | `.planning/workstreams/ml-modeling/` |
-| Track 3 roadmap/requirements/state (retired) | `.planning/workstreams/corridor-geometry/` |
+| Track 3 roadmap/requirements/state (retired, archived 2026-10-13) | `.planning/milestones/ws-corridor-geometry-2026-10-13/` |
 | Shipped v1.1 archive (phases, roadmap, requirements) | `.planning/workstreams/multi-provider-weather/milestones/v1.1-*` |
 | Shipped v1.0 archive (phases, roadmap, requirements) | `.planning/milestones/v1.0-*` |
 

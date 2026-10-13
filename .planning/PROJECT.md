@@ -1,6 +1,18 @@
 # Dynamic Line Rating (DLR) System
 
-## Current State (as of v1.1)
+## Current State (updated 2026-10-13; v1.1 text below is history)
+
+**Per-city point scope (since 2026-10-12).** The corridor model was retired
+(`docs/data-science/decisions/point_scope.md`). Each of the four cities (Austin, Corpus Christi,
+Midland, El Paso) is one independent rating point: `city_point.city_point` and
+`city_rating.rate_city` replace `corridor_discretization` and `rate_corridor`, and nothing reduces
+across cities. Per-city "ml" forecast and anomaly models and 12 per-city shadow artifacts were refit
+on 2026-10-13; the shadow collector runs 4 cycles a day on the underlying weather model `gfs_seamless`;
+a per-city scorer is built, and the per-city confirmation protocol (v3) was signed on 2026-10-13 for the
+2026-11-24 evaluation. Line bearings are an assumption (`decisions/line_bearing_check.md`). Mentions of
+corridors in the rest of this file describe v1.0/v1.1 as shipped and are kept as history.
+
+## State as of v1.1 (history)
 
 **Shipped 2026-09-15.** The Data Science subsystem's weather ingestion is now a ratified,
 five-provider composition behind one adapter (`backend/weather_provider.py::fetch_weather`):
@@ -21,7 +33,7 @@ discrepancy (see `docs/data-science/PRD.md` §10, corrected in this milestone). 
 `anomaly_detector.AnomalyDetector` are implemented and tested but have no production caller —
 `api/` and `frontend/` remain documented, not-started placeholders owned by the Software
 sub-team. Whoever builds that serving/scheduler layer needs to wire the Phase 3+4 loop
-(`rate_corridor` with a real, history-backed `AnomalyDetector`, periodic archive→forecast refit)
+(then `rate_corridor`, now `rate_city`, with a real, history-backed `AnomalyDetector`, periodic archive→forecast refit)
 live; today it's proven only by tests. Separately, TCEQ solar-radiation instrumentation remains
 confirmed only for Austin/Corpus Christi CAMS sites (tracked as v2 requirement WX-09 if TCEQ solar
 is ever pursued — TCEQ is wired for wind/temp/RH only in v1.1).
@@ -60,8 +72,8 @@ ethical commitment, not a nice-to-have).
 - ✓ ERCOT West-zone grid load merge + Amps→MW conversion (`backend/ercot_dlr_merger.py`) — Phase 2
 - ✓ CSV export + 4-panel summary plots per station (`backend/dlr_pipeline.py`) — Phase 1
 - ✓ DS-F7: Safety monitor unified with the real IEEE 738 thermal model (`DLRSafetyMonitor._compute_ampacity` calls `thermal_model.ieee738_ampacity` directly); every gate (G1-G5) resolves toward the static rating, never an optimistic guess — Phase 3
-- ✓ DS-F10: Corridor spatial discretization — `corridor_discretization.py` discretizes each corridor into 5 great-circle points and takes the minimum per-point ampacity as the corridor-level rating, with the bottleneck point identified — Phase 3
-- ✓ DS-NF5: Fail-safe by default, extended to corridors — a candidate-probe exhaustion (no usable station data for a point) resolves to the corridor's static rating rather than dropping the point, raising, or interpolating — Phase 3
+- ✓ DS-F10 (v1.0 as shipped; corridors retired 2026-10-12, replaced by per-city points): Corridor spatial discretization — `corridor_discretization.py` discretizes each corridor into 5 great-circle points and takes the minimum per-point ampacity as the corridor-level rating, with the bottleneck point identified — Phase 3
+- ✓ DS-NF5 (v1.0 as shipped; now per-city, `city_rating.rate_city` resolves to the city's static rating): Fail-safe by default, extended to corridors — a candidate-probe exhaustion (no usable station data for a point) resolves to the corridor's static rating rather than dropping the point, raising, or interpolating — Phase 3
 - ✓ DS-F5: Per-location static-rating comparison — `config.STATIC_RATINGS.get(city, config.DEFAULT_STATIC_RATING)` wired into `dlr_pipeline.py::run_pipeline`/`plot_dlr_summary` and `ercot_dlr_merger.py::process_dlr_to_hourly` (already wired into `corridor_discretization.py` since Phase 3) — v1.0 (Phase 5)
 - ✓ DS-F11: Ampacity forecasting ahead of real time — `ampacity_forecast.forecast_ampacity`, out-of-sample expanding-window walk-forward backtested confidence band, published through `PIPELINE_SCHEMA` v2's additive columns — v1.0 (Phase 4)
 - ✓ DS-F12: Learned anomaly detection, additive to the fallback path — `anomaly_detector.AnomalyDetector` (forecast-residual + rolling-baseline cold start) wired as gate G6 into `DLRSafetyMonitor._fallback` — v1.0 (Phase 4)
@@ -154,7 +166,7 @@ ethical commitment, not a nice-to-have).
 |----------|-----------|---------|
 | Adopt the existing 4-phase structure from `docs/data-science/ROADMAP.md`/`PRD.md` §4 (Foundation → Core Consolidation → Safety & Spatial → Predictive) as this project's ROADMAP.md | Already derived from the real component dependency graph (C1→{C4,C5,C6}→{C7,C8}→{C9,C10}); two of the four phases are already delivered against it | ✓ Good — validated by two completed phases |
 | **RESOLVED — Geographic/corridor scope**: adopted `Project Definition.md`'s 4-city scope (Austin, Corpus Christi, Midland, El Paso) as authoritative for `config.py::STATIC_RATINGS`, replacing the previous mismatched 5-city table. See `docs/data-science/decisions/geographic_scope.md` for full evidence and rationale. | `PRD.md` §10 and `data_provider.md` already implicitly treated the 4-city spec as ground truth; this makes it official. `config.py::STATIC_RATINGS` re-keyed to the 4 cities (midpoint of each city's documented static-limit range); `dlr_pipeline.py`'s redundant dead-code stub deleted. | ✓ Resolved 2026-09-02. Corridor-endpoint mapping (previously open) resolved 2026-09-08 — see next row. |
-| **RESOLVED — Corridor endpoints for C8**: `config.CORRIDOR_ENDPOINTS` defines exactly two corridors (Austin↔Corpus Christi, Midland↔El Paso / D-01), each endpoint resolving into `CITY_COORDINATES`/`STATIC_RATINGS`/`RATING_BOUNDS_BY_LOCATION` — one consistent geographic model across station discovery, static ratings, and discretization. Legacy `station_explorer.py::CORRIDORS` left untouched, not read by the new module. | Closed the gap `geographic_scope.md` flagged as still open. City coordinates for Corpus Christi/El Paso needed live re-verification against OpenStreetMap Nominatim (US Census Gazetteer diverged materially due to those cities' irregular incorporated-limits shapes). | ✓ Resolved 2026-09-08 — Phase 3 (03-02) |
+| **RESOLVED, then RETIRED 2026-10-12 (history) — Corridor endpoints for C8**: `config.CORRIDOR_ENDPOINTS` defines exactly two corridors (Austin↔Corpus Christi, Midland↔El Paso / D-01), each endpoint resolving into `CITY_COORDINATES`/`STATIC_RATINGS`/`RATING_BOUNDS_BY_LOCATION` — one consistent geographic model across station discovery, static ratings, and discretization. Legacy `station_explorer.py::CORRIDORS` left untouched, not read by the new module. | Closed the gap `geographic_scope.md` flagged as still open. City coordinates for Corpus Christi/El Paso needed live re-verification against OpenStreetMap Nominatim (US Census Gazetteer diverged materially due to those cities' irregular incorporated-limits shapes). | ✓ Resolved 2026-09-08 — Phase 3 (03-02) |
 | **RESOLVED — Weather data provider**: adopted `data_provider.md`'s per-variable composition (TCEQ+ASOS for wind/temp/RH, NSRDB for solar, Open-Meteo for historical backfill, Synoptic retained as automatic fallback — never an additional/parallel source) to resolve `PRD.md` §7.1 | Synoptic/WTM has real research-tier scaling limits and doesn't match the real four-city spec's coverage; the vetting log in `data_provider.md` already did the candidate research — no single provider is both observation-grade and variable-complete, so per-variable sourcing was the strongest option found | ✓ Resolved 2026-09-15 — Phases 6-10 (v1.1); ratified in `PRD.md` §7.1/`data_provider.md`, confirmed against live Synoptic/NSRDB endpoints |
 | TCEQ multi-day fetch capped at 31 calendar days per request (`TCEQ_MAX_DAYS_PER_FETCH`) rather than serving unbounded historical backfill | `daily_summary.pl` is a free, unauthenticated, public government CGI endpoint with no documented rate limit; the project chose not to service long backfills by issuing hundreds of rapid sequential requests against it — Open-Meteo (WX-04) exists for bulk historical backfill instead | ✓ Resolved — Phase 9 (09-02) |
 | Fallback eligibility (Synoptic behind TCEQ/NSRDB) computed before any provider dispatch, keyed on provider+path only — never on error type; `EnvironmentError` (missing credential) is never masked by a fallback | A caller-shaped error (unknown provider, wrong path, multiple CAMS IDs, unresolvable coordinates) must never trigger a real network fallback request; a misconfigured machine (missing credential) must stay visibly broken rather than silently served from a fallback that looks like success | ✓ Resolved — Phase 10 (10-01/10-02) |

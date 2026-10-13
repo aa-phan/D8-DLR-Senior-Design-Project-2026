@@ -2,6 +2,8 @@
 
 *A living document updated after each milestone. Lessons feed forward into future planning.*
 
+> Note (2026-10-13): the corridor model described in this milestone was retired on 2026-10-12 and replaced by one independent rating point per city (`docs/data-science/decisions/point_scope.md`). The retrospective below is history and is not rewritten.
+
 ## Milestone: v1.0 — MVP
 
 **Shipped:** 2026-09-10

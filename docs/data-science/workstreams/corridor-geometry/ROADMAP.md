@@ -2,11 +2,11 @@
 
 # Track 3 — Real Transmission-Line Corridor Geometry: Roadmap
 
-This is a redirect page. The live roadmap is maintained by GSD directly at
-`.planning/workstreams/corridor-geometry/ROADMAP.md` and can't be moved — GSD reads and writes
-that exact path at runtime.
+This is a redirect page. The roadmap was archived by GSD when the workstream was completed on 2026-10-13, to
+`.planning/milestones/ws-corridor-geometry-2026-10-13/ROADMAP.md`. It is kept as history only and is no
+longer a live workstream.
 
-**→ [Open the live roadmap](../../../../.planning/workstreams/corridor-geometry/ROADMAP.md)**
+**→ [Open the archived roadmap](../../../../.planning/milestones/ws-corridor-geometry-2026-10-13/ROADMAP.md)**
 
 See also [`REQUIREMENTS.md`](REQUIREMENTS.md) and [`PROJECT-STATUS.md`](../../PROJECT-STATUS.md)
 for the current cross-track summary.
