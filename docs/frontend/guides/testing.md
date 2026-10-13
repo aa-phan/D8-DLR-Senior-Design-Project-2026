@@ -96,10 +96,9 @@ Most tests avoid network access, the real filesystem layout, and shared state by
 
 ### Golden files
 
-Three regression files sit in `backend/tests/` next to the tests that read them. They pin numeric output from before a refactor:
+Two regression files sit in `backend/tests/` next to the tests that read them. They pin numeric output from before a refactor:
 
 - `thermal_model_pre_refactor_golden.npz`
-- `forecast_training_pre_refactor_golden.csv`
 - `forecast_training_pre_horizon_param_golden.npz`
 
 Do not regenerate them without talking to the DS team. A golden mismatch usually means behavior changed, not that the file is stale.

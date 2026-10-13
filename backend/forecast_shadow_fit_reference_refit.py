@@ -12,9 +12,11 @@ per city in `config.LOCATIONS` (or re-run only if the pinned
 train-plus-validation window ever needs to be extended). The scheduled
 cycle never calls anything in this module -- it only ever loads the
 `.joblib` artifact this script writes, via `forecast_shadow_pipeline.
-load_correction_model`. Until a city has been refit, that city's
-`reference_ml_refit_24h` candidate reports `status="unavailable"` with a
-named reason (the `FileNotFoundError` path), never a crash.
+load_correction_model`. All four cities were fit on 2026-10-13 and the
+artifacts are committed and hashed in `data/shadow/models/
+ARTIFACT_HASHES.sha256`; nothing is refit after the 2026-11-01 model freeze.
+A city with no artifact reports `status="unavailable"` with a named reason
+(the `FileNotFoundError` path) for `reference_ml_refit_24h`, never a crash.
 
 **Target: that city's own ampacity.** The training series is one city's
 own archived truth weather (`open_meteo_provider.fetch_open_meteo`, the

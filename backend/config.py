@@ -324,14 +324,14 @@ FORECAST_ML_TRAINING_YEARS: int = 3
 
 # D-01's evidence-based bake-off (v1.3 Phase 1 Plan 01-02): expanding-window
 # fold count for the offline candidate comparison (`forecast_training.
-# bakeoff_corridor`). A small fold count rather than per-row retraining --
+# bakeoff_city`). A small fold count rather than per-row retraining --
 # refitting a real scikit-learn estimator at every row of a multi-year
 # hourly series is the documented cost trap RESEARCH.md Pitfall 1 warns
 # about, while a handful of TimeSeriesSplit folds still preserves the same
 # "train strictly precedes test" guarantee the walk-forward band relies on.
 FORECAST_ML_BAKEOFF_SPLITS: int = 5
 
-# Filename for the bake-off's machine-readable per-corridor comparison
+# Filename for the bake-off's machine-readable per-city comparison
 # report, written under FORECAST_ML_MODEL_DIR (git-ignored, generated
 # evidence). Plan 01-03 transcribes its numbers into the tracked validation
 # record (D-06) -- this JSON file itself is not the artifact of record.
@@ -360,7 +360,7 @@ FORECAST_EXPERIMENT_CACHE_DIR: str = "data/experiment"
 # CORRECTED TWICE, by two independent findings that must both be satisfied:
 #
 # (1) 03-01-BOUNDARY-INVESTIGATION.md: a live daily-resolution sweep across
-#     two cities (AUSTIN, EL_PASO), both project corridors, comparing the
+#     two cities (AUSTIN, EL_PASO), both project cities, comparing the
 #     bulk product against the 00Z Single-Runs run only, found a SHARP,
 #     single-day cutover at 2024-11-12 -> 2024-11-13 (externally
 #     corroborated: it lands on the same day ECMWF upgraded its IFS model
@@ -526,7 +526,7 @@ FORECAST_EXPERIMENT_BOOTSTRAP_CONFIDENCE: float = 0.95
 # that trips too eagerly erodes trust faster than one that occasionally
 # misses a subtle anomaly, since G1-G5's deterministic gates already catch
 # the clear-cut failure modes. All four values start equal at 4.0 and are
-# expected to diverge as each corridor accumulates its own history — it is
+# expected to diverge as each city accumulates its own history — it is
 # the per-location structure, not these initial numbers, that D-06
 # requires.
 ANOMALY_CONTROL_LIMIT_K_BY_LOCATION: dict[str, float] = {
@@ -602,7 +602,7 @@ ANOMALY_ML_RANDOM_SEED: int = 20260924
 # turns the tracer's single fitted estimator above into a measured,
 # evidence-selected one.
 
-# The fraction of each corridor's chronologically-latest rows reserved for
+# The fraction of each city's chronologically-latest rows reserved for
 # false-positive/recall measurement. The split is by TIME and NEVER
 # shuffled: a shuffled split would let the estimator see rows adjacent in
 # time to the ones it is scored on and understate the live false-positive
@@ -701,7 +701,7 @@ ASOS_STATIONS: dict[str, str] = {
 # TCEQ CAMS site IDs (Phase 9, C4 / WX-01)
 # ──────────────────────────────────────────────────────────────────────────────
 # Selected on wind/temp/RH completeness alone (D-01/D-02) -- NOT proximity to a
-# corridor endpoint and NOT solar availability. Each site was confirmed by a
+# city point and NOT solar availability. Each site was confirmed by a
 # raw fetch of monitors.pl?region=<n> and daily_summary.pl?cams=<id> during
 # Phase 9 research (09-RESEARCH.md "CAMS Site Selection"). Values are strings
 # to match daily_summary.pl's `cams=<id>` query parameter, mirroring
