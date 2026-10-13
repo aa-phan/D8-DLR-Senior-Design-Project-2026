@@ -25,7 +25,14 @@ concurrency:
 jobs:
   collect:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 30 minutes (raised from 15 on 2026-10-12 for the per-city collector). Nominal wall
+    # time is ~2 minutes: 4 cities x ~30s of fetches + 3 x INTER_CITY_DELAY_S (15s) = 45s of
+    # deliberate pauses. The ceiling must cover the degraded case, though: per city, a
+    # forecast fetch, an anchor fetch (TCEQ then Synoptic), a truth-proxy station fetch
+    # (TCEQ then Synoptic) and a solar-proxy fetch with one retry can each hit their own
+    # 60s HTTP timeout (~7 minutes worst case), so 4 cities can legitimately run well past
+    # the old 15 minutes before the job is cut off.
+    timeout-minutes: 30
     steps:
       - name: Checkout code (main)
         uses: actions/checkout@v4
@@ -40,12 +47,22 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
+      - name: Pre-flight - per-city model artifacts present
+        # The runner can only use models committed to main (data/shadow/models is
+        # deliberately git-tracked; it cannot retrain and has no data/experiment
+        # cache). Fails fast, listing every missing {method}_{CITY}.joblib for the
+        # 3 artifact-backed methods x config.LOCATIONS. Legacy corridor-named
+        # artifacts never satisfy it. Without this, a missing file would silently
+        # leave that city's ML candidates `unavailable` on every run.
+        run: |
+          PYTHONPATH=backend python backend/forecast_shadow_check_models.py
+
       - name: Run shadow collector
         env:
           SYNOPTIC_TOKEN: ${{ secrets.SYNOPTIC_TOKEN }}
         run: |
           PYTHONPATH=backend python backend/forecast_shadow_collect.py
-        # Exit 0: both corridors attempted (success or honest fallback -- both healthy).
+        # Exit 0: all four cities attempted (success or honest fallback -- both healthy).
         # Exit 1: a genuine code bug -- this SHOULD fail the job and notify via GitHub's
         #         own workflow-failure email, which doubles as alerting.
         # Exit 2: a concurrent run held the lock -- shouldn't occur with cancel-in-progress:
@@ -73,10 +90,14 @@ jobs:
           # APPEND, never overwrite (fixed 2026-10-07): `cp` here previously
           # replaced the destination file wholesale every run, so the data
           # branch only ever held the SINGLE most recent run's entry per
-          # corridor -- 10 real runs' worth of predictions were silently
+          # log file -- 10 real runs' worth of predictions were silently
           # destroyed before this was caught. `>>` onto a nonexistent file
-          # creates it, so the very first run (and a brand-new corridor
+          # creates it, so the very first run (and a brand-new per-city
           # file) still works correctly.
+          # Only per-city {CITY}.jsonl files exist here: data/shadow/predictions/ is
+          # git-ignored, so legacy corridor logs (AUSTIN_CORPUS_CHRISTI.jsonl,
+          # MIDLAND_EL_PASO.jsonl) are absent on the runner and are never copied;
+          # the data branch's own copies of them are left untouched.
           found_any=0
           for f in data/shadow/predictions/*.jsonl; do
             [ -e "$f" ] || continue
@@ -84,7 +105,7 @@ jobs:
             bn=$(basename "$f")
             cat "$f" >> "/tmp/shadow-data-branch/data/shadow/predictions/$bn"
           done
-          [ "$found_any" -eq 1 ] || echo "No prediction files produced this run (all corridors may have hit an unexpected early error)."
+          [ "$found_any" -eq 1 ] || echo "No prediction files produced this run (all cities may have hit an unexpected early error)."
 
           # Render the top-level README.md table (2026-10-07): ran from
           # THIS checkout (main) so backend/forecast_shadow_render_table.py
