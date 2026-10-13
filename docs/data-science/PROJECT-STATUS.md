@@ -48,19 +48,35 @@ cities. Models, logs and record fields formerly keyed by corridor are keyed by c
 is [`decisions/point_scope.md`](decisions/point_scope.md); the component is
 [`specs/C8-city-point-rating.md`](specs/C8-city-point-rating.md).
 
-**Not done yet:**
+**Done since (2026-10-13):**
 
-- **Per-city model refit.** The "ml" forecaster, the anomaly model and the shadow correction
-  models have not been retrained per city (needs live Open-Meteo/ERCOT data). Until they are, the
-  ML shadow candidates report `status="unavailable"` with a named reason, and the per-city
-  `forecast_{city}.joblib` / `anomaly_{city}.joblib` artifacts do not exist.
-- **Legacy corridor-named artifacts and logs are retained, not loaded** — the corridor-named
+- **Per-city retrain.** The "ml" forecaster and the anomaly model were retrained for each city
+  (local, git-ignored `data/models/`). Forecast winners: HistGradientBoosting (Austin, El Paso)
+  and MLP (Corpus Christi, Midland), all four NOT MET against naive. Anomaly: OneClassSVM, MET in
+  all four. The 12 shadow correction artifacts (`ml_wind_corrected`, `ml_cooling_corrected`,
+  `reference_ml_refit_24h` x 4 cities) are fit and committed in `data/shadow/models/`.
+- **Collector changes.** 4 cycles a day (was 2), one child process per city, a retry on the
+  forecast fetch, underlying weather model `gfs_seamless` (`config.SHADOW_LIVE_FORECAST_MODEL`),
+  and a `forecast_model` field on every v3 row. A fix removed a one-hour forecast offset. Rows
+  logged without `forecast_model` are pre-fix (offset, `ecmwf_ifs` forecast) and must never be
+  scored or pooled. Revert steps are in `.github/workflows/shadow_collect.yml`.
+- **Scorer built.** Per-city evaluation modules (`forecast_shadow_eval_core.py`,
+  `forecast_shadow_score*.py`, `forecast_shadow_decision.py`, `forecast_shadow_confirm.py`) are
+  merged with tests. Nothing is published automatically and no real FRESH data has been scored.
+- **Protocol amendment drafted.**
+  [`decisions/confirmation_protocol_v3_per_city.md`](decisions/confirmation_protocol_v3_per_city.md)
+  records the owner selections; **the signature block is still blank.** It must be signed before
+  the 2026-11-24 run.
+
+**Still open:**
+
+- **Protocol signature** (owner), then the model-artifact hash manifest by the 2026-11-01 freeze.
+- **Legacy corridor-named artifacts and logs are retained, not loaded** - the corridor-named
   model files and the shadow logs `AUSTIN_CORPUS_CHRISTI.jsonl` / `MIDLAND_EL_PASO.jsonl` stay on
-  disk as the corridor-era record. Per-city shadow logs (`data/shadow/predictions/{CITY}.jsonl`)
-  start empty.
-- **Shadow-evidence baseline.** The 2026-11-24 evaluation date was set against corridor-level
-  collection; whether it moves is a team decision.
-- **Line bearing is an assumption** — carried over from the retired corridor bearings, to be
+  disk as the corridor-era record. Per-city shadow logs started empty on 2026-10-12.
+- **Shadow-evidence window.** Per-city evidence only exists from 2026-10-12 (gfs_seamless rows
+  from 2026-10-13); the evaluation instant remains 2026-11-24 under the draft protocol.
+- **Line bearing is an assumption** - carried over from the retired corridor bearings, to be
   replaced with real line orientation when known.
 
 ---

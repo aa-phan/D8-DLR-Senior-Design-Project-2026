@@ -115,7 +115,7 @@ The `backend/` code is owned by the DS team. If you want a backend-side test add
 
 ## CI integration
 
-The only workflow is `.github/workflows/shadow_collect.yml` (name: "Shadow Collection"). It runs twice daily on a cron schedule (06:00 and 18:00 UTC) and on manual dispatch. It installs `requirements.txt`, runs the shadow collector and health check, and commits predictions to the `shadow-collection-data` branch. **It does not run `pytest`.**
+The only workflow is `.github/workflows/shadow_collect.yml` (name: "Shadow Collection"). It runs four times daily on a cron schedule (00:00, 06:00, 12:00 and 18:00 UTC) and on manual dispatch. It installs `requirements.txt`, runs the shadow collector and health check, and commits predictions to the `shadow-collection-data` branch. **It does not run `pytest`.**
 
 There is currently no automated test run on pushes or pull requests. Until one is added, run `pytest` locally before opening a PR that touches `backend/`.
 

@@ -96,7 +96,7 @@ Notes for the software team:
 
 - `/outputs` is git-ignored as a whole, so a fresh clone has no `outputs/` files until you run the pipeline (`python backend/dlr_pipeline.py`, which edits its inputs at the bottom of the file rather than taking CLI arguments). For UI work without credentials, start from `data/fixtures/sample_pipeline_output.csv`.
 - The scheduled workflow appends new predictions to `data/shadow/predictions/*.jsonl` on a separate branch named `shadow-collection-data` and renders a README table there with `backend/forecast_shadow_render_table.py`. Read live shadow data from that branch, not from `main`. <!-- VERIFY: the shadow-collection-data branch currently exists on the remote and is the intended source for frontend work -->
-- The workflow runs at 06:00 and 18:00 UTC daily (`cron: '0 6,18 * * *'`) and can be triggered manually from the Actions tab.
+- The workflow runs four cycles a day at 00:00, 06:00, 12:00 and 18:00 UTC (`cron: '0 0,6,12,18 * * *'`; GitHub often starts scheduled runs hours late) and can be triggered manually from the Actions tab. Each city is collected in its own child process, and every v3 row records the underlying weather model in `forecast_model` (`config.SHADOW_LIVE_FORECAST_MODEL`, currently `gfs_seamless`). To go back to two cycles a day, set the cron to `0 6,18 * * *`; to go back to the earlier underlying weather model, set `SHADOW_LIVE_FORECAST_MODEL` to `"ecmwf_ifs"`.
 
 ## Per-environment overrides
 

@@ -142,14 +142,16 @@ The dict may contain numpy/pandas scalar types (observation values come from Dat
 
 ### 5. Shadow prediction JSONL
 
-One JSON object per line, **one file per city** (`data/shadow/predictions/{CITY}.jsonl`), append-only. A cycle runs twice a day via `.github/workflows/shadow_collect.yml` and now iterates the four cities (`config.LOCATIONS`) with an inter-city request delay. Live data is on the `shadow-collection-data` branch, not on `main`:
+One JSON object per line, **one file per city** (`data/shadow/predictions/{CITY}.jsonl`), append-only. A cycle runs four times a day (00, 06, 12, 18 UTC) via `.github/workflows/shadow_collect.yml` and iterates the four cities (`config.LOCATIONS`), one child process per city, with an inter-city request delay. GitHub starts scheduled runs late, so expect roughly 2-4 distinct `valid_time`s per day. Live data is on the `shadow-collection-data` branch, not on `main`:
 
 ```bash
 git fetch origin shadow-collection-data
 git show origin/shadow-collection-data:data/shadow/predictions/AUSTIN.jsonl
 ```
 
-Per-city logs **start empty**, so a file can be missing or hold no rows. Until per-city shadow models are refit, ML candidates report `status="unavailable"` with a named reason (the existing `FileNotFoundError` path), and the 2026-11-24 shadow evaluation date, which was set against corridor-level collection, may move (team decision, open).
+Per-city logs began empty on 2026-10-12, so a file can be missing or hold few rows. The 12 per-city shadow correction artifacts are fit and committed, so ML candidates normally report `status="ok"`; `unavailable` with a named reason still occurs, for example `persistence_24h` on a cold start, or right after the model switch until a prior `gfs_seamless` entry is in tolerance.
+
+**`forecast_model` and the one-hour offset fix (2026-10-13).** Since 2026-10-13 the collector uses the underlying weather model `gfs_seamless` (`config.SHADOW_LIVE_FORECAST_MODEL`), selects the exact valid hour (the earlier rows carried a one-hour forecast offset), and writes a string field `forecast_model` on every v3 row. **A v3 row without `forecast_model` is pre-fix: it carries the one-hour offset and an `ecmwf_ifs` forecast. Do not consume such rows as part of a per-city series, and never pool them with rows that have the field.** Rows with different `forecast_model` values must not be mixed either. `persistence_24h` is computed from the same underlying weather model as the row it sits in (same-model rule).
 
 Three row shapes can exist and a reader must handle all of them:
 
@@ -220,7 +222,7 @@ No HTTP status codes exist. Data-level failure signals the contract already carr
 | `status: "fallback"`, `fallback: true` | `rate_city` dict, archive rows | A safety gate failed; `rating` is the city's static rating (or `min(computed, static)` for G5). `alerts` has the text. One city's fallback says nothing about the other three. |
 | Gates G1 to G6 | `alerts` strings | G1 sensor availability, G2 link, G3 range, G4 plausibility, G5 large delta, G6 learned anomaly (including `detector error`) |
 | Exhausted candidates | `rate_city` `alerts` and `exhausted` | Every candidate station for the city was unusable; `station_id` is `None`, `observation` is `None`, rating is the city's static rating. Alert text is `EXHAUSTED FAIL (CITY: n candidates exhausted) — fallback rating N A` in the code read on 2026-10-12 |
-| `candidates.*.status` | Shadow JSONL | `ok`, `unavailable` (no input, for example `persistence_24h` on a cold start, or a per-city ML model not yet refit), or `failed` (exception, text in `reason`) |
+| `candidates.*.status` | Shadow JSONL | `ok`, `unavailable` (no input, for example `persistence_24h` on a cold start, or a missing model artifact), or `failed` (exception, text in `reason`) |
 | `candidates.*.fallback_used` | Shadow JSONL | Method fell back internally to `raw_forecast` and still produced a value |
 | `bundle.status: "unavailable"` | Shadow JSONL (v3) | No bundle value for this candidate this cycle |
 | Empty DataFrame | `run_pipeline` | No observations returned |

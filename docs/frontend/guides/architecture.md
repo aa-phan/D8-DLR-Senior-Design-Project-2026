@@ -79,9 +79,9 @@ The forecast (`ampacity_forecast.forecast_ampacity`, then `forecast_columns`) pr
 
 This is the only path that runs unattended and produces a continuously growing feed. It is explicitly experimental and is never invoked by the production pipeline; see [`docs/data-science/decisions/shadow_collection_runbook.md`](../../data-science/decisions/shadow_collection_runbook.md).
 
-1. `.github/workflows/shadow_collect.yml` ("Shadow Collection") runs at 06:00 and 18:00 UTC (`cron: '0 6,18 * * *'`) and on manual dispatch.
-2. It runs `backend/forecast_shadow_collect.py::collect_once`, which iterates `config.LOCATIONS` (the four cities, with an inter-city request delay) and calls `forecast_shadow_demo.run_once_all_methods` for each city.
-3. That function fetches the live Open-Meteo forecast and the observed anchor wind once per city (`forecast_shadow_pipeline.fetch_shared_city_inputs`, formerly `fetch_shared_corridor_inputs`). It then computes five candidates, named in `forecast_shadow_pipeline.CANDIDATE_METHOD_NAMES`: `ml_wind_corrected`, `ml_cooling_corrected`, `raw_forecast`, `persistence_24h`, `reference_ml_refit_24h`.
+1. `.github/workflows/shadow_collect.yml` ("Shadow Collection") runs four times a day at 00:00, 06:00, 12:00 and 18:00 UTC (`cron: '0 0,6,12,18 * * *'`) and on manual dispatch.
+2. It runs `backend/forecast_shadow_collect.py::collect_once`, which iterates `config.LOCATIONS` (the four cities, one child process per city, with an inter-city request delay) and calls `forecast_shadow_demo.run_once_all_methods` for each city.
+3. That function fetches the live Open-Meteo forecast (underlying weather model `config.SHADOW_LIVE_FORECAST_MODEL`, currently `gfs_seamless`, up to 3 attempts on transport errors) and the observed anchor wind once per city (`forecast_shadow_pipeline.fetch_shared_city_inputs`, formerly `fetch_shared_corridor_inputs`). It then computes five candidates, named in `forecast_shadow_pipeline.CANDIDATE_METHOD_NAMES`: `ml_wind_corrected`, `ml_cooling_corrected`, `raw_forecast`, `persistence_24h`, `reference_ml_refit_24h`.
 4. `forecast_shadow_pipeline.log_cycle_predictions` appends one JSON line per city per cycle to `data/shadow/predictions/{CITY}.jsonl`, with `schema_version: 3`.
 5. The workflow appends those lines to the same path on the `shadow-collection-data` branch, and runs `backend/forecast_shadow_render_table.py` to regenerate that branch's root `README.md` table. It then pushes the branch.
 
@@ -135,7 +135,7 @@ The backend is organized as flat Python modules with a shared `config.py` and `u
 ### What exists to build against today
 
 - **Sample data without credentials:** `data/fixtures/sample_pipeline_output.csv` has 10 rows for one station at 5-minute cadence and matches `pipeline_output_v1.md`. It was designed so the dashboard can be built and tested without running the pipeline or holding a Synoptic token.
-- **Shadow predictions:** the `shadow-collection-data` branch on `origin`. Retrieve a log with `git fetch origin shadow-collection-data` followed by `git show shadow-collection-data:data/shadow/predictions/AUSTIN.jsonl` (a per-city file). Per-city logs start empty, so a given file may not exist or may have no rows until the collector has run under the per-city model; the corridor-named files are legacy. Whether the repo is readable without authentication for a raw-file HTTP fetch is not documented. <!-- VERIFY: repository visibility and whether raw.githubusercontent.com access to the shadow-collection-data branch is permitted -->
+- **Shadow predictions:** the `shadow-collection-data` branch on `origin`. Retrieve a log with `git fetch origin shadow-collection-data` followed by `git show shadow-collection-data:data/shadow/predictions/AUSTIN.jsonl` (a per-city file). Per-city logs began empty on 2026-10-12, so a given file may not exist or may have no rows until the collector has run under the per-city model; the corridor-named files are legacy. Whether the repo is readable without authentication for a raw-file HTTP fetch is not documented. <!-- VERIFY: repository visibility and whether raw.githubusercontent.com access to the shadow-collection-data branch is permitted -->
 
 ### `api/` (PLANNED)
 
@@ -173,7 +173,7 @@ These follow from reading the code and specs. Confirm each with the DS team befo
 - **PSS/E interface undefined.** The handoff format with Power Systems is deliberately unspecified; see `docs/data-science/decisions/pss_e_handoff.md`.
 - **Static ratings are placeholders.** `config.STATIC_RATINGS` values are midpoints of ranges from the Project Definition, not confirmed line ratings. Present them as such. The shadow README carries the same caveat. A city now uses its own entry, not the minimum of a corridor pair (Corpus Christi 3000 A, was 1900 A).
 - **Line bearings are assumed.** `config.CITY_LINE_BEARING_DEG` is carried over from the retired corridor bearings and drives the perpendicular-wind component. It is not a measured line orientation (`point_scope.md`, open question).
-- **Per-city models are not refit.** Per-city forecast, anomaly and shadow correction models have not been trained under the new scope; until they are, ML candidates report `unavailable` and the learned anomaly model is likely absent.
+- **Per-city models are fit locally only.** The per-city "ml" forecast and anomaly models were retrained on 2026-10-13 but live in git-ignored `data/models/`, so a clean checkout has none and ML candidates there report `unavailable`. The 12 shadow correction artifacts in `data/shadow/models/` are committed.
 - **Timezones.** Backend timestamps are UTC (`datetime_utc`, and `*_time` fields in JSONL). The merger adds a local-time column (`datetime_local`, Central time in the checked-in example). Display conversions are a frontend concern.
 
 ## Related docs
