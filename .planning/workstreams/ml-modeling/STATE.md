@@ -151,3 +151,4 @@ Resume file: None
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 261013-149 | Retrain per-city ml forecast and anomaly models after the corridor-to-city rescope | 2026-10-13 | 85ec2b7 | [261013-149-retrain-per-city-ml-forecast-and-anomaly](./quick/261013-149-retrain-per-city-ml-forecast-and-anomaly/) |
+| 261013-285 | Per-city shadow-log scorer and per-city confirmation port (live-log scorer, stats + 9-test Holm family, ship rule, frozen-harness port, frozen-data validation) | 2026-10-13 | 6869095 | [261013-285-plan-the-per-city-shadow-log-scorer](./quick/261013-285-plan-the-per-city-shadow-log-scorer/) |
