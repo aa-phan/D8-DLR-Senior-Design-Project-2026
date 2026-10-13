@@ -7,7 +7,7 @@ current_phase_name: "Shadow Collector: Five-Method Side-by-Side Challenger Recor
 status: completed
 stopped_at: Completed plans 05-03 and 05-04 (parallel Wave 3)
 last_updated: "2026-10-08T00:42:13.533Z"
-last_activity: 2026-10-07
+last_activity: 2026-10-13
 last_activity_desc: "Phase 05 complete: five-candidate shadow collection verified 11/11, live on scheduled GitHub Actions runs"
 state_head: c6f73dd46e9aee09a146d444d43142f6bb4195fb
 progress:
@@ -145,3 +145,9 @@ Last session: 2026-10-07T21:52:04.757Z
 Stopped at: Completed plans 05-03 and 05-04 (parallel Wave 3)
 `/gsd-plan-phase 1` in this workstream.
 Resume file: None
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 261013-149 | Retrain per-city ml forecast and anomaly models after the corridor-to-city rescope | 2026-10-13 | 85ec2b7 | [261013-149-retrain-per-city-ml-forecast-and-anomaly](./quick/261013-149-retrain-per-city-ml-forecast-and-anomaly/) |
