@@ -28,7 +28,7 @@ I have read this amendment, I acknowledge the known validity threats V1 to V6 (l
 model freeze" was made and accepted on 2026-10-12 as described, and I approve the choices recorded above as the per-city
 confirmation protocol (v3), effective from the date below. These choices were made without reading any FRESH-basis outcome.
 
-- Project owner (name): ______________________________
-- Signature: ______________________________
-- Date (UTC): ______________________________
+- Project owner (name): _________Aaron Phan___________
+- Signature: _________Aaron Phan
+- Date (UTC): __________10/13/26_
 
