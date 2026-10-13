@@ -533,6 +533,7 @@ def _city_error_frame(scored: pd.DataFrame) -> pd.DataFrame:
     frame = pd.DataFrame(cols)
     if not scored.empty:
         frame["slot"] = scored["valid_time"]
+    frame.attrs["row_source"] = ROW_SOURCE
     return frame
 
 

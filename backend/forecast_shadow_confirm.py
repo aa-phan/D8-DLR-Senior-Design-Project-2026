@@ -555,9 +555,12 @@ def load_models(city: str, loader: Callable[[str, str], object]):
 def _error_frame(preds: pd.DataFrame) -> pd.DataFrame:
     """Signed errors (prediction - truth), one column per candidate, indexed by valid_time."""
     if preds is None or len(preds) == 0:
-        return pd.DataFrame({name: pd.Series(dtype=float) for name in core.CANDIDATES})
+        empty = pd.DataFrame({name: pd.Series(dtype=float) for name in core.CANDIDATES})
+        empty.attrs["row_source"] = ROW_SOURCE
+        return empty
     frame = pd.DataFrame({name: preds[name] - preds["truth_amps"] for name in core.CANDIDATES}, index=preds.index)
     frame["slot"] = preds["slot"]
+    frame.attrs["row_source"] = ROW_SOURCE
     return frame
 
 

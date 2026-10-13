@@ -367,6 +367,16 @@ def build_family_report(errors_by_city: dict, *, row_source: str, params: Option
     """
     if row_source not in core.ROW_SOURCES:
         raise ValueError(f"build_family_report: unknown row_source {row_source!r}")
+    # An error frame may carry the row source it was built from in `frame.attrs["row_source"]` (both evaluators
+    # tag theirs). A frame tagged with any other source is refused: the two sources are never pooled (decision 9).
+    tags = {city: f.attrs.get("row_source") for city, f in errors_by_city.items()
+            if f is not None and f.attrs.get("row_source") is not None}
+    conflicting = {city: tag for city, tag in tags.items() if tag != row_source}
+    if conflicting:
+        raise ValueError(
+            f"build_family_report: error frames carry row source(s) {sorted(set(conflicting.values()))} but this family "
+            f"is {row_source!r} (cities {sorted(conflicting)}); row sources are never pooled"
+        )
     p = _merge_params(params)
     cities = list(errors_by_city)
     slot_hours = pd.Timedelta(hours=core.SLOT_HOURS)

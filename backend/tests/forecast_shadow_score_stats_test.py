@@ -405,3 +405,18 @@ def test_runtime_stats_module_does_not_import_the_frozen_audit_module():
             assert all(a.name != "forecast_experiment_audit" for a in node.names)
         if isinstance(node, ast.ImportFrom):
             assert node.module != "forecast_experiment_audit"
+
+
+def test_build_family_report_refuses_error_frames_tagged_with_another_row_source():
+    # Task 4 validation: frames may carry `attrs["row_source"]`; one tagged with a different source is refused.
+    frames = make_frames(n=40, cities=["AUSTIN", "MIDLAND"])
+    frames["AUSTIN"].attrs["row_source"] = "shadow_logs"
+    frames["MIDLAND"].attrs["row_source"] = "reconstructed_frames"
+    with pytest.raises(ValueError, match="row source"):
+        st.build_family_report(frames, row_source="shadow_logs", params=small_params())
+    with pytest.raises(ValueError, match="row source"):
+        st.build_family_report(frames, row_source="reconstructed_frames", params=small_params())
+    frames["MIDLAND"].attrs["row_source"] = "shadow_logs"
+    assert st.build_family_report(frames, row_source="shadow_logs", params=small_params())["row_source"] == "shadow_logs"
+    untagged = make_frames(n=40, cities=["AUSTIN"])           # untagged frames stay accepted (backwards compatible)
+    assert st.build_family_report(untagged, row_source="reconstructed_frames", params=small_params())["row_source"] == "reconstructed_frames"
