@@ -92,6 +92,7 @@ from typing import Optional, Protocol
 
 import numpy as np
 import pandas as pd
+import requests
 from dotenv import load_dotenv
 
 import ampacity_forecast
@@ -187,6 +188,23 @@ def _resolve_publication_lag_hours() -> float:
     )
 
 
+# 2026-10-13: retry policy for the live single-runs forecast fetch. On
+# GitHub-hosted runners the 3rd/4th city's request to
+# single-runs-api.open-meteo.com repeatedly hit a 60 s read timeout (first two
+# cities fine), including from a fresh process per city, while the identical
+# request from a developer machine answers in ~0.6 s. A transient stall is
+# best met with a quick give-up-and-retry on a FRESH connection, the same
+# remedy that fixed the solar-proxy fetch (`_SOLAR_PROXY_FETCH_ATTEMPTS`).
+# Each attempt uses a short read timeout (healthy calls take under a second),
+# so the worst case per city is ATTEMPTS x TIMEOUT + (ATTEMPTS - 1) x DELAY
+# = 3 x 30 + 2 x 20 = 130 s. Only transport failures
+# (`requests.exceptions.RequestException`) are retried: an unavailable run
+# (`SingleRunUnavailable`) or a malformed/null response is not transient.
+_FORECAST_FETCH_ATTEMPTS = 3
+_FORECAST_FETCH_TIMEOUT_S = 30
+_FORECAST_FETCH_RETRY_DELAY_S = 20
+
+
 def fetch_live_forecast_for_valid_time(
     city: str, valid_time, horizon_minutes: int, *, lat: float, lon: float,
     decision_time=None,
@@ -235,20 +253,46 @@ def fetch_live_forecast_for_valid_time(
             f"existed yet at decision time"
         )
 
-    try:
-        frame = open_meteo_forecast_provider.fetch_single_run(
-            lat, lon, initialization_time, forecast_days=1,
-        )
-    except open_meteo_forecast_provider.SingleRunUnavailable as exc:
-        raise StaleOrMissingDataError(
-            f"fetch_live_forecast_for_valid_time: run {initialization_time} "
-            f"unavailable for city {city!r}: {exc}"
-        ) from exc
-    except Exception as exc:  # network/transport failure of any kind
-        raise StaleOrMissingDataError(
-            f"fetch_live_forecast_for_valid_time: retrieval failed for "
-            f"city {city!r}, run {initialization_time}: {exc}"
-        ) from exc
+    frame = None
+    for attempt in range(1, _FORECAST_FETCH_ATTEMPTS + 1):
+        started = time.monotonic()
+        try:
+            frame = open_meteo_forecast_provider.fetch_single_run(
+                lat, lon, initialization_time, forecast_days=1,
+                timeout=_FORECAST_FETCH_TIMEOUT_S,
+            )
+            logger.info(
+                "fetch_live_forecast_for_valid_time(%r): single-run fetch attempt "
+                "%d/%d succeeded in %.1fs",
+                city, attempt, _FORECAST_FETCH_ATTEMPTS, time.monotonic() - started,
+            )
+            break
+        except open_meteo_forecast_provider.SingleRunUnavailable as exc:
+            raise StaleOrMissingDataError(
+                f"fetch_live_forecast_for_valid_time: run {initialization_time} "
+                f"unavailable for city {city!r}: {exc}"
+            ) from exc
+        except requests.exceptions.RequestException as exc:  # transport failure
+            logger.info(
+                "fetch_live_forecast_for_valid_time(%r): single-run fetch attempt "
+                "%d/%d failed after %.1fs (%s: %s)%s",
+                city, attempt, _FORECAST_FETCH_ATTEMPTS, time.monotonic() - started,
+                type(exc).__name__, exc,
+                " -- retrying" if attempt < _FORECAST_FETCH_ATTEMPTS else "",
+            )
+            if attempt < _FORECAST_FETCH_ATTEMPTS:
+                time.sleep(_FORECAST_FETCH_RETRY_DELAY_S)
+                continue
+            raise StaleOrMissingDataError(
+                f"fetch_live_forecast_for_valid_time: retrieval failed for "
+                f"city {city!r}, run {initialization_time} after "
+                f"{_FORECAST_FETCH_ATTEMPTS} attempt(s): {exc}"
+            ) from exc
+        except Exception as exc:  # any other failure is not transient
+            raise StaleOrMissingDataError(
+                f"fetch_live_forecast_for_valid_time: retrieval failed for "
+                f"city {city!r}, run {initialization_time}: {exc}"
+            ) from exc
 
     if frame.empty:
         raise StaleOrMissingDataError(

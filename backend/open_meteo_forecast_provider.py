@@ -371,7 +371,7 @@ def fetch_historical_forecast(lat: float, lon: float, start: str, end: str) -> p
     )
 
 
-def fetch_single_run(lat: float, lon: float, run, hourly_vars=None, forecast_days=None, model=None) -> pd.DataFrame:
+def fetch_single_run(lat: float, lon: float, run, hourly_vars=None, forecast_days=None, model=None, timeout=None) -> pd.DataFrame:
     """
     Fetch one exact model run from the Single-Runs API, in exactly one HTTP
     request, with `models` pinned to `FORECAST_MODEL_ID` by default.
@@ -386,6 +386,12 @@ def fetch_single_run(lat: float, lon: float, run, hourly_vars=None, forecast_day
     ("ecmwf_ifs") -- the alternative, a second near-duplicate fetch
     function, is exactly the duplication 03-RESEARCH.md's "Don't Hand-Roll"
     guidance forbids.
+
+    `timeout` (additive keyword, appended last; default `None` keeps
+    `config.FORECAST_EXPERIMENT_HTTP_TIMEOUT_S`, so every existing caller,
+    including the frozen experiment harness, is unchanged) lets the live shadow
+    collector use a shorter per-attempt read timeout together with its own
+    retry loop.
 
     This endpoint live-confirmed rejects a `start_date`/`end_date` range
     outright (`{"error":true,"reason":"Parameter 'start_date' must not be
@@ -454,7 +460,7 @@ def fetch_single_run(lat: float, lon: float, run, hourly_vars=None, forecast_day
     r = requests.get(
         OPEN_METEO_SINGLE_RUNS_BASE,
         params=params,
-        timeout=config.FORECAST_EXPERIMENT_HTTP_TIMEOUT_S,
+        timeout=config.FORECAST_EXPERIMENT_HTTP_TIMEOUT_S if timeout is None else timeout,
         # `Connection: close` (2026-10-07): confirmed via an isolated-runner
         # diagnostic that calling this endpoint twice within the SAME
         # process -- once per city, back-to-back, in

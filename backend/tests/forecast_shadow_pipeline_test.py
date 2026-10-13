@@ -2029,3 +2029,103 @@ def test_unknown_city_is_rejected_everywhere_a_city_is_resolved():
         shadow.ShadowPipeline("AUSTIN_CORPUS_CHRISTI", shadow.RawForecastShadowMethod())
     with pytest.raises(KeyError):
         shadow.validate_and_prepare_shadow_row(_synthetic_row(), city="MIDLAND_EL_PASO")
+
+
+# --- 2026-10-13: retry of the live single-runs forecast fetch -----------------
+
+def _retry_fixture(monkeypatch):
+    """No real sleeping; returns (sleeps, calls) recorders."""
+    sleeps = []
+    monkeypatch.setattr(shadow.time, "sleep", lambda s: sleeps.append(s))
+    return sleeps
+
+
+def _good_single_run_frame(valid_time):
+    return pd.DataFrame({
+        "datetime_utc": [valid_time],
+        "air_temp": [25.0], "wind_speed": [3.0], "wind_direction": [180.0],
+        "solar_radiation": [500.0], "relative_humidity": [40.0],
+    })
+
+
+def test_fetch_live_forecast_retries_a_transport_timeout_and_then_succeeds(monkeypatch):
+    import open_meteo_forecast_provider as omp
+    import requests
+
+    sleeps = _retry_fixture(monkeypatch)
+    valid_time = pd.Timestamp("2026-01-02T00:00:00Z")
+    calls = []
+
+    def _flaky(lat, lon, run, **kwargs):
+        calls.append(kwargs)
+        if len(calls) < 3:
+            raise requests.exceptions.ReadTimeout("Read timed out. (read timeout=30)")
+        return _good_single_run_frame(valid_time)
+
+    monkeypatch.setattr(omp, "fetch_single_run", _flaky)
+    row, _ts = shadow.fetch_live_forecast_for_valid_time(
+        _CITY, valid_time, horizon_minutes=1440, lat=30.27, lon=-97.74,
+    )
+    assert len(calls) == 3
+    assert all(c["timeout"] == shadow._FORECAST_FETCH_TIMEOUT_S for c in calls)  # short per-attempt timeout
+    assert sleeps == [shadow._FORECAST_FETCH_RETRY_DELAY_S] * 2
+    assert row["fcst_wind_speed"] == 3.0
+
+
+def test_fetch_live_forecast_gives_up_after_the_configured_attempts(monkeypatch):
+    import open_meteo_forecast_provider as omp
+    import requests
+
+    sleeps = _retry_fixture(monkeypatch)
+    calls = []
+
+    def _always_times_out(*a, **k):
+        calls.append(1)
+        raise requests.exceptions.ConnectionError("connection reset")
+
+    monkeypatch.setattr(omp, "fetch_single_run", _always_times_out)
+    with pytest.raises(shadow.StaleOrMissingDataError, match="after 3 attempt"):
+        shadow.fetch_live_forecast_for_valid_time(
+            _CITY, pd.Timestamp("2026-01-02T00:00:00Z"), horizon_minutes=1440,
+            lat=30.27, lon=-97.74,
+        )
+    assert len(calls) == shadow._FORECAST_FETCH_ATTEMPTS == 3
+    assert len(sleeps) == 2  # no sleep after the final failed attempt
+
+
+def test_fetch_live_forecast_does_not_retry_an_unavailable_run_or_a_non_transport_error(monkeypatch):
+    import open_meteo_forecast_provider as omp
+
+    sleeps = _retry_fixture(monkeypatch)
+    calls = []
+
+    def _unavailable(*a, **k):
+        calls.append(1)
+        raise omp.SingleRunUnavailable("no such run")
+
+    monkeypatch.setattr(omp, "fetch_single_run", _unavailable)
+    with pytest.raises(shadow.StaleOrMissingDataError, match="unavailable"):
+        shadow.fetch_live_forecast_for_valid_time(
+            _CITY, pd.Timestamp("2026-01-02T00:00:00Z"), horizon_minutes=1440, lat=30.27, lon=-97.74,
+        )
+
+    def _malformed(*a, **k):
+        calls.append(1)
+        raise ValueError("null value(s) in single-run fetch")
+
+    monkeypatch.setattr(omp, "fetch_single_run", _malformed)
+    with pytest.raises(shadow.StaleOrMissingDataError, match="retrieval failed"):
+        shadow.fetch_live_forecast_for_valid_time(
+            _CITY, pd.Timestamp("2026-01-02T00:00:00Z"), horizon_minutes=1440, lat=30.27, lon=-97.74,
+        )
+    assert len(calls) == 2 and sleeps == []  # one call each, never retried
+
+
+def test_the_retry_budget_per_city_fits_the_per_city_process_cap():
+    import forecast_shadow_collect as collect
+    worst_forecast_s = (
+        shadow._FORECAST_FETCH_ATTEMPTS * shadow._FORECAST_FETCH_TIMEOUT_S
+        + (shadow._FORECAST_FETCH_ATTEMPTS - 1) * shadow._FORECAST_FETCH_RETRY_DELAY_S
+    )
+    assert worst_forecast_s == 130
+    assert worst_forecast_s < collect.CITY_TIMEOUT_S
