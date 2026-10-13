@@ -1464,6 +1464,10 @@ def test_combined_summary_keeps_the_two_sources_apart_and_never_adds_their_count
     logs, port = small_reports.logs, small_reports.port
     assert logs["per_city"]["AUSTIN"]["n_scored"][RAW] == 50 and port["per_city"]["AUSTIN"]["n_scored"][RAW] == 190
     text = decision.combined_summary(port, logs)
+    # the runbook's one-liner feeds the two saved report.json files to combined_summary: same lines (report.json is
+    # written with sorted keys, so only the order of the three candidate lines inside a section can differ)
+    from_disk = decision.combined_summary(read_json(port), read_json(logs))
+    assert sorted(from_disk.splitlines()) == sorted(text.splitlines())
     head, rest = text.split("## Live-system check")
     live, agreement = rest.split("## Agreement")
     assert "row source: reconstructed_frames" in head and "190 to 190" in head
