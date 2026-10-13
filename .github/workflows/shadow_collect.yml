@@ -62,6 +62,10 @@ jobs:
           SYNOPTIC_TOKEN: ${{ secrets.SYNOPTIC_TOKEN }}
         run: |
           PYTHONPATH=backend python backend/forecast_shadow_collect.py
+        # The collector runs each city in its OWN child process (fresh interpreter and
+        # connections), one after another -- see forecast_shadow_collect.py's docstring and
+        # the runbook's "Process model". A child stuck past CITY_TIMEOUT_S (360 s) is killed
+        # and reported without failing the run; four cities at that cap still fit the job timeout.
         # Exit 0: all four cities attempted (success or honest fallback -- both healthy).
         # Exit 1: a genuine code bug -- this SHOULD fail the job and notify via GitHub's
         #         own workflow-failure email, which doubles as alerting.

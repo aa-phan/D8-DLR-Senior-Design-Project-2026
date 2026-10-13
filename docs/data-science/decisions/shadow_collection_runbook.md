@@ -311,6 +311,29 @@ cd <repo_root> && PYTHONPATH=backend .venv/bin/python3.12 backend/forecast_shado
 ```
 Exit 0 = all four cities attempted (success, `unavailable` candidates, or honest fallback — each is a healthy exit). Exit 1 = a genuine code-level bug in one city. Exit 2 = a concurrent run was already in progress (lock held) — this invocation skipped, not an error.
 
+**Process model: one child process per city (2026-10-13).** `collect_once` does not run the cities
+inside its own Python process. For each city in `config.LOCATIONS`, in order, it spawns a fresh
+interpreter, `python backend/forecast_shadow_collect.py --city <CITY>`, waits for it, then pauses
+`INTER_CITY_DELAY_S` before the next one. The parent holds the lock, streams the children's output
+into the job log and aggregates exit codes: a child that exits non-zero counts as a hard failure
+(exit 1 overall); a child still running after `CITY_TIMEOUT_S` (360 s) is killed, reported on stderr
+and does **not** fail the run, so the other cities' logs are still committed (four cities at the
+cap plus pauses is about 24.75 minutes, inside the workflow's 30-minute timeout; a test pins this).
+`--city` can be run by hand to collect a single city, but it takes **no lock** — do not run it while
+the scheduled collector may be active.
+
+*Why.* On GitHub-hosted runners the second and later `single-runs-api.open-meteo.com` requests in
+one Python process timed out position-dependently (first city ok, later cities `unavailable`),
+even though `fetch_single_run` already sends `Connection: close`. In the corridor-era logs the
+second corridor's `raw_forecast` was `unavailable` in 9 consecutive scheduled runs from
+2026-10-08 12:40 UTC to 2026-10-12, and in the first four-city run (2026-10-13 02:36 UTC) the first two
+cities succeeded while Midland and El Paso timed out. The same request from a fresh process had
+succeeded every time, so each city now gets a fresh process, interpreter and TLS session. This is a
+mitigation matched to that evidence, not a confirmed root cause; the first scheduled runs after it
+should be checked for `unavailable` forecasts by position. Other Open-Meteo calls (historical-forecast
+solar proxy, archive, previous-runs) do not send `Connection: close`; the per-city process
+boundary covers them too.
+
 The collector keeps a fixed pause between consecutive cities' live-provider requests (never before
 the first) — currently 15 seconds, so four cities add about 45 seconds of delay per run. The pause
 exists because back-to-back requests to the same providers were observed to make the second
