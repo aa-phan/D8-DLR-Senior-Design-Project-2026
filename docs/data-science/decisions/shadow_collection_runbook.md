@@ -433,3 +433,40 @@ Nothing in this collector ever deletes or rewrites a prior entry, on either path
 ## Monitoring, without inspecting any reserved outcome
 
 The health check (above) plus `data/shadow/predictions/{CITY}.jsonl`'s own fields are sufficient to monitor: input freshness (`decision_time` vs. `logged_at`), missingness (a city with no recent entry), provider usage (`anchor_provenance.anchor_source`), per-candidate availability (`candidates.*.status`, so a city still awaiting its refit shows `unavailable` rather than looking broken), and prediction-method fallback rate (`fallback_used`) — all without ever comparing a prediction to a ground-truth outcome, reserved or otherwise.
+
+## Evaluation day (2026-11-24): per-city confirmation run
+
+Two one-shot tools, run in this order: the reconstructed-frame port (`forecast_shadow_confirm.py`, the HEADLINE for "which candidate to ship") and then the shadow-log scorer (`forecast_shadow_score.py`, the live-system check). The two row sources are reported separately and never pooled. Definitions, validity flags and planner defaults are in `confirmation_protocol_v3_per_city.md` and the module docstrings; nothing here changes them.
+
+**Preconditions.**
+- Pass `--protocol-status signed` only if the amendment is signed; otherwise leave the default `unsigned` (every report is then labelled exploratory). The tools never decide this.
+- Do not run before 2026-11-24T00:00:00Z. Before that both tools refuse a FRESH-dated run (exit 2) before any network call or file read. Do not use `--override-reason` to get around it: it is for rehearsals and an owner-approved rerun, and it is printed in `report.json` and the `report.md` header.
+- Leave every default alone (dates, `--block-lengths`, `--n-resamples`, ...); a non-default value in a FRESH run is refused without `--override-reason`.
+
+**Any time before the instant** (permitted mechanical checks: no truth, no outcome):
+
+    PYTHONPATH=backend .venv/bin/python backend/forecast_shadow_confirm.py --dry-run --out dry_run.json
+    PYTHONPATH=backend .venv/bin/python backend/forecast_shadow_score.py --count-only --predictions-dir <exported logs> --out counts.json
+
+Dry run first, on the day too: it makes no network call and creates no evidence directory, and prints whether the guard would refuse now, the 8 planned requests, the 12 artifact hashes and the freeze check (artifact commits dated 2026-11-01 or later are flagged).
+
+**On the day, in order** (once each, at or after the instant):
+
+    PYTHONPATH=backend .venv/bin/python backend/forecast_shadow_confirm.py --protocol-status <signed|unsigned>
+    # export the logs as in the docstring of forecast_shadow_score.py (git show origin/shadow-collection-data:... per city), then:
+    PYTHONPATH=backend .venv/bin/python backend/forecast_shadow_score.py --predictions-dir <exported logs> --source-commit $(git rev-parse origin/shadow-collection-data) --protocol-status <signed|unsigned>
+
+**One-shot marker.** Each run writes `data/shadow/evaluation/{row_source}_{UTC time}/`. Its first file, `run_started.json` (guard record and config), is written after the guard passes and before any request. A second FRESH run of the same row source is refused (exit 2) if any `run_started.json` with basis FRESH and that row source exists, even if that run crashed and wrote no report. Never re-run, retry or extend a run after seeing its output; a rerun needs an owner-approved `--override-reason`.
+
+**What each report states** (`report.json` and `report.md`; every number is reanalysis-derived, never sensor-validated): n, effective sample size and the ~590 / ~1,575 precision targets (unmet is expected) first; per-city bias, MAE, RMSE and median absolute error; the 9-test pooled city-clustered Holm family; per-city comparisons (descriptive, uncorrected); minimum detectable differences; the evidence level against `raw_forecast` at 5 A and the default action (labelled "headline decision" for the port, "live-system check" for the scorer); the exploratory label when unsigned; and that calibrated overrating risk and retained capacity were not measured and no 8% ceiling was applied.
+
+**Refusal or a failed city.**
+- Exit 2 (`refused: ...`): nothing was fetched and no directory was created. Fix the cause named in the message (clock, log directory, argument); do not override.
+- A failed city (previous-runs or archive HTTP error, structural check) is named in the report with its error and is not retried; the other cities are scored. Report it as failed.
+- Port exit 1 (leakage probe failed) writes no `report.json`. Do not re-run to get one; archive the evidence directory and tell the owner.
+
+**Archive and cite.** Both evidence directories (`report.json`, `report.md`, `run_started.json`, `http/` bodies and meta, and `frames/` for the port) are not git-ignored: `git add data/shadow/evaluation` and commit them. In the write-up cite both directory names and the output of
+
+    PYTHONPATH=backend .venv/bin/python -c "import json,sys; import forecast_shadow_decision as d; print(d.combined_summary(json.load(open(sys.argv[1])), json.load(open(sys.argv[2]))))" <port report.json> <scorer report.json>
+
+The headline decision comes from the port's report; the live-system check never changes it, and no count is ever added across the two sources.
