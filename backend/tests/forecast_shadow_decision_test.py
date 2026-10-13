@@ -198,11 +198,12 @@ def test_labels_follow_the_row_source():
 def test_runtime_modules_do_not_import_the_frozen_audit_or_name_its_gate_machinery():
     import ast
     import os
+    import forecast_shadow_confirm as confirm_mod
     import forecast_shadow_score as score_mod
     import forecast_shadow_score_stats as stats_mod
     banned = {"CONFIRMATION_MINIMUM_ROWS", "basis_evaluation_report", "_fresh_confirmation_report", "build_basis_manifest",
               "fresh_basis_attempt", "minimum_fresh_rows"}
-    for mod in (dec, core, score_mod, stats_mod):
+    for mod in (dec, core, score_mod, stats_mod, confirm_mod):
         tree = ast.parse(open(mod.__file__, encoding="utf-8").read())
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
