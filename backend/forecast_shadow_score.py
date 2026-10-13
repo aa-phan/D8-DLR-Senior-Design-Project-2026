@@ -684,7 +684,7 @@ def score(predictions_dir: str, *, cities, guard_cfg: core.GuardConfig, evidence
                          "targets": core.precision_targets(max(report["per_city"][c]["n_scored"].values(), default=0))}
                      for c in cities},
         "pooled_nominal": {"label": "nominal, not effective", "n_scored": pooled,
-                           "targets": core.precision_targets(max(pooled.values(), default=0))},
+                           "targets": core.pooled_nominal_targets(max(pooled.values(), default=0))},
     }
     report = _attach_family_and_decision(report, error_frames, params, protocol_status)
     report["evidence"] = core.collect_evidence(evidence_dir)

@@ -775,6 +775,29 @@ def precision_targets(n: int, n_eff=None) -> dict:
     }
 
 
+def pooled_nominal_targets(n: int) -> dict:
+    """
+    The precision-target block for a POOLED NOMINAL count. A pooled count sums
+    autocorrelated six-hourly rows from four cities that share weather, so it is
+    not an effective sample size and is never judged against the ~590 / ~1,575
+    targets: both `*_met` flags are False by construction, `basis` says why, and the
+    judgement lives with the per-pair effective n (`precision_targets(n, n_eff)`).
+    A bare `precision_targets(pooled_n)` would read "met" at 768 rows (found
+    2026-10-13 by the Task 4 validation test, which reads report.json end to end).
+    """
+    return {
+        "n": int(n),
+        "n_effective": None,
+        "basis": "nominal_not_judged",
+        "tail_rate_target_rows": TAIL_RATE_TARGET_ROWS,
+        "tail_rate_target_met": False,
+        "mdd_target_rows": MDD_TARGET_ROWS,
+        "mdd_target_met": False,
+        "note": "a pooled nominal count is not an effective sample size and is never judged against the "
+                "precision targets; see the per-pair effective n",
+    }
+
+
 # --------------------------------------------------------------------------
 # Provenance
 # --------------------------------------------------------------------------

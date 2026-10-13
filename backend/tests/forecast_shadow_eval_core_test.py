@@ -664,3 +664,12 @@ def test_sample_size_render_never_reports_a_pooled_nominal_count_as_meeting_a_ta
     assert "NOT an effective sample size" in pooled_line and "target met" not in pooled_line
     assert "| not met | not met |" in md  # the pair row, judged on effective n = 140
     assert "met | met" not in md
+
+
+def test_pooled_nominal_targets_are_never_judged_against_the_precision_targets():
+    # 2026-10-13 (Task 4 validation): report.json carried `tail_rate_target_met: True` for a pooled nominal 976.
+    t = core.pooled_nominal_targets(976)
+    assert t["n"] == 976 and t["basis"] == "nominal_not_judged" and t["n_effective"] is None
+    assert t["tail_rate_target_met"] is False and t["mdd_target_met"] is False
+    assert core.pooled_nominal_targets(10 ** 6)["tail_rate_target_met"] is False
+    assert core.pooled_nominal_targets(10 ** 6)["mdd_target_met"] is False
