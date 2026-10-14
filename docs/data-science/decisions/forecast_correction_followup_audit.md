@@ -1988,6 +1988,8 @@ The smallest useful handoff from the data team to unblock an eventual sensor-gro
 
 ### Versioned, deadline-based confirmation protocol (v2 — supersedes the sample-size-gated v1 above)
 
+> **Per-city scoring (2026-10-13):** the per-city amendment `confirmation_protocol_v3_per_city.md` (signed 2026-10-13) supersedes this protocol for scoring the four rating points. This section stays as written.
+
 **v1** (the "Freeze a concrete confirmation protocol" section above, dated 2026-10-05 earlier this
 same day) specified waiting for ~590 rows (~150 days) before any FRESH-basis evaluation. **v2**,
 below, replaces that waiting condition with a fixed calendar date, per the project owner's explicit

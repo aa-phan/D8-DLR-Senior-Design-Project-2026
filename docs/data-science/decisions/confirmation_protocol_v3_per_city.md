@@ -1,6 +1,8 @@
 <!-- generated-by: gsd-doc-writer -->
 # Confirmation Protocol v3 — Per-City Amendment (DRAFT)
 
+> **Signed 2026-10-13 by the project owner (Aaron Phan); the signature is recorded in [`confirmation_protocol_v3_per_city_SIGNING_COPY.md`](confirmation_protocol_v3_per_city_SIGNING_COPY.md). The blank block at the end of this file is left as drafted; the signing copy is the signed record. The text below is the DRAFT as reviewed.**
+>
 > **DRAFT — not in force until the project owner signs the block at the end. The owner's selections for all eleven decisions were recorded in review on 2026-10-13 (see "Owner selections" below); nothing here has been decided by the drafter.**
 >
 > This document was written to be reviewed and signed by the project owner. Every statement of the
@@ -10,7 +12,7 @@
 > `forecast_correction_followup_audit.md`, and the open items below have the "if the owner does nothing"
 > consequence stated for each.
 
-**Status:** Draft, written 2026-10-13. Amends the confirmation protocol for per-city scoring only.
+**Status:** Draft written 2026-10-13; signed 2026-10-13 (see the signing copy). Amends the confirmation protocol for per-city scoring only.
 **Supersedes (if signed):** v2, "Versioned, deadline-based confirmation protocol", but only for
 per-city scoring of the four rating points. **Does not edit or replace** the frozen corridor-era record
 (v1, v2, the 2026-10-06 correction, and every corridor-era table), which stays exactly as written.
@@ -371,6 +373,8 @@ truth proxy rather than the archive series it was fit on.
 `anchor_source`, `anchor_station` and `anchor_observation_time`, so the scorer reports the realized anchor
 age and source per row and the distribution of both, and gives each correction candidate's error split by
 anchor source (an exploratory breakdown, not a hypothesis test). It does not adjust or reweight scores.
+
+**Owner resolution (2026-10-13): accept and report.** The shadow logs are scored as operated; the scorer reports error split by `anchor_source` and realized anchor age (descriptive only, no adjustment or reweighting). No collector or scorer change.
 
 ### V2. `reference_ml_refit_24h` is scored against a different hour than it predicts
 
@@ -854,12 +858,30 @@ The consequences below follow mechanically from the existing documents and code;
 
 | Date | Change |
 |---|---|
+| 2026-10-13 (signed) | Owner signed (signing copy). Recorded the owner's V1 resolution (accept and report), the 12 shadow artifact hashes (`data/shadow/models/ARTIFACT_HASHES.sha256`), and the follow-up pointers from the audit and runbook. No decision text changed. |
 | 2026-10-13 (V6) | Added V6: rows logged before 2026-10-13 predicted the weather one hour before the scored hour (`forecast_days=1` plus a nearest-earlier-hour lookup); fixed with `forecast_days=2` and a strict lookup; rows without a `forecast_model` field are excluded from scoring. |
 | 2026-10-13 (owner selections) | Recorded the project owner's selections for all eleven decisions in "Owner selections" and the sign-off table (decisions 1 and 9 differ from the drafter's recommendations, with notes); signature still pending; noted that decision 9 implies a per-city point-metric port of the frozen harness and that the scorer plan must be extended to include it. |
 | 2026-10-13 (review pass, 2) | Added V5 (live `ecmwf_ifs` versus training `gfs_seamless`) and decision 11, and extended the sign-off. |
 | 2026-10-13 (review pass) | Added persistence comparisons to decision 2's family (new option B2; recommendation changed from 6 to 9 tests); added the standalone "Known validity threats" section (V1 anchor mismatch, V2 `reference_ml_refit_24h` target hour, V3 logged `persistence_24h` definition, V4 reanalysis/shared weather) with sign-off acknowledgement and scorer flags. |
 | 2026-10-13 | Draft created for owner review. If signed, supersedes v2 only for per-city scoring of the four rating points; leaves the frozen corridor-era record (v1, v2, the 2026-10-06 correction and all corridor tables in `forecast_correction_followup_audit.md`) and the legacy corridor logs untouched. Records the already-accepted fit-window decision (train + validation) from the shadow collection runbook. No existing document was edited. |
 
-**Suggested follow-up (the owner's call, not done here):** once signed, add a one-line pointer from
-`forecast_correction_followup_audit.md` (at the v2 section) to this document, and one from
-`shadow_collection_runbook.md`'s "Evidence base and the 2026-11-24 date" paragraph.
+## Frozen artifact hashes (recorded 2026-10-13)
+
+The 12 per-city shadow artifacts as of signing, also in `data/shadow/models/ARTIFACT_HASHES.sha256` (check with `shasum -a 256 -c`). Nothing is refit after the 2026-11-01 freeze.
+
+| sha256 | artifact |
+|---|---|
+| `5026d01fb430016b23f1823fa58f74996b999e0b9a85d321a79ddbae5f384f5b` | `ml_cooling_corrected_AUSTIN.joblib` |
+| `8f50c799f6e282f48e2e51738da44896d0893125fdb27eda0a488ae70419a7cc` | `ml_cooling_corrected_CORPUS_CHRISTI.joblib` |
+| `f64f9872883164e89979536cbc5c5338195f2b84929b30ca6e3dde7e24610fb2` | `ml_cooling_corrected_EL_PASO.joblib` |
+| `cdd0a2c9187560d04921647c59bcaf99577fd6e9d94c92a10b59958a5c63a5ee` | `ml_cooling_corrected_MIDLAND.joblib` |
+| `b19039c2d3e8bf7688c92d9946eb64fc118994f587ee42fb619349862b21f9a0` | `ml_wind_corrected_AUSTIN.joblib` |
+| `f81f0d5e3371e14e4bf3e31dfd9261a28ac09024e4cd25c451d4691f6f9d53f1` | `ml_wind_corrected_CORPUS_CHRISTI.joblib` |
+| `7494e91d218651c8640ddb156ee0d16db34af0ea1f296c65f40c06c2403530ae` | `ml_wind_corrected_EL_PASO.joblib` |
+| `79c8bd5ac6bebf5e3dfcd4c32bffc9356349c2b77a7c0acc395c41b3bd57f544` | `ml_wind_corrected_MIDLAND.joblib` |
+| `f348ba6d9fcda92888c49f0308123ba647a98c60a6029b89b8a3614ef506d5ee` | `reference_ml_refit_24h_AUSTIN.joblib` |
+| `c3f998af8b8b4058dc4e74281500b5e47ed579274f288bdf99bd847ccdbbe11f` | `reference_ml_refit_24h_CORPUS_CHRISTI.joblib` |
+| `46b3e09b44638557998c7b96d366fd3b59c47b3b03414443e485af574e83e580` | `reference_ml_refit_24h_EL_PASO.joblib` |
+| `ba4eff0ed8b902eb05b26b8df883c881bd2862c095f1b9cfe037ab7cf024bea9` | `reference_ml_refit_24h_MIDLAND.joblib` |
+
+**Follow-up pointers (done 2026-10-13):** one-line pointers to this document were added to `forecast_correction_followup_audit.md` (v2 section) and `shadow_collection_runbook.md` ("Evidence base and the 2026-11-24 date").

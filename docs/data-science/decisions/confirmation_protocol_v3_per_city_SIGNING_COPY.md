@@ -32,3 +32,4 @@ confirmation protocol (v3), effective from the date below. These choices were ma
 - Signature: _________Aaron Phan
 - Date (UTC): __________10/13/26_
 
+**Recorded with the signature (2026-10-13):** V1 (live versus training anchor) resolved as *accept and report*; the 12 artifact hashes are in `data/shadow/models/ARTIFACT_HASHES.sha256` and the amendment's "Frozen artifact hashes" section.

@@ -189,7 +189,7 @@ is **not** outcome inspection. This runbook note, and every check this phase ran
 collector works, stayed entirely inside that boundary — no FRESH-basis row's predicted-vs-truth
 outcome was inspected, or will be, before 2026-11-24T00:00:00 UTC.
 
-**Evidence base and the 2026-11-24 date.** The fixed 2026-11-24 evaluation date was set against
+*(Per-city scoring is governed by `confirmation_protocol_v3_per_city.md`, signed 2026-10-13.)* **Evidence base and the 2026-11-24 date.** The fixed 2026-11-24 evaluation date was set against
 corridor-level collection. Per-city logs start empty, so whether that date moves (and whether
 corridor-era FRESH-basis rows count toward any per-city evaluation) is an open team decision
 recorded in `point_scope.md` — this runbook does not decide it.
