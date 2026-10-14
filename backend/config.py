@@ -96,18 +96,23 @@ BUNDLE_RATING_BASIS: str = (
 # ──────────────────────────────────────────────────────────────────────────────
 # Per-location G4 plausibility bounds (Amps)
 # ──────────────────────────────────────────────────────────────────────────────
-# Each city's documented "Worst Case Static Limit (I) [A]" range from
-# `docs/Project Definition.md` (the same source STATIC_RATINGS' midpoints are
-# derived from). Per-location, not one widened global band (PD-A3,
-# `.planning/phases/03-safety-spatial/03-01-PLAN.md`): a single band spanning
-# all four cities (600, 5000) would pass a 4450 A reading for EL_PASO, whose
-# own static rating is 1450 A and documented range only extends to 2300 A —
-# a 67x-headroom overstatement, exactly the failure DS-NF5 exists to prevent.
+# PER-CONDUCTOR amps (the monitor judges the single-conductor rating). Updated
+# 2026-10-13 to the Power Systems team's 345 kV BUNDLE ranges divided by
+# SUBCONDUCTORS_PER_PHASE: Austin 2300-5000 /2, Corpus Christi 1600-4400 /2,
+# Midland 2500-5000 /2, El Paso 640-2000 /1. Before then these were the
+# `docs/Project Definition.md` "Worst Case Static Limit" ranges (800-3000,
+# 1000-5000, 600-3000, 600-2300). Per-location, not one widened global band
+# (PD-A3, `.planning/phases/03-safety-spatial/03-01-PLAN.md`).
+# CONSEQUENCE (measured 2026-10-13 on a year of hourly weather, no wind
+# direction so two wind cases): computed ratings fall below the Austin and
+# Midland lower bounds in roughly 5-30% of hours and exceed the Corpus Christi
+# / El Paso upper bounds in about 1-3%; each such hour falls back to the static
+# rating. Owner accepted this; revisit the models if fallbacks prove costly.
 RATING_BOUNDS_BY_LOCATION: dict[str, tuple[float, float]] = {
-    "AUSTIN": (800.0, 3000.0),
-    "CORPUS_CHRISTI": (1000.0, 5000.0),
-    "MIDLAND": (600.0, 3000.0),
-    "EL_PASO": (600.0, 2300.0),
+    "AUSTIN": (1150.0, 2500.0),
+    "CORPUS_CHRISTI": (800.0, 2200.0),
+    "MIDLAND": (1250.0, 2500.0),
+    "EL_PASO": (640.0, 2000.0),
 }
 
 # Fallback plausibility bounds (Amps) for a monitor constructed without a

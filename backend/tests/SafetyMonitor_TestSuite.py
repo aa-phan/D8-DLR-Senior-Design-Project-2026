@@ -296,16 +296,17 @@ def test_plausibility_bounds_are_inclusive():
 
 
 def test_plausibility_bounds_are_per_location_and_inclusive():
+    lo, hi = config.RATING_BOUNDS_BY_LOCATION["AUSTIN"]
     m = DLRSafetyMonitor(
-        static_rating=1900.0,
-        rating_bounds=config.RATING_BOUNDS_BY_LOCATION["AUSTIN"],
+        static_rating=1825.0,
+        rating_bounds=(lo, hi),
         logger=lambda msg: None,
     )
 
-    assert m._gate_plausible(800.0) is True
-    assert m._gate_plausible(3000.0) is True
-    assert m._gate_plausible(799.99) is False
-    assert m._gate_plausible(3000.01) is False
+    assert m._gate_plausible(lo) is True
+    assert m._gate_plausible(hi) is True
+    assert m._gate_plausible(lo - 0.01) is False
+    assert m._gate_plausible(hi + 0.01) is False
 
 
 def test_rating_bounds_cover_every_city_static_rating():

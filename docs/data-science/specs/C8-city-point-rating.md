@@ -31,7 +31,7 @@ History: until 2026-10-11 this component was "Corridor Spatial Discretization" â
 | `LOCATIONS` | The four city keys; replaces `CORRIDOR_ENDPOINTS` |
 | `CITY_COORDINATES[city]` | One lat/lon per city |
 | `STATIC_RATINGS[city]` | Per-city static rating in per-conductor amps: Austin 1825, Corpus Christi 1500, Midland 1875, El Paso 1320 (2026-10-13; bundle averages 3650, 3000, 3750, 1320 A divided by the subconductor counts) |
-| `RATING_BOUNDS_BY_LOCATION[city]` | Per-city plausibility bounds for C7's G4 (previously the min of two cities' bounds) |
+| `RATING_BOUNDS_BY_LOCATION[city]` | Per-city plausibility bounds for C7's G4, per-conductor amps (previously the min of two cities' bounds). Since 2026-10-13: the Power Systems 345 kV bundle ranges divided by subconductors: Austin 1150-2500, Corpus Christi 800-2200, Midland 1250-2500, El Paso 640-2000. Expect more G4 fallbacks than under the old Project Definition ranges (see the config comment); revisit the models if they prove costly |
 | `CITY_LINE_BEARING_DEG[city]` | Line azimuth for the perpendicular-wind component. **Assumption**: carried over from the retired corridor bearings (Austin and Corpus Christi 173.15 deg, Midland and El Paso 267.54 deg) so wind-cooling behavior is unchanged. A point has no line direction of its own |
 | `LEGACY_CORRIDOR_ENDPOINTS` | Retired pairing, kept only for the frozen forecast-correction experiment modules (`forecast_experiment*.py`, `legacy_corridor.py`). Nothing else may import it |
 
