@@ -479,3 +479,18 @@ Check it from the repo root with `shasum -a 256 -c data/shadow/models/ARTIFACT_H
 Nothing is refit after the 2026-11-01 freeze based on FRESH data; any artifact change after that date must be
 reported as a protocol deviation and the manifest not silently regenerated. The legacy corridor-named artifacts are
 not in the manifest.
+
+## gfs_seamless single-run publication lag (measured 2026-10-14)
+
+`data/publication_lag_check/` (script `poll_lag.py`, workflow `.github/workflows/publication_lag_check.yml`,
+manual dispatch, weather fetches only). Polling Austin every 5 minutes from init:
+
+| Run (init UTC) | Last "unavailable" | First complete response | Lag |
+|---|---|---|---|
+| 2026-10-13 18Z | not observed (already served at the first poll) | 4.67 h old | at most 4.67 h |
+| 2026-10-14 00Z (GitHub runner) | 3.148 h | 3.232 h | between 3.15 and 3.23 h (about 3.2 h) |
+
+The earlier bracket (1.1 h to 7.05 h) is replaced by about 3.2 h for the 00Z run; further runs (06Z, 12Z) are added below
+when measured. The collector requests runs that are 7 to 13 h old, so the margin over the measured lag is at least
+3.8 h, and the 6 h default (`_DEFAULT_PUBLICATION_LAG_HOURS`) is conservative. No collector change is proposed.
+One city (Austin) and a small number of runs; a single run's lag can vary.
