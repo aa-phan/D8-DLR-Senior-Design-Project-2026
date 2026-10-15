@@ -1,18 +1,19 @@
 """
 DLR Pipeline Entry Point (Track 1)
 ==================================================
-One call runs the whole integrated pipeline for every configured corridor:
+One call runs the whole integrated pipeline for every configured city
+(`config.LOCATIONS`), each an independent rating point:
 
     archive history -> forecast -> anomaly detector (G6)
-        -> corridor discretization / rate_corridor -> archive append
+        -> city_rating.rate_city -> archive append
 
 Lives in its own module (not dlr_pipeline.py) because weather_provider
-imports dlr_pipeline, and corridor_discretization imports weather_provider;
-importing the corridor stack from dlr_pipeline would be circular.
+imports dlr_pipeline, and city_rating imports weather_provider; importing
+the city stack from dlr_pipeline would be circular.
 
 CLI:
-    python dlr_orchestrator.py                      # all corridors, last hour, composed providers
-    python dlr_orchestrator.py --corridors MIDLAND_EL_PASO --window-hours 2
+    python dlr_orchestrator.py                      # all cities, last hour, composed providers
+    python dlr_orchestrator.py --cities MIDLAND EL_PASO --window-hours 2
     python dlr_orchestrator.py --provider open_meteo --start 2025-07-01 --end 2025-07-02
     python dlr_orchestrator.py --forecast-method ewm --output outputs/run.json
 """
@@ -27,10 +28,10 @@ from datetime import datetime, timedelta, timezone
 import pandas as pd
 
 import ampacity_forecast
+import city_point
 import config
-import corridor_discretization
 import station_explorer
-from corridor_pipeline import run_corridor_pipeline
+from city_pipeline import run_city_pipeline
 import observation_composer
 
 log = logging.getLogger(__name__)
@@ -66,18 +67,18 @@ def _discover_stations(provider: str, token: str = None) -> pd.DataFrame:
 
 
 def summarize(result: dict) -> dict:
-    """Flatten one run_corridor_pipeline result into a report row."""
+    """Flatten one run_city_pipeline result into a report row."""
     pipe = result.get("pipeline", {})
     fc = pipe.get("forecast")
-    static = corridor_discretization.corridor_geometry(result["corridor"]).static_rating
-    gates = [a.split(" ")[0] for p in result["points"] for a in p["alerts"]]
+    static = city_point.city_point(result["city"]).static_rating
+    gates = [a.split(" ")[0] for a in result["alerts"]]
     return {
-        "corridor": result["corridor"],
+        "city": result["city"],
         "rating_a": result["rating"],
         "static_rating_a": static,
-        "bottleneck_index": result["bottleneck_index"],
         "fallback": result["fallback"],
-        "exhausted_points": result["exhausted_points"],
+        "exhausted": result["exhausted"],
+        "station_id": result["station_id"],
         "fallback_gates": sorted(set(gates)),
         "archived": result["archived"],
         "history_rows": pipe.get("history_rows"),
@@ -87,7 +88,7 @@ def summarize(result: dict) -> dict:
 
 
 def run_dlr_pipeline(
-    corridors=None,
+    cities=None,
     start: str = None,
     end: str = None,
     window_hours: float = 1.0,
@@ -100,12 +101,12 @@ def run_dlr_pipeline(
     fetcher=None,
 ) -> dict:
     """
-    Run the integrated pipeline for each corridor (default: every key of
-    config.CORRIDOR_ENDPOINTS). A failure in one corridor is recorded under
-    `errors` and does not stop the others.
+    Run the integrated pipeline for each city (default: every city in
+    config.LOCATIONS). A failure in one city is recorded under `errors` and
+    does not stop the others.
 
     Returns {"start", "end", "provider", "forecast_method", "results": [raw
-    run_corridor_pipeline dicts], "summary": [report rows], "errors": {}}.
+    run_city_pipeline dicts], "summary": [report rows], "errors": {}}.
     """
     if provider not in PROVIDERS:
         raise ValueError(f"provider must be one of {PROVIDERS}, got {provider!r}")
@@ -115,17 +116,17 @@ def run_dlr_pipeline(
             f"got {forecast_method!r}"
         )
 
-    corridors = list(corridors) if corridors else sorted(config.CORRIDOR_ENDPOINTS)
-    unknown = [c for c in corridors if c not in config.CORRIDOR_ENDPOINTS]
+    cities = list(cities) if cities else list(config.LOCATIONS)
+    unknown = [c for c in cities if c not in config.LOCATIONS]
     if unknown:
-        raise KeyError(f"Unknown corridor(s) {unknown}. Valid: {sorted(config.CORRIDOR_ENDPOINTS)}")
+        raise KeyError(f"Unknown city/cities {unknown}. Valid: {sorted(config.LOCATIONS)}")
 
     start, end = _default_window(window_hours, end=end, start=start)
     if stations is None:
         stations = _discover_stations(provider, token)
 
     # "composed": each input comes from its best provider (see
-    # observation_composer.FIELD_PRIORITY); rate_corridor runs its station
+    # observation_composer.FIELD_PRIORITY); rate_city runs its station
     # path with the composed fetcher in place of weather_provider.fetch_weather.
     # A caller running many windows (backfill_archive.py) passes one `fetcher`
     # so its request cache and provenance persist across runs.
@@ -142,9 +143,9 @@ def run_dlr_pipeline(
         "forecast_method": forecast_method,
         "results": [], "summary": [], "errors": {},
     }
-    for name in corridors:
+    for name in cities:
         try:
-            result = run_corridor_pipeline(
+            result = run_city_pipeline(
                 name, start, end, stations,
                 provider=rate_provider,
                 archive_path=archive_path,
@@ -157,7 +158,7 @@ def run_dlr_pipeline(
             log.info("%s: rating=%.0f A fallback=%s archived=%s",
                      name, result["rating"], result["fallback"], result["archived"])
         except Exception as exc:
-            log.error("corridor %s failed: %s", name, exc)
+            log.error("city %s failed: %s", name, exc)
             out["errors"][name] = str(exc)
     if fetcher is not None:
         out["sources"] = observation_composer.summarize_sources(fetcher.provenance)
@@ -170,8 +171,8 @@ def _print_report(run: dict) -> None:
           f"forecast={run['forecast_method']}")
     if run["summary"]:
         df = pd.DataFrame(run["summary"])
-        cols = ["corridor", "rating_a", "static_rating_a", "bottleneck_index", "fallback",
-                "exhausted_points", "archived", "history_rows", "forecast_amps", "detector_signal"]
+        cols = ["city", "rating_a", "static_rating_a", "fallback", "exhausted", "station_id",
+                "archived", "history_rows", "forecast_amps", "detector_signal"]
         print(df[cols].round(1).to_string(index=False))
     for field, counts in run.get("sources", {}).items():
         print(f"  sources[{field}]: {counts}")
@@ -182,8 +183,8 @@ def _print_report(run: dict) -> None:
 
 
 def main(argv=None) -> int:
-    p = argparse.ArgumentParser(description="Run the integrated DLR corridor pipeline.")
-    p.add_argument("--corridors", nargs="*", help="Corridor names (default: all in config)")
+    p = argparse.ArgumentParser(description="Run the integrated DLR city pipeline.")
+    p.add_argument("--cities", nargs="*", help="City keys (default: all in config.LOCATIONS)")
     p.add_argument("--start", help="ISO start (default: end - window-hours)")
     p.add_argument("--end", help="ISO end (default: now, UTC)")
     p.add_argument("--window-hours", type=float, default=1.0)
@@ -196,7 +197,7 @@ def main(argv=None) -> int:
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
     run = run_dlr_pipeline(
-        corridors=args.corridors, start=args.start, end=args.end,
+        cities=args.cities, start=args.start, end=args.end,
         window_hours=args.window_hours, provider=args.provider,
         forecast_method=args.forecast_method, archive=not args.no_archive,
         archive_path=args.archive_path,
