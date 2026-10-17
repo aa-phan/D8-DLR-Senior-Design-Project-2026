@@ -17,7 +17,7 @@ last, so a run newer than Open-Meteo's archive still gets solar.
 
 Wind. Speed is only taken together with a direction (degrees, meteorological,
 the direction the wind comes FROM) from the same provider and hour; the
-rating path projects it onto the corridor's bearing.
+rating path projects it onto the city's line bearing.
 
 Time alignment. Providers report at different cadences (ASOS 1-min, Synoptic
 5-min, TCEQ and NSRDB hourly) and TCEQ lags. Every provider's data is bucketed
@@ -33,7 +33,7 @@ providers fill in hour by hour.
 `make_composed_fetcher(stations)` returns a function with the same call shape
 as `weather_provider.fetch_weather` for the station path
 (`fetcher([stid], start, end, provider=...)`), so it plugs straight into
-`corridor_discretization.rate_corridor(fetch_weather=...)` with no change
+`city_rating.rate_city(fetch_weather=...)` with no change
 there. It returns a one-row frame (stid, datetime_utc = the aligned hour,
 air_temp, wind_speed, wind_direction, solar_radiation + per-field *_source
 columns) or an
