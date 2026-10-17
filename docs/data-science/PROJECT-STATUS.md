@@ -59,7 +59,10 @@ is [`decisions/point_scope.md`](decisions/point_scope.md); the component is
   forecast fetch, underlying weather model `gfs_seamless` (`config.SHADOW_LIVE_FORECAST_MODEL`),
   and a `forecast_model` field on every v3 row. A fix removed a one-hour forecast offset. Rows
   logged without `forecast_model` are pre-fix (offset, `ecmwf_ifs` forecast) and must never be
-  scored or pooled. Revert steps are in `.github/workflows/shadow_collect.yml`.
+  scored or pooled. Revert steps are in `docs/data-science/decisions/shadow_collection_runbook.md`.
+  Since 2026-10-15 the four daily runs are started by an external cron-job.org job calling the
+  workflow-dispatch API; the workflow's GitHub `schedule:` trigger was removed because scheduled
+  runs started 3-8 h late.
 - **Scorer built.** Per-city evaluation modules (`forecast_shadow_eval_core.py`,
   `forecast_shadow_score*.py`, `forecast_shadow_decision.py`, `forecast_shadow_confirm.py`) are
   merged with tests. Nothing is published automatically and no real FRESH data has been scored.

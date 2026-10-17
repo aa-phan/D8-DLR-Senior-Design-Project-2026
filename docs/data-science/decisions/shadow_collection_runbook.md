@@ -264,7 +264,7 @@ field and carry the offset, so they must not be scored or pooled with later rows
 Two protocol-affecting collector changes, decided by the project owner on 2026-10-13 (decisions 6B and 11B in
 `confirmation_protocol_v3_per_city.md`, which is still DRAFT) and made before the 2026-11-01 model freeze.
 
-**1. Cadence: 4 decision cycles/day.** Cron is `0 0,6,12,18 * * *` (was `0 6,18 * * *`). The NWP runs on a
+**1. Cadence: 4 decision cycles/day.** Cron was `0 0,6,12,18 * * *` (was `0 6,18 * * *`); since 2026-10-15 the same 00/06/12/18 UTC times are fired by cron-job.org, not GitHub (see "External trigger (2026-10-15)" below). The NWP runs on a
 6-hourly UTC grid and one decision cycle yields exactly one valid time (the next grid hour 11 to 17 h ahead).
 GitHub starts scheduled runs 3 to 8 h late, so expect about 2 to 4 distinct valid times per day, not a guaranteed
 4; a delayed run can land on the same valid time as the next (duplicates, decision 10). The 30-minute job timeout
@@ -288,7 +288,7 @@ cycles after the switch report it as unavailable (cold start) until a `gfs_seaml
 tolerance of the decision time.
 
 ### REVERT (if GitHub Actions minute limits are hit)
-- Back to 2 cycles/day: edit the cron line in `.github/workflows/shadow_collect.yml` to `0 6,18 * * *`.
+- Back to 2 cycles/day: change the cron-job.org schedule to 06:00 and 18:00 UTC (before 2026-10-15 this was the cron line in `.github/workflows/shadow_collect.yml`, `0 6,18 * * *`).
 - Back to the legacy model: set `SHADOW_LIVE_FORECAST_MODEL = "ecmwf_ifs"` in `backend/config.py`. New rows are then
   tagged `ecmwf_ifs` again and must not be pooled with `gfs_seamless` rows.
 - The two are independent. Logged rows are never rewritten.
@@ -296,11 +296,30 @@ tolerance of the decision time.
 **Actions minutes caveat.** 4/day is about 140 runs to the cutoff at roughly 3 to 5 min each (about 700 min), double
 the 2/day figure. The repository is private and the plan's monthly Linux-minute quota is **unverified**.
 
+## External trigger (2026-10-15)
+
+The workflow's GitHub `schedule:` trigger was removed on 2026-10-15. Scheduled runs started 3 to 8 h late,
+which left the 24 h persistence anchor unavailable. The four daily runs (00, 06, 12 and 18 UTC) are now started by
+a cron-job.org job that POSTs to the workflow's `dispatches` endpoint
+(`.../actions/workflows/shadow_collect.yml/dispatches`). `workflow_dispatch` is the only trigger in
+`shadow_collect.yml`, so manual runs from the Actions tab still work.
+
+- **Recorded here:** the trigger mechanism and times above, and that the owner confirmed the cron-job.org job is
+  configured. Its credentials (a GitHub token allowed to dispatch workflows) live in cron-job.org and are not in
+  this repo.
+- **Not measured:** how late runs start under the external trigger. Check `gh run list` before relying on
+  timing, and note that rows from before 2026-10-15 were produced by GitHub-scheduled runs.
+- **Failure mode:** if the cron-job.org job is disabled, misconfigured or its token expires, no runs start and
+  nothing in the repo reports it. `forecast_shadow_healthcheck.py` only runs inside a collection run, so it
+  cannot detect a missing run.
+- **To return to GitHub's scheduler:** re-add `schedule: [{cron: '0 0,6,12,18 * * *'}]` to the workflow's `on:`
+  block, and disable the cron-job.org job so runs are not doubled.
+
 ## Host: GitHub Actions (chosen 2026-10-06)
 
 No persistent machine is designated or required. The collector runs on GitHub's own scheduled
 runners via `.github/workflows/shadow_collect.yml` — free, no provisioning, no uptime/sleep
-concerns, and its cadence is 4 cycles/day (`cron: '0 0,6,12,18 * * *'`, raised from 2/day on 2026-10-13; see "Cadence and underlying weather model (2026-10-13)" below).
+concerns, and its cadence is 4 cycles/day (00, 06, 12 and 18 UTC, raised from 2/day on 2026-10-13; see "Cadence and underlying weather model (2026-10-13)" below). Since 2026-10-15 the runs are started by an external cron-job.org job, not by GitHub's scheduler (see "External trigger (2026-10-15)" below).
 
 **One-time setup (do this once, before the first scheduled run):**
 1. In the GitHub repo → **Settings → Secrets and variables → Actions → New repository secret**,
@@ -322,9 +341,10 @@ the two corridor files, the data branch's `AUSTIN_CORPUS_CHRISTI.jsonl` and
 `MIDLAND_EL_PASO.jsonl` simply stop growing, and four new `{CITY}.jsonl` files appear on the
 first per-city run.
 
-**Stop:** delete or disable the workflow file on `main` (or disable it from the Actions tab's "..."
-menu on the workflow page) — no server to touch, no crontab to edit.
-**Restart:** re-enable the workflow; it resumes on the next scheduled boundary. State is entirely
+**Stop:** disable the cron-job.org job (or delete or disable the workflow file on `main`, or disable it
+from the Actions tab's "..." menu on the workflow page) — no server to touch, no crontab to edit.
+**Restart:** re-enable the cron-job.org job (and the workflow if it was disabled); it resumes on the next
+boundary. State is entirely
 in the `shadow-collection-data` branch's append-only logs, nothing to reset.
 
 **To retrieve the collected data later** (e.g. for the Nov 24 evaluation):

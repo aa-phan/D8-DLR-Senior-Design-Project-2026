@@ -10,22 +10,12 @@ name: Shadow Collection
 # the technical rationale.
 
 on:
-  schedule:
-    # 4 decision cycles/day (00, 06, 12, 18 UTC), raised from 2/day on 2026-10-13
-    # (protocol v3 decision 6B). Rationale: the NWP runs on a 6-hourly UTC grid, and a
-    # single decision cycle yields exactly ONE valid time (the next grid hour 11-17 h
-    # ahead). GitHub starts scheduled runs 3-8 h late, so expect about 2-4 distinct
-    # valid times per day, not a guaranteed 4.
-    #
-    # ===================== REVERT (if Actions minutes limits are hit) =====================
-    # * Back to 2 cycles/day: edit the cron line below back to  '0 6,18 * * *'.
-    # * Back to the legacy forecast model: set SHADOW_LIVE_FORECAST_MODEL = "ecmwf_ifs" in
-    #   backend/config.py (the 2026-10-13 default is "gfs_seamless", decision 11B). Rows are
-    #   then tagged ecmwf_ifs again and MUST NOT be pooled with gfs_seamless rows.
-    # The two reverts are independent. Rows already logged are never rewritten.
-    # =======================================================================================
-    - cron: '0 0,6,12,18 * * *'
-  workflow_dispatch: {} # allow a manual run for testing, from the Actions tab
+  # Triggered externally by cron-job.org (POST .../actions/workflows/shadow_collect.yml/dispatches)
+  # at 00, 06, 12 and 18 UTC. The GitHub `schedule:` trigger was removed on 2026-10-15
+  # because it started runs 3-8 h late, which left the 24 h persistence anchor unavailable.
+  # To go back to GitHub's scheduler, re-add:  schedule: [{cron: '0 0,6,12,18 * * *'}]
+  # Cost reverts (2 cycles/day, ecmwf_ifs model) are in shadow_collection_runbook.md.
+  workflow_dispatch: {} # external cron-job.org trigger and manual runs from the Actions tab
 
 permissions:
   contents: write # needed to push collected logs to the shadow-collection-data branch

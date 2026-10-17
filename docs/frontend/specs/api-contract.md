@@ -141,7 +141,7 @@ The dict may contain numpy/pandas scalar types (observation values come from Dat
 
 ### 5. Shadow prediction JSONL
 
-One JSON object per line, **one file per city** (`data/shadow/predictions/{CITY}.jsonl`), append-only. A cycle runs four times a day (00, 06, 12, 18 UTC) via `.github/workflows/shadow_collect.yml` and iterates the four cities (`config.LOCATIONS`), one child process per city, with an inter-city request delay. GitHub starts scheduled runs late, so expect roughly 2-4 distinct `valid_time`s per day. Live data is on the `shadow-collection-data` branch, not on `main`:
+One JSON object per line, **one file per city** (`data/shadow/predictions/{CITY}.jsonl`), append-only. A cycle runs four times a day (00, 06, 12, 18 UTC) via `.github/workflows/shadow_collect.yml` (started by an external cron-job.org dispatch, not a GitHub `schedule:` trigger) and iterates the four cities (`config.LOCATIONS`), one child process per city, with an inter-city request delay. Runs that start late or are skipped still reduce the count, so expect up to 4 distinct `valid_time`s per day, and fewer in practice (the GitHub scheduler, used before 2026-10-15, started runs 3-8 h late; timing under the external trigger has not been measured). Live data is on the `shadow-collection-data` branch, not on `main`:
 
 ```bash
 git fetch origin shadow-collection-data
