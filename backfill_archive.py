@@ -43,6 +43,22 @@ DEFAULT_LOG = os.path.join("outputs", "backfill_log.csv")
 _GATE_RE = re.compile(r"\b(G[1-6]) FAIL")
 
 
+_LOG_HEADER = "run_end_utc,city,rating_a,fallback,exhausted,archived,gates,error"
+
+
+def _retire_stale_log(log_path: str) -> None:
+    """
+    If an existing log has a different header (e.g. the corridor-era format),
+    move it aside so new rows are never appended under the wrong header.
+    """
+    if not os.path.exists(log_path) or os.path.getsize(log_path) == 0:
+        return
+    with open(log_path, "r", encoding="utf-8") as fh:
+        first = fh.readline().strip()
+    if first != _LOG_HEADER:
+        os.replace(log_path, log_path + ".legacy")
+
+
 def _already_archived(path: str) -> dict:
     """{city: set of UTC timestamps} already present in the archive file."""
     hist = historical_archive.read_history(path=path, validate=False)
@@ -70,6 +86,7 @@ def backfill(start, end, step_hours=1.0, archive_path=DEFAULT_ARCHIVE, log_path=
 
     done = _already_archived(archive_path)
     os.makedirs(os.path.dirname(log_path) or ".", exist_ok=True)
+    _retire_stale_log(log_path)
     write_header = not os.path.exists(log_path)
     totals = {"runs": 0, "skipped": 0, "archived": Counter(), "not_archived": Counter(),
               "fallback": Counter(), "exhausted": Counter(), "gates": Counter(), "errors": Counter()}
@@ -78,7 +95,7 @@ def backfill(start, end, step_hours=1.0, archive_path=DEFAULT_ARCHIVE, log_path=
 
     with open(log_path, "a", encoding="utf-8") as log_fh:
         if write_header:
-            log_fh.write("run_end_utc,city,rating_a,fallback,exhausted,archived,gates,error\n")
+            log_fh.write(_LOG_HEADER + "\n")
         try:
             for i, ts in enumerate(times, 1):
                 todo = [c for c in cities if ts not in done.get(c, set())]
