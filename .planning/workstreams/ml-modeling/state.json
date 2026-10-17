@@ -1,7 +1,7 @@
 {
   "contract": "1.0.0",
   "flavor": "core",
-  "milestone": "v1.3 — )",
+  "milestone": "v1.3 — ML Model Development",
   "phases": [
     {
       "number": "1",
@@ -22,12 +22,17 @@
       "number": "4",
       "name": "Forecast Correction Follow-up Audit",
       "status": "complete"
+    },
+    {
+      "number": "5",
+      "name": "Shadow Collector: Five-Method Side-by-Side Challenger Recording",
+      "status": "complete"
     }
   ],
   "next": {
     "command": "/gsd:progress --next",
     "label": "Advance to the next step",
-    "reason": "Phase 5 of 5 · 80% · executing"
+    "reason": "Phase 5 of 5 · 100% · complete; awaiting the 2026-11-24 shadow evaluation"
   },
   "updated_at": "2026-10-07T21:51:39.698Z"
 }

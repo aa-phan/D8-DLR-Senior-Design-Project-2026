@@ -83,16 +83,18 @@ is [`decisions/point_scope.md`](decisions/point_scope.md); the component is
 
 ## What's in flight now
 
-No milestone is currently active — v1.2/v1.3/v1.4 are **fully scoped (requirements + roadmap
-written) but not yet planned or executed.** These three tracks were split out in
+No milestone is currently active — v1.2/v1.3/v1.5 are **fully scoped (requirements + roadmap
+written) but not yet planned or executed** (v1.3's five phases are all built; the milestone is still open pending the
+2026-11-24 shadow evaluation). v1.4 was retired. These tracks were split out in
 [`DEVELOPMENT-TRACKS.md`](DEVELOPMENT-TRACKS.md) so they can be picked up independently, one per
 GSD workstream:
 
 | Track | Milestone | Workstream | Status | Goal |
 |---|---|---|---|---|
 | 1 — Pipeline Integration & Real-Data Verification | v1.2 | `pipeline-integration` | Scoped (4 phases), not started | Wire `run_pipeline` to actually call per-city rating (`city_rating.rate_city`) → anomaly detection → forecasting as one connected sequence, then validate against real historical ERCOT data |
-| 2 — ML Model Development | v1.3 | `ml-modeling` | Scoped (2 phases), not started | Replace the naive/EWM forecaster and the mean±k·std anomaly gate with real trained models, behind the same interfaces |
+| 2 — ML Model Development | v1.3 | `ml-modeling` | Phases 1–5 built (forecasting model, anomaly model, forecast-correction experiment and follow-up audit, shadow collector); awaiting the 2026-11-24 shadow evaluation | Replace the naive/EWM forecaster and the mean±k·std anomaly gate with real trained models, behind the same interfaces. Per-city forecast models are NOT MET vs. naive; per-city anomaly models are MET (see "Done since (2026-10-13)") |
 | 3 — Real Transmission-Line Corridor Geometry | v1.4 | `corridor-geometry` | **Retired 2026-10-12** — corridors no longer exist (`decisions/point_scope.md`) | Was: replace the two placeholder straight-line corridors with real substation-to-substation route geometry. No longer applicable; the only remaining geometry-like item is a real per-city line orientation (see Known open items) |
+| 4 — Input Provenance & Power Systems Contract | v1.5 | `input-provenance` | Scoped (4 phases, 8 requirements), not started; opened 2026-10-17 | Give every rating input (conductor temperature limit, static ratings, line bearing, subconductor counts) a documented source and basis, measure its sensitivity before the 2026-11-01 model freeze, and replace the informal PSS/E hand-off note with a confirmed, tested interface contract |
 
 Each workstream's live roadmap and requirements are the actual source of truth — this table is a
 summary, not a substitute. The links below are one click through a redirect page into the real
@@ -101,6 +103,7 @@ file GSD maintains under `.planning/`:
 - Track 1: [`ROADMAP.md`](workstreams/pipeline-integration/ROADMAP.md) · [`REQUIREMENTS.md`](workstreams/pipeline-integration/REQUIREMENTS.md)
 - Track 2: [`ROADMAP.md`](workstreams/ml-modeling/ROADMAP.md) · [`REQUIREMENTS.md`](workstreams/ml-modeling/REQUIREMENTS.md)
 - Track 3 (retired): [`ROADMAP.md`](workstreams/corridor-geometry/ROADMAP.md) · [`REQUIREMENTS.md`](workstreams/corridor-geometry/REQUIREMENTS.md) — kept as history only
+- Track 4: [`ROADMAP.md`](workstreams/input-provenance/ROADMAP.md) · [`REQUIREMENTS.md`](workstreams/input-provenance/REQUIREMENTS.md)
 
 ---
 
@@ -117,14 +120,19 @@ file GSD maintains under `.planning/`:
   understood informally (a predicted ampacity, evaluated by them against grid conditions for
   feasibility) but no file format, cadence, or exact field set has ever been agreed. See
   [`decisions/pss_e_handoff.md`](decisions/pss_e_handoff.md) for the full note — deliberately
-  deferred until an actual cross-team conversation happens.
+  deferred until an actual cross-team conversation happens. Tracked as PSSE-01/PSSE-02 in
+  Track 4 (`input-provenance`).
+- **Conductor temperature limit has no documented source** — `max_temp_c` is 75 °C in
+  `backend/config.py` and `ConductorConfig`, while project reports state 100 °C. Static ratings
+  (`STATIC_RATINGS`, derived from Power Systems bundle ranges) are unverified midpoints with an
+  unknown normal/emergency basis and temperature. Tracked as PROV-01/PROV-02 in Track 4.
 - **ERCOT live pull (watch item)** — `ercot_data_retriever.py::pull_ercot_data` failed with `Bad CRC-32`
   inside the third-party `gridstatus` library on 2026-08-25. A retest on 2026-10-13 (2025 and 2026
   windows, `gridstatus` 0.35.0) completed without error, so it is not reproduced; cause unknown.
 - **Line orientation per city is an assumption** — `config.CITY_LINE_BEARING_DEG` carries over the
   retired corridor bearings (Austin and Corpus Christi 173.15°, Midland and El Paso 267.54°) so
   perpendicular-wind behavior is unchanged. It is not a measurement; replace it when each city's
-  real line orientation is known. The former
+  real line orientation is known (Track 4, PROV-03). The former
   "corridor geometry is a placeholder" item no longer applies — corridors were retired.
 
 ---
@@ -145,4 +153,4 @@ source instead of trusting a stale copy here:
 | Shipped v1.1 archive (phases, roadmap, requirements) | `.planning/workstreams/multi-provider-weather/milestones/v1.1-*` |
 | Shipped v1.0 archive (phases, roadmap, requirements) | `.planning/milestones/v1.0-*` |
 
-*Last updated: 2026-10-12, after the corridor model was retired in favor of per-city rating points (previously: 2026-09-23, after v1.1 shipped and v1.2/v1.3/v1.4 were scoped).*
+*Last updated: 2026-10-17, after Track 4 (`input-provenance`) was added (previously: 2026-10-12, after the corridor model was retired in favor of per-city rating points; before that: 2026-09-23, after v1.1 shipped and v1.2/v1.3/v1.4 were scoped).*

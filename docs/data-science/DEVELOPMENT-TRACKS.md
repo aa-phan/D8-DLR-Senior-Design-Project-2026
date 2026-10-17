@@ -5,7 +5,8 @@
 > text that mentions corridors has been updated to per-city terms. Track 3's section is kept as
 > history.
 
-Three independent workstreams for dividing remaining DS-subsystem work across developers.
+Four workstreams (Track 3 since retired; Track 4 added 2026-10-17) for dividing remaining
+DS-subsystem work across developers.
 Each is scoped to have no file/function overlap with the others at the level of "who owns
 the PR," so they can run in parallel. Story-level planning for each track happens separately
 (via this project's `.planning/` milestone workflow) once a track is assigned.
@@ -134,9 +135,46 @@ otherwise independent.
 
 ---
 
+## Track 4: Input Provenance & Power Systems Contract
+
+**Added 2026-10-17**, after Track 3 was retired.
+
+**Goal:** Make every input the rating depends on citable, measure how much the open ones matter,
+and turn the DS → PSS/E hand-off from an informal understanding into a confirmed contract.
+
+**Current state:**
+- `max_temp_c` is 75 °C in `backend/config.py` and the `ConductorConfig` default, with no
+  documented source; project reports state 100 °C. `ieee738_ampacity` uses it as the fixed
+  conductor temperature, so it drives every computed rating.
+- `STATIC_RATINGS` and `RATING_BOUNDS_BY_LOCATION` come from Power Systems bundle ranges divided
+  by a provisional subconductor count; whether those ranges are normal or emergency ratings, and
+  at what conductor temperature, is not recorded.
+- `config.CITY_LINE_BEARING_DEG` values are placeholders carried over from the retired corridors.
+- `decisions/pss_e_handoff.md` is an informal note never confirmed with Power Systems.
+
+**Scope:**
+- Audit and record the source and basis of each input above; send Power Systems one consolidated
+  data request.
+- Measure the sensitivity of computed ampacity to the open inputs, and record before the
+  2026-11-01 model freeze whether any model artifact must be refit.
+- Apply the values Power Systems confirms to config, `ConductorConfig`, docs, and tests.
+- Agree and implement the PSS/E interface contract (format, cadence, fields, granularity, rating
+  basis) with a test that checks an emitted file against it.
+
+**Not in scope:** shadow-evaluation scoring and the confirmation protocol (Track 2,
+`ml-modeling`); wiring the pipeline into one scheduled run (Track 1); the dashboard and API.
+
+**Depends on:** answers from the Power Systems sub-team. Phase 2 (sensitivity) is designed to
+run on candidate values without waiting for them. Live roadmap:
+`.planning/workstreams/input-provenance/ROADMAP.md`.
+
+---
+
 ## Parallelization Notes
 
-- Tracks 1 and 2 have no file overlap in their early work. (Track 3 is retired; its former
+- Tracks 1 and 2 have no file overlap in their early work. Track 4 touches `config.py`,
+  `thermal_model.py` defaults and docs, so coordinate with Track 2 on anything that changes a
+  value the existing models were trained on. (Track 3 is retired; its former
   overlap with Track 1 on `corridor_discretization.py` no longer applies.)
 - All active tracks should treat `PIPELINE_SCHEMA` (`backend/units_def.py`) as the fixed
   contract between them, per the project's existing constraint that no new component may

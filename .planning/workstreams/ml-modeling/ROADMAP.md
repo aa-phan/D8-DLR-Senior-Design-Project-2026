@@ -9,10 +9,13 @@ components that satisfy C9/C10's naming and test contracts but are not actually 
 module's existing public interface so neither Track 1 (Pipeline Integration) nor
 `DLRSafetyMonitor`'s G6 gate wiring has to change. The two models are independent components
 with no shared code path other than both being consumed by `DLRSafetyMonitor`, so the journey
-is two parallel-safe, per-model phases rather than a design-then-validate split across all four
-requirements: Phase 1 builds and validates the forecasting model (FCST-01, FCST-02), Phase 2
-builds and validates the anomaly-detection model (ANOM-01, ANOM-02). Neither phase depends on
-the other to start.
+was originally two parallel-safe, per-model phases rather than a design-then-validate split
+across all four requirements: Phase 1 builds and validates the forecasting model (FCST-01,
+FCST-02), Phase 2 builds and validates the anomaly-detection model (ANOM-01, ANOM-02). Neither
+depends on the other to start. Three phases were added later: Phase 3 (the ampacity forecast
+correction experiment), Phase 4 (its follow-up audit), and Phase 5 (the shadow collector that
+records five candidates side by side for the 2026-11-24 evaluation). All five are built; the
+milestone stays open pending that evaluation.
 
 This is a fresh, independent workstream — phase numbering starts at 1 and does not continue any
 other workstream's phase numbering.
@@ -21,7 +24,7 @@ other workstream's phase numbering.
 fail-safe commitment, not renegotiable here):**
 
 - `ampacity_forecast.py::forecast_ampacity(history, horizon_min, method="naive", ...)` — the new
-  method must be an additional value in `FORECAST_METHODS` (currently `("naive", "ewm")`), not a
+  method must be an additional value in `FORECAST_METHODS` (originally `("naive", "ewm")`; it now also includes `"ml"`), not a
   signature change, and must still return a `ForecastResult` populating the same four
   `PIPELINE_SCHEMA` columns via `forecast_columns()`.
 - `anomaly_detector.py::AnomalyDetector.check(raw_data, rating) -> (bool, str)` — the new model
@@ -51,13 +54,14 @@ during phase planning/execution before any new dependency is added.
 
 **Phase Numbering:**
 
-- Integer phases (1, 2, 3): Planned milestone work
+- Integer phases (1, 2, 3, 4, 5): Planned milestone work
 - Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
 
 - [x] **Phase 1: Forecasting Model** - Replace/extend `ampacity_forecast.py`'s naive/EWM methods with a trained regression or neural-network model, validated against real historical data (completed 2026-09-24)
 - [x] **Phase 2: Anomaly Detection Model** - Replace/augment `anomaly_detector.py`'s mean±k·std threshold with a trained model on historical per-variable baselines, validated against real historical data (completed 2026-09-28)
 - [x] **Phase 3: Ampacity Forecast Correction Experiment** - Determine what should replace the current lagged-ampacity `"ml"` method: compare persistence, raw-forecast-through-IEEE-738, ML-corrected-wind, and ML-corrected-cooling approaches (plus an oracle diagnostic) against a real, empirically lead-time-calibrated weather forecast archive on a fixed chronological train/val/test split (supersedes backlog Phase 999.1) (completed 2026-09-30)
 - [x] **Phase 4: Forecast Correction Follow-up Audit** - Adversarial follow-up audit of Phase 3's frozen results: data provenance/leakage re-check, strengthened statistical comparison (block-bootstrap, direct pairwise, RMSE), conservative-rating/overrating analysis with calibrated quantiles, corrected verdict language, and integration-readiness scoping (completed 2026-10-01) — does not replace the production model or re-run the frozen test set
+- [x] **Phase 5: Shadow Collector: Five-Method Side-by-Side Challenger Recording** - Extend the shadow collector to record all five real 24-hour-lead candidates side by side every cycle from the same shared inputs, feeding FRESH-basis data into the 2026-11-24 evaluation without declaring a winner (completed 2026-10-13)
 
 ## Phase Details
 
@@ -396,6 +400,7 @@ and may be executed first or in parallel if that better fits available capacity)
 | 2. Anomaly Detection Model | 5/5 | Complete   | 2026-09-28 |
 | 3. Ampacity Forecast Correction Experiment | 7/7 | Complete   | 2026-09-30 |
 | 4. Forecast Correction Follow-up Audit | 6/6 | Complete   | 2026-10-01 |
+| 5. Shadow Collector: Five-Method Side-by-Side Challenger Recording | 5/5 | Complete   | 2026-10-13 |
 
 ## Backlog
 

@@ -1,21 +1,21 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.3
-milestone_name: )
+milestone_name: ML Model Development
 current_phase: 05
 current_phase_name: "Shadow Collector: Five-Method Side-by-Side Challenger Recording"
 status: completed
-stopped_at: Completed plans 05-03 and 05-04 (parallel Wave 3)
+stopped_at: Phase 05 complete (all 5 plans)
 last_updated: "2026-10-08T00:42:13.533Z"
 last_activity: 2026-10-13
 last_activity_desc: "Phase 05 complete: five-candidate shadow collection verified 11/11, live on scheduled GitHub Actions runs"
 state_head: c6f73dd46e9aee09a146d444d43142f6bb4195fb
 progress:
   total_phases: 5
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 26
-  completed_plans: 24
-  percent: 80
+  completed_plans: 26
+  percent: 100
 ---
 
 # Project State
@@ -28,31 +28,31 @@ See: .planning/PROJECT.md (updated 2026-09-10) and this workstream's
 **Core value:** The end-to-end pipeline produces valid ampacity forecasts and runs without manual
 intervention, while never letting an unreliable input silently overstate what a line can safely
 carry.
-**Current focus:** Phase 05 — Shadow Collector: Five-Method Side-by-Side Challenger Recording
-Forecast Correction Experiment, promoted from backlog Phase 999.1) determined what should replace
-Phase 1's "ml" forecasting method: `ml_cooling_corrected` (a 24-hour-lead physics-plus-ML-corrected
-approach) beat persistence with a statistically distinguishable margin at both corridors on the
-held-out test set — see `docs/data-science/decisions/forecast_correction_experiment.md`.
+**Current focus:** All five phases are built. The open item is the 2026-11-24 shadow evaluation
+(owned by this workstream; see `docs/data-science/decisions/confirmation_protocol_v3_per_city.md`).
+Phase 3 (the forecast correction experiment, promoted from backlog Phase 999.1) determined what
+should replace Phase 1's "ml" forecasting method: `ml_cooling_corrected` (a 24-hour-lead
+physics-plus-ML-corrected approach) beat persistence with a statistically distinguishable margin
+at both corridors on the held-out test set (a corridor-era result) — see
+`docs/data-science/decisions/forecast_correction_experiment.md`. The corridors were retired on
+2026-10-12; the per-city retrain results are in `docs/data-science/PROJECT-STATUS.md`.
 
 ## Current Position
 
-Phase: 05 (Shadow Collector: Five-Method Side-by-Side Challenger Recording) — EXECUTING
-Plan: 3 of 5
+Phase: 05 (Shadow Collector: Five-Method Side-by-Side Challenger Recording) — COMPLETE
+Plan: 5 of 5
 Status: completed
-vs. persistence at AUSTIN_CORPUS_CHRISTI/MIDLAND_EL_PASO, both 95% CIs excluding zero. The original
-1-hour approach (Wave 1) hit a bit-identical forecast/truth data-source dead end and was pivoted
-(D-04) to a 24-hour lead via Previous Runs API — kept in the record as a labeled non-primary
-curiosity, not a competing result.
-Last activity: 2026-10-07 — Phase 05 execution started
-finalized. Milestone v1.3 (all 3 phases) now complete.
+Last activity: 2026-10-13 — Phase 05 complete (five-candidate shadow collection verified 11/11).
+All 5 phases and 26 plans are complete; the milestone stays open pending the 2026-11-24 shadow
+evaluation.
 
-Progress: [████████░░] 80%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 8
+- Total plans completed: 26
 - Average duration: N/A
 - Total execution time: N/A
 
@@ -62,6 +62,9 @@ Progress: [████████░░] 80%
 |-------|-------|-------|----------|
 | 01 | 3 | - | - |
 | 02 | 5 | - | - |
+| 03 | 7 | - | - |
+| 04 | 6 | - | - |
+| 05 | 5 | - | - |
 
 **Recent Trend:**
 
@@ -80,7 +83,7 @@ Progress: [████████░░] 80%
 
 ### Decisions
 
-- Phase order chosen as Forecasting Model -> Anomaly Detection Model, but with no hard
+- Phase order was originally chosen as Forecasting Model -> Anomaly Detection Model, but with no hard
   dependency between them: the two models are independent components with no shared code path
   other than both being consumed by `DLRSafetyMonitor` — see ROADMAP.md Overview for full
   rationale. Phase 2 may be executed before or in parallel with Phase 1.
@@ -117,14 +120,12 @@ None yet.
 
 ### Blockers/Concerns
 
-- A new ML dependency (e.g., scikit-learn) is likely required for FCST-01/ANOM-01 and is not
-  yet part of this project's Python 3.12 stack (pandas/numpy/scipy only). Expect a
-  package-legitimacy review checkpoint during Phase 1/2 planning or execution, per this
-  project's existing audit precedent (`09-RESEARCH.md`) — not yet resolved.
-- The live `historical_archive.py` archive (`config.HISTORICAL_ARCHIVE_PATH`) has zero rows
-  today (Track 1 has not executed). Both phases must assemble their own real-data training/
-  validation series from Open-Meteo backfill (+ ERCOT historical load for Phase 2) rather than
-  assuming the live archive has accrued — see ROADMAP.md Overview.
+- **Resolved:** the new ML dependency was added in Phase 1 (`scikit-learn==1.9.1` is pinned in
+  `requirements.txt`, with its legitimacy audit recorded there).
+- The live `historical_archive.py` archive (`config.HISTORICAL_ARCHIVE_PATH`) was empty when this
+  workstream was scoped because Track 1 had not executed; Track 1 (`pipeline-integration`) is
+  still not started. The phases assembled their own real-data training/validation series from
+  Open-Meteo backfill (+ ERCOT historical load for Phase 2) — see ROADMAP.md Overview.
 - Phase 4 planning (2026-09-30): the automated `check.decision-coverage-plan` gate returned
   `passed: false, reason: could-not-parse` against `04-CONTEXT.md` — its `- **D-NN:**` bullet
   parser doesn't match this CONTEXT.md's `### D-01:`-heading decision format (5 sections, `uncovered`
@@ -141,9 +142,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-10-07T21:52:04.757Z
-Stopped at: Completed plans 05-03 and 05-04 (parallel Wave 3)
-`/gsd-plan-phase 1` in this workstream.
+Last session: 2026-10-13 (Phase 05 completed; per-city retrain and scorer quick tasks below)
+Stopped at: Phase 05 complete (all 5 plans); awaiting the 2026-11-24 shadow evaluation
 Resume file: None
 
 ### Quick Tasks Completed
