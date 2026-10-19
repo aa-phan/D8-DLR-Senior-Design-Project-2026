@@ -44,14 +44,19 @@ def synthetic_city(monkeypatch):
     return _TEST_CITY
 
 
-def _weather_frame(stid: str, wind: float, temp: float = 25.0, solar: float = 500.0) -> pd.DataFrame:
+# Wind from due north (0 deg) is perpendicular to the synthetic city's 90 deg
+# line, so the projected wind equals the measured speed in these fixtures.
+def _weather_frame(
+    stid: str, wind: float, temp: float = 25.0, solar: float = 500.0, wind_dir: float = 0.0
+) -> pd.DataFrame:
     return pd.DataFrame(
-        [{"stid": stid, "air_temp": temp, "wind_speed": wind, "solar_radiation": solar}]
+        [{"stid": stid, "air_temp": temp, "wind_speed": wind, "wind_direction": wind_dir,
+          "solar_radiation": solar}]
     )
 
 
 def _empty_weather_frame() -> pd.DataFrame:
-    return pd.DataFrame(columns=["stid", "air_temp", "wind_speed", "solar_radiation"])
+    return pd.DataFrame(columns=["stid", "air_temp", "wind_speed", "wind_direction", "solar_radiation"])
 
 
 def _station_at_city() -> pd.DataFrame:
@@ -143,10 +148,13 @@ def test_usable_observation_none_when_data_missing():
     assert cr._usable_observation(_empty_weather_frame(), "X") is None
     assert cr._usable_observation(_weather_frame("OTHER", 5.0), "X") is None
     null_temp = pd.DataFrame(
-        [{"stid": "X", "air_temp": None, "wind_speed": 5.0, "solar_radiation": 500.0}]
+        [{"stid": "X", "air_temp": None, "wind_speed": 5.0, "wind_direction": 0.0,
+          "solar_radiation": 500.0}]
     )
     assert cr._usable_observation(null_temp, "X") is None
-    missing_col = pd.DataFrame([{"stid": "X", "air_temp": 25.0, "wind_speed": 5.0}])
+    missing_col = pd.DataFrame(
+        [{"stid": "X", "air_temp": 25.0, "wind_speed": 5.0, "wind_direction": 0.0}]
+    )
     assert cr._usable_observation(missing_col, "X") is None
 
 
@@ -159,12 +167,13 @@ def test_usable_observation_maps_schema_correctly():
         "temp": 20.0,
         "wind": 5.0,
         "solar": 300.0,
+        "wind_direction": 0.0,
     }
 
 
 def test_usable_observation_grid_takes_first_row_without_stid():
     frame = pd.DataFrame(
-        [{"air_temp": 21.0, "wind_speed": 4.0, "solar_radiation": 100.0}]
+        [{"air_temp": 21.0, "wind_speed": 4.0, "wind_direction": 0.0, "solar_radiation": 100.0}]
     )
     reading = cr._usable_observation_grid(frame)
     assert reading["temp"] == 21.0 and reading["wind"] == 4.0 and reading["solar"] == 100.0
@@ -260,7 +269,8 @@ def test_probe_unusable_frame_variants_are_all_skipped(probe_stations):
             return _weather_frame("OTHER", wind=5.0)
         if stid == "C03":
             return pd.DataFrame(
-                [{"stid": "C03", "air_temp": None, "wind_speed": 5.0, "solar_radiation": 500.0}]
+                [{"stid": "C03", "air_temp": None, "wind_speed": 5.0, "wind_direction": 0.0,
+                  "solar_radiation": 500.0}]
             )
         return _weather_frame(stid, wind=5.0)
 
@@ -547,7 +557,7 @@ def test_rate_city_open_meteo_provider_fetches_city_coordinate(synthetic_city):
     def fetch(stids, start, end, provider="synoptic"):
         seen["args"] = (stids, provider)
         return pd.DataFrame(
-            [{"air_temp": 25.0, "wind_speed": 6.5, "solar_radiation": 500.0}]
+            [{"air_temp": 25.0, "wind_speed": 6.5, "wind_direction": 0.0, "solar_radiation": 500.0}]
         )
 
     result = cr.rate_city(
