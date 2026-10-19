@@ -186,20 +186,21 @@ def test_the_cli_really_spawns_a_python_child_and_rejects_an_unknown_city():
     assert "invalid choice" in proc.stderr
 
 
-def test_workflow_cron_is_four_cycles_a_day_and_documents_the_revert():
+def test_workflow_is_dispatched_externally_four_times_a_day_and_documents_the_revert():
+    """Since 2026-10-15 cron-job.org fires the workflow at 00/06/12/18 UTC through
+    workflow_dispatch; GitHub's `schedule:` trigger is gone, and the revert values
+    (2/day cadence, ecmwf_ifs model) live in the runbook."""
     import re
-    workflow = os.path.join(
-        os.path.dirname(__file__), "..", "..", ".github", "workflows", "shadow_collect.yml"
-    )
-    text = open(workflow).read()
-    try:
-        import yaml
-        doc = yaml.safe_load(text)
-        crons = [s["cron"] for s in (doc.get("on") or doc.get(True))["schedule"]]
-    except ImportError:  # PyYAML is not a project dependency
-        crons = re.findall(r"^\s*-\s*cron:\s*'([^']+)'", text, flags=re.M)
-    assert crons == ["0 0,6,12,18 * * *"]
-    assert "REVERT" in text
-    assert "0 6,18 * * *" in text  # the 2/day revert value is spelled out
-    assert 'SHADOW_LIVE_FORECAST_MODEL = "ecmwf_ifs"' in text
+    repo = os.path.join(os.path.dirname(__file__), "..", "..")
+    text = open(os.path.join(repo, ".github", "workflows", "shadow_collect.yml")).read()
+    runbook = open(os.path.join(
+        repo, "docs", "data-science", "decisions", "shadow_collection_runbook.md"
+    )).read()
+    assert re.search(r"^\s*workflow_dispatch:", text, flags=re.M)
+    assert not re.search(r"^\s*schedule:", text, flags=re.M)
+    assert not re.findall(r"^\s*-\s*cron:", text, flags=re.M)
+    assert "cron-job.org" in text
+    assert "00, 06, 12 and 18 UTC" in text
+    assert "0 6,18 * * *" in runbook  # the 2/day revert value is spelled out
+    assert 'SHADOW_LIVE_FORECAST_MODEL = "ecmwf_ifs"' in runbook
     assert "timeout-minutes: 30" in text
