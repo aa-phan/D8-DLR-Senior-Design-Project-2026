@@ -77,7 +77,13 @@ per slot.
   3. Appending an already-present (`city`, `datetime_utc`) never creates a second row, for both
      `append_observation` and the orchestrator path (not only backfill).
   4. Cleaned rows carry a marker (column or flag) that tells them apart from raw rows.
-**Plans**: TBD
+**Plans**: 4 plans
+
+Plans:
+- [ ] 02-01-PLAN.md — Tracer: data_cleaning.clean_history wired into city_pipeline (timestamp, duplicate, fallback rules; clean_flags/clean_excluded markers), one archive row per (city, instant) on append, orchestrator rerun test (wave 1)
+- [ ] 02-02-PLAN.md — Archive tests for the one-row-per-slot guard (spellings, other cities, corridor-era files, unreadable files) and stable read order (wave 2)
+- [ ] 02-03-PLAN.md — Hourly-slot, gap, stuck-run and spike rules, gap_slots marker, and the written policy docs/data-science/decisions/data_cleaning.md (wave 2)
+- [ ] 02-04-PLAN.md — Forecast gap guard for G6 (stale history, ml lookback), skipped-cycle tests end to end, phase gate (wave 3)
 
 ### Phase 3: Real-Data Validation
 **Goal**: Evidence that the pipeline's ratings and statistical methods are fit for production, and
@@ -147,7 +153,7 @@ read-only REST interface.
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Land PR #7 | 0/5 | Blocked on PR author | - |
-| 2. Data Cleaning | 0/TBD | Not started | - |
+| 2. Data Cleaning | 0/4 | Planned | - |
 | 3. Real-Data Validation | 0/TBD | Not started | - |
 | 4. Supabase Store & Writer | 0/TBD | Not started | - |
 | 5. Scheduled Live Runs | 0/TBD | Not started | - |
