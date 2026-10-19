@@ -132,6 +132,11 @@ proposals.
 | OD-3 | Forecast method on the live path | Phase 3 | **`ml`.** Consequence: the per-city forecast models (`data/models/forecast_{CITY}.joblib`, git-ignored) must be available to the live runner alongside the anomaly models (`data/models/anomaly_{CITY}.joblib`). Provisioning them is in scope for Phases 4-5. `city_pipeline` catches a forecast failure and continues without a forecast, so a missing model degrades silently. The live run must detect that case and record it |
 | OD-4 | Freshness grace period for E2E-02 | Phase 6 | **30 min** past one cadence interval (a city's latest `valid_time` no older than 90 min at hourly cadence) |
 | OD-5 | Labelling of values based on provisional static ratings / assumed bearings | Phase 4 | **Labelled provisional** in the schema doc and per row (e.g. a `rating_basis` / `config_version` column) |
+| OD-6 | What the anon (publishable) key may read | Phase 4/6 | **Full history is public.** Anon gets SELECT on both the `latest_rating` view and the full per-city rating table. It gets no write privileges at all: writes are revoked explicitly, not only blocked by RLS (06-RESEARCH: with grants left in place, PATCH/DELETE return 200 `[]`) |
+| OD-7 | Meaning of a rating row's `valid_time` key | Phase 4 | **Run slot, hour-truncated UTC** of the run window end (a 14:07 run and a 14:12 retry share the 14:00 key, and the retry overwrites). The aligned weather hour is stored separately as `observation_time` |
+| OD-8 | History read window for forecast/detector on the live path | Phase 4 | **Last 30 days** per city |
+| OD-9 | How a city that fails outright (exception, not a safety fallback) appears | Phase 4/5 | **Run log only.** No rating row is written; the failure is recorded in the `pipeline_run` log. `latest_rating` keeps the last good row, and the freshness check (E2E-02) flags persistent failures |
+| OD-10 | How the runner gets the per-city forecast/anomaly models (8 `.joblib` files, <1 MB) | Phase 5 | **Commit them to git** through a `.gitignore` carve-out, following the `data/shadow/models` precedent. Supabase Storage is not used |
 
 ## Out of Scope
 
