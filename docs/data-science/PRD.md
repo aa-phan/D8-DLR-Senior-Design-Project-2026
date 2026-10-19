@@ -125,6 +125,13 @@ columns — see `units_def.py` for the schema itself, not restated here.
 See `decisions/data_provider.md` for the full per-provider vetting evidence and
 `specs/C4-weather-ingestion.md` for the implementation detail (Phase 7-10 additions).
 
+**Amendment (2026-10-16).** The rating path now composes weather per input and per UTC hour in
+`backend/observation_composer.py`; the provider order and its three differences from the
+ratified composition are recorded in `decisions/data_provider.md` ("Pipeline-level
+composition"). Wind is projected onto each city's line bearing in `city_rating.py` before the
+safety monitor; the G6 detector receives the measured (unprojected) wind speed, because its
+learned envelope is trained on raw wind.
+
 ## 8. Future Scope (brief)
 
 **This section is stale as of v1.0 and is kept only for history.** It originally described

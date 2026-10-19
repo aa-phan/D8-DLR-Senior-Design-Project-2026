@@ -232,3 +232,33 @@ Based on the vetting above, the adopted path is **per-variable sourcing**, not a
 - `PRD.md` §7.1 — Open Decisions: Weather data provider
 - `ROADMAP.md` §5 Blocker Analysis — the weather-provider decision must not gate C8
 - `specs/C4-weather-ingestion.md` — current implementation and live-verification findings (account-tier failure, missing solar on working stations)
+
+### Pipeline-level composition (amendment, 2026-10-16)
+
+`backend/observation_composer.py` builds one reading per city for the rating path
+(`city_rating.rate_city`), taking each input from the first provider in
+`FIELD_PRIORITY` that has data:
+
+| Input | Order |
+|---|---|
+| Air temperature | Synoptic (ASOS-supplemented) → TCEQ → Open-Meteo |
+| Wind speed + direction | TCEQ → Synoptic (ASOS-supplemented) → Open-Meteo |
+| Solar irradiance | NSRDB → Open-Meteo → Synoptic station |
+
+- **Wind** counts only as a speed and direction pair from the same provider and hour.
+  `city_rating` projects it onto the city's line bearing (`thermal_model.perpendicular_wind`)
+  before the safety monitor, so the archived `wind_speed` is the projected value.
+- **Same hour:** all three inputs are taken from the same UTC hour, the latest hour the
+  chosen providers share within a 3-hour lookback (TCEQ publishes hourly and lags).
+- **NSRDB** has no data after a month in 2025, so runs near the present take solar from
+  Open-Meteo's archive or the Synoptic station. Open-Meteo's archive is a reanalysis and
+  may not cover the latest hours either.
+- **Historical runs** (end more than 2 days ago) request whole days and cache them.
+  NSRDB and Open-Meteo are skipped for the rest of a run after 3 consecutive failures.
+- **Provenance** is recorded per reading in the run summary. The archive does not store it.
+
+This differs from the ratified composition above in three places: (1) temperature is
+Synoptic/ASOS first, with TCEQ second; (2) Open-Meteo is in the live chain as a last resort
+for temperature and wind and as the solar fallback, where the ratified text excludes it from
+fallback; (3) the composer calls each provider directly, so the adapter-level Synoptic
+fallback (`weather_provider._attempt_fallback`, WX-06) is not used on this path.

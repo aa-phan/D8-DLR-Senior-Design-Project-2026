@@ -27,6 +27,7 @@ import city_point as city_point_module
 import config
 import historical_archive
 import station_explorer
+import thermal_model
 import weather_provider
 from DLRSafetyMonitor import DLRSafetyMonitor
 
@@ -78,7 +79,59 @@ def _reading_from_row(row) -> dict | None:
         if value is None or (isinstance(value, float) and math.isnan(value)):
             return None
         reading[target_key] = value
+
+    # Wind direction (meteorological, degrees the wind comes FROM) is needed
+    # to project the measured wind onto the line; a reading without one is
+    # unusable rather than rated on the unprojected speed.
+    direction = row["wind_direction"] if "wind_direction" in row.index else None
+    if direction is None or (isinstance(direction, float) and math.isnan(direction)):
+        return None
+    reading["wind_direction"] = float(direction)
     return reading
+
+
+def _project_wind(observation: dict, bearing_deg: float) -> dict:
+    """
+    Copy of `observation` whose `wind` is the component of the measured wind
+    perpendicular to the line (`thermal_model.perpendicular_wind` with the
+    city's own bearing) -- what `ieee738_ampacity` expects as `wind_perp_ms`.
+    The measured speed is kept as `wind_raw`. Because `wind` is replaced, the
+    archived `wind_speed` and the detector's `raw_data["wind"]` are the
+    projected value, as `historical_archive` documents.
+    """
+    projected = dict(observation)
+    projected["wind_raw"] = observation["wind"]
+    projected["wind"] = float(
+        thermal_model.perpendicular_wind(
+            observation["wind"], observation["wind_direction"], bearing_deg
+        )
+    )
+    return projected
+
+
+class _RawWindDetector:
+    """
+    Thin wrapper that hands the G6 detector the MEASURED wind speed
+    (`wind_raw`) instead of the line-perpendicular `wind` the monitor uses
+    for the physics. The learned weather envelope (`anomaly_training`,
+    `config.ANOMALY_ML_FEATURE_COLUMNS`) is fitted on raw wind speed, and a
+    weather envelope should not depend on a line's bearing; feeding it the
+    projected value would judge live readings against a different
+    distribution than it was trained on. Every other attribute (`signal`,
+    `model_source`, ...) is delegated to the wrapped detector.
+    """
+
+    def __init__(self, detector):
+        self._detector = detector
+
+    def check(self, raw_data: dict, rating: float):
+        data = dict(raw_data)
+        if "wind_raw" in data:
+            data["wind"] = data["wind_raw"]
+        return self._detector.check(data, rating)
+
+    def __getattr__(self, name):
+        return getattr(self._detector, name)
 
 
 def _usable_observation(frame, stid: str) -> dict | None:
@@ -88,7 +141,8 @@ def _usable_observation(frame, stid: str) -> dict | None:
     `weather_provider.fetch_weather` returns).
 
     Returns `None` when the frame is empty, the station is absent, or any
-    required variable is null for that station's row(s).
+    required variable (including `wind_direction`) is null for that
+    station's row(s).
     """
     if frame is None or frame.empty:
         return None
@@ -351,11 +405,15 @@ def rate_city(
             "observation": None,
         }
     else:
+        observation = _project_wind(observation, point.bearing_deg)
         monitor = DLRSafetyMonitor(
             static_rating=point.static_rating,
             conductor=point.conductor,
             rating_bounds=point.rating_bounds,
-            anomaly_detector=anomaly_detector,
+            anomaly_detector=None if anomaly_detector is None else _RawWindDetector(anomaly_detector),
+            # G5 (step-change vs the previous rating) is intentionally off:
+            # this monitor is built fresh for every call, so it has no
+            # previous rating to compare against.
             delta_fraction=float("inf"),
         )
         check = monitor.run_check(observation)
