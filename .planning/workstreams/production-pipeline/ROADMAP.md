@@ -186,9 +186,9 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Land PR #7 | 0/5 | Blocked on PR author | - |
+| 1. Land PR #7 | 0/5 | Planned | - |
 | 2. Data Cleaning | 0/4 | Planned | - |
 | 3. Real-Data Validation | 0/5 | Planned | - |
 | 4. Supabase Store & Writer | 0/6 | Planned | - |
-| 5. Scheduled Live Runs | 0/TBD | Not started | - |
+| 5. Scheduled Live Runs | 0/8 | Planned | - |
 | 6. Exposure & E2E Verification | 0/7 | Planned | - |

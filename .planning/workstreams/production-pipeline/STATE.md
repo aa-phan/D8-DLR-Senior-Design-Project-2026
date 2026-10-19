@@ -20,10 +20,35 @@ whoever owns that analysis; they are not work items here.
 
 ## Current Position
 
-**Status:** Phase 1 (Land PR #7) mostly complete; LAND-03 open
+**Status:** All six phases planned and checked; ready to execute Phase 1 (LAND-03 tests)
 **Current Phase:** 1
 **Last Activity:** 2026-10-19
-**Last Activity Description:** PR #7 restructure pushed to main (5efe97d); live run verified
+**Last Activity Description:** Planned Phases 1-6 (35 plans); every phase passed gsd-plan-checker
+
+## Planning Summary (2026-10-19)
+
+| Phase | Plans | Check | Revisions |
+|-------|-------|-------|-----------|
+| 1 Land PR #7 | 5 | passed | 0 |
+| 2 Data Cleaning | 4 | passed | 1 (CSV first-write-wins marked CSV-only; Postgres follows OD-7) |
+| 3 Real-Data Validation | 5 | passed | 0 |
+| 4 Supabase Store & Writer | 6 | passed | 1 (pre-push manylinux wheel check for the psycopg pins) |
+| 5 Scheduled Live Runs | 8 | passed | 1 (phase-wide secret scan; binary permanence shown at push) |
+| 6 Exposure & E2E | 7 | passed | 1 (72 h soak starts only after the dry-soak review) |
+
+Execution order is 1 → 2 → 3 → 4 → 5 → 6. Each phase's preconditions check the previous one.
+
+**Cross-phase notes:**
+- **Conflict rules:** the CSV archive is first-write-wins (Phase 2, for backfill resume). The Postgres `city_rating` upsert is `ON CONFLICT (city, valid_time) DO UPDATE` with `first_written_at` immutable (OD-7, Phase 4). The DB-03 backfill loader uses DO NOTHING, so it never overwrites live rows.
+- **Phase 2 edits Phase 1's tests:** it changes fixture data in Phase 1's `city_pipeline_test.py` and in `predictive_tracer_test.py`. Assert lines stay pinned to the last `test(01-03)` commit.
+- **Phase 5 extends Phase 1's pinned tests:** it adds to the pinned key lists in Phase 1's tests and removes no assertion. Each city runs in its own child process, so a station-discovery abort stays per city, and the behaviour pinned by Phase 1's orchestrator test is unchanged.
+- **Phase 6 permissions:** Phase 6 revokes every anon/authenticated privilege in `public`, then grants SELECT on `city_rating` and `latest_rating` only. The `dlr_writer` role is untouched.
+
+**Owner risks to settle before go-live:**
+- **Actions minutes:** the repo is PRIVATE. Hourly live runs are estimated at about 2,900-4,300 min/month on top of about 600-660 for Shadow Collection. Running out of minutes stops every workflow, including Shadow Collection, before 2026-11-24. Plan 05-06 reads the real quota and offers "hold".
+- **requirements.txt push:** adding psycopg affects Shadow Collection's install. Plan 04-06 gates the push on a manylinux cp312 wheel check.
+- **Cold start:** the backfill window ends 2026-09-28, which is outside the 30-day read window by go-live. A fresh backfill before go-live avoids the cold start (raised in 04-05).
+- **Wind feature mismatch:** the ml forecast was trained on measured wind but reads projected wind from the archive. Phase 3 records this as a finding with options for the owner.
 
 ## Phase 1 Progress
 
@@ -79,10 +104,15 @@ These block or affect stringing the system together and belong to the phases nam
 
 ## Open Decisions
 
-OD-1 to OD-5 decided 2026-10-19 (REQUIREMENTS.md "Owner decisions"): hourly, composed, ml forecast,
-30-min grace, labelled provisional.
+None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner decisions"):
+- OD-1 to OD-5: hourly cadence, composed providers, ml forecast, 30-min grace, labelled provisional.
+- OD-6: public history.
+- OD-7: hour-slot `valid_time`; a retry overwrites.
+- OD-8: 30-day read window.
+- OD-9: a failed city appears in the run log only.
+- OD-10: models committed to git.
 
 ## Session Continuity
 
-**Stopped At:** Phase 1, after the push to main; LAND-03 next
+**Stopped At:** All phases planned and checked; next is `/gsd-execute-phase 1 --ws production-pipeline`
 **Resume File:** None
