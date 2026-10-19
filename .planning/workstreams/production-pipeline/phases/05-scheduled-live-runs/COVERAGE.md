@@ -1,0 +1,1 @@
+No external API integration: the phase wires existing pipeline modules into a new dispatch-only workflow; the only outside endpoints it touches are GitHub's workflow-dispatch call made by an owner-configured cron-job.org job (the same single capability Shadow Collection already uses), read-only `gh run list`, and Supabase through Phase 4's existing writer.

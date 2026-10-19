@@ -136,7 +136,17 @@ Plans:
      recorded.
   4. The runbook covers the cron-job.org setup, pausing, changing cadence, and Actions-minute
      budget.
-**Plans**: TBD
+**Plans:** 8 plans
+
+Plans:
+- [ ] 05-01-PLAN.md — Live runner (one orchestrator child per city, timeouts, exit policy, fault drill) and dispatch-only `dlr_live.yml` (tracer)
+- [ ] 05-02-PLAN.md — Forecast status/error and anomaly-model presence in run output, NSRDB skip for the current year, prints to logging, `.env` for script runs
+- [ ] 05-03-PLAN.md — Runner records every run and failed city in Phase 4's `pipeline_run` (OD-9)
+- [ ] 05-04-PLAN.md — Commit the eight live models via `.gitignore` carve-out (OD-10, main checkout) and run a SHA-256 pre-flight before rating
+- [ ] 05-05-PLAN.md — Runbook (cron-job.org, token scope, pause, cadence, minutes budget) and the 24 h window check
+- [ ] 05-06-PLAN.md — Owner: secrets and billing figures, go-live decision and push, first verified dispatch
+- [ ] 05-07-PLAN.md — Owner: cron-job.org hourly job; one-city fault drill in production
+- [ ] 05-08-PLAN.md — 24 h window evidence, measured Actions minutes, owner sign-off
 
 ### Phase 6: Exposure & E2E Verification
 **Goal**: Consumers can read current ratings for every city at any time through a documented,
