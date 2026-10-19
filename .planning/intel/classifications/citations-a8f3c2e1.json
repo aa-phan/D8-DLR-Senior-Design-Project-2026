@@ -1,0 +1,25 @@
+{
+  "source_path": "/Users/aphan/Documents/Senior_Design/docs/data-science/citations.md",
+  "type": "DOC",
+  "confidence": "high",
+  "manifest_override": false,
+  "title": "Research Citations",
+  "summary": "Bibliography of external sources used for static line ratings and IEEE 738 validation, pending human verification.",
+  "scope": [
+    "static line ratings",
+    "IEEE 738 validation",
+    "ERCOT",
+    "STATIC_RATINGS config",
+    "thermal model"
+  ],
+  "cross_refs": [
+    "ACKNOWLEDGEMENTS.md",
+    "backend/config.py",
+    "backend/thermal_model.py",
+    "backend/tests/thermal_model_test.py",
+    "Project Definition.md"
+  ],
+  "locked": false,
+  "precedence": null,
+  "notes": ""
+}

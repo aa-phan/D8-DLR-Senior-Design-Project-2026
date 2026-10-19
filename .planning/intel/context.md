@@ -1,0 +1,61 @@
+# Context (from DOC-classified documents)
+
+7 DOC-classified documents in this ingest batch.
+
+---
+
+## Topic: DS Subsystem Implementation Roadmap & Dependency Graph
+- source: docs/data-science/ROADMAP.md
+- Internal engineering reference, companion to PRD.md and specs/. Not a course deliverable, not a calendar (no dates); S/M/L effort sizes are relative complexity.
+- Repo's five production modules (`station_explorer.py`, `dlr_pipeline.py`, `DLRSafetyMonitor.py`, `units_def.py`, `ercot_data_retriever.py`/`ercot_dlr_merger.py`) have zero cross-module imports — they communicate entirely through CSV files on disk, coupled by column name, implicitly and unenforced. Formalizing this implicit contract is the roadmap's driving rationale.
+- Dependency graph: C1 → {C4, C5, C6}; C4 → C8; C5 → {C8, C7}; C7 → C10; C2 → C3 → {C6, Software dashboard}; C4+C5 → C9. Critical path: C1 → C5 → C8. Cross-team unblock path: C2 → C3 → Software sub-team dashboard.
+- Phases: 1-Foundation (C1,C2,C3, serialization point), 2-Core Consolidation (C4,C5,C6, fully parallel), 3-Safety & Spatial (C7,C8, independent tracks), 4-Predictive (C9,C10, deliberately last, highest complexity/dependency).
+- Finding 1: C1 is a serialization chokepoint — keep scope minimal or the whole team idles.
+- Finding 2: C3's output schema is the largest external-wait risk — Software sub-team's dashboard depends entirely on it; publish early with a sample fixture CSV.
+- Finding 3: the weather-provider decision must not gate C8 — C4's adapter interface exists specifically to absorb a future provider switch.
+- Finding 4: don't let a dev sit idle waiting on C5 to start C7 — pick up C6 or scaffold C8 meanwhile.
+- Finding 5: historical data for C9/C10 has lead time that phase ordering alone doesn't solve — start a background historical pull/archive job during C4 (Phase 2), well before Phase 4 begins.
+
+## Topic: Component Specs Index & Shared Template
+- source: docs/data-science/specs/README.md
+- Index of the ten DS component specs (C1–C10) with Phase/Effort/Status/File columns. Points to `../PRD.md` for requirements and `../ROADMAP.md` for phase order/dependencies.
+- Shared spec template fields: Header (ID, phase, effort, build status, one-line responsibility), Current Implementation, Interface & Data Contract, Blocked by, Blocks (kept as exact inverse of upstream's Blocked-by), Parallel-safe with, Known Issues, Acceptance Criteria (drawn from System Design Report §3.3 where applicable), Open Questions.
+- Consistency rule stated in-doc: "The dependency graph in ROADMAP.md §3 is the authoritative picture. Every 'Blocked by' entry in a spec must have a matching 'Blocks' entry in the upstream component's spec, and vice versa. If you edit one, edit the other."
+- Note: this index's own status column (e.g. "C1 — Not started", "C4 — provider-locked", "C5 — not importable") is stale relative to the individual C1–C10 spec files, which report C1/C2/C4/C5 etc. as Implemented — flagged here for downstream awareness, not corrected (index maintenance, not a doc-vs-doc content contradiction requiring a conflict-report entry).
+
+## Topic: Frontend/API Documentation Placeholder
+- source: docs/frontend/README.md
+- Placeholder only — "No requirements have been written yet. This file exists only to establish where they'll go." Intended home for the Software sub-team's PRD/ROADMAP/specs, following the same convention established in `docs/data-science/` (PRD.md, ROADMAP.md, specs/ one-file-per-component). Explicitly: "Do not invent frontend/API requirements preemptively."
+
+## Topic: Research Citations (AI-assisted, unverified)
+- source: docs/data-science/citations.md
+- Bibliography for external sources found via AI-assisted web research (2026-08-24, 2026-08-25). Companion to ACKNOWLEDGEMENTS.md, which discloses the research was AI-sourced and not yet independently confirmed by a team member.
+- Static line ratings (`config.py::STATIC_RATINGS`): ERCOT Board Item 11.2 (Aug 2023) used for San Antonio's 1,761A figure (single-circuit 345kV J.K. Spruce–Pawnee path, 1,051 MVA normal capacity) — the only genuinely city-specific sourced rating found. AEP Texas TD World article used as corroborating evidence for the uniform 900A baseline (Houston/Austin/Dallas/Fort Worth). ERCOT Board Item 9.3.4 (Oncor Wilmer) checked but excluded as non-representative (modern HTLS-rebuild target specs, not typical-existing-conductor).
+- IEEE 738 validation: IEEE Std 738-2023 Clause 4.6.1 (pp.28-31), the standard's own published worked example (795 kcmil Drake ACSR) — this is the source used to find and fix the π-factor bug in C5's thermal model.
+- Verification status: none of the citations have been independently opened/confirmed by a team member yet; explicit 3-step verification checklist given before use in the research paper or any graded submission.
+
+## Topic: Weather Data Provider Vetting (open research log)
+- source: docs/data-science/decisions/data_provider.md
+- Status: Open — vetting in progress, answers PRD.md §7.1. Explicitly "not a final recommendation document."
+- Requirements each candidate vetted against: temporal density (5-min ideal), spatial coverage of the four target cities (Austin, Corpus Christi, Midland, El Paso, per Project Definition.md's I/O table), variable completeness (temp, wind speed/direction, solar GHI, RH), cost/access, historical depth, integration effort against `weather_provider.py`'s adapter interface.
+- Headline finding: no single candidate is both observation-grade and variable-complete. Real-station networks (TCEQ CAMS, Synoptic/WTM, ASOS) have trustworthy sensor-measured wind but solar is absent/minority-only; satellite/reanalysis products (NSRDB, Open-Meteo, RTMA) have complete solar but modeled/coarse/non-standard-height wind.
+- Per-provider verdicts: TCEQ CAMS — viable primary wind/temp/RH for all 4 cities, not viable solar except minority sites, highest integration effort (HTML scraping, no REST API). NREL NSRDB PSM v4 — viable primary solar for all 4 cities, weak/not-recommended-by-NREL-itself for wind (2m MERRA-2 reanalysis). Synoptic Open Access — zero-code-change fix for the currently-broken real-time path, same West-Texas-skewed coverage ceiling as today. ASOS 1-minute — viable wind/temp supplement only, no solar, densest temporal resolution of any candidate. Open-Meteo — viable secondary solar+wind source, best bulk-historical backfill option (confirmed live, all 4 cities, all 5 variables from one request), model output not raw observations. USCRN — NOT viable, disqualified: no wind direction measurement at all (hard blocker for `perpendicular_wind()`). NOAA RTMA/URMA, NOAA MADIS, Meteostat, NWS/api.weather.gov — lower priority, dominated by other options.
+- Recommended composition (synthesis, explicitly not a final decision): TCEQ CAMS primary wind/temp + ASOS 1-min supplement; NSRDB primary solar; Open-Meteo for bulk historical backfill; apply for Synoptic Open Access immediately regardless (free, zero engineering cost, fixes the current account-tier failure).
+- Design consequence flagged: `weather_provider.py::fetch_weather` is station-ID-based; NSRDB/Open-Meteo are lat/lon-based — combining a station-based primary with a grid-based supplement needs either a station→lat/lon mapping layer or a `fetch_weather` signature change, "designed deliberately now rather than discovered mid-way through C8."
+- Explicitly not decided here: which combination to adopt, whether to update PRD.md §7.1's status, any provider integration code.
+
+## Topic: System Design Report — Design Concept, Risk Reduction, Test Plan, Project Management
+- source: docs/System Design Report.md
+- Course deliverable (April 24, 2026), team: Ben Huynh, Tejaswini Kalikiri, Agustin Wilde, Benjamin Meunier, Allie Cao, Aaron Phan. To Dr. Hao Zhu, Kameron Dunn.
+- §3.1 Design Concept: three-layer architecture (Input Data, Analysis & Modeling, Output). States the team "evaluated" Synoptic vs. NOAA+NSRDB and "selected NOAA and NSRDB because of their superior data accessibility and lack of restrictive privacy limitations." States PSS/E was chosen over PowerWorld for its Python API and time-varying dynamic data modeling.
+- §3.2 Risk Reduction: N-1 Contingency Analysis (PSS/E, checks thermal/voltage violations post-contingency vs. NERC standards). Reactive Power Exhaustion (steady-state load flow sims; PV→PQ bus transition identified as a risk; mitigation = switched shunt capacitor banks at receiving end). Voltage Stability (PV curves for critical load buses; mitigation rule = dispatched capacity is minimum of DLR thermal limit and voltage stability limit). Data Integrity: states a "machine learning–based anomaly detection model...is currently being trained and tuned on historical ambient weather and operating datasets." DLR Pipeline Validation: describes the dimensional-analysis unit-tracking module and its test approach (intentional unit-error injection, e.g. kW where MW expected). Weather Data and Transmission Corridor Mapping: states the team "developed a spatial pipeline that defines transmission line corridors...discretizes the corridor into multiple geographic points," sourcing wind from NOAA and solar/temp from NSRDB, applying IEEE 738 at each point and taking the corridor-level minimum; states corridors are currently "synthetically connected substation coordinates" as a dev/validation environment, to be replaced with real transmission-line geometry during implementation.
+- §3.3 Test Plan: known-value validation for the DS pipeline against historical datasets; 100%-detection-rate testing for the dimensional-analysis module; anomaly-injection testing with zero-false-positive requirement and confirmed SLR fallback; synthetic-corridor spatial pipeline validation plus artificial "cooling" of one segment to confirm bottleneck detection; PSS/E N-1 contingency/voltage-stability test criteria; UI dashboard usability review against ISO 9241; full end-to-end integration test criteria.
+- §4.0 Project Management: sub-team coordination framework (weekly progress checks, bi-weekly faculty mentor reviews). Appendix B (WBS) itemizes tasks including "2.1.1 Integrate NOAA real-time weather data streams," "2.3.1 Train Machine Learning model on sensor telemetry data," under the Data Science Sub-Team.
+- Note: several §3.1/§3.2/Appendix-B claims describe work as already selected/completed/in-training that does not match the actual repo state per PRD.md §9–§10 and the individual C-component specs — see INGEST-CONFLICTS.md for the specific auto-resolved contradictions.
+
+## Topic: Prior Art Report — DLR Prior Art Review
+- source: docs/Prior Art Report.md
+- Course deliverable (April 3, 2026), same authorship/addressees as System Design Report.
+- Reviewed non-patent prior art: DOE "Grid-Enhancing Technologies: A Case Study on Ratepayer Impact" (NYISO-focused, methodology for quantifying GET benefits); EPRI "Introduction to Grid Enhancing Technologies" (comparison of rating methods — seasonal, AAR, DLR; DLR allows 15-30 min granular updates); IEEE Trans. Smart Grid, Morozovska et al., "Including Dynamic Line Rating Into the Optimal Planning of Distributed Energy Resources" (MILP model using IEEE 738 heat balance for DER planning — cited as the mathematical foundation for C9's forecasting work).
+- Patent search (Google Patents): US20180131189A1 (phasor-based DLR, no weather sensors — contrasted against the team's weather-driven approach), EP2050176B1 (thermal model parameter estimation), US7504819B2 (line-mounted sag/creep sensor DLR — contrasted against the team's sensor-free weather-station approach), CN111707888A ("withstand time" concept informed the UI's "Trusted Duration" feature; also noted as lacking any fail-safe fallback to static ratings — a gap the team's design explicitly fills), US7200491B1 (synthetic meteorological interpolation, informed thinking on station-weighting-by-covariance).
+- States design impact: prior-art gap (no reviewed patent had a fail-safe-to-static-rating fallback mechanism) "validated our 'right-skewed' fail-safe protocol as a necessary and original contribution." States the team's system "ingests external weather data from NOAA and sensors" (§Impact of Prior-Art Search) and states N-1 contingency checks were integrated "directly into our Python-based data science pipeline."

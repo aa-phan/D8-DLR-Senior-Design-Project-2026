@@ -1,0 +1,13 @@
+{
+  "source_path": "/Users/aphan/Documents/Senior_Design/docs/data-science/PRD.md",
+  "type": "PRD",
+  "confidence": "high",
+  "manifest_override": false,
+  "title": "Data Science Subsystem — Product Requirements",
+  "summary": "Requirements for the DS subsystem that computes Dynamic Line Rating from weather/grid data with fail-safe fallback to Static Line Rating.",
+  "scope": ["Data Science subsystem", "Dynamic Line Rating", "Static Line Rating", "IEEE 738 thermal model", "weather ingestion", "anomaly detection", "ERCOT grid load integration", "corridor discretization", "ampacity forecasting"],
+  "cross_refs": ["ROADMAP.md", "specs/README.md", "specs/C1", "specs/C2", "specs/C3", "specs/C4", "specs/C5", "specs/C6", "specs/C7", "specs/C8", "specs/C9", "specs/C10", "Project Definition.md", "Prior Art Report.md", "System Design Report.md", "citations.md"],
+  "locked": false,
+  "precedence": null,
+  "notes": ""
+}

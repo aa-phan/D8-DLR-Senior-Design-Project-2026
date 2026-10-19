@@ -1,0 +1,139 @@
+name: Shadow Collection
+
+# Experimental/shadow forecast-correction prototype (ml-modeling workstream, Phase 4
+# follow-up). This workflow is NEVER invoked by production -- dlr_pipeline.py and every
+# other production caller remain untouched. It exists solely to run
+# backend/forecast_shadow_collect.py four times daily so real shadow predictions accumulate
+# ahead of the fixed 2026-11-24 evaluation date. See
+# docs/data-science/decisions/shadow_collection_runbook.md for the full operational
+# reference and docs/data-science/decisions/forecast_correction_followup_audit.md for
+# the technical rationale.
+
+on:
+  # Triggered externally by cron-job.org (POST .../actions/workflows/shadow_collect.yml/dispatches)
+  # at 00, 06, 12 and 18 UTC. The GitHub `schedule:` trigger was removed on 2026-10-15
+  # because it started runs 3-8 h late, which left the 24 h persistence anchor unavailable.
+  # To go back to GitHub's scheduler, re-add:  schedule: [{cron: '0 0,6,12,18 * * *'}]
+  # Cost reverts (2 cycles/day, ecmwf_ifs model) are in shadow_collection_runbook.md.
+  workflow_dispatch: {} # external cron-job.org trigger and manual runs from the Actions tab
+
+permissions:
+  contents: write # needed to push collected logs to the shadow-collection-data branch
+
+concurrency:
+  group: shadow-collection
+  cancel-in-progress: false # never cancel a run already in flight; let forecast_shadow_collect.py's own flock handle true concurrency
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    # 30 minutes (raised from 15 on 2026-10-12 for the per-city collector). Nominal wall
+    # time is ~2 minutes: 4 cities x ~30s of fetches + 3 x INTER_CITY_DELAY_S (15s) = 45s of
+    # deliberate pauses. The ceiling must cover the degraded case, though: per city, a
+    # forecast fetch, an anchor fetch (TCEQ then Synoptic), a truth-proxy station fetch
+    # (TCEQ then Synoptic) and a solar-proxy fetch with one retry can each hit their own
+    # 60s HTTP timeout (~7 minutes worst case), so 4 cities can legitimately run well past
+    # the old 15 minutes before the job is cut off. Arithmetic at the cap (unchanged by
+    # the 4/day cadence, which only changes how often the job starts): 4 cities x
+    # CITY_TIMEOUT_S (360 s) = 1440 s + 3 x INTER_CITY_DELAY_S (15 s) = 1485 s (~24.8 min),
+    # which fits 30 minutes before the pre-flight, install and push steps (~1-2 min).
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code (main)
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Pre-flight - per-city model artifacts present
+        # The runner can only use models committed to main (data/shadow/models is
+        # deliberately git-tracked; it cannot retrain and has no data/experiment
+        # cache). Fails fast, listing every missing {method}_{CITY}.joblib for the
+        # 3 artifact-backed methods x config.LOCATIONS. Legacy corridor-named
+        # artifacts never satisfy it. Without this, a missing file would silently
+        # leave that city's ML candidates `unavailable` on every run.
+        run: |
+          PYTHONPATH=backend python backend/forecast_shadow_check_models.py
+
+      - name: Run shadow collector
+        env:
+          SYNOPTIC_TOKEN: ${{ secrets.SYNOPTIC_TOKEN }}
+        run: |
+          PYTHONPATH=backend python backend/forecast_shadow_collect.py
+        # The collector runs each city in its OWN child process (fresh interpreter and
+        # connections), one after another -- see forecast_shadow_collect.py's docstring and
+        # the runbook's "Process model". A child stuck past CITY_TIMEOUT_S (360 s) is killed
+        # and reported without failing the run; four cities at that cap still fit the job timeout.
+        # Exit 0: all four cities attempted (success or honest fallback -- both healthy).
+        # Exit 1: a genuine code bug -- this SHOULD fail the job and notify via GitHub's
+        #         own workflow-failure email, which doubles as alerting.
+        # Exit 2: a concurrent run held the lock -- shouldn't occur with cancel-in-progress:
+        #         false serializing runs, but is non-fatal if it ever does.
+
+      - name: Health check
+        run: |
+          PYTHONPATH=backend python backend/forecast_shadow_healthcheck.py
+
+      - name: Commit predictions to shadow-collection-data branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          rm -rf /tmp/shadow-data-branch
+          if git ls-remote --exit-code --heads origin shadow-collection-data >/dev/null 2>&1; then
+            git clone --branch shadow-collection-data --single-branch "$REPO_URL" /tmp/shadow-data-branch
+          else
+            echo "shadow-collection-data branch does not exist yet -- creating it as an orphan branch."
+            git clone "$REPO_URL" /tmp/shadow-data-branch
+            (cd /tmp/shadow-data-branch && git checkout --orphan shadow-collection-data && git rm -rf . >/dev/null 2>&1 || true)
+          fi
+          mkdir -p /tmp/shadow-data-branch/data/shadow/predictions
+          # APPEND, never overwrite (fixed 2026-10-07): `cp` here previously
+          # replaced the destination file wholesale every run, so the data
+          # branch only ever held the SINGLE most recent run's entry per
+          # log file -- 10 real runs' worth of predictions were silently
+          # destroyed before this was caught. `>>` onto a nonexistent file
+          # creates it, so the very first run (and a brand-new per-city
+          # file) still works correctly.
+          # Only per-city {CITY}.jsonl files exist here: data/shadow/predictions/ is
+          # git-ignored, so legacy corridor logs (AUSTIN_CORPUS_CHRISTI.jsonl,
+          # MIDLAND_EL_PASO.jsonl) are absent on the runner and are never copied;
+          # the data branch's own copies of them are left untouched.
+          found_any=0
+          for f in data/shadow/predictions/*.jsonl; do
+            [ -e "$f" ] || continue
+            found_any=1
+            bn=$(basename "$f")
+            cat "$f" >> "/tmp/shadow-data-branch/data/shadow/predictions/$bn"
+          done
+          [ "$found_any" -eq 1 ] || echo "No prediction files produced this run (all cities may have hit an unexpected early error)."
+
+          # Render the top-level README.md table (2026-10-07): ran from
+          # THIS checkout (main) so backend/forecast_shadow_render_table.py
+          # resolves, but reading the data branch's own (just-appended)
+          # predictions directory and writing the data branch's own
+          # top-level README.md -- GitHub renders a branch's root
+          # README.md automatically, so switching to shadow-collection-data
+          # shows this table immediately, no digging into raw JSONL.
+          PYTHONPATH=backend python backend/forecast_shadow_render_table.py \
+            /tmp/shadow-data-branch/data/shadow/predictions \
+            /tmp/shadow-data-branch/README.md
+
+          cd /tmp/shadow-data-branch
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f data/shadow/predictions/*.jsonl README.md 2>/dev/null || true
+          if ! git diff --cached --quiet; then
+            git commit -m "shadow collection: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            git push origin shadow-collection-data
+          else
+            echo "No changes to commit this run."
+          fi

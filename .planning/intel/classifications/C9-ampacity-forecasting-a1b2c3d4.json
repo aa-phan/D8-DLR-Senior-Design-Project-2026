@@ -1,0 +1,26 @@
+{
+  "source_path": "/Users/aphan/Documents/Senior_Design/docs/data-science/specs/C9-ampacity-forecasting.md",
+  "type": "SPEC",
+  "confidence": "medium",
+  "manifest_override": false,
+  "title": "C9 \u2014 Ampacity Forecasting",
+  "summary": "Not-yet-designed spec for forecasting future ampacity from historical weather and ampacity time series data.",
+  "scope": [
+    "ampacity forecasting",
+    "PIPELINE_SCHEMA",
+    "weather features",
+    "trusted duration",
+    "forecast horizon"
+  ],
+  "cross_refs": [
+    "System Design Report.md",
+    "Prior Art Report",
+    "Project Definition.md",
+    "C4",
+    "C5",
+    "C10"
+  ],
+  "locked": false,
+  "precedence": null,
+  "notes": "Path is docs/data-science/specs/ and filename is component-numbered (C9-), giving strong SPEC signal via headers: Interface & Data Contract, Blocked by/Blocks, Acceptance Criteria. However content states design has not started and most fields are 'not yet defined' \u2014 confidence downgraded to medium due to thin/placeholder content rather than a fully specified contract."
+}

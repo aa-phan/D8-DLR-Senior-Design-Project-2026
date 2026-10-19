@@ -1,0 +1,13 @@
+{
+  "source_path": "/Users/aphan/Documents/Senior_Design/docs/data-science/decisions/data_provider.md",
+  "type": "DOC",
+  "confidence": "medium",
+  "manifest_override": false,
+  "title": "Data Provider Decision Log",
+  "summary": "Working research log vetting weather data providers against project requirements; no final provider decision made yet.",
+  "scope": ["weather data provider", "TCEQ CAMS", "NREL NSRDB", "Synoptic", "ASOS", "Open-Meteo", "USCRN", "IEEE 738", "weather_provider.py"],
+  "cross_refs": ["PRD.md", "Project Definition.md", "ROADMAP.md", "specs/C4-weather-ingestion.md", "config.py", "station_explorer.py", "backend/weather_provider.py", "dlr_pipeline.py", "thermal_model.py"],
+  "locked": false,
+  "precedence": null,
+  "notes": "File lives in a 'decisions/' directory and is framed as a decision log, giving it ADR-like signals, but Status is explicitly 'Open' (not Accepted/Proposed) and the document repeatedly states it is 'Not a final recommendation document' and 'Explicitly not decided here.' No '## Decision' + '## Consequences' structure; content is per-candidate research/vetting notes (prose evidence, verdicts, rationale) with a synthesis section marked as non-final. Classified as DOC (context/research) rather than ADR since no locked decision exists yet; should be revisited and reclassified as ADR once a final choice is recorded with Accepted status."
+}

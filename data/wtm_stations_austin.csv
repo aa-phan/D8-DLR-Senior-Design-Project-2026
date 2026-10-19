@@ -1,0 +1,3 @@
+stid,name,lat,lon,elev_ft,county,state,km_to_Panhandle_Export,km_to_Permian_Basin_345kV,km_to_Sweetwater_Wind_Hub,km_to_Big_Spring_Corridor,km_to_West_TX_to_Hill_Country,nearest_corridor,nearest_corridor_km
+MOFWL,Mount Fowlkes,30.681444,-104.014722,6643.0,,TX,472.5496177781685,211.90670929619293,397.59317809510077,300.0565465470002,480.3894852795341,Permian_Basin_345kV,211.90670929619293
+MOLOK,Mount Locke,30.6715,-104.022611,6791.0,,TX,473.8723000162164,213.19690958115262,398.81464079797433,301.3085122979638,481.12336000566705,Permian_Basin_345kV,213.19690958115262

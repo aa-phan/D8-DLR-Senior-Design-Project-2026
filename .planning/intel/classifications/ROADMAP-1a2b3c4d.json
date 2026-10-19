@@ -1,0 +1,33 @@
+{
+  "source_path": "/Users/aphan/Documents/Senior_Design/docs/data-science/ROADMAP.md",
+  "type": "DOC",
+  "confidence": "high",
+  "manifest_override": false,
+  "title": "Data Science Subsystem \u2014 Implementation Roadmap",
+  "summary": "Internal build-order and dependency roadmap for the DS subsystem's components, phases, and parallelization guidance.",
+  "scope": [
+    "data science subsystem",
+    "component model",
+    "dependency graph",
+    "build phases",
+    "parallelization",
+    "weather ingestion",
+    "thermal model",
+    "ERCOT integration",
+    "safety monitor",
+    "corridor discretization",
+    "ampacity forecasting",
+    "anomaly detection"
+  ],
+  "cross_refs": [
+    "specs/C1-configuration.md",
+    "specs/C10-anomaly-detection.md",
+    "specs/README.md",
+    "docs/data-science/schema/pipeline_output_v1.md",
+    "data/fixtures/sample_pipeline_output.csv",
+    "System Design Report.md"
+  ],
+  "locked": false,
+  "precedence": null,
+  "notes": ""
+}

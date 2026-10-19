@@ -1,0 +1,24 @@
+{
+  "source_path": "/Users/aphan/Documents/Senior_Design/docs/data-science/specs/C7-safety-monitor.md",
+  "type": "SPEC",
+  "confidence": "high",
+  "manifest_override": false,
+  "title": "C7 \u2014 Safety Monitor & Fallback",
+  "summary": "Technical spec for the safety monitor component gating measurement cycles between computed and static conductor ratings.",
+  "scope": [
+    "DLRSafetyMonitor",
+    "safety gating",
+    "ampacity",
+    "fallback logic",
+    "IEEE 738 thermal model",
+    "PIPELINE_SCHEMA"
+  ],
+  "cross_refs": [
+    "Project Definition.md",
+    "backend/DLRSafetyMonitor.py",
+    "backend/tests/SafetyMonitor_TestSuite.py"
+  ],
+  "locked": false,
+  "precedence": null,
+  "notes": ""
+}

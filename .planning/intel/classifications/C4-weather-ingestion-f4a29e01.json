@@ -1,0 +1,20 @@
+{
+  "source_path": "/Users/aphan/Documents/Senior_Design/docs/data-science/specs/C4-weather-ingestion.md",
+  "type": "SPEC",
+  "confidence": "high",
+  "manifest_override": false,
+  "title": "C4 \u2014 Weather Ingestion",
+  "summary": "Technical spec for a provider-agnostic weather station discovery and observation-fetching interface behind an adapter.",
+  "scope": [
+    "weather ingestion",
+    "station discovery",
+    "Synoptic API",
+    "weather_provider adapter",
+    "PIPELINE_SCHEMA",
+    "ampacity"
+  ],
+  "cross_refs": [],
+  "locked": false,
+  "precedence": null,
+  "notes": ""
+}

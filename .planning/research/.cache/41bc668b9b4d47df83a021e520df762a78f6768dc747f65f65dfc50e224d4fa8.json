@@ -1,0 +1,1 @@
+{"content":"Open-Meteo Archive API free tier is rate-limited (10,000 calls/day) with no strict hard date-range cap enforced by the API itself for a single request; very large multi-year single-location requests are supported without per-day chunking.","source":"web","provider":"websearch","confidence":"MEDIUM","fetched_at":"2026-09-24T05:21:14.809Z","ttl":86400000,"kind":"web"}

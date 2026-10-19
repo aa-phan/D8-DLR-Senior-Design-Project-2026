@@ -1,0 +1,13 @@
+{
+  "source_path": "/Users/aphan/Documents/Senior_Design/docs/System Design Report.md",
+  "type": "DOC",
+  "confidence": "medium",
+  "manifest_override": false,
+  "title": "A System Design Report for Grid Enhancement Technology: Maximizing Transmission Power Delivery via Dynamic Line Rating",
+  "summary": "System design report describing a Dynamic Line Rating system's architecture, risk reduction work, test plan, and project management for a senior design project.",
+  "scope": ["Dynamic Line Rating", "DLR system", "PSS/E simulation", "N-1 contingency analysis", "anomaly detection", "UI dashboard", "IEEE 738", "NERC reliability standards", "data science pipeline", "project management"],
+  "cross_refs": [],
+  "locked": false,
+  "precedence": null,
+  "notes": "Prose-heavy report combining design description (3.0), risk reduction (3.2), test plan (3.3), and project management (4.0). No single locked architectural decision (no Status/Accepted field), no user-story-driven PRD structure, and no isolated API/schema contract structure — classified as general DOC/context. Some sections (3.3 Test Plan) resemble SPEC-like acceptance criteria but are embedded in a broader narrative report rather than a standalone technical specification."
+}

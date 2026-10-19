@@ -1,0 +1,21 @@
+{
+  "source_path": "/Users/aphan/Documents/Senior_Design/docs/data-science/specs/C10-anomaly-detection.md",
+  "type": "SPEC",
+  "confidence": "high",
+  "manifest_override": false,
+  "title": "C10 \u2014 Learned Anomaly Detection",
+  "summary": "Spec for a learned anomaly detection component to augment DLRSafetyMonitor's deterministic threshold gates, not yet implemented.",
+  "scope": [
+    "DLRSafetyMonitor",
+    "anomaly detection",
+    "C7 fallback path",
+    "ampacity computation",
+    "training data"
+  ],
+  "cross_refs": [
+    "backend/DLRSafetyMonitor.py"
+  ],
+  "locked": false,
+  "precedence": null,
+  "notes": ""
+}

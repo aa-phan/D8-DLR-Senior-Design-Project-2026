@@ -1,0 +1,1 @@
+{"content":"scikit-learn TimeSeriesSplit provides expanding-window train/test folds enforcing strict temporal ordering (train always precedes test, no shuffling), the standard leakage-safe backtest primitive for tabular time-series ML in scikit-learn.","source":"web","provider":"websearch","confidence":"MEDIUM","fetched_at":"2026-09-24T05:21:14.972Z","ttl":86400000,"kind":"docs"}

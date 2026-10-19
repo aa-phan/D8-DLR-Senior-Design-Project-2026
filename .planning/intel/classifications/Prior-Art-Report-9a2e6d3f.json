@@ -1,0 +1,13 @@
+{
+  "source_path": "/Users/aphan/Documents/Senior_Design/docs/Prior Art Report.md",
+  "type": "DOC",
+  "confidence": "high",
+  "manifest_override": false,
+  "title": "A Prior Art Report for Grid Enhancement Technology: Maximizing Transmission Power Delivery via Dynamic Line Rating",
+  "summary": "Reviews non-patent and patent prior art on Dynamic Line Rating systems and their relevance to the team's DLR design.",
+  "scope": ["Dynamic Line Rating", "Static Line Rating", "Grid Enhancing Technologies", "IEEE Standard 738", "thermal modeling", "UI dashboard", "fail-safe protocols", "patent search"],
+  "cross_refs": [],
+  "locked": false,
+  "precedence": null,
+  "notes": ""
+}

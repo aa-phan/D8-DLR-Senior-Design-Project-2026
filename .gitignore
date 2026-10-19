@@ -1,0 +1,29 @@
+.venv
+/outputs
+# The accumulating historical archive (Phase 4) is generated data like
+# outputs/, not source -- keeps the append-only file from being committed
+# run-by-run.
+/data/historical/
+# Generated model artifacts and assembled training frames (v1.3 Phase 1) --
+# like /data/historical/, not source; regenerable via forecast_training.py.
+/data/models/
+# Generated experiment caches and reports (v1.3 Phase 3) -- like
+# /data/models/, not source; regenerable via forecast_leadtime_calibration.py
+# and forecast_experiment.py.
+/data/experiment/
+# Shadow-prototype prediction logs and the collector's lock file (project
+# pivot, 2026-10-05) -- generated per-run, not source.
+# `/data/shadow/models/` is DELIBERATELY NOT ignored (2026-10-06): the
+# trained .joblib artifacts there must reach the GitHub Actions runner,
+# which has no other way to obtain them (no network access to retrain,
+# and the cached ABLATION-basis data they're fit from isn't shipped
+# either) -- without this carve-out every scheduled run silently falls
+# back to raw_forecast, never producing the real ml_wind_corrected
+# prediction the collector exists to log. Revisit if the model is
+# retrained after the 2026-11-01 freeze point.
+/data/shadow/predictions/
+/data/shadow/.collect.lock
+.env
+__pycache__/
+*.pyc
+.claude

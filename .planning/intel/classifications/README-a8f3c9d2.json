@@ -1,0 +1,24 @@
+{
+  "source_path": "/Users/aphan/Documents/Senior_Design/docs/frontend/README.md",
+  "type": "DOC",
+  "confidence": "high",
+  "manifest_override": false,
+  "title": "Frontend/API Documentation \u2014 Placeholder",
+  "summary": "Placeholder explaining the intended directory structure for future frontend/API PRD, roadmap, and specs.",
+  "scope": [
+    "frontend",
+    "api",
+    "documentation structure",
+    "PRD",
+    "ROADMAP",
+    "specs"
+  ],
+  "cross_refs": [
+    "docs/data-science/",
+    "docs/data-science/specs/README.md",
+    "api/README.md"
+  ],
+  "locked": false,
+  "precedence": null,
+  "notes": ""
+}
