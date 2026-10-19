@@ -1,0 +1,669 @@
+"""
+Tests for backend/tceq_provider.py (C4, Phase 9 / WX-01).
+
+Follows backend/tests/asos_provider_test.py's `_FakeResponse` +
+`monkeypatch.setattr(module.requests, "get", ...)` convention to avoid a
+live network call. Module-level plain-assert functions, no test classes --
+matches every existing test file's convention in this project.
+
+Fixtures are small hand-built HTML strings matching `daily_summary.pl`'s
+confirmed table shape (one `<h1><a ...CAMS=id>`, one `<table border='1'>`,
+a header row of four-digit hour labels, and one `<tr>` per parameter with a
+`<strong>` label cell and hourly `<td>` cells) -- built by `_report_html`,
+which takes the hour count as an argument so Plan 09-02 can reuse it.
+
+This is Plan 09-01 Task 3's tracer group: one city (Corpus Christi, CAMS
+83), one calendar day, proving the vertical slice end to end. RH-absent
+sites and multi-day windows are Plan 09-02's expansion.
+"""
+
+import pandas as pd
+import pytest
+
+import config
+import tceq_provider
+from units_def import Q
+
+_CAMS_83 = "83"
+_START = "2026-07-01T00:00:00Z"
+_END = "2026-07-01T23:59:59Z"
+_JAN_START = "2026-01-15T00:00:00Z"
+_JAN_END = "2026-01-15T23:59:59Z"
+
+_HOUR_LABELS = ["0000", "0100", "0200", "0300"]
+
+
+class _FakeResponse:
+    def __init__(self, text):
+        self._text = text
+
+    def raise_for_status(self):
+        pass
+
+    @property
+    def text(self):
+        return self._text
+
+
+def _mock_get(monkeypatch, text):
+    monkeypatch.setattr(tceq_provider.requests, "get", lambda *a, **k: _FakeResponse(text))
+
+
+def _report_html(
+    cams_id: str,
+    hour_labels: list,
+    rows: dict,
+    site_name: str = "Corpus Christi C83",
+) -> str:
+    """
+    Build a minimal daily_summary.pl-shaped report: one <h1><a> carrying
+    CAMS=<cams_id>, one <table border='1'> with a header row of hour
+    labels and one <tr> per (label -> values) entry in `rows`. Each data
+    row's first cell holds <a><strong>label</strong></a>, followed by one
+    <td> per hourly value, a repeated-label cell, and a POC cell -- the
+    live-confirmed shape `_extract_row_values` slices against.
+    """
+    header_cells = "".join(f"<td>{h}</td>" for h in hour_labels)
+    header_row = f"<tr><td>&nbsp;</td>{header_cells}<td>Parameter Measured</td><td>POC</td></tr>"
+
+    row_htmls = []
+    for label, values in rows.items():
+        value_cells = "".join(f"<td>{v}</td>" for v in values)
+        row_htmls.append(
+            f"<tr><td><a href='#'><strong>{label}</strong></a></td>"
+            f"{value_cells}<td>{label}</td><td>1</td></tr>"
+        )
+
+    table = f"<table border='1'>{header_row}{''.join(row_htmls)}</table>"
+    return (
+        "<html><body>"
+        f"<h1><a href='daily_summary.pl?CAMS={cams_id}&region=14'>{site_name}</a></h1>"
+        f"{table}"
+        "</body></html>"
+    )
+
+
+# The tracer's primary fixture: all four target rows plus a
+# "Resultant Wind Direction" row and a "Std. Dev. Wind Direction" row (both
+# contain the substring "Wind Direction"), so the label-exactness test has
+# something to collide with (09-RESEARCH.md Pattern 2).
+_WIND_SPEED_MPH = [5.0, 10.0, 15.0, 20.0]
+_WIND_DIRECTION_DEG = [180.0, 190.0, 200.0, 210.0]
+_RESULTANT_WIND_DIRECTION_DEG = [90.0, 91.0, 92.0, 93.0]
+_STD_DEV_WIND_DIRECTION_DEG = [5.0, 6.0, 7.0, 8.0]
+_OUTDOOR_TEMP_DEGF = [75.0, 76.0, 77.0, 78.0]
+_RELATIVE_HUMIDITY_PCT = [55.0, 56.0, 57.0, 58.0]
+
+_PRIMARY_ROWS = {
+    "Wind Speed": _WIND_SPEED_MPH,
+    "Wind Direction": _WIND_DIRECTION_DEG,
+    "Resultant Wind Direction": _RESULTANT_WIND_DIRECTION_DEG,
+    "Std. Dev. Wind Direction": _STD_DEV_WIND_DIRECTION_DEG,
+    "Outdoor Temperature": _OUTDOOR_TEMP_DEGF,
+    "Relative Humidity": _RELATIVE_HUMIDITY_PCT,
+}
+
+_PRIMARY_HTML = _report_html(_CAMS_83, _HOUR_LABELS, _PRIMARY_ROWS)
+
+
+def test_fetch_tceq_parses_into_pipeline_columns(monkeypatch):
+    _mock_get(monkeypatch, _PRIMARY_HTML)
+
+    result = tceq_provider.fetch_tceq(_CAMS_83, _START, _END)
+
+    assert list(result.columns) == [
+        "datetime_utc",
+        "air_temp",
+        "wind_speed",
+        "wind_direction",
+        "relative_humidity",
+    ]
+    assert len(result) == len(_HOUR_LABELS)
+
+
+def test_fetch_tceq_converts_units(monkeypatch):
+    _mock_get(monkeypatch, _PRIMARY_HTML)
+
+    result = tceq_provider.fetch_tceq(_CAMS_83, _START, _END)
+
+    expected_temp = [Q(v, "degF").to("degC").value for v in _OUTDOOR_TEMP_DEGF]
+    expected_wind = [Q(v, "mph").to("m/s").value for v in _WIND_SPEED_MPH]
+
+    assert list(result["air_temp"]) == pytest.approx(expected_temp)
+    assert list(result["wind_speed"]) == pytest.approx(expected_wind)
+    assert list(result["wind_direction"]) == _WIND_DIRECTION_DEG
+    assert list(result["relative_humidity"]) == _RELATIVE_HUMIDITY_PCT
+
+
+def test_fetch_tceq_request_carries_select_date_user(monkeypatch):
+    recorded = {}
+
+    def _recorder(url, params=None, timeout=None):
+        recorded["params"] = params
+        return _FakeResponse(_PRIMARY_HTML)
+
+    monkeypatch.setattr(tceq_provider.requests, "get", _recorder)
+
+    tceq_provider.fetch_tceq(_CAMS_83, _START, _END)
+
+    params = recorded["params"]
+    assert params["select_date"] == "user"
+    assert params["time_format"] == "24hr"
+    assert params["cams"] == _CAMS_83
+    assert params["user_month"] == 6  # July -> 0-indexed 6, never 7
+    assert params["user_day"] == 1
+    assert params["user_year"] == 2026
+
+
+def test_fetch_tceq_utc_day_window_issues_one_request_per_spanned_local_day(monkeypatch):
+    # Superseded by Plan 09-02's real local-calendar-day decomposition
+    # (D-09): _START/_END name one UTC calendar day (2026-07-01T00:00Z..
+    # T23:59:59Z), but CAMS 83's fixed offset (-6) means that UTC window
+    # actually spans TWO local calendar days (2026-06-30 and 2026-07-01) --
+    # local midnight of 07-01 is 06:00Z, so the window's first 6 hours
+    # belong to 06-30's local report. This is exactly why _days_spanned
+    # shifts by the site's offset before taking the date component, rather
+    # than assuming a UTC day and a local day always coincide.
+    counter = {"count": 0}
+
+    def _counting_recorder(*a, **k):
+        counter["count"] += 1
+        return _FakeResponse(_PRIMARY_HTML)
+
+    monkeypatch.setattr(tceq_provider.requests, "get", _counting_recorder)
+
+    tceq_provider.fetch_tceq(_CAMS_83, _START, _END)
+
+    assert counter["count"] == 2
+
+
+def test_fetch_tceq_applies_fixed_utc_offset_not_dst(monkeypatch):
+    _mock_get(monkeypatch, _PRIMARY_HTML)
+
+    july_result = tceq_provider.fetch_tceq(_CAMS_83, _START, _END)
+    january_result = tceq_provider.fetch_tceq(_CAMS_83, _JAN_START, _JAN_END)
+
+    # CAMS 83's fixed offset is -6 (CST, never DST-adjusted) in both months.
+    # Real local clock time in July is CDT, but the report is never
+    # DST-adjusted -- hour 0000 must still convert with the same -6 offset.
+    assert july_result["datetime_utc"].iloc[0] == pd.Timestamp("2026-07-01T06:00:00Z")
+    assert january_result["datetime_utc"].iloc[0] == pd.Timestamp("2026-01-15T06:00:00Z")
+
+
+def test_fetch_tceq_matches_row_labels_exactly(monkeypatch):
+    _mock_get(monkeypatch, _PRIMARY_HTML)
+
+    result = tceq_provider.fetch_tceq(_CAMS_83, _START, _END)
+
+    # Must hold the "Wind Direction" row's values, not "Resultant Wind
+    # Direction"'s or "Std. Dev. Wind Direction"'s -- a substring match
+    # would silently grab one of the other two rows instead.
+    assert list(result["wind_direction"]) == _WIND_DIRECTION_DEG
+    assert list(result["wind_direction"]) != _RESULTANT_WIND_DIRECTION_DEG
+    assert list(result["wind_direction"]) != _STD_DEV_WIND_DIRECTION_DEG
+
+
+def test_fetch_tceq_range_check_rejects_an_unconverted_value(monkeypatch):
+    # 150 mph converts to ~67 m/s, outside PIPELINE_SCHEMA's wind_speed
+    # range [0.0, 50.0] -- proving the range-check backstop catches a
+    # genuinely out-of-range value even after a correct conversion.
+    rows = dict(_PRIMARY_ROWS)
+    rows["Wind Speed"] = [150.0, 10.0, 15.0, 20.0]
+    html = _report_html(_CAMS_83, _HOUR_LABELS, rows)
+    _mock_get(monkeypatch, html)
+
+    with pytest.raises(ValueError) as excinfo:
+        tceq_provider.fetch_tceq(_CAMS_83, _START, _END)
+
+    message = str(excinfo.value)
+    assert "wind_speed" in message
+    assert "0.0" in message
+    assert "50.0" in message
+
+
+def test_tceq_provider_import_has_no_side_effects(monkeypatch):
+    """
+    Guards the module docstring's no-side-effects-on-import contract:
+    importing tceq_provider must never issue a network call (mirrors
+    weather_provider_test.py::test_module_import_has_no_side_effects).
+    """
+    counter = {"count": 0}
+
+    def _counting_recorder(*a, **k):
+        counter["count"] += 1
+        return _FakeResponse(_PRIMARY_HTML)
+
+    monkeypatch.setattr(tceq_provider.requests, "get", _counting_recorder)
+
+    import importlib
+
+    importlib.reload(tceq_provider)
+
+    assert counter["count"] == 0
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 09-02 Task 1: multi-day window decomposition, deterministic ordering,
+# and the two window-level raises (D-09).
+# ──────────────────────────────────────────────────────────────────────────
+
+_FULL_HOUR_LABELS = [f"{h:02d}00" for h in range(24)]
+
+
+def _full_day_rows(seed: float = 0.0) -> dict:
+    """
+    Build a full 24-hour set of the four primary target rows, with values
+    offset by `seed` so two different fixtures are distinguishable (used by
+    the dedup test to prove which call's data survived).
+    """
+    return {
+        "Wind Speed": [5.0 + seed + h * 0.1 for h in range(24)],
+        "Wind Direction": [180.0 + (seed % 90) + h for h in range(24)],
+        "Outdoor Temperature": [70.0 + seed + h * 0.1 for h in range(24)],
+        "Relative Humidity": [50.0 + (seed % 40) + h * 0.1 for h in range(24)],
+    }
+
+
+def _full_day_html(cams_id: str, seed: float = 0.0) -> str:
+    return _report_html(cams_id, _FULL_HOUR_LABELS, _full_day_rows(seed))
+
+
+# A 3-local-calendar-day window for CAMS 83 (fixed offset -6): local midnight
+# of 2026-07-01 is 2026-07-01T06:00:00Z, and local 23:59:59 of 2026-07-03 is
+# 2026-07-04T05:59:59Z -- chosen so the window boundaries land exactly on
+# local calendar-day edges, giving exactly 3 spanned days (07-01, 07-02,
+# 07-03), not 2 or 4.
+_MULTI_DAY_START = "2026-07-01T06:00:00Z"
+_MULTI_DAY_END = "2026-07-04T05:59:59Z"
+
+
+def test_fetch_tceq_multi_day_window_issues_one_request_per_day(monkeypatch):
+    recorded = []
+
+    def _recorder(url, params=None, timeout=None):
+        recorded.append(params)
+        return _FakeResponse(_full_day_html(_CAMS_83))
+
+    monkeypatch.setattr(tceq_provider.requests, "get", _recorder)
+
+    tceq_provider.fetch_tceq(_CAMS_83, _MULTI_DAY_START, _MULTI_DAY_END)
+
+    assert len(recorded) == 3
+    triples = [(p["user_year"], p["user_month"], p["user_day"]) for p in recorded]
+    # Distinctness is the actual assertion that matters: three identical
+    # triples is precisely the silent-mis-dating failure a bare count check
+    # would miss (09-RESEARCH.md Pitfall 1's warning sign).
+    assert len(set(triples)) == 3, triples
+    assert triples == sorted(triples)
+    for p in recorded:
+        assert p["select_date"] == "user"
+
+
+def test_fetch_tceq_concatenates_days_in_order(monkeypatch):
+    _mock_get(monkeypatch, _full_day_html(_CAMS_83))
+
+    result = tceq_provider.fetch_tceq(_CAMS_83, _MULTI_DAY_START, _MULTI_DAY_END)
+
+    assert result["datetime_utc"].is_monotonic_increasing
+    assert not result["datetime_utc"].duplicated().any()
+
+
+def test_fetch_tceq_day_boundary_rows_are_distinct_and_adjacent(monkeypatch):
+    _mock_get(monkeypatch, _full_day_html(_CAMS_83))
+
+    result = tceq_provider.fetch_tceq(_CAMS_83, _MULTI_DAY_START, _MULTI_DAY_END)
+
+    times = list(result["datetime_utc"])
+    diffs = [times[i + 1] - times[i] for i in range(len(times) - 1)]
+    assert all(d == pd.Timedelta(hours=1) for d in diffs)
+    assert len(times) == len(set(times))  # no timestamp duplicated
+
+
+def test_fetch_tceq_drops_duplicate_timestamps_keeping_first(monkeypatch):
+    # Force the day-decomposition to request the SAME calendar day twice --
+    # a defensive scenario the real decomposition must never itself produce,
+    # but the concat/sort/dedupe sequence must still resolve correctly if it
+    # ever did (e.g. a live report changing between two fetches of the same
+    # day). The recorder returns a DIFFERENT fixture on each call; the
+    # earlier call's values must be the ones that survive.
+    day = pd.Timestamp("2026-07-01", tz="UTC").date()
+    monkeypatch.setattr(tceq_provider, "_days_spanned", lambda *a, **k: [day, day])
+
+    responses = [_full_day_html(_CAMS_83, seed=0.0), _full_day_html(_CAMS_83, seed=1000.0)]
+    calls = {"n": 0}
+
+    def _recorder(url, params=None, timeout=None):
+        html = responses[calls["n"]]
+        calls["n"] += 1
+        return _FakeResponse(html)
+
+    monkeypatch.setattr(tceq_provider.requests, "get", _recorder)
+
+    result = tceq_provider.fetch_tceq(_CAMS_83, _START, _END)
+
+    assert not result["datetime_utc"].duplicated().any()
+    assert result["wind_speed"].iloc[0] == pytest.approx(Q(5.0, "mph").to("m/s").value)
+
+
+def test_fetch_tceq_is_reproducible_for_the_same_window(monkeypatch):
+    _mock_get(monkeypatch, _full_day_html(_CAMS_83))
+
+    first = tceq_provider.fetch_tceq(_CAMS_83, _MULTI_DAY_START, _MULTI_DAY_END)
+    second = tceq_provider.fetch_tceq(_CAMS_83, _MULTI_DAY_START, _MULTI_DAY_END)
+
+    pd.testing.assert_frame_equal(first, second)
+
+
+def test_fetch_tceq_raises_when_the_window_selects_zero_rows(monkeypatch):
+    # A report with a header row but zero hour-label columns contributes no
+    # rows at all -- the window-level empty check is what must catch this,
+    # since a single day yielding nothing is not itself a raise condition.
+    empty_hour_html = _report_html(_CAMS_83, [], {})
+    _mock_get(monkeypatch, empty_hour_html)
+
+    with pytest.raises(ValueError) as excinfo:
+        tceq_provider.fetch_tceq(_CAMS_83, _START, _END)
+
+    message = str(excinfo.value)
+    assert "2026-07-01" in message
+
+
+_FORTY_DAY_START = "2026-01-01T06:00:00Z"
+_FORTY_DAY_END = str(pd.Timestamp(_FORTY_DAY_START) + pd.Timedelta(days=40) - pd.Timedelta(seconds=1))
+
+
+def test_fetch_tceq_raises_when_the_window_exceeds_the_day_cap(monkeypatch):
+    counter = {"count": 0}
+
+    def _recorder(*a, **k):
+        counter["count"] += 1
+        return _FakeResponse(_full_day_html(_CAMS_83))
+
+    monkeypatch.setattr(tceq_provider.requests, "get", _recorder)
+
+    with pytest.raises(ValueError) as excinfo:
+        tceq_provider.fetch_tceq(_CAMS_83, _FORTY_DAY_START, _FORTY_DAY_END)
+
+    message = str(excinfo.value)
+    assert "40" in message
+    assert "31" in message
+    assert counter["count"] == 0
+
+
+def test_fetch_tceq_accepts_iso_and_bare_date_windows(monkeypatch):
+    _mock_get(monkeypatch, _full_day_html(_CAMS_83))
+
+    iso_result = tceq_provider.fetch_tceq(_CAMS_83, "2026-07-01T00:00Z", "2026-07-01T23:59:59Z")
+    bare_result = tceq_provider.fetch_tceq(_CAMS_83, "2026-07-01", "2026-07-01")
+
+    assert not iso_result.empty
+    assert not bare_result.empty
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 09-02 Task 2: all four cities, the null-RH sites, and the
+# MST-versus-CST offset split.
+# ──────────────────────────────────────────────────────────────────────────
+
+# Austin (38) and Midland (1095) have no Relative Humidity row at all
+# (09-RESEARCH.md CAMS Site Selection table, D-04); Corpus Christi (83) and
+# El Paso (41) both carry a live RH row.
+_RH_LESS_CAMS_IDS = {"38", "1095"}
+
+
+def _rows_for_cams(cams_id: str) -> dict:
+    rows = dict(_PRIMARY_ROWS)
+    if cams_id in _RH_LESS_CAMS_IDS:
+        del rows["Relative Humidity"]
+    return rows
+
+
+@pytest.mark.parametrize("cams_id", sorted(config.TCEQ_STATIONS.values()))
+def test_fetch_tceq_serves_every_configured_city(monkeypatch, cams_id):
+    html = _report_html(cams_id, _HOUR_LABELS, _rows_for_cams(cams_id))
+    _mock_get(monkeypatch, html)
+
+    result = tceq_provider.fetch_tceq(cams_id, _START, _END)
+
+    assert list(result.columns) == tceq_provider._RETURN_COLUMNS
+    assert len(result) > 0
+
+
+def test_fetch_tceq_leaves_rh_null_when_the_site_has_no_rh_row(monkeypatch):
+    rows = _rows_for_cams("38")
+    assert "Relative Humidity" not in rows
+    html = _report_html("38", _HOUR_LABELS, rows)
+    _mock_get(monkeypatch, html)
+
+    result = tceq_provider.fetch_tceq("38", _START, _END)
+
+    assert "relative_humidity" in result.columns
+    assert result["relative_humidity"].isna().all()
+
+
+def test_fetch_tceq_applies_the_el_paso_offset_separately(monkeypatch):
+    fixed_day = pd.Timestamp("2026-07-01", tz="UTC").date()
+    monkeypatch.setattr(tceq_provider, "_days_spanned", lambda *a, **k: [fixed_day])
+
+    wide_start, wide_end = "2026-06-25T00:00:00Z", "2026-07-10T23:59:59Z"
+
+    def _mk_get(cams_id):
+        html = _report_html(cams_id, _HOUR_LABELS, _PRIMARY_ROWS)
+        return lambda *a, **k: _FakeResponse(html)
+
+    monkeypatch.setattr(tceq_provider.requests, "get", _mk_get("41"))
+    el_paso = tceq_provider.fetch_tceq("41", wide_start, wide_end)
+
+    monkeypatch.setattr(tceq_provider.requests, "get", _mk_get("83"))
+    corpus = tceq_provider.fetch_tceq("83", wide_start, wide_end)
+
+    assert el_paso["datetime_utc"].iloc[0] == pd.Timestamp("2026-07-01T07:00:00Z")
+    assert corpus["datetime_utc"].iloc[0] == pd.Timestamp("2026-07-01T06:00:00Z")
+
+
+def test_fetch_tceq_rejects_a_cams_id_with_no_known_offset(monkeypatch):
+    counter = {"count": 0}
+
+    def _recorder(*a, **k):
+        counter["count"] += 1
+        return _FakeResponse(_PRIMARY_HTML)
+
+    monkeypatch.setattr(tceq_provider.requests, "get", _recorder)
+
+    with pytest.raises(ValueError) as excinfo:
+        tceq_provider.fetch_tceq("999999", _START, _END)
+
+    assert "999999" in str(excinfo.value)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 09-02 Task 3: the fail-loud suite -- malformed reports, absent
+# required rows, placeholder cells, and (in weather_provider_test.py)
+# multi-site requests.
+# ──────────────────────────────────────────────────────────────────────────
+
+# The live-confirmed shape of the generic site-selection form TCEQ serves
+# for an unknown/invalid CAMS ID at HTTP 200 (09-RESEARCH.md Pitfall 3):
+# no site-specific <h1><a> link, zero <table> elements.
+_GENERIC_SITE_SELECTION_HTML = "<html><body><h1>Data by Site by Date (all parameters)</h1></body></html>"
+
+
+def test_fetch_tceq_raises_on_the_generic_site_selection_page(monkeypatch):
+    _mock_get(monkeypatch, _GENERIC_SITE_SELECTION_HTML)
+
+    with pytest.raises(ValueError) as excinfo:
+        tceq_provider.fetch_tceq(_CAMS_83, _START, _END)
+
+    assert _CAMS_83 in str(excinfo.value)
+
+
+def test_fetch_tceq_raises_when_the_h1_names_a_different_site(monkeypatch):
+    # A well-formed report, but the <h1> link's CAMS id (999) does not match
+    # the CAMS id actually requested (83) -- the endpoint answering about a
+    # site nobody asked for is exactly as wrong as answering about no site.
+    html = _report_html("999", _HOUR_LABELS, _PRIMARY_ROWS, site_name="Some Other Site")
+    _mock_get(monkeypatch, html)
+
+    with pytest.raises(ValueError):
+        tceq_provider.fetch_tceq(_CAMS_83, _START, _END)
+
+
+@pytest.mark.parametrize("missing_label", ["Wind Speed", "Wind Direction", "Outdoor Temperature"])
+def test_fetch_tceq_raises_when_a_required_row_is_absent(monkeypatch, missing_label):
+    rows = dict(_PRIMARY_ROWS)
+    del rows[missing_label]
+    html = _report_html(_CAMS_83, _HOUR_LABELS, rows)
+    _mock_get(monkeypatch, html)
+
+    with pytest.raises(ValueError) as excinfo:
+        tceq_provider.fetch_tceq(_CAMS_83, _START, _END)
+
+    message = str(excinfo.value)
+    assert _CAMS_83 in message
+    assert missing_label in message
+
+
+def test_fetch_tceq_omitting_only_relative_humidity_does_not_raise(monkeypatch):
+    # Pinned against the group above: the three required labels raise,
+    # Relative Humidity does not -- proving the two dispositions are
+    # distinct branches rather than one collapsed check.
+    rows = dict(_PRIMARY_ROWS)
+    del rows["Relative Humidity"]
+    html = _report_html(_CAMS_83, _HOUR_LABELS, rows)
+    _mock_get(monkeypatch, html)
+
+    result = tceq_provider.fetch_tceq(_CAMS_83, _START, _END)
+
+    assert result["relative_humidity"].isna().all()
+
+
+def test_fetch_tceq_treats_placeholder_cells_as_null(monkeypatch):
+    fixed_day = pd.Timestamp("2026-07-01", tz="UTC").date()
+    monkeypatch.setattr(tceq_provider, "_days_spanned", lambda *a, **k: [fixed_day])
+
+    rows = dict(_PRIMARY_ROWS)
+    rows["Wind Speed"] = [5.0, "FEW", 15.0, "NA"]
+    html = _report_html(_CAMS_83, _HOUR_LABELS, rows)
+    _mock_get(monkeypatch, html)
+
+    wide_start, wide_end = "2026-06-25T00:00:00Z", "2026-07-10T23:59:59Z"
+    result = tceq_provider.fetch_tceq(_CAMS_83, wide_start, wide_end)
+
+    # A placeholder nulls a cell without dropping its row: the row count
+    # still equals the hour-column count.
+    assert len(result) == len(_HOUR_LABELS)
+    assert pd.isna(result["wind_speed"].iloc[1])
+    assert pd.isna(result["wind_speed"].iloc[3])
+    assert result["wind_speed"].iloc[0] == pytest.approx(Q(5.0, "mph").to("m/s").value)
+    assert result["wind_speed"].iloc[2] == pytest.approx(Q(15.0, "mph").to("m/s").value)
+
+
+def test_fetch_tceq_raises_when_a_row_is_shorter_than_the_header(monkeypatch):
+    header_cells = "".join(f"<td>{h}</td>" for h in _HOUR_LABELS)
+    header_row = f"<tr><td>&nbsp;</td>{header_cells}<td>Parameter Measured</td><td>POC</td></tr>"
+    # Header names 4 hours, but this row carries only 2 value cells --
+    # a truncated row that would otherwise misalign hours against values.
+    short_row = (
+        "<tr><td><a href='#'><strong>Wind Speed</strong></a></td>"
+        "<td>5.0</td><td>10.0</td>"
+        "<td>Wind Speed</td><td>1</td></tr>"
+    )
+    table = f"<table border='1'>{header_row}{short_row}</table>"
+    html = (
+        "<html><body>"
+        f"<h1><a href='daily_summary.pl?CAMS={_CAMS_83}&region=14'>Corpus Christi C83</a></h1>"
+        f"{table}"
+        "</body></html>"
+    )
+    _mock_get(monkeypatch, html)
+
+    with pytest.raises(ValueError):
+        tceq_provider.fetch_tceq(_CAMS_83, _START, _END)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plan 09-03 Task 2: regressions for two bugs found only by the live
+# `daily_summary.pl` check (T-09-19) -- no mocked test in Plans 09-01/09-02
+# could have caught either, since both fixtures matched the report shape
+# research recorded rather than the shape the live page actually renders.
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def test_fetch_tceq_finds_the_site_link_in_a_non_first_h1(monkeypatch):
+    """
+    The live report page renders TWO <h1> elements: a generic "Texas
+    Commission on Environmental Quality" banner first, then the
+    site-specific title carrying the CAMS link. `_validate_response`
+    originally checked only `soup.find("h1")` (the first one), which
+    rejected every genuine live report as if it were the invalid-site
+    page. Confirmed live against all four config.TCEQ_STATIONS sites
+    before this fix landed.
+    """
+    header_cells = "".join(f"<td>{h}</td>" for h in _HOUR_LABELS)
+    header_row = f"<tr><td>&nbsp;</td>{header_cells}<td>Parameter Measured</td><td>POC</td></tr>"
+    required_rows = {
+        "Wind Speed": _WIND_SPEED_MPH,
+        "Wind Direction": _WIND_DIRECTION_DEG,
+        "Outdoor Temperature": _OUTDOOR_TEMP_DEGF,
+    }
+    data_rows = "".join(
+        "<tr><td><a href='#'><strong>{label}</strong></a></td>{cells}"
+        "<td>{label}</td><td>1</td></tr>".format(
+            label=label, cells="".join(f"<td>{v}</td>" for v in values)
+        )
+        for label, values in required_rows.items()
+    )
+    table = f"<table border='1'>{header_row}{data_rows}</table>"
+    html = (
+        "<html><body>"
+        "<h1>Texas Commission on Environmental Quality</h1>"
+        f"<h1><a href='daily_summary.pl?CAMS={_CAMS_83}&region=14'>Corpus Christi C83</a></h1>"
+        f"{table}"
+        "</body></html>"
+    )
+    _mock_get(monkeypatch, html)
+
+    result = tceq_provider.fetch_tceq(_CAMS_83, _START, _END)
+
+    assert len(result) == len(_HOUR_LABELS)
+
+
+def test_fetch_tceq_extracts_hour_labels_from_th_header_cells(monkeypatch):
+    """
+    The live report page's header row is rendered entirely with <th> cells
+    (the original fixture used <td>). A <td>-only header search silently
+    returned zero hour labels for every real report -- not a crash and not
+    a raise, just a fetch that quietly contributed 0 rows for every
+    fetched day. Confirmed live against CAMS 83 before this fix landed.
+    Data rows still use <td> exclusively on the live page, so this fixture
+    intentionally leaves the data rows' cells as <td> to match.
+    """
+    header_cells = "".join(f"<th>{h}</th>" for h in _HOUR_LABELS)
+    header_row = f"<tr><th>&nbsp;</th>{header_cells}<th>Parameter Measured</th><th>POC</th></tr>"
+    required_rows = {
+        "Wind Speed": _WIND_SPEED_MPH,
+        "Wind Direction": _WIND_DIRECTION_DEG,
+        "Outdoor Temperature": _OUTDOOR_TEMP_DEGF,
+    }
+    data_rows = "".join(
+        "<tr><td><a href='#'><strong>{label}</strong></a></td>{cells}"
+        "<td>{label}</td><td>1</td></tr>".format(
+            label=label, cells="".join(f"<td>{v}</td>" for v in values)
+        )
+        for label, values in required_rows.items()
+    )
+    table = f"<table border='1'>{header_row}{data_rows}</table>"
+    html = (
+        "<html><body>"
+        f"<h1><a href='daily_summary.pl?CAMS={_CAMS_83}&region=14'>Corpus Christi C83</a></h1>"
+        f"{table}"
+        "</body></html>"
+    )
+    _mock_get(monkeypatch, html)
+
+    result = tceq_provider.fetch_tceq(_CAMS_83, _START, _END)
+
+    assert len(result) == len(_HOUR_LABELS)
+    assert list(result["wind_speed"]) == [
+        pytest.approx(Q(v, "mph").to("m/s").value) for v in _WIND_SPEED_MPH
+    ]
