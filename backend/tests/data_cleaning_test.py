@@ -10,6 +10,7 @@ imports, plain asserts, no test classes).
 """
 
 import math
+import os
 
 import pandas as pd
 import pytest
@@ -548,3 +549,49 @@ def test_a_missing_field_column_skips_its_rules():
     assert _flag_list(cleaned) == ["stuck_air_temp"] * 6
     assert cleaned.report["flag_counts"]["stuck_solar_radiation"] == 0
     assert cleaned.report["flag_counts"]["spike_solar_radiation"] == 0
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# The written policy and the code agree
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _policy_doc_lines():
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    path = os.path.join(root, "docs", "data-science", "decisions", "data_cleaning.md")
+    with open(path, encoding="utf-8") as handle:
+        return handle.read().splitlines()
+
+
+def test_policy_doc_names_every_flag_and_threshold():
+    lines = _policy_doc_lines()
+    text = "\n".join(lines)
+
+    def named(name):
+        return f"`{name}`" in text
+
+    def line_has(*needles):
+        return any(all(needle in line for needle in needles) for line in lines)
+
+    assert f"**Policy version:** {data_cleaning.CLEANING_POLICY_VERSION}" in text
+    for name in (*data_cleaning.FLAG_ORDER, *data_cleaning.MARKER_COLUMNS):
+        assert named(name), f"{name} is not named in backticks in the policy doc"
+
+    constants = {
+        name: value for name, value in vars(data_cleaning).items()
+        if name.isupper() and not name.startswith("_")
+    }
+    assert "STUCK_MIN_RUN_ROWS" in constants and "SPIKE_MAX_STEP" in constants
+    for name, value in constants.items():
+        assert named(name), f"{name} is not named in backticks in the policy doc"
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, (int, float)):
+            assert line_has(f"`{name}`", str(value)), f"{name} = {value} is not stated"
+        elif isinstance(value, dict):
+            for key, item in value.items():
+                parts = item if isinstance(item, tuple) else (item,)
+                assert line_has(f"`{name}`", f"`{key}`", *[str(p) for p in parts]), (
+                    f"{name}[{key!r}] = {item} is not stated")
+        elif isinstance(value, (tuple, frozenset)):
+            for member in value:
+                assert named(member), f"{name} member {member} is not named in backticks"
