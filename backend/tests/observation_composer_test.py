@@ -312,3 +312,173 @@ def test_no_hour_with_all_three_inputs_returns_an_empty_frame(monkeypatch):
     assert frame.empty
     assert list(frame.columns) == oc._OUT_COLUMNS
     assert fetcher.provenance == []
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Provenance, circuit breaker, error keys, provider applicability
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _stations_near(city, n):
+    """
+    Stations T1..Tn, each 0.01 degree further north than the last: each has its own
+    rounded grid coordinate (hence its own grid cache key) yet stays within
+    TCEQ_MAX_KM of the city.
+    """
+    lat, lon = config.CITY_COORDINATES[city]
+    return pd.DataFrame([
+        {"stid": f"T{i}", "name": "t", "lat": lat + 0.01 * i, "lon": lon}
+        for i in range(1, n + 1)])
+
+
+def test_provenance_columns_and_one_record_per_reading(monkeypatch):
+    def synoptic(stids, start, end, provider=None, fallback=None):
+        frame = _synoptic_all()
+        if stids[0] == "T1":
+            frame["temp_source"] = "asos"  # a provider-supplied source passes through
+        return frame
+
+    _install(monkeypatch, [], synoptic=synoptic, tceq=_tceq_all(),
+             nsrdb=_nsrdb_all(), open_meteo=_open_meteo_all())
+
+    stations = _stations_near("AUSTIN", 2)
+    first, fetcher = _fetch(stations, stid="T1")
+    second, _ = _fetch(stations, stid="T2", fetcher=fetcher)
+
+    assert first.iloc[0]["temp_source"] == "asos"
+    assert second.iloc[0]["temp_source"] == "synoptic"
+    assert len(fetcher.provenance) == 2
+    assert fetcher.provenance[0] == {
+        "stid": "T1", "hour": f"{_DAY}T11:00:00Z",
+        "air_temp": "asos", "wind_speed": "tceq", "solar_radiation": "nsrdb",
+    }
+    assert oc.summarize_sources(fetcher.provenance) == {
+        "air_temp": {"asos": 1, "synoptic": 1},
+        "wind_speed": {"tceq": 2},
+        "solar_radiation": {"nsrdb": 2},
+    }
+
+
+@pytest.mark.parametrize("name", ["nsrdb", "open_meteo"])
+def test_circuit_breaker_skips_a_grid_provider_after_consecutive_failures(monkeypatch, name):
+    calls = []
+    down = ValueError("down")
+    if name == "nsrdb":
+        providers = {"nsrdb": down, "open_meteo": _rows(["11:00"], solar_radiation=510.0)}
+        solar_source = "open_meteo"
+    else:
+        # no data from nsrdb is not a failure; open_meteo is what is down
+        providers = {"nsrdb": None, "open_meteo": down}
+        solar_source = "synoptic"
+    _install(monkeypatch, calls, synoptic=_synoptic_all(), tceq=_tceq_all(), **providers)
+
+    fetcher = oc.make_composed_fetcher(_station_at("AUSTIN"))
+    for _ in range(5):
+        frame, _ = _fetch(None, fetcher=fetcher)
+        assert len(frame) == 1
+        assert frame.iloc[0]["solar_source"] == solar_source
+
+    assert calls.count(name) == oc.CIRCUIT_BREAKER_FAILURES
+    assert fetcher.errors[f"{name}: ValueError: down"] == 3
+    assert fetcher.errors[f"{name}: skipped after 3 consecutive failures"] == 2
+
+
+def test_circuit_breaker_counts_only_consecutive_failures(monkeypatch):
+    calls = []
+
+    def nsrdb(lat, lon, start, end):
+        # call 3 succeeds; every other call fails
+        if calls.count("nsrdb") == 3:
+            return _nsrdb_all()
+        return ValueError("down")
+
+    _install(monkeypatch, calls, synoptic=_synoptic_all(), tceq=_tceq_all(),
+             nsrdb=nsrdb, open_meteo=_rows(["11:00"], solar_radiation=510.0))
+
+    stations = _stations_near("AUSTIN", 7)
+    fetcher = oc.make_composed_fetcher(stations)
+
+    for i in range(1, 6):  # fail, fail, success, fail, fail
+        frame, _ = _fetch(stations, stid=f"T{i}", fetcher=fetcher)
+        assert len(frame) == 1
+    assert calls.count("nsrdb") == 5
+    assert not any("skipped" in key for key in fetcher.errors)
+
+    _fetch(stations, stid="T6", fetcher=fetcher)  # third failure in a row opens the circuit
+    assert calls.count("nsrdb") == 6
+
+    frame, _ = _fetch(stations, stid="T7", fetcher=fetcher)
+    assert calls.count("nsrdb") == 6
+    assert fetcher.errors["nsrdb: skipped after 3 consecutive failures"] == 1
+    assert len(frame) == 1
+
+
+def test_station_and_tceq_failures_never_open_a_circuit(monkeypatch):
+    # (a) the station provider fails on every call; tceq supplies temperature
+    calls = []
+    _install(monkeypatch, calls, synoptic=RuntimeError("synoptic down"),
+             tceq=_tceq_all(), nsrdb=_nsrdb_all())
+    fetcher = oc.make_composed_fetcher(_station_at("AUSTIN"))
+    for _ in range(5):
+        frame, _ = _fetch(None, fetcher=fetcher)
+        assert frame.iloc[0]["temp_source"] == "tceq"
+
+    assert calls.count("synoptic") == 5
+    assert fetcher.errors["synoptic: RuntimeError"] == 5
+    assert not any(key.startswith("synoptic: skipped") for key in fetcher.errors)
+
+    # (b) tceq fails: the failed window is fetched once and re-raised from the cache
+    calls = []
+    _install(monkeypatch, calls, synoptic=_synoptic_all(),
+             tceq=RuntimeError("scrape failed"), nsrdb=_nsrdb_all())
+    fetcher = oc.make_composed_fetcher(_station_at("AUSTIN"))
+    for _ in range(5):
+        frame, _ = _fetch(None, fetcher=fetcher)
+        assert frame.iloc[0]["wind_source"] == "synoptic"
+
+    assert calls.count("tceq") == 1
+    assert fetcher.errors["tceq: RuntimeError"] == 5
+    assert not any(key.startswith("tceq: skipped") for key in fetcher.errors)
+
+
+def test_error_keys_never_echo_synoptic_or_request_messages(monkeypatch):
+    _install(
+        monkeypatch, [],
+        synoptic=ValueError("token=SECRET-TOKEN rejected"),
+        tceq=_tceq_all(),
+        nsrdb=ValueError("NSRDB returned HTTP 400 for this window"),
+        open_meteo=requests.ConnectionError("https://example.invalid/archive?apikey=SECRET-KEY"))
+
+    _, fetcher = _fetch(_station_at("AUSTIN"))
+
+    assert set(fetcher.errors) == {
+        "synoptic: ValueError",
+        "nsrdb: ValueError: NSRDB returned HTTP 400 for this window",
+        "open_meteo: ConnectionError",
+    }
+    assert not any("SECRET" in key for key in fetcher.errors)
+
+
+def test_tceq_needs_a_nearby_city_and_grid_providers_need_coordinates(monkeypatch):
+    # (a) a station more than 400 km from every city gets no tceq request
+    calls = []
+    _install(monkeypatch, calls, synoptic=_synoptic_all(), tceq=_tceq_all(), nsrdb=_nsrdb_all())
+    far = pd.DataFrame([{"stid": "FAR", "name": "t", "lat": 35.5, "lon": -100.5}])
+
+    frame, _ = _fetch(far, stid="FAR")
+
+    assert "tceq" not in calls
+    row = frame.iloc[0]
+    assert row["wind_source"] == "synoptic"
+    assert row["solar_source"] == "nsrdb"
+
+    # (b) a station without coordinates gets only the station provider
+    calls = []
+    _install(monkeypatch, calls, synoptic=_synoptic_all(), tceq=_tceq_all(),
+             nsrdb=_nsrdb_all(), open_meteo=_open_meteo_all())
+
+    frame, _ = _fetch(_station_at("AUSTIN"), stid="UNKNOWN")
+
+    assert calls == ["synoptic"]
+    row = frame.iloc[0]
+    assert (row["temp_source"], row["wind_source"], row["solar_source"]) == (
+        "synoptic", "synoptic", "synoptic")
