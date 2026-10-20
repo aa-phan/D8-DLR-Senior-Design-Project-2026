@@ -12,6 +12,7 @@ the network. Follows backend/tests/city_rating_test.py's conventions
 (module-level imports, plain asserts, no test classes, no network).
 """
 
+import json
 from collections import Counter
 
 import pandas as pd
@@ -255,3 +256,129 @@ def test_window_defaults_to_window_hours_before_end(monkeypatch):
     assert len(calls) == len(config.LOCATIONS)
     for _name, start, end, *_rest in calls:
         assert (start, end) == ("2025-06-01T10:00:00Z", _END)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# summarize: row shape
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_summarize_row_shape_and_gate_names():
+    result = _city_result(
+        "AUSTIN", fallback=True,
+        alerts=["G4 FAIL (out of bounds) -- fallback rating 1825 A",
+                "G6 FAIL (anomaly) -- fallback rating 1825 A",
+                "G4 FAIL (again)",
+                "EXHAUSTED FAIL (AUSTIN: 10 candidates exhausted) -- fallback rating 1825 A"],
+        forecast={"amps": 1210.0, "ci_lower_amps": 1150.0, "ci_upper_amps": 1260.0,
+                  "n_observations": 14, "horizon_min": 60.0})
+
+    row = orch.summarize(result)
+
+    assert list(row) == ["city", "rating_a", "static_rating_a", "fallback", "exhausted",
+                         "station_id", "fallback_gates", "archived", "history_rows",
+                         "forecast_amps", "detector_signal"]
+    assert row["fallback_gates"] == ["EXHAUSTED", "G4", "G6"]
+    assert row["static_rating_a"] == city_point.city_point("AUSTIN").static_rating
+    assert row["rating_a"] == result["rating"]
+    assert row["forecast_amps"] == 1210.0
+    assert row["history_rows"] == 0
+    assert row["detector_signal"] == "cold_start"
+
+
+def test_summarize_tolerates_a_result_without_pipeline_details():
+    result = _city_result("EL_PASO", alerts=[])
+    del result["pipeline"]
+
+    row = orch.summarize(result)
+
+    assert row["history_rows"] is None
+    assert row["forecast_amps"] is None
+    assert row["detector_signal"] is None
+    assert row["fallback_gates"] == []
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# main: exit code, CLI pass-through, JSON output
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _canned_run(summary_cities=("AUSTIN",), errors=None, sources=None, provider_errors=None):
+    run = {
+        "start": "2025-06-01T11:00:00Z", "end": _END, "provider": "composed",
+        "forecast_method": "naive", "results": [],
+        "summary": [orch.summarize(_city_result(c)) for c in summary_cities],
+        "errors": dict(errors or {}),
+    }
+    if sources is not None:
+        run["sources"] = sources
+    if provider_errors is not None:
+        run["provider_errors"] = provider_errors
+    return run
+
+
+def _fake_run_dlr_pipeline(monkeypatch, run):
+    """
+    Replace the run `main` would make. The real function would try station
+    discovery (no token, so it raises) and its default archive path points into
+    the repository. Returns the list of recorded call kwargs.
+    """
+    seen = []
+
+    def fake(**kwargs):
+        seen.append(kwargs)
+        return run
+
+    monkeypatch.setattr(orch, "run_dlr_pipeline", fake)
+    return seen
+
+
+@pytest.mark.parametrize("summary_cities, errors, expected", [
+    (("AUSTIN",), {}, 0),
+    (("AUSTIN",), {"MIDLAND": "down"}, 0),
+    ((), {"AUSTIN": "down", "MIDLAND": "down"}, 1),
+    ((), {}, 0),
+])
+def test_main_exit_code_is_one_only_when_every_city_failed(
+        monkeypatch, capsys, summary_cities, errors, expected):
+    _fake_run_dlr_pipeline(monkeypatch, _canned_run(summary_cities, errors))
+
+    assert orch.main([]) == expected
+
+    printed = capsys.readouterr().out
+    for city in errors:
+        assert f"ERROR {city}: down" in printed
+
+
+def test_main_passes_cli_arguments_through(tmp_path, monkeypatch, capsys):
+    seen = _fake_run_dlr_pipeline(monkeypatch, _canned_run())
+    archive_path = str(tmp_path / "archive.csv")
+
+    code = orch.main(["--cities", "MIDLAND", "EL_PASO", "--end", _END, "--window-hours", "2",
+                      "--provider", "open_meteo", "--forecast-method", "ewm", "--no-archive",
+                      "--archive-path", archive_path])
+
+    assert code == 0
+    assert seen == [{
+        "cities": ["MIDLAND", "EL_PASO"], "start": None, "end": _END, "window_hours": 2.0,
+        "provider": "open_meteo", "forecast_method": "ewm", "archive": False,
+        "archive_path": archive_path,
+    }]
+
+    # argparse rejects an unknown provider before any run
+    with pytest.raises(SystemExit):
+        orch.main(["--provider", "tceq"])
+    assert len(seen) == 1
+
+
+def test_main_output_writes_the_run_summary_json(tmp_path, monkeypatch, capsys):
+    _fake_run_dlr_pipeline(monkeypatch, _canned_run(
+        sources={"air_temp": {"synoptic": 1}}, provider_errors={}))
+    out = tmp_path / "run" / "summary.json"
+
+    assert orch.main(["--output", str(out)]) == 0
+
+    assert out.exists()
+    data = json.loads(out.read_text())
+    assert set(data) == {"start", "end", "provider", "forecast_method", "summary", "errors",
+                         "sources", "provider_errors"}
+    assert data["summary"][0]["city"] == "AUSTIN"
+    assert data["sources"] == {"air_temp": {"synoptic": 1}}
