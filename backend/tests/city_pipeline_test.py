@@ -238,3 +238,105 @@ def test_cold_start_with_no_archive_rates_without_a_forecast(tmp_path):
     assert pipeline["detector_signal"] == "cold_start"
     assert pipeline["detector_model"] is None
     assert result["exhausted"] is False
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Degenerate band, the pipeline key, and rate_city wiring
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _forecast_result(lower, upper):
+    return ampacity_forecast.ForecastResult(
+        horizon_min=60.0, amps=1200.0, ci_lower_amps=lower, ci_upper_amps=upper,
+        n_observations=14, method="naive")
+
+
+@pytest.mark.parametrize(
+    "lower, upper",
+    [(1200.0, 1200.0), (1210.0, 1190.0)],
+    ids=["zero_width", "inverted"],
+)
+def test_zero_width_band_is_reported_but_not_given_to_the_detector(
+        tmp_path, monkeypatch, caplog, lower, upper):
+    # Adjacency edge: a width of exactly zero already counts as degenerate.
+    detector_seen = _spy_detector(monkeypatch)
+    _spy_forecast(monkeypatch, result=_forecast_result(lower, upper))
+
+    with caplog.at_level(logging.INFO, logger="city_pipeline"):
+        result = _run(tmp_path)
+
+    pipeline = result["pipeline"]
+    assert detector_seen["forecast"] is None
+    assert pipeline["forecast_used_by_g6"] is False
+    assert pipeline["forecast"] == {
+        "amps": 1200.0, "ci_lower_amps": lower, "ci_upper_amps": upper,
+        "n_observations": 14, "horizon_min": 60.0,
+    }
+    assert any("forecast band has zero width" in r.getMessage() for r in caplog.records)
+
+
+def test_positive_width_band_is_given_to_the_detector(tmp_path, monkeypatch):
+    detector_seen = _spy_detector(monkeypatch)
+    forecast = _forecast_result(1150.0, 1250.0)
+    _spy_forecast(monkeypatch, result=forecast)
+
+    result = _run(tmp_path)
+
+    assert detector_seen["forecast"] is forecast
+    assert result["pipeline"]["forecast_used_by_g6"] is True
+
+
+def test_pipeline_key_reports_history_forecast_and_detector(tmp_path, monkeypatch):
+    _write_archive(tmp_path / "archive.csv", [_archive_row(_CITY, h) for h in range(3)])
+    spy = _SpyDetector()
+    spy.signal = "forecast_residual"
+    spy.model_source = "spy-model"
+    _spy_detector(monkeypatch, detector=spy)
+    forecast_seen = _spy_forecast(monkeypatch, result=_forecast_result(1150.0, 1250.0))
+
+    result = _run(tmp_path, forecast_method="ewm")
+
+    pipeline = result["pipeline"]
+    assert set(pipeline) == {
+        "history_rows", "usable_history_rows", "forecast_method", "forecast_used_by_g6",
+        "forecast", "detector_signal", "detector_model",
+    }
+    assert set(pipeline["forecast"]) == {
+        "amps", "ci_lower_amps", "ci_upper_amps", "n_observations", "horizon_min",
+    }
+    assert isinstance(pipeline["forecast"]["n_observations"], int)
+    assert isinstance(pipeline["forecast"]["amps"], float)
+    assert pipeline["forecast_method"] == "ewm"
+    assert forecast_seen["method"] == "ewm"
+    assert pipeline["detector_signal"] == "forecast_residual"
+    assert pipeline["detector_model"] == "spy-model"
+    assert pipeline["history_rows"] == 3
+
+
+def test_rate_city_gets_the_detector_and_the_callers_arguments(tmp_path, monkeypatch):
+    detector_seen = _spy_detector(monkeypatch)
+    calls = []
+
+    def fake_rate_city(*args, **kwargs):
+        calls.append((args, kwargs))
+        return {"city": _CITY, "rating": 1.0}
+
+    monkeypatch.setattr(city_pipeline.city_rating, "rate_city", fake_rate_city)
+    stations = _station_at(_CITY)
+    sentinel_fetch = object()
+    archive_path = str(tmp_path / "archive.csv")
+
+    result = city_pipeline.run_city_pipeline(
+        _CITY, _START, _END, stations, provider="open_meteo", archive_path=archive_path,
+        archive=True, fetch_weather=sentinel_fetch)
+
+    assert len(calls) == 1
+    args, kwargs = calls[0]
+    assert args[:3] == (_CITY, _START, _END)
+    assert args[3] is stations
+    assert kwargs["anomaly_detector"] is detector_seen["detector"]
+    assert kwargs["fetch_weather"] is sentinel_fetch
+    assert kwargs["archive"] is True
+    assert kwargs["archive_path"] == archive_path
+    assert kwargs["provider"] == "open_meteo"
+    assert {k: v for k, v in result.items() if k != "pipeline"} == {"city": _CITY, "rating": 1.0}
+    assert "pipeline" in result
