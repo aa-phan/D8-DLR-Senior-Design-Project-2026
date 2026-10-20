@@ -401,3 +401,150 @@ def test_a_frame_without_rows_has_an_integer_gap_slots_column_and_zero_gap_repor
     assert cleaned.report["missing_slots"] == 0
     assert cleaned.report["trailing_gap_slots"] is None
     assert cleaned.report["contiguous_tail_rows"] == 0
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Stuck-sensor runs and spikes across rows (CLEAN-01)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _with_values(field, values, hours=None, **kw):
+    """Hourly rows (hours default 0..n-1) whose `field` column is set to `values`."""
+    hours = list(range(len(values))) if hours is None else hours
+    history = _hourly(hours, **kw)
+    history[field] = list(values)
+    return history
+
+
+def _flag_list(cleaned):
+    return list(cleaned.frame["clean_flags"])
+
+
+def test_six_identical_readings_are_a_stuck_run_and_five_are_not():
+    six = data_cleaning.clean_history(_with_values("air_temp", [21.0] * 6))
+    assert _flag_list(six) == ["stuck_air_temp"] * 6
+    assert len(six.usable) == 0
+    assert six.report["flag_counts"]["stuck_air_temp"] == 6
+
+    five = data_cleaning.clean_history(_with_values("air_temp", [21.0] * 5))
+    assert _flag_list(five) == [""] * 5
+    assert len(five.usable) == 5
+    assert data_cleaning.STUCK_MIN_RUN_ROWS == 6
+
+
+def test_night_time_zero_solar_is_not_a_stuck_run():
+    night = data_cleaning.clean_history(_with_values("solar_radiation", [0.0] * 12))
+    assert _flag_list(night) == [""] * 12
+
+    daylight = data_cleaning.clean_history(_with_values("solar_radiation", [350.0] * 6))
+    assert _flag_list(daylight) == ["stuck_solar_radiation"] * 6
+
+
+def test_a_stuck_run_spans_rows_already_excluded():
+    history = _with_values("wind_speed", [4.0, 4.0, 4.0, 9.0, 4.0, 4.0, 4.0])
+    history["fallback"] = [False, False, False, True, False, False, False]
+    history["fallback"] = history["fallback"].astype(object)
+
+    cleaned = data_cleaning.clean_history(history)
+
+    assert _flag_list(cleaned) == [
+        "stuck_wind_speed", "stuck_wind_speed", "stuck_wind_speed",
+        "fallback",
+        "stuck_wind_speed", "stuck_wind_speed", "stuck_wind_speed",
+    ]
+    assert len(cleaned.usable) == 0
+
+
+def test_missing_values_never_form_a_stuck_run():
+    cleaned = data_cleaning.clean_history(_with_values("solar_radiation", [math.nan] * 6))
+
+    assert _flag_list(cleaned) == [""] * 6
+    assert len(cleaned.usable) == 6
+
+
+def test_stuck_min_run_rows_can_be_overridden():
+    history = _with_values("air_temp", [21.0] * 3 + [22.5, 23.5])
+
+    assert _flag_list(data_cleaning.clean_history(history)) == [""] * 5
+    cleaned = data_cleaning.clean_history(history, stuck_min_run_rows=3)
+
+    assert _flag_list(cleaned) == ["stuck_air_temp"] * 3 + ["", ""]
+
+
+def test_a_one_hour_excursion_beyond_the_step_is_a_spike():
+    # The spike row is excluded and leaves its hour missing, so the row after it is after_gap.
+    up = data_cleaning.clean_history(_with_values("air_temp", [20.0, 31.0, 20.0]))
+    assert _flag_list(up) == ["", "spike_air_temp", "after_gap"]
+    assert list(up.usable["air_temp"]) == [20.0, 20.0]
+
+    down = data_cleaning.clean_history(_with_values("air_temp", [20.0, 9.0, 20.0]))
+    assert _flag_list(down) == ["", "spike_air_temp", "after_gap"]
+
+
+def test_a_difference_equal_to_the_step_is_not_a_spike():
+    cleaned = data_cleaning.clean_history(_with_values("air_temp", [20.0, 30.0, 20.0]))
+
+    assert _flag_list(cleaned) == ["", "", ""]
+
+
+def test_steps_ramps_and_gaps_are_not_spikes():
+    step = data_cleaning.clean_history(_with_values("air_temp", [20.0, 31.0, 31.0]))
+    assert _flag_list(step) == ["", "", ""]
+
+    ramp = data_cleaning.clean_history(_with_values("air_temp", [20.0, 31.0, 42.0]))
+    assert _flag_list(ramp) == ["", "", ""]
+
+    # The next row is two slots away, so the excursion cannot be judged a one-hour spike.
+    gap = data_cleaning.clean_history(_with_values("air_temp", [20.0, 31.0, 20.0], hours=[0, 1, 3]))
+    assert _flag_list(gap) == ["", "", "after_gap"]
+
+
+def test_first_and_last_usable_rows_are_never_spikes():
+    first = data_cleaning.clean_history(_with_values("air_temp", [31.0, 20.0, 20.0]))
+    last = data_cleaning.clean_history(_with_values("air_temp", [20.0, 20.0, 31.0]))
+
+    assert _flag_list(first) == ["", "", ""]
+    assert _flag_list(last) == ["", "", ""]
+
+
+def test_spike_thresholds_per_field():
+    wind = data_cleaning.clean_history(_with_values("wind_speed", [2.0, 13.0, 2.0]))
+    assert _flag_list(wind) == ["", "spike_wind_speed", "after_gap"]
+
+    solar = data_cleaning.clean_history(_with_values("solar_radiation", [100.0, 900.0, 100.0]))
+    assert _flag_list(solar) == ["", "spike_solar_radiation", "after_gap"]
+
+    below = data_cleaning.clean_history(_with_values("solar_radiation", [100.0, 750.0, 100.0]))
+    assert _flag_list(below) == ["", "", ""]
+    assert data_cleaning.SPIKE_MAX_STEP == {
+        "air_temp": 10.0, "wind_speed": 10.0, "solar_radiation": 700.0}
+
+
+def test_an_oscillating_sensor_flags_every_interior_row():
+    cleaned = data_cleaning.clean_history(
+        _with_values("air_temp", [20.0, 31.0, 20.0, 31.0, 20.0]))
+
+    assert _flag_list(cleaned) == [
+        "", "spike_air_temp", "spike_air_temp", "spike_air_temp", "after_gap"]
+
+
+def test_spike_max_step_override_replaces_the_table():
+    history = _with_values("air_temp", [20.0, 26.0, 20.0])
+    history["wind_speed"] = [2.0, 13.0, 2.0]
+
+    default = data_cleaning.clean_history(history)
+    assert _flag_list(default) == ["", "spike_wind_speed", "after_gap"]
+
+    cleaned = data_cleaning.clean_history(history, spike_max_step={"air_temp": 5.0})
+
+    # The override replaces the table: air_temp now flags, wind_speed is not checked.
+    assert _flag_list(cleaned) == ["", "spike_air_temp", "after_gap"]
+
+
+def test_a_missing_field_column_skips_its_rules():
+    history = _with_values("air_temp", [21.0] * 6).drop(columns=["solar_radiation"])
+
+    cleaned = data_cleaning.clean_history(history)
+
+    assert _flag_list(cleaned) == ["stuck_air_temp"] * 6
+    assert cleaned.report["flag_counts"]["stuck_solar_radiation"] == 0
+    assert cleaned.report["flag_counts"]["spike_solar_radiation"] == 0

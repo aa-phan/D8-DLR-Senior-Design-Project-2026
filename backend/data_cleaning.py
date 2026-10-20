@@ -31,10 +31,54 @@ log = logging.getLogger(__name__)
 # the policy behind its flags.
 CLEANING_POLICY_VERSION: int = 1
 
+# Thresholds below are PROVISIONAL: they are written down with their reasoning
+# and are not fitted to data. Phase 3 measures their per-city flag rates on real
+# archives before anyone relies on them. Changing any constant bumps
+# CLEANING_POLICY_VERSION.
+
+# Fields the stuck-sensor rule checks.
+STUCK_FIELDS: tuple[str, ...] = ("air_temp", "wind_speed", "solar_radiation")
+
+# Consecutive usable rows with one identical value that mark a stuck sensor.
+# Hourly temperature at whole-degree resolution can repeat for a few hours
+# overnight; six identical hourly readings of one field is beyond that, and it
+# equals the ML forecast's six-row lookback (config.FORECAST_ML_ROLLING_WINDOW_HOURS).
+STUCK_MIN_RUN_ROWS: int = 6
+
+# Values that may repeat without meaning a stuck sensor. Solar radiation is
+# exactly 0.0 every night.
+STUCK_EXEMPT_VALUES: dict[str, tuple[float, ...]] = {"solar_radiation": (0.0,)}
+
+# Fields the spike rule checks.
+SPIKE_FIELDS: tuple[str, ...] = STUCK_FIELDS
+
+# Largest believable one-hour excursion per field, in the units of
+# units_def.PIPELINE_SCHEMA (degC, m/s, W/m2). A front is a step that stays;
+# a spike is a value that jumps away from both neighbors by more than this and
+# returns. Archived wind_speed is the line-perpendicular component
+# (city_rating._project_wind), so wind-direction swings move it. Clouds swing
+# hourly solar widely, so only a larger excursion counts.
+SPIKE_MAX_STEP: dict[str, float] = {
+    "air_temp": 10.0,
+    "wind_speed": 10.0,
+    "solar_radiation": 700.0,
+}
+
 # The order rules run in, and the order flags are joined in `clean_flags`.
 # `after_gap` marks a row without excluding it.
 FLAG_ORDER: tuple[str, ...] = (
-    "bad_timestamp", "duplicate", "fallback", "at_or_after_run", "same_hour", "after_gap",
+    "bad_timestamp",
+    "duplicate",
+    "fallback",
+    "at_or_after_run",
+    "same_hour",
+    "stuck_air_temp",
+    "stuck_wind_speed",
+    "stuck_solar_radiation",
+    "spike_air_temp",
+    "spike_wind_speed",
+    "spike_solar_radiation",
+    "after_gap",
 )
 
 # Flags that take a row out of `usable`: every flag except `after_gap`.
@@ -107,7 +151,46 @@ def _hours_since_epoch(instants: pd.Series) -> pd.Series:
     return (instants - pd.Timestamp("1970-01-01", tz="UTC")) // pd.Timedelta(hours=1)
 
 
-def clean_history(history: pd.DataFrame, as_of=None) -> CleanedHistory:
+def _stuck_mask(values: pd.Series, live: pd.Series, min_run: int, exempt) -> pd.Series:
+    """
+    Rows in a run of at least `min_run` consecutive identical values, judged
+    over the rows `live` leaves usable (a run continues across excluded rows).
+    NaN never equals itself, so it never forms a run; `exempt` values never do.
+    """
+    out = pd.Series(False, index=values.index, dtype=bool)
+    seq = values[live]
+    if seq.empty:
+        return out
+    run_id = (seq != seq.shift()).cumsum()
+    long_run = run_id.map(run_id.value_counts()) >= min_run
+    flagged = long_run & seq.notna() & ~seq.isin(list(exempt))
+    out[flagged.index[flagged.to_numpy()]] = True
+    return out
+
+
+def _spike_mask(values: pd.Series, hours: pd.Series, live: pd.Series, max_step: float) -> pd.Series:
+    """
+    Live rows whose neighbors sit on the adjacent hourly slots and whose value
+    differs from both by more than `max_step` in the same direction. Every row
+    is judged against the same set, so an oscillating sensor flags every
+    interior row. NaN comparisons are false, so NaN never flags.
+    """
+    out = pd.Series(False, index=values.index, dtype=bool)
+    v = values[live]
+    h = hours[live]
+    if len(v) < 3:
+        return out
+    adjacent = ((h - h.shift(1)) == 1) & ((h.shift(-1) - h) == 1)
+    d_prev = v - v.shift(1)
+    d_next = v - v.shift(-1)
+    flagged = adjacent & (d_prev.abs() > max_step) & (d_next.abs() > max_step) & (d_prev * d_next > 0)
+    out[flagged.index[flagged.to_numpy()]] = True
+    return out
+
+
+def clean_history(
+    history: pd.DataFrame, as_of=None, stuck_min_run_rows=None, spike_max_step=None
+) -> CleanedHistory:
     """
     Flag and select the usable rows of one city's archive history.
 
@@ -130,10 +213,29 @@ def clean_history(history: pd.DataFrame, as_of=None) -> CleanedHistory:
                          run saw (no look-ahead).
       same_hour       -- among usable rows in one slot, all but the one with
                          the latest timestamp (the fresher reading).
+      stuck_<field>   -- the row is in a run of `stuck_min_run_rows`
+                         consecutive usable rows with the identical value in
+                         air_temp, wind_speed or solar_radiation (a run
+                         continues across excluded rows; NaN never forms a
+                         run; solar 0.0 at night is exempt).
+      spike_<field>   -- the row's previous and next usable rows sit on the
+                         adjacent hourly slots and its value differs from both
+                         by more than `spike_max_step[field]` in the same
+                         direction (a one-hour excursion that returns). Steps,
+                         ramps, rows next to a gap and the first and last
+                         usable rows are never spikes.
       after_gap       -- the row follows a missing slot. Marks the row, does
                          not exclude it.
     Every flag but `after_gap` excludes the row from `usable`; `frame` keeps
-    every row.
+    every row. The three stuck rules all judge the rows left usable by
+    `same_hour`; the three spike rules all judge the rows left usable by the
+    stuck rules.
+
+    `stuck_min_run_rows` and `spike_max_step` override `STUCK_MIN_RUN_ROWS`
+    and `SPIKE_MAX_STEP` (None uses the module constant). An overriding
+    `spike_max_step` dict replaces the table: a field it omits is not
+    spike-checked, and a key outside `SPIKE_FIELDS` is ignored. A field whose
+    column is absent from the frame is skipped by both rules.
 
     Missing hourly slots are marked, never filled: no row is invented and no
     value is imputed. `gap_slots` is, per usable row, the number of hourly
@@ -209,6 +311,33 @@ def clean_history(history: pd.DataFrame, as_of=None) -> CleanedHistory:
     )
     masks["same_hour"] = same_hour
     excluded = excluded | same_hour
+
+    min_run = STUCK_MIN_RUN_ROWS if stuck_min_run_rows is None else int(stuck_min_run_rows)
+    steps = SPIKE_MAX_STEP if spike_max_step is None else spike_max_step
+    slot_hours = _hours_since_epoch(slots)
+
+    def numeric(field):
+        return pd.to_numeric(frame[field], errors="coerce") if field in frame.columns else None
+
+    live = ~excluded
+    for field in STUCK_FIELDS:
+        values = numeric(field)
+        masks[f"stuck_{field}"] = (
+            no_rows.copy() if values is None
+            else _stuck_mask(values, live, min_run, STUCK_EXEMPT_VALUES.get(field, ()))
+        )
+    for field in STUCK_FIELDS:
+        excluded = excluded | masks[f"stuck_{field}"]
+
+    live = ~excluded
+    for field in SPIKE_FIELDS:
+        values = numeric(field)
+        masks[f"spike_{field}"] = (
+            no_rows.copy() if values is None or field not in steps
+            else _spike_mask(values, slot_hours, live, float(steps[field]))
+        )
+    for field in SPIKE_FIELDS:
+        excluded = excluded | masks[f"spike_{field}"]
 
     # Gaps: hours missing between consecutive usable rows. Excluded rows carry 0.
     gap_slots = pd.Series(0, index=frame.index, dtype="int64")
