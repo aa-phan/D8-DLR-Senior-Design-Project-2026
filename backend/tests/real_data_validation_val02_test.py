@@ -12,6 +12,7 @@ detector message fails here instead of silently emptying a table.
 """
 
 import json
+import os
 
 import numpy as np
 import pandas as pd
@@ -20,9 +21,11 @@ import requests
 
 import anomaly_detector
 import ampacity_forecast
+import backfill_archive
 import city_point
 import config
 import historical_archive
+import observation_composer as oc
 import real_data_validation as rdv
 from DLRSafetyMonitor import DLRSafetyMonitor
 
@@ -511,3 +514,213 @@ def test_report_notes_a_trace_without_usable_history_rows(tmp_path):
     forecast = pd.read_csv(out_dir / "val02_forecast_by_city.csv").iloc[0]
     assert pd.isna(forecast["n_silent_forecast_failure"])
     assert forecast["n_band"] == 6
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Offline naive replay through the real pipeline
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# The original run is the whole offline stack (stub providers) over sixteen hourly
+# AUSTIN steps with forecast method naive: enough history for the last steps to
+# carry a forecast. The replay then feeds the same observations back through the
+# real pipeline. Anomaly models are patched out (git-ignored artifacts), so the
+# replay is called with require_models=False unless a test is about that refusal.
+
+_DAY = "2025-06-01"
+_R_START, _R_END = f"{_DAY}T00:00:00Z", f"{_DAY}T15:00:00Z"
+_R_STEPS = 16
+
+
+def _station_at(city):
+    lat, lon = config.CITY_COORDINATES[city]
+    return pd.DataFrame([{"stid": "T1", "name": "t", "lat": lat, "lon": lon}])
+
+
+def _hourly(values):
+    """One row per hour of _DAY; `values(h)` gives that hour's column values."""
+    return pd.DataFrame([{"datetime_utc": pd.Timestamp(f"{_DAY}T{h:02d}:00:00Z"), **values(h)}
+                         for h in range(24)])
+
+
+def _install_providers(monkeypatch):
+    """Stub the four providers the composer calls; values vary by hour so history has spread."""
+    def synoptic(stids, start, end, provider=None, fallback=None):
+        return _hourly(lambda h: dict(stid=stids[0], air_temp=18.0 + 0.9 * h + (h % 3),
+                                      wind_speed=2.0, wind_direction=10.0, solar_radiation=100.0))
+
+    def tceq(cams_id, start, end):
+        return _hourly(lambda h: dict(air_temp=19.0, wind_speed=2.0 + 0.6 * (h % 5),
+                                      wind_direction=float((35 * h) % 360)))
+
+    def nsrdb(lat, lon, start, end):
+        return _hourly(lambda h: dict(solar_radiation=40.0 + 50.0 * h))
+
+    monkeypatch.setattr(oc.weather_provider, "fetch_weather", synoptic)
+    monkeypatch.setattr(oc.tceq_provider, "fetch_tceq", tceq)
+    monkeypatch.setattr(oc.nsrdb_provider, "fetch_nsrdb", nsrdb)
+    monkeypatch.setattr(oc.open_meteo_provider, "fetch_open_meteo", lambda lat, lon, start, end: pd.DataFrame())
+
+
+def _original_run(tmp_path, monkeypatch):
+    _install_providers(monkeypatch)
+    paths = {"archive": tmp_path / "orig_archive.csv", "log": tmp_path / "orig_log.csv",
+             "trace": tmp_path / "orig_trace.jsonl"}
+    backfill_archive.backfill(
+        _R_START, _R_END, archive_path=str(paths["archive"]), log_path=str(paths["log"]),
+        cities=[_CITY], forecast_method="naive", stations=_station_at(_CITY), out=lambda *_: None,
+        trace_path=str(paths["trace"]))
+    return paths
+
+
+def _out_paths(tmp_path, tag="rep"):
+    return {"archive": tmp_path / f"{tag}_archive.csv", "trace": tmp_path / f"{tag}_trace.jsonl",
+            "log": tmp_path / f"{tag}_log.csv", "fidelity": tmp_path / f"{tag}_fidelity.json"}
+
+
+def _replay(orig, outs, method="naive", **kwargs):
+    kwargs.setdefault("require_models", False)
+    kwargs.setdefault("out", lambda *_: None)
+    return rdv.replay(str(orig["trace"]), _R_START, _R_END, 1.0, [_CITY], method,
+                      str(outs["archive"]), str(outs["trace"]), str(outs["log"]), **kwargs)
+
+
+def _classified(archive, trace):
+    steps = rdv.expected_steps(_R_START, _R_END)
+    return rdv.classify_steps(
+        rdv.load_trace(trace), historical_archive.read_history(path=str(archive), validate=True),
+        [_CITY], steps, pd.Timestamp(_R_START), 2.0)
+
+
+def _comparable(trace_df):
+    cols = ["city", "run_end_utc", "rating_a", "fallback", "fc_amps", "fc_ci_lower", "fc_ci_upper",
+            "detector_signal", "obs_temp", "obs_wind", "obs_wind_raw", "obs_solar", "temp_source",
+            "wind_source", "solar_source", "observation_hour", "history_rows", "usable_history_rows"]
+    frame = trace_df.sort_values(["city", "run_end_utc"]).reset_index(drop=True)
+    out = frame[cols].copy()
+    out["fallback_gates"] = [tuple(g) for g in frame["fallback_gates"]]
+    return out
+
+
+def _model_dir(tmp_path, monkeypatch, with_models):
+    path = tmp_path / "anomaly_models"
+    path.mkdir(exist_ok=True)
+    monkeypatch.setattr(config, "ANOMALY_ML_MODEL_DIR", str(path))
+    if with_models:
+        (path / config.ANOMALY_ML_MODEL_FILENAME_TEMPLATE.format(city=_CITY)).write_bytes(b"x")
+    return path
+
+
+def _cli(orig, outs, *extra):
+    return ["replay", "--archive", str(orig["archive"]), "--trace", str(orig["trace"]),
+            "--start", _R_START, "--end", _R_END, "--cities", _CITY, "--method", "naive",
+            "--archive-out", str(outs["archive"]), "--trace-out", str(outs["trace"]),
+            "--log-out", str(outs["log"]), "--fidelity-out", str(outs["fidelity"]),
+            "--warmup-hours", "2", *extra]
+
+
+def test_replay_with_the_same_method_reproduces_the_original_trace(tmp_path, monkeypatch):
+    orig = _original_run(tmp_path, monkeypatch)
+    outs = _out_paths(tmp_path)
+    lines = []
+
+    totals = _replay(orig, outs, out=lines.append)
+
+    assert totals[_CITY]["runs"] == _R_STEPS
+    assert len(lines) == 1  # one progress line per simulated UTC day
+    original, replayed = rdv.load_trace(orig["trace"]), rdv.load_trace(outs["trace"])
+    assert len(original) == len(replayed) == _R_STEPS
+    assert original["fc_amps"].notna().sum() >= 2  # the comparison covers real forecasts
+    pd.testing.assert_frame_equal(_comparable(original), _comparable(replayed))
+    assert set(replayed["station_id"]) == {"REPLAY_" + _CITY}
+    fidelity = rdv.replay_fidelity(_classified(orig["archive"], orig["trace"]),
+                                   _classified(outs["archive"], outs["trace"]))
+    assert fidelity["compared"] == _R_STEPS and fidelity["excluded"] == 0
+    assert fidelity["mismatches"] == 0 and fidelity["examples"] == []
+    assert (fidelity["mismatch_outcome"], fidelity["mismatch_computed"],
+            fidelity["mismatch_g6_reach"]) == (0, 0, 0)
+
+
+def test_replay_fidelity_flags_a_changed_observation(tmp_path, monkeypatch, capsys):
+    orig = _original_run(tmp_path, monkeypatch)
+    _model_dir(tmp_path, monkeypatch, with_models=True)
+    classified = _classified(orig["archive"], orig["trace"])
+    target = classified[classified["outcome"] == "ok"].iloc[3]["run_end_utc"].strftime(rdv._TS_FMT)
+    lines = orig["trace"].read_text(encoding="utf-8").splitlines()
+    edited = []
+    for line in lines:
+        record = json.loads(line)
+        if record["run_end_utc"] == target:
+            record["observation"]["temp"] = 80.0  # past the G3 range limit; the record still says ok
+        edited.append(json.dumps(record, sort_keys=True))
+    orig["trace"].write_text("\n".join(edited) + "\n", encoding="utf-8")
+    outs = _out_paths(tmp_path)
+
+    code = rdv.main(_cli(orig, outs))
+
+    assert code == 1
+    fidelity = json.loads(outs["fidelity"].read_text(encoding="utf-8"))
+    assert fidelity["mismatches"] >= 1 and fidelity["mismatch_g6_reach"] >= 1
+    assert fidelity["examples"][0]["city"] == _CITY
+    assert fidelity["examples"][0]["run_end_utc"] == target
+    assert fidelity["examples"][0]["replay_outcome"] == "G3"
+    assert "mismatches=" in capsys.readouterr().out
+
+    # An unchanged trace replays clean: exit 0, zero mismatches.
+    clean_dir = tmp_path / "clean"
+    clean_dir.mkdir()
+    clean = _original_run(clean_dir, monkeypatch)
+    clean_outs = _out_paths(clean_dir)
+    assert rdv.main(_cli(clean, clean_outs)) == 0
+    assert json.loads(clean_outs["fidelity"].read_text(encoding="utf-8"))["mismatches"] == 0
+
+
+def test_replay_refuses_without_anomaly_models_or_over_existing_outputs(tmp_path, monkeypatch, capsys):
+    orig = _original_run(tmp_path, monkeypatch)
+    model_dir = _model_dir(tmp_path, monkeypatch, with_models=False)
+    outs = _out_paths(tmp_path)
+
+    code = rdv.main(_cli(orig, outs))
+
+    err = capsys.readouterr().err
+    assert code == 2
+    assert config.ANOMALY_ML_MODEL_FILENAME_TEMPLATE.format(city=_CITY) in err
+    assert not any(path.exists() for path in outs.values())  # nothing was started
+    with pytest.raises(rdv.ReplayRefused):
+        _replay(orig, outs, require_models=True)
+
+    # With the model present, an existing output file is still refused, untouched.
+    (model_dir / config.ANOMALY_ML_MODEL_FILENAME_TEMPLATE.format(city=_CITY)).write_bytes(b"x")
+    outs["trace"].write_text("keep", encoding="utf-8")
+    code = rdv.main(_cli(orig, outs))
+    err = capsys.readouterr().err
+    assert code == 2 and str(outs["trace"]) in err
+    assert outs["trace"].read_text(encoding="utf-8") == "keep"
+    assert not outs["archive"].exists() and not outs["log"].exists() and not outs["fidelity"].exists()
+
+    # A missing original input is also exit 2, naming the path.
+    missing = dict(orig, trace=tmp_path / "nope.jsonl")
+    assert rdv.main(_cli(missing, _out_paths(tmp_path, "other"))) == 2
+    assert str(tmp_path / "nope.jsonl") in capsys.readouterr().err
+
+
+def test_replay_never_touches_the_network(tmp_path, monkeypatch):
+    orig = _original_run(tmp_path, monkeypatch)
+    outs = _out_paths(tmp_path)
+    attempts = []
+
+    def boom(*args, **kwargs):
+        attempts.append(args)
+        raise AssertionError("the replay must not call a provider or the network")
+
+    monkeypatch.setattr(requests, "get", boom)
+    monkeypatch.setattr(oc.weather_provider, "fetch_weather", boom)
+    monkeypatch.setattr(oc.tceq_provider, "fetch_tceq", boom)
+    monkeypatch.setattr(oc.nsrdb_provider, "fetch_nsrdb", boom)
+    monkeypatch.setattr(oc.open_meteo_provider, "fetch_open_meteo", boom)
+    monkeypatch.setattr(oc, "make_composed_fetcher", boom)
+
+    _replay(orig, outs)
+
+    assert attempts == []
+    assert len(rdv.load_trace(outs["trace"])) == _R_STEPS
+    assert os.path.getsize(outs["archive"]) > 0
