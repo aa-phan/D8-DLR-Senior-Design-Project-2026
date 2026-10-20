@@ -32,25 +32,25 @@ proposals.
 
 ### Merge PR #7 (Phase 1)
 
-- [ ] **LAND-01**: PR #7's modules live at their real paths (`backend/city_pipeline.py`,
+- [x] **LAND-01**: PR #7's modules live at their real paths (`backend/city_pipeline.py`,
   `backend/dlr_orchestrator.py`, `backend/observation_composer.py`, `backend/backfill_archive.py`,
   changes to `backend/city_rating.py`) on a branch based on current `main`, with LF line endings. No
   root-level duplicates of backend modules or docs are added, and the unchanged `dlr_pipeline.py`
   is dropped from the diff.
-- [ ] **LAND-02**: The full test suite passes on the merged result. This includes updating the 19
+- [x] **LAND-02**: The full test suite passes on the merged result. This includes updating the 19
   `backend/tests/city_rating_test.py` fixtures that lack `wind_direction`, collecting the
   wind-projection test as `backend/tests/city_rating_wind_projection_test.py`, and fixing the cron
   test that already fails on `main`
   (`forecast_shadow_collect_test.py::test_workflow_cron_is_four_cycles_a_day_and_documents_the_revert`,
   broken by 2ec2bfd).
-- [ ] **LAND-03**: The PR's new modules have tests: the composer's provider priority and same-hour
+- [x] **LAND-03**: The PR's new modules have tests: the composer's provider priority and same-hour
   alignment, the city pipeline's fallback-row exclusion and degenerate-band handling, the
   orchestrator's per-city error isolation, and backfill's resume/skip behavior. All run offline
   with stub fetchers.
-- [ ] **LAND-04**: The PR's doc amendments land in the right files: the composition amendment in
+- [x] **LAND-04**: The PR's doc amendments land in the right files: the composition amendment in
   `docs/data-science/decisions/data_provider.md`, and the wind-projection amendment in
   `docs/data-science/PRD.md`, not the frontend PRD.
-- [ ] **PIPE-01** (carried over): one entry point runs history → forecast → anomaly detector →
+- [x] **PIPE-01** (carried over): one entry point runs history → forecast → anomaly detector →
   `rate_city` → archive for every city in `config.LOCATIONS`. Delivered in code by PR #7; this
   phase verifies it after LAND-01..04.
 
@@ -153,7 +153,7 @@ proposals.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| LAND-01..04, PIPE-01 | Phase 1 | Pending (waiting on PR #7 author) |
+| LAND-01..04, PIPE-01 | Phase 1 | Complete (01-05, 2026-10-20) |
 | CLEAN-01..04 | Phase 2 | Pending |
 | VAL-01..03 | Phase 3 | Pending |
 | DB-01..05 | Phase 4 | Pending |
