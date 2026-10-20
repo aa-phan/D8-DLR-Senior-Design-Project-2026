@@ -1,8 +1,8 @@
 ---
 phase: 02-data-cleaning
-verified: 2026-10-20T00:00:00Z
-status: human_needed
-score: 9/10 must-haves verified
+verified: 2026-10-20T23:00:00Z
+status: passed
+score: 9/10 must-haves verified (the 10th, a backstop truth, is deferred to Phase 3 by owner disposition)
 covered_files:
   - ".planning/workstreams/production-pipeline/phases/02-data-cleaning/02-01-PLAN.md"
   - ".planning/workstreams/production-pipeline/phases/02-data-cleaning/02-01-SUMMARY.md"
@@ -21,31 +21,44 @@ covered_files:
   - "backend/tests/historical_archive_test.py"
   - "backend/tests/predictive_tracer_test.py"
   - "docs/data-science/decisions/data_cleaning.md"
-covered_digest: "v3:sha256:2c228b1a96c760e61a191d145e569791d02cdca46fda367bff05aa228400aaac"
+covered_digest: "v3:sha256:f48a7c180daa59ea3b6b50c7703f2b3e58fdff1f3cd0ce150b98af07b7639887"
 behavior_unverified: 0
 overrides_applied: 0
-coincidental_reliance_items:
-  - truth: "SC2 / gap guard: a skipped cycle is handled and the forecast is withheld only when the gap is real"
-    reason: undeclared-precondition
-    harden: "The gap tests use hour-aligned archive stamps. Production stamps each row with the run's `end`, floored to 5 minutes (`dlr_orchestrator._default_window`), not to the hour. Nothing enforces hour alignment, so run-time jitter across an hour boundary reads as a missing slot (review WR-04). Either enforce or document hour alignment of `end`, or measure gaps in elapsed time."
-human_verification:
-  - test: "Phase 3 (VAL-01/VAL-02) measures per-city flag rates for the provisional thresholds (STUCK_MIN_RUN_ROWS 6; SPIKE_MAX_STEP 10 degC, 10 m/s, 700 W/m2 per hour; MAX_TRAILING_GAP_SLOTS 1) on a backfilled real-data window. A reviewer should read those rates before anyone relies on the thresholds."
-    expected: "Flag rates are plausible per city. In particular, wind stuck runs on calm nights (El Paso, Midland) are not removing legitimate calm hours in bulk (review WR-02), and run-time jitter is not producing spurious trailing gaps (WR-04)."
-    why_human: "The plan tagged this truth `verification: backstop`. 'Physically reasonable for hourly Texas station data' cannot be shown by presence or wiring, and no held-out or property-based test exists. The thresholds were deliberately not fitted in Phase 2 (a prohibition), so the evidence is by design a Phase 3 deliverable."
+re_verification:
+  previous_status: human_needed
+  previous_score: 9/10
+  gaps_closed:
+    - "Coincidental reliance: hour alignment of archive stamps (WR-04) is now a declared precondition with a pinning test"
+    - "Review WR-01..WR-05 and IN-01..IN-03 fixed in 88e3229 and verified independently below"
+  gaps_remaining: []
+  regressions: []
+deferred:
+  - truth: "The provisional thresholds (6 rows; 10 degC, 10 m/s, 700 W/m2 per hour) are physically reasonable for hourly Texas station data"
+    addressed_in: "Phase 3 (VAL-01/VAL-02), by owner disposition in 02-UAT.md (test 1, skipped with a 'Deferred follow-up:' reason, 2026-10-20)"
+    evidence: "02-UAT.md: 'Carry to Phase 3: measure per-city flag rates for policy v2 thresholds on the 2026-09-08..09-28 backfill (VAL-01/VAL-02) and adjust thresholds there'. Caveat: no Phase 3 plan names cleaning flag rates yet, see Advisory."
+advisory:
+  - finding: "No Phase 3 plan (03-01..03-05) names per-city cleaning flag rates (stuck_*, spike_*, after_gap) as a deliverable. The deferral rests on the owner's UAT note and the policy doc's own 'Phase 3 is expected to look first at...' line, not on a Phase 3 success criterion."
+    category: other
+    reason: "Owner-deferred truth needs a carrier or it can be lost. Suggest adding a flag-rate table from clean_history(...).report['flag_counts'] to the 03-04 validation doc, or a line to 03-01's analysis CLI."
+    evidence_status: "grep of phases/03-real-data-validation/*-PLAN.md finds clean_history API references only, no flag-rate measurement task"
+  - finding: "Hour alignment (WR-04) is documented and pinned, not enforced. The hh:05 UTC live dispatch the doc relies on is a Phase 5 matter and is not yet stated in any Phase 5 requirement or plan."
+    category: other
+    reason: "A run that slips past the next hour boundary still reads as a missing slot (conservative: the forecast is withheld from G6, never an overstated rating). Phase 5 should carry the dispatch-minute constraint."
+    evidence_status: "grep for hh:05 / dispatch minute in ROADMAP.md, REQUIREMENTS.md and phases/05*/ finds nothing"
 ---
 
 # Phase 2: Data Cleaning Verification Report
 
 **Phase Goal:** The history the forecast and detector consume is checked across rows and kept to one row per slot.
 **Verified:** 2026-10-20
-**Status:** human_needed
-**Re-verification:** No, initial verification
+**Status:** passed
+**Re-verification:** Yes, after commit 88e3229 (review fixes WR-01..WR-05, IN-01..IN-03, cleaning policy v2), 47da432 (UAT disposition) and 09541aa (CLEAN-03 and SC3 owner exception)
 
 ## Verdict
 
-The goal is achieved in code. Cleaning sits on the live path, the rules fire as documented, the archive cannot take a second row for a (city, instant), and cleaned rows are distinguishable from raw rows. Every roadmap success criterion is verified against the code, a direct probe and a mutation check, not against the SUMMARY claims. No blockers.
+The goal is achieved in code and the review fixes hold. I read the changed code and tests, ran the five phase test files (103 passed, up from 96) and the full workspace suite once (1356 passed, 0 failed), ran a direct probe of the new behavior, and ran ten mutation checks in a scratch copy under `/tmp` (no source file was edited). Every mutation that should be caught by a test was caught.
 
-Status is `human_needed` for one reason only. The plan declared one truth as `verification: backstop` (the provisional thresholds are physically reasonable), which a presence check cannot establish. Phase 3 owns that evidence. The five review warnings are weighed below. None breaks a must-have, but WR-02 and WR-04 are real risks to carry into Phase 3.
+The one prior human-verification item (provisional thresholds physically reasonable on real data) is a `backstop` truth. I accept the owner's deferral to Phase 3 as its disposition and did not re-route it to human verification. Reasons it is legitimate: the owner holds that authority; Phase 2 is forbidden from fitting thresholds on real archives, so the evidence cannot exist before Phase 3's backfill; the UAT file is `status: complete` with the test `skipped` and a `Deferred follow-up:` reason; and the thresholds are labeled provisional in code and in the policy doc, with `CLEANING_POLICY_VERSION` there to record any change. I found one reason to qualify it, which is not a blocker: no Phase 3 plan yet carries the flag-rate measurement (see Advisory in the frontmatter).
 
 ## Goal Achievement
 
@@ -53,76 +66,90 @@ Status is `human_needed` for one reason only. The plan declared one truth as `ve
 
 | # | Truth | Status | Evidence |
 |---|-------|--------|----------|
-| 1 | SC1: A cleaning step sits between `read_history` and `forecast_ampacity` / `AnomalyDetector.for_city` in `city_pipeline`, and flags stuck runs and spikes under a written policy | VERIFIED | `city_pipeline.py:45-67` reads history, calls `data_cleaning.clean_history(history, as_of=end)`, reassigns `history = cleaned.usable`, and that one object feeds `forecast_ampacity` (line 75) and `AnomalyDetector.for_city` (line 99). `city_pipeline` is the only live consumer of `read_history` (grep: `backfill_archive` uses it only for resume). Probe: 6 identical `air_temp` rows flagged `stuck_air_temp` and excluded, a run of 5 not flagged, a 50 degC one-hour excursion flagged `spike_air_temp` and excluded. Policy is `docs/data-science/decisions/data_cleaning.md` (147 lines, every flag, constant, reasoning). |
-| 2 | SC2: Missing hourly slots are handled by the documented strategy, and tests cover a skipped-cycle gap | VERIFIED | Strategy is mark-never-fill (doc `## Missing hourly slots`). Probe: hourly rows 00:00-09:00 minus 05:00 gives 9 rows kept, 06:00 row `after_gap` with `gap_slots` 1, `missing_slots` 1, nothing invented. End-to-end tests `test_one_skipped_cycle_inside_the_history_keeps_the_forecast_for_g6`, `test_the_previous_cycle_skipped_still_uses_the_forecast`, `test_two_skipped_cycles_before_the_run_withhold_the_forecast_from_g6`, `test_ml_forecast_across_a_gap_in_its_lookback_is_withheld` pass. Mutation check: making `forecast_gap_reason` always return None fails 4 tests, so the guard tests discriminate. Coincidental-reliance caveat on hour alignment, see frontmatter. |
-| 3 | SC3: Appending an already-present (`city`, `datetime_utc`) never creates a second row, for `append_observation` and the orchestrator path | VERIFIED | `historical_archive.append_observation` calls `_slot_archived` before writing (lines 233-239) and returns False. Spellings Z, +00:00, naive, and an offset spelling are matched as parsed instants. Every archive write goes through `append_observation` (`city_rating.py:316`, the only caller). The orchestrator rerun test `test_rerunning_one_window_keeps_one_row_per_city_and_the_forecast_sees_cleaned_history` calls the real `dlr_orchestrator.run_dlr_pipeline` twice: second run reports `archived False` for every city and the 12:00 instant appears once. Mutation check: stubbing `_slot_archived` to False fails `test_append_refuses_a_second_row_for_the_same_city_and_instant_in_any_iso_spelling`. The read side also flags a duplicate instant (`duplicate`, probe shows 1 flagged). |
-| 4 | SC4: Cleaned rows carry a marker that tells them apart from raw rows | VERIFIED | `MARKER_COLUMNS = (clean_flags, clean_excluded, gap_slots)` appended to the frame. Probe: after cleaning, all original columns are equal to the input (`frame[orig_columns].equals(orig)` is True), the input frame is unchanged, row count in equals row count out, and the three marker columns are last. Flags join with `\|` in `FLAG_ORDER`; `""` means untouched. |
-| 5 | CLEAN-04 invariant: cleaning never changes a cell, adds or drops a row, or writes to any store | VERIFIED | Probe above. `clean_history` calls `history.copy()` and does no I/O. `test_a_pipeline_run_never_rewrites_the_archive` and the cell-invariance test pass. The only archive write is the pre-existing `rate_city` append. |
-| 6 | A cleaning exception never takes the rating down (cold start, one WARNING) | VERIFIED | `city_pipeline.py:56-67` try/except sets empty history and `cleaned = None`; `test_cleaning_failure_rates_the_city_with_no_history` passes. |
-| 7 | Forecast gap guard: a forecast built across too large a gap is computed and reported but not given to G6, with no new result keys | VERIFIED | `city_pipeline.py:88-99`: `forecast_gap_reason(cleaned.report, forecast_method)` sets `forecast_for_detector = None`, `pipeline["forecast"]` still reported, INFO line logged. `result["pipeline"]` keeps its seven keys. Boundary tests (trailing gap 1 used, 2 withheld; ml lookback 7) pass. Zero-width-band handling preserved (`test_zero_width_band_keeps_its_own_handling_when_the_history_is_also_stale`). |
-| 8 | Frozen/contract files unchanged: `ARCHIVE_COLUMNS`, `ARCHIVE_SCHEMA_VERSION`, `_validation_row`, `ampacity_forecast.py`, `anomaly_detector.py`, `forecast_training.py`, `config.py`, `shadow_collect.yml` | VERIFIED | `git diff 5efe97d HEAD --stat` over those files is empty. The `historical_archive.py` diff touches only docstrings, the new `_parse_utc` / `_slot_archived`, the guard, and the read sort; none of the three protected names appear in a changed hunk except as context. `git diff main...HEAD --name-only` lists only the nine expected files (no `data/` or `outputs/`). |
-| 9 | Written policy is pinned to the code (doc names every flag and constant; a test fails on disagreement) | VERIFIED | `test_policy_doc_names_every_flag_and_threshold` exists and passes; doc constants match the code (version 1, 6, 10/10/700, 1, 7). Weakness: single-digit numeric values are matched by substring (review WR-05), so the test would not catch every wrong value. The doc currently agrees with the code, so the truth holds today. |
-| 10 | The provisional thresholds (6 rows; 10 degC, 10 m/s, 700 W/m2 per hour) are physically reasonable for hourly Texas station data | UNCERTAIN (insufficient_spec, backstop) | No held-out or property-based test and no real-data evidence. By design: the plan prohibits fitting thresholds in Phase 2, and Phase 3 (VAL-01/02) measures flag rates. Routed to human verification. |
+| 1 | SC1: A cleaning step sits between `read_history` and `forecast_ampacity` / `AnomalyDetector.for_city`, flagging stuck runs and spikes under a written policy | VERIFIED | Unchanged since the prior report except rule bodies. `city_pipeline` calls `data_cleaning.clean_history(history, as_of=end)` and feeds `cleaned.usable` to both consumers. Policy doc `docs/data-science/decisions/data_cleaning.md` is version 2 and agrees with the code (pinning test, mutation-checked, see below). Probe: 6 identical `air_temp` on consecutive hours flag `stuck_air_temp`, 5 do not. |
+| 2 | SC2: Missing hourly slots handled by the documented strategy, with a skipped-cycle test | VERIFIED | Mark-never-fill unchanged. Probe: a stuck run split by a missing hour gives `after_gap` and no stuck flag; no row invented. The four skipped-cycle gap-guard tests in `cleaning_pipeline_test.py` still pass. Hour-alignment precondition now declared, see the coincidental-reliance check below. |
+| 3 | SC3: Appending an already-present (`city`, `datetime_utc`) never creates a second row for `append_observation` and the orchestrator path, with the owner exception that a computed row may follow a fallback row | VERIFIED | Probe against the real `append_observation` on a tmp CSV, each result as expected: fallback first then computed (any spelling) appends; computed after computed refused; fallback after any row refused; a new slot appends. Resulting file holds fallback 1825.0 and computed 1300.0 for the repaired instant. `read_history` then `clean_history` flags the fallback row `fallback` and keeps the computed row; the second computed row is the only `duplicate`. ROADMAP SC3 and REQUIREMENTS CLEAN-03 both carry the dated exception (commit 09541aa), so the code and the contract agree. Orchestrator rerun test (`cleaning_pipeline_test.py`) still passes. |
+| 4 | SC4: Cleaned rows carry a marker distinguishing them from raw rows | VERIFIED | `clean_flags`, `clean_excluded`, `gap_slots` appended; probe output shows the three columns and the original columns unchanged. Unchanged by 88e3229. |
+| 5 | CLEAN-04 invariant: cleaning never changes a cell, adds or drops a row, or writes to any store | VERIFIED | `frame = history.copy().reset_index(drop=True)`, no I/O in `data_cleaning`. Cell-invariance and no-archive-rewrite tests pass. `git status` shows no change under `data/` or `outputs/`. |
+| 6 | A cleaning exception never takes the rating down | VERIFIED | `city_pipeline_test` cleaning-failure test passes (unchanged file). |
+| 7 | Forecast gap guard withholds a gap-built forecast from G6 only past the limit, with no new result keys | VERIFIED | `city_pipeline.py` unchanged in 88e3229; boundary tests pass. |
+| 8 | Frozen and contract files unchanged | VERIFIED | `git diff 5efe97d HEAD` over `ampacity_forecast.py`, `anomaly_detector.py`, `forecast_training.py`, `config.py`, `shadow_collect.yml` is empty. No changed hunk in `historical_archive.py` touches `ARCHIVE_COLUMNS`, `ARCHIVE_SCHEMA_VERSION` or `_validation_row`. `git diff main...HEAD --name-only` outside `.planning` lists only the nine expected files. |
+| 9 | Written policy is pinned to the code (a test fails on disagreement) | VERIFIED | WR-05 fixed: `line_has(..., cells=[...])` matches values as whole table cells. Mutation: setting the doc's `MAX_TRAILING_GAP_SLOTS` cells to 10 (both tables) fails `test_policy_doc_names_every_flag_and_threshold`; setting `ML_LOOKBACK_ROWS` 7 to 17 fails it. (A first attempt that changed only one of the two doc tables survived, because the constant is stated in two tables and either line satisfies the test. That is a narrow remaining softness, noted, not a failure: any single wrong table row still has to be accompanied by a correct one.) |
+| 10 | The provisional thresholds are physically reasonable for hourly Texas station data | DEFERRED (backstop, owner disposition) | No real-data evidence is possible in Phase 2. Owner deferred it to Phase 3 in 02-UAT.md. Not counted as verified; not routed to human verification; see Verdict and Advisory. |
 
-**Score:** 9/10 truths verified (0 present-but-behavior-unverified; 1 backstop truth routed to human verification).
+**Score:** 9/10 truths verified; 1 backstop truth deferred by the owner; 0 present-but-behavior-unverified.
 
-All behavior-dependent truths (rerun leaves one row, cleaning failure degrades to cold start, gap guard withholds only past the limit) are backed by tests that I ran and by mutation checks showing the tests fail when the behavior is removed.
+### Re-verification of the Review Fixes (independent of commit messages)
 
-### Prohibitions (judgment tier)
+| ID | Owner decision / fix | Evidence | Mutation check (scratch copy) |
+|----|----------------------|----------|-------------------------------|
+| WR-01 | A computed row may follow a fallback row for its instant, on the write guard and the read-side `duplicate` rule | Probe above. Code: `_slot_archived` ignores fallback rows when the new row is computed, blocks everything when the new row is fallback; `duplicate` is `parsed[computed].duplicated(keep="first")` reindexed to the frame (index is reset first, so duplicate labels cannot break the reindex). Docs and docstrings state it. | Guard stops considering fallback (computed-after-fallback refused): `test_a_computed_row_may_follow_a_fallback_row_for_its_instant` fails. Guard lets a fallback follow a computed row: both new archive tests fail. Read-side `duplicate` over all rows: `test_a_computed_row_owns_its_instant_even_after_a_fallback_row` fails. |
+| WR-02 | Calm wind 0.0 exempt from the stuck rule | Probe: 12 hours of `wind_speed` 0.0 unflagged; 6 of 3.0 flagged; 0.0 x3 then 3.0 x6 flags only the six 3.0 rows. Solar 0.0 still exempt. | Removing the `wind_speed` exemption fails `test_calm_wind_is_not_a_stuck_run`. |
+| WR-03 | A missing hour ends a stuck run; excluded rows still bridge | Probe: same value on 7 days at one hour per day is unflagged; 6 identical with a middle hour missing is unflagged; a run bridged by a fallback row still flags 6. | Ignoring contiguity fails `test_a_missing_hour_ends_a_stuck_run`; breaking the held-hour bridge (requiring a 1-hour step) fails `test_a_stuck_run_spans_rows_already_excluded`. |
+| WR-04 | Documented hour alignment (slot is the run end's own hour, OD-7) plus a pinning test, no logic change | See coincidental-reliance check below. Confirmed no logic change: slots are still `parsed.dt.floor("h")`. | Replacing `floor("h")` with `round("h")` fails `test_a_row_belongs_to_its_run_ends_own_hour` and `test_rows_sharing_an_hour_keep_the_latest`. |
+| WR-05 | Doc test matches values as whole table cells | Truth 9 above. | Two doc mutations caught. |
+| IN-01 | Parity test across the two `_parse_utc` twins | `test_read_and_write_side_parsers_agree` runs ten spellings (Z, +00:00, +06:00, naive, fractional, -0600, date only, garbage, empty, NaN) through both and compares series. | A write-side parser that strips offsets fails the parity test and two archive tests. (A first divergent parser using `format="mixed"` produced identical output on these inputs and survived; it was not a real divergence.) |
+| IN-02 | Strict "true" contract documented | Doc rule 3 and the `fallback` table row state it; code comment matches. | n/a (documentation) |
+| IN-03 | Guard described as best effort | Module docstring, `append_observation` docstring and doc "Best effort" bullet say so. | n/a (documentation) |
 
-Plan frontmatter marks all as `resolved`. I checked each against the code rather than accepting that.
+### Coincidental-Reliance Check (hour alignment)
 
-| Prohibition | Result |
-|-------------|--------|
-| Cleaning must not write back, change a cell or invent a row (CLEAN-04) | Held. Probe and `clean_history` read-only; no store import in `data_cleaning`. |
-| Must not change `ARCHIVE_COLUMNS`, schema version, `_validation_row`, or frozen modules (CLEAN-03, CLEAN-01) | Held. Empty diff against 5efe97d. |
-| Must not edit a pre-existing assert to pass, and no cleaning opt-out on the production path | Held with one noted change. `city_pipeline_test.py` changes fixture data only. `predictive_tracer_test.py` rewrites two double-append assert lines to use a second row one hour later; this was the planned fixture resolution (the old fixture contradicted CLEAN-03) and the assertion semantics (`is True`, 3 lines, 2 rows) are unchanged. No switch to disable cleaning exists in `run_city_pipeline`. |
-| Must not overwrite or delete the stored CSV row on a slot conflict | Held. Append-only; OD-7 named in the module docstring as the Postgres rule only. |
-| Must not tune thresholds on real archives | Held. Thresholds are stated judgments with reasoning in the doc; no read of `data/historical` or `outputs/`. |
-| Must not fill a missing slot or impute | Held. Probe: no row invented, row counts equal. |
-| Must not add result/pipeline keys, or write outside `tmp_path` | Held. Seven pipeline keys kept; tests use `tmp_path` and a no-network fixture. |
+The previous report's item was an undeclared precondition: the gap tests used hour-aligned stamps while production stamps rows with a 5-minute-floored `end`. It is now declared, not removed:
 
-No prohibition is flagged unresolved.
+- `docs/data-science/decisions/data_cleaning.md` has a new `## Hour alignment` section stating that a row's slot is the run end's own hour (the same rule as OD-7's `valid_time`), that gaps are counted in slots rather than elapsed time, that the live schedule is expected to dispatch at hh:05 UTC, and exactly what happens when a run slips past an hour boundary (next row `after_gap`, `ml` forecast withheld from G6 until the lookback is unbroken; two runs in one hour leave one row via `same_hour`). It is also listed under Known limitations.
+- `test_a_row_belongs_to_its_run_ends_own_hour` pins it: stamps at 10:05, 11:40, 12:55, 13:10 with `as_of` 14:05 give no flags, `trailing_gap_slots` 0 and 4 contiguous tail rows; stamps at 10:55 and 12:00 give `after_gap`. It fails under `round("h")` (mutation M7), so it discriminates.
+- I confirmed the premise against the code: `dlr_orchestrator._default_window` floors now to 5 minutes, and OD-7 in REQUIREMENTS.md defines `valid_time` as the hour-truncated UTC run slot.
+
+Because the precondition is now stated, tested and consistent with the owner's OD-7, it no longer qualifies as coincidental reliance under the "undeclared" criterion. It is still not enforced in code, and the hh:05 dispatch is not yet written into any Phase 5 requirement or plan. Recorded as an advisory, not a gap: the failure direction is conservative (the forecast is withheld, never overstated).
+
+### Deferred Items
+
+| # | Item | Addressed In | Evidence |
+|---|------|--------------|----------|
+| 1 | Provisional thresholds physically reasonable on real data (truth 10) | Phase 3 (VAL-01/VAL-02), owner disposition | 02-UAT.md `Deferred follow-up:` entry, 2026-10-20 |
+
+### Advisory (New Scope, Unevidenced)
+
+| # | Finding | Category | Why Advisory |
+|---|---------|----------|--------------|
+| 1 | No Phase 3 plan names per-city cleaning flag rates as a deliverable; the deferral has no carrier yet | other | Planning gap, not a Phase 2 code defect |
+| 2 | Hour alignment documented and pinned but not enforced; the hh:05 dispatch is not yet in a Phase 5 requirement | other | Conservative failure direction; belongs to Phase 5 scheduling |
 
 ### Required Artifacts
 
 | Artifact | Expected | Status | Details |
 |----------|----------|--------|---------|
-| `backend/data_cleaning.py` | clean_history, CleanedHistory, FLAG_ORDER, EXCLUDING_FLAGS, MARKER_COLUMNS, forecast_gap_reason, constants | VERIFIED | 435 lines, all symbols present, no stubs. WIRED from `city_pipeline`. |
-| `backend/city_pipeline.py` | cleaning call and gap guard | VERIFIED | `data_cleaning.clean_history(history, as_of=end)` and `data_cleaning.forecast_gap_reason(cleaned.report, forecast_method)` both present. |
-| `backend/historical_archive.py` | slot guard and stable read order | VERIFIED | `_slot_archived`, `_parse_utc`, stable mergesort on parsed instant. |
-| `backend/tests/data_cleaning_test.py` | rule boundary and doc tests | VERIFIED | 597 lines. |
-| `backend/tests/cleaning_pipeline_test.py` | orchestrator tracer and skipped-cycle tests | VERIFIED | 425 lines, exercises real `run_dlr_pipeline`. |
-| `backend/tests/historical_archive_test.py` | one-row-per-slot and ordering tests | VERIFIED | 239 lines added. |
-| `docs/data-science/decisions/data_cleaning.md` | written policy and gap strategy | VERIFIED | 147 lines; contains `## Missing hourly slots` and `## Forecast use across gaps`. |
+| `backend/data_cleaning.py` | `clean_history`, rules, constants, policy version 2 | VERIFIED | Substantive, wired from `city_pipeline`. |
+| `backend/city_pipeline.py` | Cleaning call and gap guard | VERIFIED | Unchanged in 88e3229. |
+| `backend/historical_archive.py` | Slot guard with computed-after-fallback rule, stable read order | VERIFIED | `_slot_archived` and `_is_fallback` present; sole writer path via `append_observation`. |
+| `backend/tests/data_cleaning_test.py`, `historical_archive_test.py`, `cleaning_pipeline_test.py` | Rule, archive and tracer tests | VERIFIED | 103 tests across the five phase files pass. |
+| `docs/data-science/decisions/data_cleaning.md` | Written policy v2 | VERIFIED | Names every flag and constant; new Hour alignment section. |
 
 ### Key Link Verification
 
 | From | To | Via | Status |
 |------|----|-----|--------|
-| `city_pipeline.py` | `data_cleaning.py` | `data_cleaning.clean_history(history, as_of=end)` | WIRED |
-| `city_pipeline.py` | `data_cleaning.py` | `data_cleaning.forecast_gap_reason(cleaned.report, forecast_method)` | WIRED |
-| `historical_archive.append_observation` | archive CSV | `_slot_archived(...)` before write | WIRED |
-| `city_rating._archive_city_result` | `append_observation` | single archive writer for orchestrator and backfill paths | WIRED |
-| `data_cleaning.ML_LOOKBACK_ROWS` | `config.FORECAST_ML_LAG_HOURS` / `FORECAST_ML_ROLLING_WINDOW_HOURS` | read-only derivation, value 7 | WIRED |
+| `city_pipeline.py` | `data_cleaning.py` | `clean_history(history, as_of=end)`; `forecast_gap_reason(...)` | WIRED |
+| `historical_archive.append_observation` | archive CSV | `_slot_archived` before write | WIRED |
+| `city_rating._archive_city_result` | `append_observation` | row built with `fallback` from the check result | WIRED |
 | `data_cleaning_test.py` | `data_cleaning.md` | doc agreement test | WIRED |
+| `data_cleaning._parse_utc` | `historical_archive._parse_utc` | parity test | WIRED |
 
 ### Data-Flow Trace (Level 4)
 
 | Artifact | Data Variable | Source | Real Data | Status |
 |----------|---------------|--------|-----------|--------|
-| `city_pipeline` forecast input | `history` (= `cleaned.usable`) | `read_history` on the archive CSV, then `clean_history` | Yes. The orchestrator tracer shows the forecast receives 1 of 3 archive rows with the cleaned markers. | FLOWING |
-| `AnomalyDetector.for_city` | `history` | same object | Yes | FLOWING |
+| Forecast and detector input | `history` = `cleaned.usable` | `read_history` on the CSV, then `clean_history` | Yes (probe: file with a fallback and two computed rows yields the two computed rows) | FLOWING |
 
 ### Behavioral Spot-Checks
 
 | Behavior | Command | Result | Status |
 |----------|---------|--------|--------|
-| 5 phase test files | `pytest tests/data_cleaning_test.py tests/cleaning_pipeline_test.py tests/historical_archive_test.py tests/city_pipeline_test.py tests/predictive_tracer_test.py -q` | 96 passed | PASS |
-| Stuck/spike/gap/duplicate/no-mutation probe | scratch script calling `clean_history` | stuck 6 flagged, run-of-5 not, spike flagged, gap marked, cells unchanged | PASS |
-| Mutation: disable slot guard | stub `_slot_archived` to False, rerun archive tests | fails (spelling test) | PASS (tests discriminate) |
-| Mutation: disable gap guard | stub `forecast_gap_reason` to None | 4 tests fail | PASS (tests discriminate) |
-| Full suite | not re-run, per instruction | orchestrator reported 1349 passed, 0 failed on final HEAD | accepted |
+| 5 phase test files | `.venv/bin/python -m pytest -q -p no:cacheprovider backend/tests/{data_cleaning,cleaning_pipeline,historical_archive,city_pipeline,predictive_tracer}_test.py` | 103 passed | PASS |
+| Full workspace suite, run once | `.venv/bin/python -m pytest -q -p no:cacheprovider` | 1356 passed, 0 failed | PASS |
+| WR-01 write guard and read-side duplicate | scratch probe on a tmp CSV | True, True, False, False, True, False, False; computed row kept | PASS |
+| WR-02 / WR-03 stuck rule | scratch probe | calm wind and night solar unflagged; consecutive 3.0 and 20.0 flagged; hour gap and daily readings unflagged | PASS |
+| Ten mutations (scratch copy in /tmp) | per table above | each caught by a named test (the two that first survived were my own non-equivalent mutations, redone correctly) | PASS |
 
 ### Probe Execution
 
@@ -132,45 +159,24 @@ Step 7c: SKIPPED. No probe scripts are declared in the plans or summaries.
 
 | Requirement | Source Plan | Description | Status | Evidence |
 |-------------|-------------|-------------|--------|----------|
-| CLEAN-01 | 02-03 | Cross-row flagging of stuck runs and spikes under a written policy | SATISFIED | Rules 6 and 7 in `clean_history`; policy doc; probe and boundary tests. Thresholds provisional (human item). |
-| CLEAN-02 | 02-03, 02-04 | Documented gap strategy before forecast/detector consume history | SATISFIED | Mark-never-fill strategy, `after_gap` / `gap_slots`, report gap fields, `forecast_gap_reason`; skipped-cycle tests. |
-| CLEAN-03 | 02-01, 02-02 | At most one row per (`city`, `datetime_utc`); rerun never appends a duplicate or conflicting row | SATISFIED | Append guard plus read-side `duplicate` rule; orchestrator rerun test; mutation check. |
-| CLEAN-04 | 02-01, 02-03 | Cleaned rows stay distinguishable from raw rows | SATISFIED | `clean_flags`, `clean_excluded`, `gap_slots` markers; cells never changed. |
+| CLEAN-01 | 02-03 | Cross-row stuck and spike flagging under a written policy | SATISFIED | Rules 6 and 7, policy v2, tests and probe. Thresholds provisional, measurement deferred by owner. |
+| CLEAN-02 | 02-03, 02-04 | Documented gap strategy before forecast and detector consume history | SATISFIED | Mark-never-fill, `after_gap` / `gap_slots`, gap guard, skipped-cycle tests, Hour alignment section. |
+| CLEAN-03 | 02-01, 02-02 | At most one row per (`city`, `datetime_utc`); rerun never appends a duplicate or conflicting row | SATISFIED | Write guard and read-side rule, with the dated owner exception (computed may follow fallback) now present in REQUIREMENTS.md and ROADMAP SC3. |
+| CLEAN-04 | 02-01, 02-03 | Cleaned rows stay distinguishable from raw rows | SATISFIED | Marker columns; cells never changed. |
 
-All four IDs in REQUIREMENTS.md for this phase (CLEAN-01..04, already ticked) appear in a plan's `requirements` field. No orphaned requirements. VAL-01/02/03 are Phase 3 and not claimed here.
+All four phase IDs in REQUIREMENTS.md (CLEAN-01..04, ticked and marked Complete in the traceability table) appear in a plan's `requirements` field. No orphaned requirements.
 
 ### Anti-Patterns Found
 
-None blocking. No TBD/FIXME/XXX markers in the changed files, no stubs, no console-only handlers. `deferred-items.md` records one item (the `_parse_utc` mixed-batch defect), marked resolved in 02-03 with a regression test.
-
-### Review Findings Weighed Against the Goal
-
-The disposition file lists all eight as `open`. None is a must-have failure. My weighing:
-
-| ID | Breaks a must-have or the goal? | Assessment |
-|----|---------------------------------|------------|
-| WR-01 fallback row first blocks the later real reading | No. Plan truth 02-02 explicitly states "first-written row stays", and the doc states the CSV-only divergence. The effect is conservative (the hour becomes a missing slot, which is excluded and marked, not a silent overstatement). | Real operational weakness: a rerun cannot repair the one case where a rerun matters, and an `ml` forecast can be withheld for up to 7 hours. Decide in Phase 4 (OD-7 overwrite semantics fix this in Postgres) or relax the CSV guard to skip only computed rows. The doc does not yet list this under Known limitations. |
-| WR-02 calm wind 0.0 flagged stuck | No. The plan truth and doc specify exactly this rule (only solar 0.0 exempt). Provisional by declaration. | Carry to Phase 3. Biases the learned baseline toward windy hours and can open gaps that withhold the forecast. This is the first thing Phase 3 should measure, and the doc already says so. |
-| WR-03 stuck rule counts rows, not hours | No. Plan and doc define the run in consecutive usable rows. | Minor. Only matters in gap-ridden archives. |
-| WR-04 hour-floored slots vs 5-minute-stamped rows | No for the stated requirements (CLEAN-03 key is the exact instant). Yes for production robustness: confirmed `_default_window` stamps rows at a 5-minute floor, so jitter across an hour boundary reads as a missing slot. The failure direction is conservative (forecast withheld from G6 and falls back to rolling baseline or cold start), never an overstated rating. | The strongest of the five. Recorded as a coincidental-reliance item. Address before Phase 5's scheduled runs (enforce hour-aligned `end`, or measure gaps by elapsed time). |
-| WR-05 doc test matches numbers by substring | No. Doc agrees with code today. | Test-strength gap; fix cheaply. |
-| IN-01..03 | No. | Twin parser drift risk, strict fallback spelling (unreachable from the writer), non-atomic check-then-append (best effort; read-side `duplicate` limits harm). |
+None blocking. No TBD, FIXME or XXX in the changed source, test or doc files. No stubs. One cosmetic note: a comment line above `STUCK_MIN_RUN_ROWS` in `data_cleaning.py` was extended without rewrapping, so it exceeds the surrounding line width. Info only.
 
 ## Human Verification Required
 
-### 1. Provisional thresholds on real data
-
-**Test:** During Phase 3 (VAL-01/VAL-02), read the per-city flag rates from `clean_history(read_history(path, city=c), as_of=None)` (`report["flag_counts"]`) over the backfilled window.
-**Expected:** Stuck and spike rates are plausible for each city. Calm-night wind runs (El Paso, Midland) are not being removed in bulk, and run-time jitter is not creating spurious trailing gaps. If either occurs, adjust the thresholds or rules and bump `CLEANING_POLICY_VERSION`.
-**Why human:** The truth is a `backstop` judgment about physical reasonableness. No test or code inspection can establish it, and Phase 2 is forbidden from fitting thresholds on real archives.
+None. The sole prior item is deferred to Phase 3 by the owner (see Deferred Items).
 
 ## Gaps Summary
 
-No gaps. The phase goal is met: the history the forecast and detector consume is cleaned across rows, gap-aware and one row per slot. Before Phase 3 sign-off, three follow-ups are worth tracking (none block the phase):
-
-1. WR-04: enforce or document hour alignment of the run `end` (or measure gaps by elapsed time) before scheduled live runs in Phase 5.
-2. WR-02 / WR-03: let Phase 3's measured flag rates decide the wind exemption and whether the stuck run should require consecutive hours.
-3. WR-01: add the "fallback row blocks a later real reading" consequence to `data_cleaning.md` Known limitations, or relax the guard.
+No gaps. The goal holds: the history the forecast and detector consume is checked across rows and kept to one row per slot, with the owner-approved exception that a computed row may replace a fallback cycle's slot. Two carry-forward notes for Phase 3 and Phase 5 are in the Advisory section; neither blocks Phase 2.
 
 ---
 
