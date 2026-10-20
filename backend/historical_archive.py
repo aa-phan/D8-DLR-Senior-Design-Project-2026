@@ -124,6 +124,10 @@ def _normalize_row_keys(row: dict) -> dict:
     return row
 
 
+# A time of day followed by an explicit UTC offset ("...T10:00:00Z", "...+06:00").
+_EXPLICIT_OFFSET = r"\d{2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?\s*(?:[Zz]|[+-]\d{2}(?::?\d{2})?)\s*$"
+
+
 def _parse_utc(values) -> pd.Series:
     """
     Parse timestamps as UTC instants; unparseable values become NaT.
@@ -133,9 +137,25 @@ def _parse_utc(values) -> pd.Series:
     collection import this module). `format="ISO8601"` because pandas 2.3
     otherwise fixes one format from the first value and rejects other
     spellings of the same instant; naive values read as UTC.
+
+    Values with an explicit offset and values without one are parsed in
+    separate batches: pandas 2.3 applies the offset of an earlier value to a
+    later naive one in a single mixed call (a naive "00:30" after a "+06:00"
+    row came back as 18:30 the day before), which would misorder the sort and
+    miss a slot match.
     """
-    parsed = pd.to_datetime(values, utc=True, errors="coerce", format="ISO8601")
-    return pd.Series(parsed, index=values.index if isinstance(values, pd.Series) else None)
+    series = values if isinstance(values, pd.Series) else pd.Series(list(values), dtype=object)
+    index = series.index
+    series = series.reset_index(drop=True)
+    explicit = series.astype(str).str.contains(_EXPLICIT_OFFSET, regex=True)
+    parsed = pd.Series(pd.NaT, index=series.index, dtype="datetime64[ns, UTC]")
+    for mask in (explicit, ~explicit):
+        if mask.any():
+            parsed.loc[mask] = pd.to_datetime(
+                series[mask], utc=True, errors="coerce", format="ISO8601"
+            )
+    parsed.index = index
+    return parsed
 
 
 def _existing_header(path: str):

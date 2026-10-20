@@ -391,3 +391,102 @@ def test_unreadable_slot_check_is_not_archived_and_does_not_raise(tmp_path, capl
     assert len(warnings) == 1
     assert "append failed (non-fatal)" in warnings[0].getMessage()
     assert path.read_text() == "a,b\n1,2\n"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# read_history order (stable, by UTC instant)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_read_history_keeps_file_order_within_one_instant(tmp_path):
+    path = tmp_path / "ampacity_history.csv"
+    instants = ["2026-01-01T00:00:00Z", "2026-01-01T01:00:00Z"]
+    rows = [
+        _row(dlr_amps=1000.0 + i, datetime_utc=instants[i % 2]) for i in range(24)
+    ]
+    _write_rows_directly(path, rows)
+
+    df = ha.read_history(path=str(path), validate=False)
+
+    assert df["datetime_utc"].tolist() == [instants[0]] * 12 + [instants[1]] * 12
+    first_instant = df["dlr_amps"].iloc[:12].tolist()
+    second_instant = df["dlr_amps"].iloc[12:].tolist()
+    assert first_instant == sorted(first_instant)
+    assert second_instant == sorted(second_instant)
+    assert first_instant == [1000.0 + i for i in range(0, 24, 2)]
+    assert second_instant == [1000.0 + i for i in range(1, 24, 2)]
+
+
+def test_read_history_orders_spellings_by_their_utc_instant(tmp_path):
+    path = tmp_path / "ampacity_history.csv"
+    _write_rows_directly(
+        path,
+        [
+            _row(dlr_amps=1.0, datetime_utc="2026-01-01T01:00:00Z"),
+            _row(dlr_amps=2.0, datetime_utc="2026-01-01T06:00:00+06:00"),  # 00:00 UTC
+            _row(dlr_amps=3.0, datetime_utc="2026-01-01T00:30:00"),  # naive reads as UTC
+        ],
+    )
+
+    df = ha.read_history(path=str(path), validate=False)
+
+    assert df["datetime_utc"].tolist() == [
+        "2026-01-01T06:00:00+06:00",
+        "2026-01-01T00:30:00",
+        "2026-01-01T01:00:00Z",
+    ]
+
+
+def test_read_history_puts_unparseable_timestamps_last(tmp_path):
+    path = tmp_path / "ampacity_history.csv"
+    _write_rows_directly(
+        path,
+        [
+            _row(dlr_amps=1.0, datetime_utc="not-a-time"),
+            _row(dlr_amps=2.0, datetime_utc="2026-01-01T00:00:00Z"),
+        ],
+    )
+
+    df = ha.read_history(path=str(path), validate=False)
+
+    assert df["datetime_utc"].tolist() == ["2026-01-01T00:00:00Z", "not-a-time"]
+
+
+def test_read_history_city_filter_and_empty_file_keep_working(tmp_path):
+    missing = ha.read_history(path=str(tmp_path / "nope.csv"))
+    assert missing.empty
+    assert list(missing.columns) == ha.ARCHIVE_COLUMNS
+
+    path = tmp_path / "ampacity_history.csv"
+    _write_rows_directly(
+        path,
+        [
+            _row(city="AUSTIN", dlr_amps=1102.0, datetime_utc="2026-01-01T02:00:00Z"),
+            _row(city="MIDLAND", dlr_amps=1900.0, datetime_utc="2026-01-01T01:00:00Z"),
+            _row(city="AUSTIN", dlr_amps=1101.0, datetime_utc="2026-01-01T00:00:00Z"),
+        ],
+    )
+
+    df = ha.read_history(path=str(path), city="AUSTIN")
+
+    assert df["city"].unique().tolist() == ["AUSTIN"]
+    assert df["dlr_amps"].tolist() == [1101.0, 1102.0]
+
+
+def test_a_naive_timestamp_after_an_offset_timestamp_still_reads_as_utc(tmp_path):
+    # pandas 2.3 applied an earlier row's offset to a later naive one when both
+    # were parsed in one call; the guard and the sort must not inherit that.
+    path = tmp_path / "ampacity_history.csv"
+    _write_rows_directly(
+        path,
+        [
+            _row(datetime_utc="2026-01-01T06:00:00+06:00"),  # 00:00 UTC
+            _row(datetime_utc="2026-01-01T00:30:00"),  # naive: 00:30 UTC
+        ],
+    )
+
+    assert ha.append_observation(
+        _row(datetime_utc="2026-01-01T00:30:00Z"), path=str(path)
+    ) is False
+    assert ha.append_observation(
+        _row(datetime_utc="2025-12-31T18:30:00Z"), path=str(path)
+    ) is True
