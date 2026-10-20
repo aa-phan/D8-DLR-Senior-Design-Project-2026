@@ -31,7 +31,7 @@ infrastructure is created.
 ## Phases
 
 - [x] **Phase 1: Land PR #7** — relocate, fix tests, add tests, merge (completed 2026-10-19)
-- [ ] **Phase 2: Data Cleaning** — cross-row outlier, gap and duplicate handling on city history
+- [x] **Phase 2: Data Cleaning** — cross-row outlier, gap and duplicate handling on city history (completed 2026-10-20)
 - [ ] **Phase 3: Real-Data Validation** — ratings and calibration on backfilled data; production go/no-go
 - [ ] **Phase 4: Supabase Store & Writer** — schema migration, Postgres read/write, backfill load, secrets
 - [ ] **Phase 5: Scheduled Live Runs** — new workflow, cron-job.org trigger, failure isolation, runbook
@@ -81,7 +81,7 @@ per slot.
      2026-10-20): a computed row may follow a fallback row, and cleaning keeps only the computed one.
   4. Cleaned rows carry a marker (column or flag) that tells them apart from raw rows.
 
-**Plans**: 4/4 plans executed
+**Plans**: 4/4 plans complete
 
 Plans:
 - [x] 02-01-PLAN.md — Tracer: data_cleaning.clean_history wired into city_pipeline (timestamp, duplicate, fallback rules; clean_flags/clean_excluded markers), one archive row per (city, instant) on append, orchestrator rerun test (wave 1)
@@ -196,7 +196,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Land PR #7 | 5/5 | Complete    | 2026-10-19 |
-| 2. Data Cleaning | 4/4 | In Progress | - |
+| 2. Data Cleaning | 4/4 | Complete    | 2026-10-20 |
 | 3. Real-Data Validation | 0/5 | Planned | - |
 | 4. Supabase Store & Writer | 0/6 | Planned | - |
 | 5. Scheduled Live Runs | 0/8 | Planned | - |
