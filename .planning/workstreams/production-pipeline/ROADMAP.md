@@ -55,13 +55,13 @@ tests for every new module.
   4. The re-review checklist from the 2026-10-18 review (relocation, CRLF, unchanged
      `dlr_pipeline.py`, 19 fixture failures, uncollected test, misplaced PRD amendment) is
      resolved item by item.
-**Plans**: 3/5 plans executed
+**Plans**: 4/5 plans executed
 
 Plans:
 - [x] 01-01-PLAN.md — Tracer: offline backfill -> orchestrator -> city pipeline -> composer run, plus backfill resume/log/interrupt tests (wave 1)
 - [x] 01-02-PLAN.md — observation_composer tests: priority, same-hour alignment, fallback pass, wind pairing, circuit breaker, provenance (wave 2)
 - [x] 01-03-PLAN.md — city_pipeline tests: fallback-row exclusion, forecast failure, degenerate band, pipeline key (wave 2)
-- [ ] 01-04-PLAN.md — dlr_orchestrator tests: per-city error isolation, validation, composed wiring, summarize, main exit code (wave 2)
+- [x] 01-04-PLAN.md — dlr_orchestrator tests: per-city error isolation, validation, composed wiring, summarize, main exit code (wave 2)
 - [ ] 01-05-PLAN.md — Read-only evidence for LAND-01/02/04 and PIPE-01, plus the full suite with the new tests (wave 3)
 
 ### Phase 2: Data Cleaning
@@ -194,7 +194,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Land PR #7 | 3/5 | In Progress | - |
+| 1. Land PR #7 | 4/5 | In Progress | - |
 | 2. Data Cleaning | 0/4 | Planned | - |
 | 3. Real-Data Validation | 0/5 | Planned | - |
 | 4. Supabase Store & Writer | 0/6 | Planned | - |
