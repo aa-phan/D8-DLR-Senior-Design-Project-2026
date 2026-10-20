@@ -2,17 +2,17 @@
 gsd_state_version: "1.0"
 current_phase: 02
 current_plan: 4
-status: executing
-stopped_at: Completed 02-03-PLAN.md
-last_updated: "2026-10-20T16:46:28.038Z"
+status: verifying
+stopped_at: Completed 02-04-PLAN.md
+last_updated: "2026-10-20T16:54:14.261Z"
 last_activity: 2026-10-20
 last_activity_desc: Phase 02 execution started
-state_head: fa05c37bd739bef382b6c213adb7433e3f16e6ce
+state_head: bdaf2b09e9ea713b0d886198e52ad9b158c02494
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 35
-  completed_plans: 8
+  completed_plans: 9
   percent: 17
 milestone_name: Production Pipeline (Supabase + live ratings)
 workstream: production-pipeline
@@ -35,7 +35,7 @@ whoever owns that analysis; they are not work items here.
 
 ## Current Position
 
-**Status:** Ready to execute
+**Status:** Phase complete — ready for verification
 **Current Phase:** 02
 **Current Plan:** 4
 **Total Plans in Phase:** 4
@@ -126,6 +126,7 @@ These block or affect stringing the system together and belong to the phases nam
 - [Phase 02]: 02-03: Mark, never fill - a missing hourly slot is never imputed; the next usable row carries after_gap and gap_slots and the report measures missing, trailing and contiguous-tail slots for 02-04
 - [Phase 02]: 02-03: at_or_after_run excludes rows whose slot is at or after as_of's slot, so reruns and out-of-order backfills have no look-ahead
 - [Phase 02]: 02-03: stuck (6 rows, solar 0.0 exempt) and spike (10 degC, 10 m/s, 700 W/m2 per hour) thresholds are provisional and unfitted; Phase 3 measures flag rates; each rule family judges its fields against one shared row set
+- [Phase 02]: A forecast is withheld from G6 when the newest usable row is more than 1 hourly slot before the run, or (ml only) when fewer than 7 newest usable rows sit on consecutive hours; both provisional until Phase 3
 
 ## Open Decisions
 
@@ -139,9 +140,9 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 
 ## Session Continuity
 
-**Last session:** 2026-10-20T16:46:27.957Z
+**Last session:** 2026-10-20T16:54:14.163Z
 
-**Stopped At:** Completed 02-03-PLAN.md
+**Stopped At:** Completed 02-04-PLAN.md
 **Resume File:** None
 
 ## Performance Metrics
@@ -156,3 +157,4 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 | Phase 02 P01 | 22 min | 2 tasks | 6 files |
 | Phase 02 P02 | 9 min | 2 tasks | 2 files |
 | Phase 02 P03 | 40 min | 3 tasks | 5 files |
+| Phase 02 P04 | 6 min | 2 tasks | 4 files |

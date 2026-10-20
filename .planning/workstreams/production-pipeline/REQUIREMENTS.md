@@ -59,7 +59,7 @@ proposals.
 - [x] **CLEAN-01**: Across a city's history (not one row at a time), physically implausible values
   are flagged under a written policy (flag, exclude or impute): stuck-sensor runs, and spikes that
   are inconsistent with neighboring readings.
-- [ ] **CLEAN-02**: A documented gap-handling strategy covers missing hourly slots in a city's
+- [x] **CLEAN-02**: A documented gap-handling strategy covers missing hourly slots in a city's
   history before the forecast and anomaly detector consume it.
 - [x] **CLEAN-03**: At most one row exists per (`city`, `datetime_utc`) slot. Re-running a window
   never appends a duplicate or conflicting row.
@@ -159,7 +159,7 @@ proposals.
 | LAND-04 | Phase 1 | Complete |
 | PIPE-01 | Phase 1 | Complete |
 | CLEAN-01 | Phase 2 | Complete |
-| CLEAN-02 | Phase 2 | Pending |
+| CLEAN-02 | Phase 2 | Complete |
 | CLEAN-03 | Phase 2 | Complete |
 | CLEAN-04 | Phase 2 | Complete |
 | VAL-01 | Phase 3 | Pending |
