@@ -175,3 +175,62 @@ def test_rerunning_one_window_keeps_one_row_per_city_and_the_forecast_sees_clean
     parsed = pd.to_datetime(austin_rows["datetime_utc"], utc=True, format="ISO8601")
     assert (parsed == twelve).sum() == 1
     assert not os.path.exists(config.HISTORICAL_ARCHIVE_PATH)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Cleaning failure degrades to cold start; cleaning is read-only
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_cleaning_failure_rates_the_city_with_no_history(tmp_path, monkeypatch, caplog):
+    archive = tmp_path / "archive.csv"
+    _write_archive(archive, [
+        _archive_row("AUSTIN", f"{_DAY}T{h:02d}:00:00Z", dlr_amps=1200.0 + h)
+        for h in (7, 8, 9)
+    ])
+
+    def raiser(history, as_of=None):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(data_cleaning, "clean_history", raiser)
+
+    with caplog.at_level(logging.WARNING, logger="city_pipeline"):
+        result = city_pipeline.run_city_pipeline(
+            "AUSTIN", f"{_DAY}T09:00:00Z", f"{_DAY}T10:00:00Z", _stations(),
+            provider="synoptic", archive=False, archive_path=str(archive),
+            fetch_weather=_StubFetcher())
+
+    pipeline = result["pipeline"]
+    assert pipeline["history_rows"] == 3
+    assert pipeline["usable_history_rows"] == 0
+    assert pipeline["forecast"] is None
+    assert pipeline["forecast_used_by_g6"] is False
+    assert pipeline["detector_signal"] == "cold_start"
+    assert "rating" in result
+    warnings = [r for r in caplog.records
+                if r.name == "city_pipeline" and r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    message = warnings[0].getMessage()
+    assert "AUSTIN" in message
+    assert "cold start" in message
+
+
+def test_a_pipeline_run_never_rewrites_the_archive(tmp_path):
+    archive = tmp_path / "archive.csv"
+    _write_archive(archive, [
+        _archive_row("AUSTIN", f"{_DAY}T07:00:00Z", dlr_amps=1201.0),
+        _archive_row("AUSTIN", f"{_DAY}T07:00:00+00:00", dlr_amps=1202.0),    # duplicate
+        _archive_row("AUSTIN", f"{_DAY}T08:00:00Z", dlr_amps=1825.0, fallback=True),
+        _archive_row("AUSTIN", "garbage", dlr_amps=1203.0),                  # bad timestamp
+        _archive_row("AUSTIN", f"{_DAY}T09:00:00Z", dlr_amps=1204.0),
+    ])
+    before = archive.read_bytes()
+
+    result = city_pipeline.run_city_pipeline(
+        "AUSTIN", f"{_DAY}T09:00:00Z", f"{_DAY}T10:00:00Z", _stations(),
+        provider="synoptic", archive=False, archive_path=str(archive),
+        fetch_weather=_StubFetcher())
+
+    assert "rating" in result
+    assert result["pipeline"]["history_rows"] == 5
+    assert result["pipeline"]["usable_history_rows"] == 2
+    assert archive.read_bytes() == before
