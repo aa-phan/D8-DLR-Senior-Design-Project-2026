@@ -40,6 +40,7 @@ infrastructure is created.
 ## Phase Details
 
 ### Phase 1: Land PR #7
+
 **Goal**: PR #7's integrated pipeline is on `main` at the correct paths, with a green suite and
 tests for every new module.
 **Depends on**: PR #7 author finishing their update (external gate)
@@ -54,16 +55,17 @@ tests for every new module.
   4. The re-review checklist from the 2026-10-18 review (relocation, CRLF, unchanged
      `dlr_pipeline.py`, 19 fixture failures, uncollected test, misplaced PRD amendment) is
      resolved item by item.
-**Plans**: 5 plans
+**Plans**: 1/5 plans executed
 
 Plans:
-- [ ] 01-01-PLAN.md — Tracer: offline backfill -> orchestrator -> city pipeline -> composer run, plus backfill resume/log/interrupt tests (wave 1)
+- [x] 01-01-PLAN.md — Tracer: offline backfill -> orchestrator -> city pipeline -> composer run, plus backfill resume/log/interrupt tests (wave 1)
 - [ ] 01-02-PLAN.md — observation_composer tests: priority, same-hour alignment, fallback pass, wind pairing, circuit breaker, provenance (wave 2)
 - [ ] 01-03-PLAN.md — city_pipeline tests: fallback-row exclusion, forecast failure, degenerate band, pipeline key (wave 2)
 - [ ] 01-04-PLAN.md — dlr_orchestrator tests: per-city error isolation, validation, composed wiring, summarize, main exit code (wave 2)
 - [ ] 01-05-PLAN.md — Read-only evidence for LAND-01/02/04 and PIPE-01, plus the full suite with the new tests (wave 3)
 
 ### Phase 2: Data Cleaning
+
 **Goal**: The history the forecast and detector consume is checked across rows and kept to one row
 per slot.
 **Depends on**: Phase 1
@@ -77,6 +79,7 @@ per slot.
   3. Appending an already-present (`city`, `datetime_utc`) never creates a second row, for both
      `append_observation` and the orchestrator path (not only backfill).
   4. Cleaned rows carry a marker (column or flag) that tells them apart from raw rows.
+
 **Plans**: 4 plans
 
 Plans:
@@ -86,6 +89,7 @@ Plans:
 - [ ] 02-04-PLAN.md — Forecast gap guard for G6 (stale history, ml lookback), skipped-cycle tests end to end, phase gate (wave 3)
 
 ### Phase 3: Real-Data Validation
+
 **Goal**: Evidence that the pipeline's ratings and statistical methods are fit for production, and
 a recorded go/no-go.
 **Depends on**: Phase 2
@@ -108,6 +112,7 @@ Plans:
 - [ ] 03-05-PLAN.md — Wave 4: owner's go/no-go (blocking-human decision) recorded verbatim in the doc and STATE.md
 
 ### Phase 4: Supabase Store & Writer
+
 **Goal**: Postgres on Supabase is the production system of record for per-city ratings.
 **Depends on**: Phase 3 (go)
 **Requirements**: DB-01, DB-02, DB-03, DB-04, DB-05
@@ -132,6 +137,7 @@ Plans:
 - [ ] 04-06-PLAN.md — Owner: GitHub secret, approved push, Actions smoke, backfill load; executor verifies and commits the evidence (wave 5)
 
 ### Phase 5: Scheduled Live Runs
+
 **Goal**: Ratings accrue in Supabase on a fixed cadence with no human involved.
 **Depends on**: Phase 4
 **Requirements**: PIPE-02, SCHED-01, SCHED-02
@@ -157,6 +163,7 @@ Plans:
 - [ ] 05-08-PLAN.md — 24 h window evidence, measured Actions minutes, owner sign-off
 
 ### Phase 6: Exposure & E2E Verification
+
 **Goal**: Consumers can read current ratings for every city at any time through a documented,
 read-only REST interface.
 **Depends on**: Phase 5
@@ -171,6 +178,7 @@ read-only REST interface.
   4. A ≥72 h soak shows every city's latest `valid_time` within the cadence plus grace (OD-4) at
      every probe. Breaches are listed with causes.
   5. Insert, update and delete attempts with the anon key are all rejected.
+
 **Plans**: 7 plans
 
 Plans:
@@ -186,7 +194,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Land PR #7 | 0/5 | Planned | - |
+| 1. Land PR #7 | 1/5 | In Progress | - |
 | 2. Data Cleaning | 0/4 | Planned | - |
 | 3. Real-Data Validation | 0/5 | Planned | - |
 | 4. Supabase Store & Writer | 0/6 | Planned | - |
