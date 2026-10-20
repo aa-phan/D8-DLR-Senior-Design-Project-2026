@@ -211,3 +211,22 @@ def test_report_counts_rows_and_names_the_policy_version():
     again = data_cleaning.clean_history(history, as_of=f"{_DAY}T12:00:00+00:00")
     assert again.report["as_of"] == f"{_DAY}T12:00:00Z"
     assert data_cleaning.clean_history(history).report["as_of"] is None
+
+
+def test_offset_and_naive_spellings_in_one_frame_are_parsed_independently():
+    # pandas 2.3 applies an earlier value's explicit offset to a later naive or
+    # date-only value in one mixed parse; each value must read as its own instant.
+    history = _rows(
+        (f"{_DAY}T16:00:00+06:00", 1001.0, False),   # 10:00Z
+        (f"{_DAY}T11:00:00", 1002.0, False),         # naive, reads as 11:00Z
+        (f"{_DAY}T10:00:00", 1003.0, False),         # naive, same instant as the first row
+        (_DAY, 1004.0, False),                       # date only, reads as 00:00Z
+    )
+
+    cleaned = data_cleaning.clean_history(history)
+
+    assert list(cleaned.frame["dlr_amps"]) == [1004.0, 1001.0, 1003.0, 1002.0]
+    assert _flags_by_amps(cleaned) == {
+        1004.0: "", 1001.0: "", 1003.0: "duplicate", 1002.0: "",
+    }
+    assert list(cleaned.usable["dlr_amps"]) == [1004.0, 1001.0, 1002.0]

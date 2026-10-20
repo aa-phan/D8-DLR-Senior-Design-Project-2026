@@ -43,6 +43,10 @@ MARKER_COLUMNS: tuple[str, ...] = ("clean_flags", "clean_excluded")
 _AS_OF_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
 
+# A time of day followed by an explicit UTC offset ("...T10:00:00Z", "...+06:00").
+_EXPLICIT_OFFSET = r"\d{2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?\s*(?:[Zz]|[+-]\d{2}(?::?\d{2})?)\s*$"
+
+
 def _parse_utc(values) -> pd.Series:
     """
     Parse timestamps as UTC instants; anything unparseable becomes NaT.
@@ -50,9 +54,25 @@ def _parse_utc(values) -> pd.Series:
     `format="ISO8601"` matters: without it pandas 2.3 infers one format from
     the first value and rejects other spellings of the same instant (a naive
     "...T10:00:00" after a "...T10:00:00Z"). Naive values read as UTC.
+
+    Values with an explicit offset and values without one are parsed in
+    separate batches: pandas 2.3 applies the offset of an earlier value to a
+    later naive or date-only one in a single mixed call, which would misplace
+    that row in the time sort and miss a duplicate instant. The write-side twin
+    is `historical_archive._parse_utc`.
     """
-    parsed = pd.to_datetime(values, utc=True, errors="coerce", format="ISO8601")
-    return pd.Series(parsed, index=values.index if isinstance(values, pd.Series) else None)
+    series = values if isinstance(values, pd.Series) else pd.Series(list(values), dtype=object)
+    index = series.index
+    series = series.reset_index(drop=True)
+    explicit = series.astype(str).str.contains(_EXPLICIT_OFFSET, regex=True)
+    parsed = pd.Series(pd.NaT, index=series.index, dtype="datetime64[ns, UTC]")
+    for mask in (explicit, ~explicit):
+        if mask.any():
+            parsed.loc[mask] = pd.to_datetime(
+                series[mask], utc=True, errors="coerce", format="ISO8601"
+            )
+    parsed.index = index
+    return parsed
 
 
 class CleanedHistory:
