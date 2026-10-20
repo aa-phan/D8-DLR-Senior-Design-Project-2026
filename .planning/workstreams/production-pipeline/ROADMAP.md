@@ -80,10 +80,10 @@ per slot.
      `append_observation` and the orchestrator path (not only backfill).
   4. Cleaned rows carry a marker (column or flag) that tells them apart from raw rows.
 
-**Plans**: 4 plans
+**Plans**: 1/4 plans executed
 
 Plans:
-- [ ] 02-01-PLAN.md — Tracer: data_cleaning.clean_history wired into city_pipeline (timestamp, duplicate, fallback rules; clean_flags/clean_excluded markers), one archive row per (city, instant) on append, orchestrator rerun test (wave 1)
+- [x] 02-01-PLAN.md — Tracer: data_cleaning.clean_history wired into city_pipeline (timestamp, duplicate, fallback rules; clean_flags/clean_excluded markers), one archive row per (city, instant) on append, orchestrator rerun test (wave 1)
 - [ ] 02-02-PLAN.md — Archive tests for the one-row-per-slot guard (spellings, other cities, corridor-era files, unreadable files) and stable read order (wave 2)
 - [ ] 02-03-PLAN.md — Hourly-slot, gap, stuck-run and spike rules, gap_slots marker, and the written policy docs/data-science/decisions/data_cleaning.md (wave 2)
 - [ ] 02-04-PLAN.md — Forecast gap guard for G6 (stale history, ml lookback), skipped-cycle tests end to end, phase gate (wave 3)
@@ -195,7 +195,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Land PR #7 | 5/5 | Complete    | 2026-10-19 |
-| 2. Data Cleaning | 0/4 | Planned | - |
+| 2. Data Cleaning | 1/4 | In Progress | - |
 | 3. Real-Data Validation | 0/5 | Planned | - |
 | 4. Supabase Store & Writer | 0/6 | Planned | - |
 | 5. Scheduled Live Runs | 0/8 | Planned | - |
