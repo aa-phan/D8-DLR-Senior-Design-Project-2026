@@ -18,11 +18,17 @@ Needs SYNOPTIC_TOKEN (station locations), NREL_API_KEY and NREL_API_EMAIL.
 Writes the archive (default data/historical/provisional_backfill.csv) and a
 per-run log (default outputs/backfill_log.csv); never touches
 config.HISTORICAL_ARCHIVE_PATH unless you pass it.
+
+With --trace-path it also appends one JSON line per city per executed step
+(schema `backfill_trace/1`) holding what the per-city pipeline actually did, for
+offline validation by real_data_validation.py. Without it nothing extra is
+opened or written.
 """
 
 import argparse
 import contextlib
 import io
+import json
 import logging
 import os
 import re
@@ -41,6 +47,10 @@ _TS_FMT = "%Y-%m-%dT%H:%M:%SZ"
 DEFAULT_ARCHIVE = os.path.join("data", "historical", "provisional_backfill.csv")
 DEFAULT_LOG = os.path.join("outputs", "backfill_log.csv")
 _GATE_RE = re.compile(r"\b(G[1-6]) FAIL")
+
+# Per-step validation trace (see `_trace_records`).
+TRACE_SCHEMA = "backfill_trace/1"
+_OBSERVATION_KEYS = ("temp", "wind", "wind_raw", "wind_direction", "solar")
 
 
 _LOG_HEADER = "run_end_utc,city,rating_a,fallback,exhausted,archived,gates,error"
@@ -70,9 +80,50 @@ def _already_archived(path: str) -> dict:
     return done
 
 
+def _trace_records(run: dict, ts_text: str, forecast_method: str, provenance: list) -> list:
+    """
+    One trace record per city the step rated, built from the raw
+    `run_city_pipeline` results zipped with their summary rows. `provenance` is
+    the slice of the composed fetcher's provenance this step added; the record of
+    the rated station (the last one, if several) names the aligned observation
+    hour and the provider of each input.
+    """
+    records = []
+    for result, row in zip(run["results"], run["summary"]):
+        obs = result.get("observation")
+        stid = result.get("station_id")
+        match = None
+        if stid is not None:
+            for rec in provenance:
+                if str(rec.get("stid")) == str(stid):
+                    match = rec
+        records.append({
+            "schema": TRACE_SCHEMA,
+            "run_end_utc": ts_text,
+            "city": result["city"],
+            "forecast_method": run.get("forecast_method", forecast_method),
+            "error": None,
+            "station_id": stid,
+            "rating_a": result["rating"],
+            "static_rating_a": row["static_rating_a"],
+            "status": result["status"],
+            "fallback": result["fallback"],
+            "exhausted": result["exhausted"],
+            "archived": result["archived"],
+            "fallback_gates": row["fallback_gates"],
+            "alerts": [str(a) for a in result["alerts"]],
+            "observation": None if obs is None else {k: float(obs[k]) for k in _OBSERVATION_KEYS},
+            "observation_hour": None if match is None else match.get("hour"),
+            "sources": None if match is None else {
+                k: match.get(k) for k in ("air_temp", "wind_speed", "solar_radiation")},
+            "pipeline": result.get("pipeline"),
+        })
+    return records
+
+
 def backfill(start, end, step_hours=1.0, archive_path=DEFAULT_ARCHIVE, log_path=DEFAULT_LOG,
              cities=None, forecast_method="naive", skip_synoptic=False,
-             stations=None, fetcher=None, out=print) -> dict:
+             stations=None, fetcher=None, out=print, trace_path=None) -> dict:
     cities = list(cities) if cities else list(config.LOCATIONS)
     times = pd.date_range(pd.Timestamp(start, tz="UTC") if pd.Timestamp(start).tzinfo is None else pd.Timestamp(start).tz_convert("UTC"),
                           pd.Timestamp(end, tz="UTC") if pd.Timestamp(end).tzinfo is None else pd.Timestamp(end).tz_convert("UTC"),
@@ -93,7 +144,12 @@ def backfill(start, end, step_hours=1.0, archive_path=DEFAULT_ARCHIVE, log_path=
     t0 = time.time()
     n = len(times)
 
-    with open(log_path, "a", encoding="utf-8") as log_fh:
+    trace_cm = contextlib.nullcontext()
+    if trace_path:
+        os.makedirs(os.path.dirname(str(trace_path)) or ".", exist_ok=True)
+        trace_cm = open(trace_path, "a", encoding="utf-8")
+
+    with open(log_path, "a", encoding="utf-8") as log_fh, trace_cm as trace_fh:
         if write_header:
             log_fh.write(_LOG_HEADER + "\n")
         try:
@@ -102,6 +158,7 @@ def backfill(start, end, step_hours=1.0, archive_path=DEFAULT_ARCHIVE, log_path=
                 if not todo:
                     totals["skipped"] += 1
                     continue
+                prov_start = len(fetcher.provenance) if trace_fh is not None else 0
                 buf = io.StringIO()
                 with contextlib.redirect_stdout(buf):  # the safety monitor prints each gate failure
                     run = run_dlr_pipeline(
@@ -124,6 +181,11 @@ def backfill(start, end, step_hours=1.0, archive_path=DEFAULT_ARCHIVE, log_path=
                     totals["errors"][c] += 1
                     log_fh.write(f"{ts.strftime(_TS_FMT)},{c},,,,,,{msg.replace(',', ';')[:120]}\n")
                     parts.append(f"{c[:6]} ERROR")
+                if trace_fh is not None:
+                    for record in _trace_records(run, ts.strftime(_TS_FMT), forecast_method,
+                                                 fetcher.provenance[prov_start:]):
+                        trace_fh.write(json.dumps(record, default=str, sort_keys=True) + "\n")
+                    trace_fh.flush()
                 log_fh.flush()
                 elapsed = time.time() - t0
                 eta = elapsed / max(totals["runs"], 1) * (n - i)
@@ -163,10 +225,14 @@ def main(argv=None) -> int:
     p.add_argument("--forecast-method", default="naive")
     p.add_argument("--no-synoptic", action="store_true",
                    help="skip Synoptic/ASOS (far fewer requests for old windows with no station data)")
+    p.add_argument("--trace-path", default=None,
+                   help="append one JSON line per city per step for offline validation "
+                        "(default: no trace)")
     args = p.parse_args(argv)
     logging.basicConfig(level=logging.ERROR, format="%(levelname)s | %(message)s")
     totals = backfill(args.start, args.end, args.step_hours, args.archive_path, args.log_path,
-                      args.cities, args.forecast_method, args.no_synoptic)
+                      args.cities, args.forecast_method, args.no_synoptic,
+                      trace_path=args.trace_path)
     _print_summary(totals, args.archive_path)
     return 0
 
