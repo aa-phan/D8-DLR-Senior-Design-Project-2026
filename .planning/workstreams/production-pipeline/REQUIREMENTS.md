@@ -56,14 +56,14 @@ proposals.
 
 ### Production gaps (Phases 2-3)
 
-- [ ] **CLEAN-01**: Across a city's history (not one row at a time), physically implausible values
+- [x] **CLEAN-01**: Across a city's history (not one row at a time), physically implausible values
   are flagged under a written policy (flag, exclude or impute): stuck-sensor runs, and spikes that
   are inconsistent with neighboring readings.
 - [ ] **CLEAN-02**: A documented gap-handling strategy covers missing hourly slots in a city's
   history before the forecast and anomaly detector consume it.
 - [x] **CLEAN-03**: At most one row exists per (`city`, `datetime_utc`) slot. Re-running a window
   never appends a duplicate or conflicting row.
-- [ ] **CLEAN-04**: Rows touched by cleaning stay distinguishable from rows as written, so
+- [x] **CLEAN-04**: Rows touched by cleaning stay distinguishable from rows as written, so
   validation can tell raw readings from cleaned ones.
 - [ ] **VAL-01**: Over a backfilled real-data window for all four cities, the pipeline's ratings
   are compared against each city's static rating (`config.STATIC_RATINGS`, provisional) and
@@ -158,10 +158,10 @@ proposals.
 | LAND-03 | Phase 1 | Complete |
 | LAND-04 | Phase 1 | Complete |
 | PIPE-01 | Phase 1 | Complete |
-| CLEAN-01 | Phase 2 | Pending |
+| CLEAN-01 | Phase 2 | Complete |
 | CLEAN-02 | Phase 2 | Pending |
 | CLEAN-03 | Phase 2 | Complete |
-| CLEAN-04 | Phase 2 | Pending |
+| CLEAN-04 | Phase 2 | Complete |
 | VAL-01 | Phase 3 | Pending |
 | VAL-02 | Phase 3 | Pending |
 | VAL-03 | Phase 3 | Pending |
