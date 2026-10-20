@@ -2,15 +2,17 @@
 City Pipeline Orchestrator (Track 1)
 ==========================================
 Per-city replacement for the retired corridor pipeline: reads one city's
-archived history, forecasts ahead, builds that city's anomaly detector from
-the forecast + history, then runs `city_rating.rate_city` with the detector
-wired in as G6 (and archives the result so the next run has more history).
+archived history, cleans it (`data_cleaning.clean_history`), forecasts ahead,
+builds that city's anomaly detector from the forecast + the cleaned history,
+then runs `city_rating.rate_city` with the detector wired in as G6 (and
+archives the result so the next run has more history).
 """
 
 import logging
 
 import ampacity_forecast
 import city_rating
+import data_cleaning
 import historical_archive
 from anomaly_detector import AnomalyDetector
 
@@ -31,23 +33,41 @@ def run_city_pipeline(
     """
     Full Track 1 integration for one city, one run:
       1. read this city's archived history
-      2. forecast ahead from that history (None if cold start)
-      3. build the city's anomaly detector from the forecast + history
-      4. rate the city with that detector wired into G6
+      2. clean it (data_cleaning.clean_history): the forecast and detector
+         see only the rows left usable
+      3. forecast ahead from that history (None if cold start)
+      4. build the city's anomaly detector from the forecast + history
+      5. rate the city with that detector wired into G6
 
     Returns whatever `rate_city` returns, plus a `pipeline` key describing
-    what steps 1-3 produced (history rows, forecast, detector signal).
+    what steps 1-4 produced (history rows, forecast, detector signal).
     """
     history = historical_archive.read_history(path=archive_path, city=city)
 
-    # Fallback cycles archive the *static* rating as dlr_amps. Feeding those
-    # back in makes the naive forecast equal the static rating, so the next
-    # real reading looks anomalous, falls back, and archives static again --
-    # a self-sustaining latch. Forecast and detector only learn from cycles
-    # that produced a computed rating.
     total_rows = int(len(history))
-    if "fallback" in history.columns and total_rows:
-        history = history[history["fallback"].astype(str).str.lower() != "true"].reset_index(drop=True)
+
+    # A cleaning failure must not take the rating down, and unvetted history
+    # is not fed to G6: continue with an empty history (the detector's own
+    # convention is no signal, no trips). The fallback-row rule that breaks
+    # the static-rating latch lives in data_cleaning.
+    try:
+        cleaned = data_cleaning.clean_history(history, as_of=end)
+        history = cleaned.usable
+        flagged = ", ".join(
+            f"{name}={count}"
+            for name, count in cleaned.report["flag_counts"].items() if count
+        ) or "no rows flagged"
+        log.info(
+            "%s: %d of %d history rows usable after cleaning (%s)",
+            city, int(len(history)), total_rows, flagged,
+        )
+    except Exception as exc:
+        log.warning(
+            "data cleaning failed for %s (%s) -- continuing with no history (cold start)",
+            city, str(exc),
+        )
+        history = history.iloc[0:0]
+        cleaned = None
 
     # A forecast failure (e.g. method="ml" with no trained artifact) must not
     # take the rating down: G6 degrades to the rolling baseline / cold start.

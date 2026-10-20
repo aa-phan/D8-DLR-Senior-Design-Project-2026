@@ -11,8 +11,17 @@ The row shape (`ARCHIVE_COLUMNS`) reuses `units_def.PIPELINE_SCHEMA`'s
 column spellings for every numeric field so `validate_pipeline_row` vets
 an archive row with no change to that validator and no parallel schema
 object (T-04-01, the archive-poisoning mitigation). Storage is an
-append-only CSV at `config.HISTORICAL_ARCHIVE_PATH`, unbounded retention
-this phase (D-09) — this module does not implement rotation/compaction.
+append-only CSV at `config.HISTORICAL_ARCHIVE_PATH` holding at most one row
+per (city, datetime_utc) instant: `append_observation` refuses a second row
+for an instant already archived for that city, in any ISO-8601 spelling, and
+the first write wins (CLEAN-03). Retention is unbounded this phase (D-09) —
+this module does not implement rotation/compaction.
+
+First-write-wins is a CSV-only rule: an append-only file cannot replace a row
+without rewriting the whole file inside a best-effort path that must never
+raise. The Postgres writer follows owner decision OD-7 instead (key = the
+hour-truncated run slot, a same-slot retry overwrites the row). Nothing here
+sets that rule.
 
 Column list locked at the Plan 04-01 Task 1 checkpoint (D-07 — one-way:
 once `ampacity_forecast.py`/`anomaly_detector.py` read this shape and rows
@@ -115,11 +124,45 @@ def _normalize_row_keys(row: dict) -> dict:
     return row
 
 
+def _parse_utc(values) -> pd.Series:
+    """
+    Parse timestamps as UTC instants; unparseable values become NaT.
+
+    Write-side twin of `data_cleaning._parse_utc`, kept separate so this
+    module's imports stay as they are (forecast_training and the shadow
+    collection import this module). `format="ISO8601"` because pandas 2.3
+    otherwise fixes one format from the first value and rejects other
+    spellings of the same instant; naive values read as UTC.
+    """
+    parsed = pd.to_datetime(values, utc=True, errors="coerce", format="ISO8601")
+    return pd.Series(parsed, index=values.index if isinstance(values, pd.Series) else None)
+
+
 def _existing_header(path: str):
     """Header columns of an existing non-empty CSV at `path`, else None."""
     if not os.path.exists(path) or os.path.getsize(path) == 0:
         return None
     return list(pd.read_csv(path, nrows=0).columns)
+
+
+def _slot_archived(path: str, header: list, row: dict) -> bool:
+    """
+    True when the CSV at `path` already holds a row for the same city at the
+    same UTC instant as `row`. Reads only the city and `datetime_utc` columns.
+    Instants are compared parsed, so "...T10:00:00Z", "...T10:00:00+00:00" and
+    a naive "...T10:00:00" are one slot; a new timestamp that does not parse
+    is matched by its exact string.
+    """
+    city_col = "city" if "city" in header else "corridor"
+    existing = pd.read_csv(path, usecols=[city_col, "datetime_utc"], dtype=str)
+    same_city = existing[city_col] == str(row["city"])
+    if not same_city.any():
+        return False
+    new_value = row.get("datetime_utc")
+    new_instant = _parse_utc([new_value]).iloc[0]
+    if pd.isna(new_instant):
+        return bool((same_city & (existing["datetime_utc"] == str(new_value))).any())
+    return bool((same_city & (_parse_utc(existing["datetime_utc"]) == new_instant)).any())
 
 
 def append_observation(row: dict, path: str = None) -> bool:
@@ -136,6 +179,11 @@ def append_observation(row: dict, path: str = None) -> bool:
 
     A row that fails `units_def.validate_pipeline_row` (T-04-01 — the
     archive-poisoning mitigation) is logged and rejected, not persisted.
+
+    One row per slot (CLEAN-03): when the file already holds a row for the
+    same city at the same UTC instant (any ISO-8601 spelling), nothing is
+    written, the skip is logged and the return value is False. The first
+    write stays. This is a CSV-only rule; the Postgres writer follows OD-7.
     """
     if path is None:
         path = config.HISTORICAL_ARCHIVE_PATH
@@ -163,6 +211,12 @@ def append_observation(row: dict, path: str = None) -> bool:
             os.makedirs(parent, exist_ok=True)
 
         existing_header = _existing_header(path)
+        if existing_header is not None and _slot_archived(path, existing_header, row):
+            logger.info(
+                "historical_archive skipped row for %s at %s: slot already archived (first write kept)",
+                row["city"], row.get("datetime_utc"),
+            )
+            return False
         if existing_header is None:
             pd.DataFrame([row], columns=ARCHIVE_COLUMNS).to_csv(
                 path, mode="a", header=True, index=False
@@ -189,9 +243,10 @@ def read_history(
     path: str = None, city: str = None, validate: bool = True, corridor: str = None
 ) -> pd.DataFrame:
     """
-    Read the archive back as a DataFrame, sorted ascending by
-    `datetime_utc` so downstream time-series code never depends on file
-    write order.
+    Read the archive back as a DataFrame, sorted ascending by parsed UTC
+    time so downstream time-series code never depends on file write order.
+    The sort is stable: rows for one instant keep file order, whatever their
+    ISO-8601 spelling, and unparseable timestamps come last.
 
     Returns an empty `ARCHIVE_COLUMNS`-shaped frame (not a raised error)
     when `path` does not exist, so a cold-start caller needs no special
@@ -247,4 +302,9 @@ def read_history(
     if city is not None and "city" in df.columns:
         df = df[df["city"] == city]
 
-    return df.sort_values("datetime_utc", ascending=True).reset_index(drop=True)
+    # Stable sort on the parsed instant. A plain string sort is not stable here
+    # and orders "...T10:00:00" before "...T10:00:00Z".
+    return (
+        df.sort_values("datetime_utc", key=_parse_utc, kind="mergesort", na_position="last")
+        .reset_index(drop=True)
+    )

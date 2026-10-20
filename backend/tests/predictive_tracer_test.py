@@ -187,7 +187,9 @@ def test_two_appends_produce_one_header_line_and_two_data_lines(tmp_path):
     path = tmp_path / "ampacity_history.csv"
 
     assert historical_archive.append_observation(_valid_archive_row(), path=str(path)) is True
-    assert historical_archive.append_observation(_valid_archive_row(), path=str(path)) is True
+    # A second row for the same instant is now refused (CLEAN-03).
+    assert historical_archive.append_observation(
+        _valid_archive_row(datetime_utc="2026-01-01T01:00:00"), path=str(path)) is True
 
     lines = path.read_text().splitlines()
     assert len(lines) == 3  # one header + two data lines
@@ -198,7 +200,9 @@ def test_two_appends_read_history_returns_two_rows(tmp_path):
     path = tmp_path / "ampacity_history.csv"
 
     assert historical_archive.append_observation(_valid_archive_row(), path=str(path)) is True
-    assert historical_archive.append_observation(_valid_archive_row(), path=str(path)) is True
+    # A second row for the same instant is now refused (CLEAN-03).
+    assert historical_archive.append_observation(
+        _valid_archive_row(datetime_utc="2026-01-01T01:00:00"), path=str(path)) is True
 
     df = historical_archive.read_history(path=str(path))
     assert len(df) == 2
