@@ -4,7 +4,7 @@ Real-data validation analysis (Phase 3, offline)
 Turns the files a real backfill run leaves behind into the tables the owner
 reads. VAL-01 (what the pipeline reports against the static rating, the rating
 bounds and its own gates) is implemented here; VAL-02 (forecast and detector
-behaviour) is added later in the same phase.
+behaviour) is implemented below the VAL-01 code.
 
 Inputs, all named on the command line and read only:
   * the archive CSV the backfill wrote (`historical_archive` format)
@@ -24,9 +24,9 @@ Subcommands (run from the repository root with PYTHONPATH=backend):
                 exhausted, errors, no_trace, missing
   manifest      deterministic JSON record of the validated run (window, backfill
                 argv after a literal `--`, file and model hashes, git HEAD)
-  report        VAL-01 tables, report_meta.json and tables.md; exits 1 when a
-                self-check counts a disagreement between trace, archive and the
-                recomputed ampacity
+  report        VAL-01 and VAL-02 tables, report_meta.json and tables.md; exits 1
+                when a self-check counts a disagreement between trace, archive
+                and the recomputed ampacity
 
     python backend/real_data_validation.py completeness --archive A --trace T \\
         --log L --start 2026-09-07T00:00:00Z --end 2026-09-27T23:00:00Z --out OUT.csv
@@ -566,10 +566,10 @@ def _round(table: pd.DataFrame) -> pd.DataFrame:
             continue
         if col.endswith("_a") or any(col.endswith(s) for s in (
                 "_min", "_p05", "_p25", "_p50", "_p75", "_p95", "_max", "_mean")) \
-                or col.startswith("overstatement_"):
+                or col.startswith("overstatement_") or col == "fc_amps":
             table[col] = table[col].round(_AMP_DECIMALS)
-        elif col.startswith("frac_") or col.endswith(("_rate", "_share", "_fraction_median")) \
-                or col == "rate":
+        elif col.startswith(("frac_", "coverage_", "trip_rate", "nominal_")) \
+                or col.endswith(("_rate", "_share", "_fraction_median")) or col == "rate":
             table[col] = table[col].round(_RATE_DECIMALS)
         else:
             table[col] = table[col].round(_INPUT_DECIMALS)
@@ -653,6 +653,440 @@ def cleaning_summary(archive_path, trace, cities) -> dict:
     return summary
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# VAL-02: forecast-band coverage and detector (G6) behaviour
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# Everything below measures the CURRENT city pipeline (`city_pipeline`) from the
+# per-step trace. It scores a forecast against the rating the pipeline computed
+# for the same step (the forecast at step t is built from history strictly before
+# t, so it targets the computed rating at t). It changes no forecast method,
+# quantile, control limit or model, and loads no model of its own.
+
+NOMINAL_COVERAGE = float(config.FORECAST_BACKTEST_QUANTILES[1] - config.FORECAST_BACKTEST_QUANTILES[0])
+BOOTSTRAP_SEED = 20261019
+BOOTSTRAP_RESAMPLES = 2000
+BOOTSTRAP_CONF = 0.95
+RESIDUAL_BUCKETS = ("0", "1-47", "48-167", "168+")
+# Phrases of the real detector and monitor messages (anomaly_detector._check_against_*,
+# DLRSafetyMonitor G6). `test_g6_vote_markers_match_real_detector_reasons` runs the
+# real branches and fails if one of them is reworded.
+G6_VOTE_MARKERS = {
+    "forecast": "from forecast center",
+    "rolling": "from rolling baseline mean",
+    "model": "model flagged reading",
+    "error": "detector error (",
+}
+_G6_EVALUATED = ("ok", "G6")  # outcomes of steps that passed G1-G5, so G6 ran on them
+_VOTE_ORDER = ("forecast", "rolling", "model", "error")
+G6_TRIPS_PER_CITY = 50
+
+_FORECAST_COLUMNS_OUT = [
+    "city", "method", "n_warmup", "n_scored", "n_not_g6", "n_g6_evaluated", "n_with_forecast",
+    "n_cold_start", "n_silent_forecast_failure", "n_cleaning_failure_suspect",
+    "n_degenerate_band", "n_no_computed", "n_band", "n_withheld_gap", "n_used_by_g6",
+    "coverage_nominal", "nominal_target", "coverage_ci_lo", "coverage_ci_hi", "coverage_widened",
+    "width_mean_a", "width_median_a", "mae_a", "bias_a", "n_all_computed", "coverage_all_computed"]
+_RESIDUAL_COLUMNS_OUT = ["city", "method", "period", "bucket", "n", "coverage_nominal", "n_zero_width"]
+_DETECTOR_COLUMNS_OUT = [
+    "city", "method", "n_g6_evaluated", "n_g6_trips", "trip_rate", "trip_rate_ci_lo",
+    "trip_rate_ci_hi", "forecast_runs", "rolling_runs", "model_runs", "cold_start_runs",
+    "forecast_votes", "rolling_votes", "model_votes", "detector_errors", "n_g6_trips_unattributed",
+    "model_trip_rate", "n_detector_model_missing", "anomaly_ml_max_false_positive_rate"]
+_TRIP_COLUMNS_OUT = ["city", "method", "run_end_utc", "votes", "computed_a", "fc_amps",
+                     "widened_lower_a", "widened_upper_a", "reason"]
+
+
+def band_hit(value, lo, hi):
+    """
+    True where `lo <= value <= hi` (inclusive at both edges, like
+    `AnomalyDetector._check_against_forecast`); vectorised, False for NaN.
+    """
+    value = np.asarray(value, dtype=float)
+    return (value >= lo) & (value <= hi)
+
+
+def widened_band(center, lo, hi, k):
+    """
+    The detector's own widened band, with its expression and operation order:
+    `center + k * (edge - center)` for each edge.
+    """
+    return center + k * (lo - center), center + k * (hi - center)
+
+
+def k_for(city) -> float:
+    """The control-limit multiplier the detector uses for `city`."""
+    return float(config.ANOMALY_CONTROL_LIMIT_K_BY_LOCATION.get(
+        city, config.DEFAULT_ANOMALY_CONTROL_LIMIT_K))
+
+
+def residual_bucket(n_observations):
+    """
+    The backtest-residual stratum of a forecast built from `n_observations`
+    usable rows: residuals = `max(n_observations - FORECAST_MIN_HISTORY_ROWS, 0)`,
+    bucketed as RESIDUAL_BUCKETS. None when the count is unknown.
+    """
+    if n_observations is None or pd.isna(n_observations):
+        return None
+    residuals = max(int(n_observations) - int(config.FORECAST_MIN_HISTORY_ROWS), 0)
+    if residuals == 0:
+        return "0"
+    if residuals < 48:
+        return "1-47"
+    if residuals < 168:
+        return "48-167"
+    return "168+"
+
+
+def _alert_texts(alerts) -> list:
+    """Alert strings from a list (the trace) or the ' | '-joined text `classify_steps` stores."""
+    if alerts is None or (isinstance(alerts, float) and np.isnan(alerts)):
+        return []
+    if isinstance(alerts, str):
+        return [part for part in alerts.split(" | ") if part.strip()]
+    return [str(a) for a in alerts]
+
+
+def g6_votes(alerts) -> set:
+    """
+    Which G6 branches voted, from the traced alert text: a subset of
+    {"forecast", "rolling", "model", "error"}. Only alerts that start with
+    `G6 FAIL` are read. A detector error is exclusive (the detector raised, no
+    branch voted). The trace keeps the first 200 characters of each alert; every
+    marker sits well inside that, so a combined forecast+model reason keeps both.
+    """
+    votes = set()
+    for text in _alert_texts(alerts):
+        if not text.lstrip().startswith("G6 FAIL"):
+            continue
+        if G6_VOTE_MARKERS["error"] in text:
+            votes.add("error")
+            continue
+        votes.update(name for name, marker in G6_VOTE_MARKERS.items() if marker in text)
+    return votes
+
+
+def day_block_bootstrap_ci(hits, days, n_resamples=BOOTSTRAP_RESAMPLES, seed=BOOTSTRAP_SEED,
+                           conf=BOOTSTRAP_CONF):
+    """
+    Percentile interval of a pooled hit rate, resampling WHOLE UTC days (a block
+    per day, because consecutive hours share weather and errors) with
+    replacement. Seeded, so equal inputs give equal intervals. Returns
+    (nan, nan) for no observations or fewer than two distinct days: a single
+    block cannot show how the rate varies from day to day.
+    """
+    hits = np.asarray(hits, dtype=float)
+    days = np.asarray(days)
+    if hits.size == 0:
+        return float("nan"), float("nan")
+    _, inverse = np.unique(days, return_inverse=True)
+    n_days = int(inverse.max()) + 1
+    if n_days < 2:
+        return float("nan"), float("nan")
+    day_hits = np.bincount(inverse, weights=hits, minlength=n_days)
+    day_counts = np.bincount(inverse, minlength=n_days).astype(float)
+    picks = np.random.default_rng(seed).integers(0, n_days, size=(int(n_resamples), n_days))
+    rates = day_hits[picks].sum(axis=1) / day_counts[picks].sum(axis=1)
+    tail = (1.0 - conf) / 2.0
+    lo, hi = np.quantile(rates, [tail, 1.0 - tail])
+    return float(lo), float(hi)
+
+
+def _flag(value) -> bool:
+    """A traced boolean that may be None, NaN or pd.NA (missing counts as False)."""
+    if value is None or value is pd.NA:
+        return False
+    if isinstance(value, float) and np.isnan(value):
+        return False
+    return bool(value)
+
+
+def _numeric(frame, name) -> pd.Series:
+    """Column `name` as floats; NaN throughout when the trace has no such column."""
+    if name not in frame.columns:
+        return pd.Series(np.nan, index=frame.index, dtype=float)
+    return pd.to_numeric(frame[name], errors="coerce")
+
+
+def usable_history_known(steps) -> bool:
+    """True when the trace carries `usable_history_rows` for at least one step."""
+    return "usable_history_rows" in steps.columns and bool(_numeric(steps, "usable_history_rows").notna().any())
+
+
+def _scored_city(steps, city) -> pd.DataFrame:
+    """A copy of one city's rows with the numeric helpers the VAL-02 tables share."""
+    part = steps[steps["city"] == city].copy()
+    part["_scored"] = part["period"] == "scored"
+    part["_g6"] = part["outcome"].isin(_G6_EVALUATED)
+    for name in ("computed_a", "fc_amps", "fc_ci_lower", "fc_ci_upper", "fc_n_observations",
+                 "history_rows", "usable_history_rows"):
+        part["_" + name] = _numeric(part, name)
+    part["_width"] = part["_fc_ci_upper"] - part["_fc_ci_lower"]
+    part["_used"] = (part["forecast_used_by_g6"].map(_flag) if "forecast_used_by_g6" in part.columns
+                     else pd.Series(False, index=part.index))
+    part["_day"] = part["run_end_utc"].dt.strftime("%Y-%m-%d")
+    return part
+
+
+def _count_or_na(known, mask):
+    return int(mask.sum()) if known else pd.NA
+
+
+def _city_forecast_row(steps, city, method, usable_known) -> dict:
+    part = _scored_city(steps, city)
+    scored = part[part["_scored"]]
+    g6 = scored[scored["_g6"]]
+    has_fc = g6["_fc_amps"].notna()
+    positive = has_fc & (g6["_width"] > 0)
+    no_fc = ~has_fc
+    usable = g6["_usable_history_rows"]
+    min_rows = config.FORECAST_MIN_HISTORY_ROWS
+    band = g6[positive & g6["_computed_a"].notna()]
+    used = band[band["_used"]]
+    k = k_for(city)
+
+    row = {
+        "city": city, "method": method,
+        "n_warmup": int((~part["_scored"]).sum()), "n_scored": int(len(scored)),
+        "n_not_g6": int((~scored["_g6"]).sum()), "n_g6_evaluated": int(len(g6)),
+        "n_with_forecast": int(has_fc.sum()),
+        "n_cold_start": _count_or_na(usable_known, no_fc & (usable < min_rows)),
+        "n_silent_forecast_failure": _count_or_na(usable_known, no_fc & (usable >= min_rows)),
+        "n_cleaning_failure_suspect": _count_or_na(
+            usable_known, (g6["_history_rows"] >= min_rows) & (usable == 0)),
+        "n_degenerate_band": int((has_fc & (g6["_width"] <= 0)).sum()),
+        "n_no_computed": int((positive & g6["_computed_a"].isna()).sum()),
+        "n_band": int(len(band)), "n_withheld_gap": int((~band["_used"]).sum()),
+        "n_used_by_g6": int(len(used)), "nominal_target": NOMINAL_COVERAGE,
+    }
+    nan = float("nan")
+    hits = band_hit(band["_computed_a"], band["_fc_ci_lower"], band["_fc_ci_upper"])
+    row["coverage_nominal"] = _share(hits.sum(), len(band))
+    row["coverage_ci_lo"], row["coverage_ci_hi"] = day_block_bootstrap_ci(hits, band["_day"].to_numpy())
+    wide_lo, wide_hi = widened_band(used["_fc_amps"], used["_fc_ci_lower"], used["_fc_ci_upper"], k)
+    row["coverage_widened"] = _share(band_hit(used["_computed_a"], wide_lo, wide_hi).sum(), len(used))
+    row["width_mean_a"] = float(band["_width"].mean()) if len(band) else nan
+    row["width_median_a"] = float(band["_width"].median()) if len(band) else nan
+    error = band["_computed_a"] - band["_fc_amps"]
+    row["mae_a"] = float(error.abs().mean()) if len(band) else nan
+    row["bias_a"] = float(error.mean()) if len(band) else nan
+    everything = scored[scored["_computed_a"].notna() & scored["_fc_amps"].notna() & (scored["_width"] > 0)]
+    row["n_all_computed"] = int(len(everything))
+    row["coverage_all_computed"] = _share(band_hit(
+        everything["_computed_a"], everything["_fc_ci_lower"], everything["_fc_ci_upper"]).sum(),
+        len(everything))
+    return row
+
+
+def _cities_in(steps, cities):
+    if cities is not None:
+        return list(cities)
+    present = set(steps["city"]) if len(steps) else set()
+    return [c for c in config.LOCATIONS if c in present]
+
+
+def forecast_table(steps, method_label, cities=None) -> pd.DataFrame:
+    """
+    VAL-02 forecast-band coverage, one row per city (scored period).
+
+    Coverage population `n_band`: scored steps that reached G6 (outcome `ok` or
+    `G6`), had a forecast with a band wider than zero, and have a computed
+    rating, whether or not G6 used that forecast. `coverage_nominal` is the share
+    of those whose computed rating lies inside the nominal band (the 5-95%
+    backtest quantiles, nominal 90%), with a day-block bootstrap 95% interval.
+    `coverage_widened` is the share inside the detector's widened band
+    (center + k*(edge - center)), on `n_used_by_g6` only: the steps whose
+    forecast G6 actually used. Everything left out is counted in its own column:
+    warm-up, steps that never reached G6, cold starts, silent forecast failures
+    (usable history met the minimum but there is no forecast: the OD-3
+    degradation to the rolling baseline), suspected cleaning failures (rows read
+    but none usable; also counted in `n_cold_start`), zero-width bands, steps
+    with no computed rating, and forecasts withheld across a gap
+    (`n_withheld_gap`, which stay in `n_band`). `coverage_all_computed` is the
+    secondary figure over EVERY scored step with a computed rating and a
+    non-zero band, G4 fallbacks included. `mae_a`/`bias_a` are computed minus
+    forecast centre over `n_band`. When the trace has no `usable_history_rows`
+    the cold-start split cannot be made and those three counts are empty.
+    """
+    known = usable_history_known(steps)
+    rows = [_city_forecast_row(steps, city, method_label, known) for city in _cities_in(steps, cities)]
+    table = pd.DataFrame(rows, columns=_FORECAST_COLUMNS_OUT)
+    for column in ("n_cold_start", "n_silent_forecast_failure", "n_cleaning_failure_suspect"):
+        table[column] = table[column].astype("Int64")
+    return table
+
+
+def coverage_by_residuals_table(steps, method_label, cities=None) -> pd.DataFrame:
+    """
+    Nominal-band coverage by backtest-residual count (`RESIDUAL_BUCKETS`), for
+    both periods, same population as `forecast_table`'s `n_band`. Every bucket is
+    listed, with n 0 allowed. A forecast with 0 residuals has a zero-width band,
+    so its bucket is empty by definition; `n_zero_width` counts the G6-evaluated
+    steps that were left out for that reason.
+    """
+    rows = []
+    for city in _cities_in(steps, cities):
+        part = _scored_city(steps, city)
+        part["_bucket"] = [residual_bucket(n) for n in part["_fc_n_observations"]]
+        has_fc = part["_g6"] & part["_fc_amps"].notna()
+        for period in PERIODS:
+            in_period = part["period"] == period
+            for bucket in RESIDUAL_BUCKETS:
+                here = in_period & (part["_bucket"] == bucket)
+                band = part[here & has_fc & (part["_width"] > 0) & part["_computed_a"].notna()]
+                hits = band_hit(band["_computed_a"], band["_fc_ci_lower"], band["_fc_ci_upper"])
+                rows.append({
+                    "city": city, "method": method_label, "period": period, "bucket": bucket,
+                    "n": int(len(band)), "coverage_nominal": _share(hits.sum(), len(band)),
+                    "n_zero_width": int((here & has_fc & (part["_width"] <= 0)).sum())})
+    return pd.DataFrame(rows, columns=_RESIDUAL_COLUMNS_OUT)
+
+
+def _signal_has(signals: pd.Series, needle: str) -> int:
+    return int(signals.map(lambda s: isinstance(s, str) and needle in s).sum())
+
+
+def detector_table(steps, method_label, cities=None) -> pd.DataFrame:
+    """
+    VAL-02 detector (G6) behaviour, one row per city (scored period).
+
+    Population `n_g6_evaluated`: scored steps that reached G6 (outcome `ok` or
+    `G6`). `trip_rate` is `n_g6_trips / n_g6_evaluated`, with a day-block
+    bootstrap interval; a detector error also fails the step to G6, so it is a
+    trip here and is counted again in `detector_errors`. The `*_runs` columns say
+    which branches ran (from `detector_signal`; a detector that raised keeps the
+    signal of the branches that finished). The `*_votes` columns say which
+    branches voted anomalous, read from the traced G6 alert text; one trip can
+    carry several votes, and `n_g6_trips_unattributed` counts trips whose text
+    matched no marker. `model_trip_rate` is `model_votes / model_runs`;
+    `n_detector_model_missing` counts G6-evaluated steps whose detector had no
+    anomaly model loaded. The design false-positive rate of the learned model is
+    shown for reference only.
+    """
+    rows = []
+    for city in _cities_in(steps, cities):
+        part = _scored_city(steps, city)
+        g6 = part[part["_scored"] & part["_g6"]]
+        trips = g6[g6["outcome"] == "G6"]
+        votes = [g6_votes(a) for a in trips["alerts"]] if "alerts" in trips.columns else []
+        signals = g6["detector_signal"] if "detector_signal" in g6.columns else pd.Series(
+            [None] * len(g6), index=g6.index, dtype=object)
+        model_runs = _signal_has(signals, "model_")
+        model_votes = sum("model" in v for v in votes)
+        interval = day_block_bootstrap_ci((g6["outcome"] == "G6").to_numpy(), g6["_day"].to_numpy())
+        if "detector_model" in g6.columns:
+            missing = int(g6["detector_model"].map(
+                lambda m: m is None or m is pd.NA or (isinstance(m, float) and np.isnan(m)) or m == "").sum())
+        else:
+            missing = pd.NA
+        rows.append({
+            "city": city, "method": method_label, "n_g6_evaluated": int(len(g6)),
+            "n_g6_trips": int(len(trips)), "trip_rate": _share(len(trips), len(g6)),
+            "trip_rate_ci_lo": interval[0], "trip_rate_ci_hi": interval[1],
+            "forecast_runs": _signal_has(signals, "forecast_residual"),
+            "rolling_runs": _signal_has(signals, "rolling_baseline"),
+            "model_runs": model_runs, "cold_start_runs": _signal_has(signals, "cold_start"),
+            "forecast_votes": sum("forecast" in v for v in votes),
+            "rolling_votes": sum("rolling" in v for v in votes),
+            "model_votes": model_votes, "detector_errors": sum("error" in v for v in votes),
+            "n_g6_trips_unattributed": sum(not v for v in votes),
+            "model_trip_rate": _share(model_votes, model_runs),
+            "n_detector_model_missing": missing,
+            "anomaly_ml_max_false_positive_rate": float(config.ANOMALY_ML_MAX_FALSE_POSITIVE_RATE)})
+    table = pd.DataFrame(rows, columns=_DETECTOR_COLUMNS_OUT)
+    table["n_detector_model_missing"] = table["n_detector_model_missing"].astype("Int64")
+    return table
+
+
+def g6_trips_table(steps, method_label, cities=None, per_city=G6_TRIPS_PER_CITY) -> pd.DataFrame:
+    """
+    The scored G6 trips, at most `per_city` per city, ordered by the absolute
+    deviation of the computed rating from the forecast centre (largest first,
+    trips with no forecast last), then by time. `votes` is the "|"-joined sorted
+    branch list; the widened band is shown only for a step whose forecast G6 used.
+    `reason` is the alert text as traced (at most 200 characters).
+    """
+    rows = []
+    for city in _cities_in(steps, cities):
+        part = _scored_city(steps, city)
+        trips = part[part["_scored"] & (part["outcome"] == "G6")].copy()
+        trips["_deviation"] = (trips["_computed_a"] - trips["_fc_amps"]).abs()
+        trips = trips.sort_values(["_deviation", "run_end_utc"], ascending=[False, True],
+                                  na_position="last", kind="mergesort").head(per_city)
+        k = k_for(city)
+        for rec in trips.to_dict("records"):
+            usable_band = rec["_used"] and rec["_width"] > 0
+            lo, hi = (widened_band(rec["_fc_amps"], rec["_fc_ci_lower"], rec["_fc_ci_upper"], k)
+                      if usable_band else (float("nan"), float("nan")))
+            alerts = rec.get("alerts")
+            rows.append({
+                "city": city, "method": method_label,
+                "run_end_utc": rec["run_end_utc"].strftime(_TS_FMT),
+                "votes": "|".join(v for v in _VOTE_ORDER if v in g6_votes(alerts)),
+                "computed_a": rec["_computed_a"], "fc_amps": rec["_fc_amps"],
+                "widened_lower_a": lo, "widened_upper_a": hi,
+                "reason": alerts if isinstance(alerts, str) else ""})
+    return pd.DataFrame(rows, columns=_TRIP_COLUMNS_OUT)
+
+
+def _trace_methods(trace) -> str:
+    """The forecast method(s) the trace records, '+'-joined; 'unknown' when none."""
+    if "forecast_method" not in trace.columns:
+        return "unknown"
+    methods = sorted({str(m) for m in trace["forecast_method"].dropna()})
+    return "+".join(methods) if methods else "unknown"
+
+
+def val02_tables(method_frames, cities) -> dict:
+    """
+    The four VAL-02 tables for `method_frames`, a list of (method label, classified
+    steps). Rows are city-major (config.LOCATIONS order), then in the order given.
+    """
+    def stack(builder, columns, **kwargs):
+        parts = [builder(frame, label, [city], **kwargs)
+                 for city in cities for label, frame in method_frames]
+        return _round(pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=columns))
+
+    return {
+        "val02_forecast_by_city": stack(forecast_table, _FORECAST_COLUMNS_OUT),
+        "val02_coverage_by_residuals": stack(coverage_by_residuals_table, _RESIDUAL_COLUMNS_OUT),
+        "val02_detector_by_city": stack(detector_table, _DETECTOR_COLUMNS_OUT),
+        "val02_g6_trips": stack(g6_trips_table, _TRIP_COLUMNS_OUT),
+    }
+
+
+_VAL02_DEFINITIONS = (
+    "Populations. `n_g6_evaluated`: scored steps that passed G1-G5 (outcome ok or G6), so the detector "
+    "ran on them. `n_band` (the coverage population): of those, steps with a forecast whose band is wider "
+    "than zero and a computed rating, whether or not G6 used the forecast. `coverage_nominal` = computed "
+    "rating inside the forecast's own 5-95% band (nominal target 0.90), with a day-block bootstrap 95% "
+    "interval (whole UTC days, 2000 resamples, fixed seed); the interval is empty with fewer than two "
+    "days. `coverage_widened` is inside the detector's widened band, on `n_used_by_g6` only. Warm-up, "
+    "steps that fell back at G1-G5 or were exhausted, cold starts, silent forecast failures, zero-width "
+    "bands and forecasts withheld across a gap are counted in their own columns, never mixed in. "
+    "`trip_rate` = G6 trips / `n_g6_evaluated`. Rates are exact count ratios; read each with its n.")
+
+
+def _val02_markdown(tables: dict, method_labels, notes) -> list:
+    sections = ["# VAL-02 tables", "", _LABEL, "", _VAL02_DEFINITIONS, "",
+                "Method label(s): " + ", ".join(method_labels) + ". A `naive_replay` row, when present, is a "
+                "counterfactual reference (same observations, different forecast method), not what the "
+                "live system did.", ""]
+    for note in notes:
+        sections += [f"Note: {note}", ""]
+    for name in ("val02_forecast_by_city", "val02_coverage_by_residuals", "val02_detector_by_city"):
+        sections += [f"## {name}", "", _markdown_table(tables[name]), ""]
+    trips = tables["val02_g6_trips"]
+    per_city = (trips.groupby(["city", "method"], sort=False).size().rename("trips_listed").reset_index()
+                if len(trips) else pd.DataFrame({"city": [], "method": [], "trips_listed": []}))
+    sections += ["## G6 trips", "",
+                 f"The trip list can run to hundreds of rows, so it is CSV-only: `val02_g6_trips.csv` "
+                 f"(at most {G6_TRIPS_PER_CITY} per city and method, ordered by deviation of the computed "
+                 "rating from the forecast centre, then time; each row carries its votes, the widened band "
+                 "and the traced reason).", "", _markdown_table(per_city), ""]
+    return sections
+
+
 # ── rendering ─────────────────────────────────────────────────────────────────
 
 def _cell(value) -> str:
@@ -688,12 +1122,14 @@ def _requested_cities(requested):
     return [c for c in config.LOCATIONS if c in wanted]  # config.LOCATIONS order
 
 
-def build_report(archive_path, trace_path, start, end, step_hours, warmup_hours, cities, out_dir) -> int:
+def build_report(archive_path, trace_path, start, end, step_hours, warmup_hours, cities, out_dir,
+                 method_label=None) -> int:
     """
-    Write the VAL-01 tables, report_meta.json and tables.md to `out_dir`, then
-    return 1 if any self-check (a key of report_meta ending in `mismatches`)
-    counted a disagreement, else 0. Files are written before the exit code is
-    decided, so a failing run still leaves its evidence.
+    Write the VAL-01 and VAL-02 tables, report_meta.json and tables.md to
+    `out_dir`, then return 1 if any self-check (a key of report_meta ending in
+    `mismatches`) counted a disagreement, else 0. Files are written before the
+    exit code is decided, so a failing run still leaves its evidence. The VAL-02
+    method label defaults to the forecast method recorded in the trace.
     """
     steps = expected_steps(start, end, step_hours)
     start_ts = _utc(start)
@@ -709,8 +1145,18 @@ def build_report(archive_path, trace_path, start, end, step_hours, warmup_hours,
         "val01_outliers": _round(_outliers_table(frame, cities)),
         "val01_drivers_by_city": _round(_drivers_table(frame, cities)),
     }
+    label = method_label or _trace_methods(trace)
+    val02 = val02_tables([(label, frame)], cities)
+    notes = [] if usable_history_known(frame) else [
+        "usable_history_rows is absent from the trace, so n_cold_start, n_silent_forecast_failure and "
+        "n_cleaning_failure_suspect are left empty."]
     meta = {
         "label": _LABEL,
+        "nominal_coverage_target": round(NOMINAL_COVERAGE, _RATE_DECIMALS),
+        "bootstrap": {"n_resamples": BOOTSTRAP_RESAMPLES, "seed": BOOTSTRAP_SEED,
+                      "conf": BOOTSTRAP_CONF, "block": "UTC day"},
+        "val02_method_labels": [label],
+        "val02_notes": notes,
         "window": {"start": start_ts.strftime(_TS_FMT), "end": _utc(end).strftime(_TS_FMT),
                    "step_hours": float(step_hours), "steps_per_city": int(len(steps))},
         "warmup_hours": float(warmup_hours),
@@ -726,7 +1172,7 @@ def build_report(archive_path, trace_path, start, end, step_hours, warmup_hours,
     meta.update(archive_checks(archive, trace, cities, steps))
 
     os.makedirs(out_dir, exist_ok=True)
-    for name, table in tables.items():
+    for name, table in {**tables, **val02}.items():
         _write_csv(table, os.path.join(out_dir, f"{name}.csv"))
     with open(os.path.join(out_dir, "report_meta.json"), "w", encoding="utf-8", newline="\n") as fh:
         fh.write(json.dumps(meta, indent=2, sort_keys=True) + "\n")
@@ -741,6 +1187,7 @@ def build_report(archive_path, trace_path, start, end, step_hours, warmup_hours,
     for name, table in tables.items():
         sections += [f"## {name}", "", _markdown_table(table), ""]
     sections += ["## Cleaning activity", "", _markdown_table(cleaning), ""]
+    sections += _val02_markdown(val02, [label], notes)
     with open(os.path.join(out_dir, "tables.md"), "w", encoding="utf-8", newline="\n") as fh:
         fh.write("\n".join(sections))
     failed = sorted(k for k, v in meta.items() if k.endswith("mismatches") and v)
@@ -878,7 +1325,7 @@ def _cmd_report(args) -> int:
         print(str(exc), file=sys.stderr)
         return 2
     return build_report(args.archive, args.trace, args.start, args.end, args.step_hours,
-                        args.warmup_hours, cities, args.out_dir)
+                        args.warmup_hours, cities, args.out_dir, method_label=args.method_label)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -913,7 +1360,7 @@ def _build_parser() -> argparse.ArgumentParser:
     man.add_argument("--out", required=True, help="JSON path for the manifest")
     man.set_defaults(func=_cmd_manifest)
 
-    rep = sub.add_parser("report", help="VAL-01 tables from the trace and archive")
+    rep = sub.add_parser("report", help="VAL-01 and VAL-02 tables from the trace and archive")
     rep.add_argument("--archive", required=True)
     rep.add_argument("--trace", required=True)
     rep.add_argument("--start", required=True)
@@ -922,6 +1369,8 @@ def _build_parser() -> argparse.ArgumentParser:
     rep.add_argument("--warmup-hours", type=float, default=168.0)
     rep.add_argument("--cities", nargs="*")
     rep.add_argument("--out-dir", required=True)
+    rep.add_argument("--method-label",
+                     help="VAL-02 method label (default: the forecast method recorded in the trace)")
     rep.set_defaults(func=_cmd_report)
     return parser
 

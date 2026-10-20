@@ -407,6 +407,7 @@ def _trace_record(hour, temp=15.0, g6_trip=False):
     point = city_point.city_point(_CITY)
     wind, solar = 3.0, 300.0
     computed = float(rdv.computed_amps(_CITY, temp, wind, solar))
+    centre = computed + (50.0 if hour == 4 else 20.0 * (hour % 3 - 1))  # hour 4 misses the +-30 band
     record = {
         "schema": rdv.TRACE_SCHEMA, "run_end_utc": _ts(hour), "city": _CITY,
         "forecast_method": "ml", "error": None, "station_id": "T1",
@@ -423,9 +424,8 @@ def _trace_record(hour, temp=15.0, g6_trip=False):
         "pipeline": {
             "history_rows": 100, "usable_history_rows": 99, "forecast_method": "ml",
             "forecast_used_by_g6": True,
-            "forecast": {"amps": computed + (50.0 if hour == 4 else 20.0 * (hour % 3 - 1)),
-                         "ci_lower_amps": computed - 30.0,
-                         "ci_upper_amps": computed + 30.0, "n_observations": 100,
+            "forecast": {"amps": centre, "ci_lower_amps": centre - 30.0,
+                         "ci_upper_amps": centre + 30.0, "n_observations": 100,
                          "horizon_min": 60.0},
             "detector_signal": "forecast_residual", "detector_model": "m.joblib"}}
     return record
@@ -477,7 +477,8 @@ def test_report_writes_val02_tables_deterministically(tmp_path):
     assert row["n_g6_evaluated"] == 6             # the G6 trip also reached G6
     assert row["n_band"] == 6 and row["n_used_by_g6"] == 6
     assert row["nominal_target"] == pytest.approx(0.9)
-    assert 0.0 <= row["coverage_nominal"] <= 1.0
+    assert row["coverage_nominal"] == pytest.approx(5 / 6, abs=1e-4)   # hour 4 is outside its band
+    assert row["coverage_widened"] == 1.0                              # the widened band holds all six
     assert row["coverage_ci_lo"] <= row["coverage_nominal"] <= row["coverage_ci_hi"]  # two UTC days
     assert len(str(row["coverage_nominal"]).split(".")[-1]) <= 4
 
