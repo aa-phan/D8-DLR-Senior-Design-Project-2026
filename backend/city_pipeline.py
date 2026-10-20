@@ -87,8 +87,17 @@ def run_city_pipeline(
     forecast_degenerate = (
         forecast is not None and forecast.ci_upper_amps - forecast.ci_lower_amps <= 0
     )
+    # A forecast built across too large a gap (stale newest row, or an ml
+    # lookback that spans a missing hour) is handled the same way: G6 then uses
+    # the rolling baseline or cold start, and the forecast is still reported.
+    gap_reason = None
+    if forecast is not None and cleaned is not None:
+        gap_reason = data_cleaning.forecast_gap_reason(cleaned.report, forecast_method)
     if forecast_degenerate:
         log.info("%s: forecast band has zero width -- not used for G6 this run", city)
+        forecast_for_detector = None
+    elif gap_reason:
+        log.info("%s: forecast not used for G6 this run -- %s", city, gap_reason)
         forecast_for_detector = None
     else:
         forecast_for_detector = forecast

@@ -106,13 +106,16 @@ def _write_archive(path, rows):
     pd.DataFrame(rows, columns=historical_archive.ARCHIVE_COLUMNS).to_csv(path, index=False)
 
 
-def _forecast_spy(monkeypatch):
-    """Replace forecast_ampacity; collect a copy of every history it is given."""
+def _forecast_spy(monkeypatch, result=None):
+    """
+    Replace forecast_ampacity; collect a copy of every history it is given and
+    return `result` (None: no forecast).
+    """
     seen = []
 
     def fake(history, method="naive", **kw):
         seen.append(history.copy())
-        return None
+        return result
 
     monkeypatch.setattr(ampacity_forecast, "forecast_ampacity", fake)
     return seen
@@ -234,3 +237,189 @@ def test_a_pipeline_run_never_rewrites_the_archive(tmp_path):
     assert result["pipeline"]["history_rows"] == 5
     assert result["pipeline"]["usable_history_rows"] == 2
     assert archive.read_bytes() == before
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Forecast use across gaps (CLEAN-02, SC2): a forecast built from history with
+# too large a gap is reported but does not gate G6
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _band(method="naive", lower=1150.0, upper=1250.0):
+    return ampacity_forecast.ForecastResult(60.0, 1200.0, lower, upper, 14, method)
+
+
+class _Detector:
+    signal = "forecast"
+    model_source = "stand-in"
+
+    def check(self, raw_data, rating):
+        return False, ""
+
+
+def _detector_spy(monkeypatch):
+    """Stand in for AnomalyDetector; record what `for_city` was given."""
+    seen = {}
+
+    class _StandIn:
+        @staticmethod
+        def for_city(city, forecast=None, history=None, **kw):
+            seen["forecast"] = forecast
+            seen["history"] = history
+            return _Detector()
+
+    monkeypatch.setattr(city_pipeline, "AnomalyDetector", _StandIn)
+    return seen
+
+
+def _hourly_archive(path, hours, city="AUSTIN"):
+    """One row per listed hour on _DAY, with values that vary so no rule flags them."""
+    _write_archive(path, [
+        _archive_row(
+            city, f"{_DAY}T{h:02d}:00:00Z", dlr_amps=1200.0 + h,
+            air_temp=25.0 + 0.1 * h, wind_speed=5.0 + 0.05 * h,
+            solar_radiation=500.0 + h)
+        for h in hours
+    ])
+
+
+def _run_at_ten(archive, method="naive"):
+    return city_pipeline.run_city_pipeline(
+        "AUSTIN", f"{_DAY}T09:00:00Z", f"{_DAY}T10:00:00Z", _stations(),
+        provider="synoptic", archive=False, archive_path=str(archive),
+        fetch_weather=_StubFetcher(), forecast_method=method)
+
+
+def _report(rows_usable=5, trailing_gap_slots=0, contiguous_tail_rows=5):
+    return {"rows_usable": rows_usable, "trailing_gap_slots": trailing_gap_slots,
+            "contiguous_tail_rows": contiguous_tail_rows}
+
+
+def _gap_notes(caplog):
+    return [r.getMessage() for r in caplog.records
+            if r.name == "city_pipeline" and "forecast not used for G6" in r.getMessage()]
+
+
+def test_gap_reason_tolerates_one_skipped_cycle_before_the_run():
+    assert data_cleaning.MAX_TRAILING_GAP_SLOTS == 1
+    for slots in (0, 1, None):
+        assert data_cleaning.forecast_gap_reason(_report(trailing_gap_slots=slots), "naive") is None
+    reason = data_cleaning.forecast_gap_reason(_report(trailing_gap_slots=2), "naive")
+    assert "2 missing hourly slot" in reason
+
+
+def test_gap_reason_ignores_an_empty_history():
+    report = _report(rows_usable=0, trailing_gap_slots=9, contiguous_tail_rows=0)
+    assert data_cleaning.forecast_gap_reason(report, "naive") is None
+    assert data_cleaning.forecast_gap_reason(report, "ml") is None
+
+
+def test_gap_reason_requires_an_unbroken_lookback_only_for_ml():
+    assert data_cleaning.forecast_gap_reason(_report(contiguous_tail_rows=7), "ml") is None
+    reason = data_cleaning.forecast_gap_reason(_report(contiguous_tail_rows=6), "ml")
+    assert "ml" in reason
+    assert "6" in reason
+    for method in ("naive", "ewm"):
+        assert data_cleaning.forecast_gap_reason(_report(contiguous_tail_rows=1), method) is None
+
+
+def test_ml_lookback_follows_the_feature_definition():
+    expected = max(max(config.FORECAST_ML_LAG_HOURS), config.FORECAST_ML_ROLLING_WINDOW_HOURS) + 1
+    assert data_cleaning.ML_LOOKBACK_ROWS == expected == 7
+
+
+def test_one_skipped_cycle_inside_the_history_keeps_the_forecast_for_g6(tmp_path, monkeypatch):
+    archive = tmp_path / "archive.csv"
+    _hourly_archive(archive, [h for h in range(10) if h != 5])
+    band = _band()
+    forecast_seen = _forecast_spy(monkeypatch, result=band)
+    detector_seen = _detector_spy(monkeypatch)
+
+    result = _run_at_ten(archive)
+
+    assert result["pipeline"]["forecast_used_by_g6"] is True
+    assert detector_seen["forecast"] is band
+    history = forecast_seen[0]
+    assert len(history) == 9
+    flags = dict(zip(history["datetime_utc"], history["clean_flags"]))
+    assert flags[f"{_DAY}T06:00:00Z"] == "after_gap"
+    assert flags[f"{_DAY}T04:00:00Z"] == ""
+
+
+def test_the_previous_cycle_skipped_still_uses_the_forecast(tmp_path, monkeypatch):
+    archive = tmp_path / "archive.csv"
+    _hourly_archive(archive, range(9))
+    band = _band()
+    _forecast_spy(monkeypatch, result=band)
+    detector_seen = _detector_spy(monkeypatch)
+
+    result = _run_at_ten(archive)
+
+    assert result["pipeline"]["forecast_used_by_g6"] is True
+    assert detector_seen["forecast"] is band
+
+
+def test_two_skipped_cycles_before_the_run_withhold_the_forecast_from_g6(
+        tmp_path, monkeypatch, caplog):
+    archive = tmp_path / "archive.csv"
+    _hourly_archive(archive, range(8))
+    _forecast_spy(monkeypatch, result=_band())
+    detector_seen = _detector_spy(monkeypatch)
+
+    with caplog.at_level(logging.INFO, logger="city_pipeline"):
+        result = _run_at_ten(archive)
+
+    pipeline = result["pipeline"]
+    assert pipeline["forecast_used_by_g6"] is False
+    assert pipeline["forecast"]["amps"] == 1200.0
+    assert pipeline["forecast"]["ci_lower_amps"] == 1150.0
+    assert detector_seen["forecast"] is None
+    assert "rating" in result
+    notes = _gap_notes(caplog)
+    assert len(notes) == 1
+    assert "missing hourly slot" in notes[0]
+    assert "AUSTIN" in notes[0]
+
+
+def test_ml_forecast_across_a_gap_in_its_lookback_is_withheld(tmp_path, monkeypatch, caplog):
+    archive = tmp_path / "archive.csv"
+    _hourly_archive(archive, [h for h in range(10) if h != 5])
+    _forecast_spy(monkeypatch, result=_band("ml"))
+    detector_seen = _detector_spy(monkeypatch)
+
+    with caplog.at_level(logging.INFO, logger="city_pipeline"):
+        result = _run_at_ten(archive, method="ml")
+
+    assert result["pipeline"]["forecast_used_by_g6"] is False
+    assert result["pipeline"]["forecast"] is not None
+    assert detector_seen["forecast"] is None
+    notes = _gap_notes(caplog)
+    assert len(notes) == 1
+    assert "ml" in notes[0]
+
+    complete = tmp_path / "complete.csv"
+    _hourly_archive(complete, range(10))
+    band = _band("ml")
+    _forecast_spy(monkeypatch, result=band)
+    detector_seen = _detector_spy(monkeypatch)
+
+    result = _run_at_ten(complete, method="ml")
+
+    assert result["pipeline"]["forecast_used_by_g6"] is True
+    assert detector_seen["forecast"] is band
+
+
+def test_zero_width_band_keeps_its_own_handling_when_the_history_is_also_stale(
+        tmp_path, monkeypatch, caplog):
+    archive = tmp_path / "archive.csv"
+    _hourly_archive(archive, range(8))
+    _forecast_spy(monkeypatch, result=_band(lower=1200.0, upper=1200.0))
+    detector_seen = _detector_spy(monkeypatch)
+
+    with caplog.at_level(logging.INFO, logger="city_pipeline"):
+        result = _run_at_ten(archive)
+
+    assert result["pipeline"]["forecast_used_by_g6"] is False
+    assert detector_seen["forecast"] is None
+    messages = [r.getMessage() for r in caplog.records if r.name == "city_pipeline"]
+    assert any("forecast band has zero width" in m for m in messages)
+    assert _gap_notes(caplog) == []

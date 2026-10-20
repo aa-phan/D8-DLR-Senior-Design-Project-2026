@@ -25,6 +25,8 @@ import logging
 
 import pandas as pd
 
+import config
+
 log = logging.getLogger(__name__)
 
 # Bump whenever a rule or threshold changes, so a validation result can name
@@ -63,6 +65,23 @@ SPIKE_MAX_STEP: dict[str, float] = {
     "wind_speed": 10.0,
     "solar_radiation": 700.0,
 }
+
+# Largest number of missing hourly slots between the newest usable row and the
+# run's own slot for which a forecast may still gate G6. The forecast band is
+# calibrated one step (60 min) ahead of its newest row; one skipped cycle is
+# tolerated, and a larger trailing gap means the band describes an older hour
+# than the one being rated. Provisional until Phase 3.
+MAX_TRAILING_GAP_SLOTS: int = 1
+
+# Newest usable rows that must sit on consecutive hourly slots before an `ml`
+# forecast may gate G6. `ampacity_forecast.build_ml_features` lags by row
+# position (`.shift(h)`), so the newest row's features are the trained hourly
+# features only when this many rows are consecutive hours: the model was
+# trained on a gap-free hourly series. Derived from the feature definition
+# (config is read only).
+ML_LOOKBACK_ROWS: int = (
+    max(max(config.FORECAST_ML_LAG_HOURS), config.FORECAST_ML_ROLLING_WINDOW_HOURS) + 1
+)
 
 # The order rules run in, and the order flags are joined in `clean_flags`.
 # `after_gap` marks a row without excluding it.
@@ -383,3 +402,34 @@ def clean_history(
         "contiguous_tail_rows": int(contiguous_tail_rows),
     }
     return CleanedHistory(frame=frame, usable=usable, report=report)
+
+
+def forecast_gap_reason(report: dict, forecast_method: str):
+    """
+    Why a forecast built from this cleaned history must not gate G6, or None.
+
+    This is not a cleaning rule and excludes no row: it tells the caller
+    whether a forecast built from the history `report` describes (the report of
+    `clean_history`) may be used by G6. A reason is returned when:
+      - the newest usable row is more than `MAX_TRAILING_GAP_SLOTS` hourly
+        slots before the run (`trailing_gap_slots`), or
+      - `forecast_method` is "ml" and fewer than `ML_LOOKBACK_ROWS` of the
+        newest usable rows sit on consecutive hours (`contiguous_tail_rows`).
+    With no usable rows there is nothing to judge and the result is None.
+    """
+    if not report.get("rows_usable"):
+        return None
+    trailing = report.get("trailing_gap_slots")
+    if trailing is not None and trailing > MAX_TRAILING_GAP_SLOTS:
+        return (
+            f"{trailing} missing hourly slot(s) between the newest usable row and the run "
+            f"(limit {MAX_TRAILING_GAP_SLOTS})"
+        )
+    if forecast_method == "ml":
+        tail = report.get("contiguous_tail_rows", 0)
+        if tail < ML_LOOKBACK_ROWS:
+            return (
+                f"ml forecast needs {ML_LOOKBACK_ROWS} newest usable rows on consecutive hours, "
+                f"found {tail}"
+            )
+    return None

@@ -76,6 +76,8 @@ None of these values was derived from or tuned on real archives. Each is a state
 | `SPIKE_MAX_STEP` | `air_temp` | 10.0 | degC per hour | A front is a step that stays; a swing this large that returns within the hour is more likely a sensor fault |
 | `SPIKE_MAX_STEP` | `wind_speed` | 10.0 | m/s per hour | Archived wind is the line-perpendicular component, so direction swings move it; a larger swing that returns is suspect |
 | `SPIKE_MAX_STEP` | `solar_radiation` | 700.0 | W/m2 per hour | Clouds swing hourly solar widely, so only a larger excursion counts |
+| `MAX_TRAILING_GAP_SLOTS` | - | 1 | slots | Largest trailing gap for which a forecast may still gate G6; see Forecast use across gaps |
+| `ML_LOOKBACK_ROWS` | - | 7 | rows | Consecutive newest rows an `ml` forecast needs; derived from the ML feature definition |
 
 Tuple and set constants, by name and members:
 
@@ -106,7 +108,22 @@ What a gap does to each consumer of the usable frame:
 | Walk-forward band (`backtest_residuals`) | A residual after a gap spans more than one hour, so the band widens, the conservative direction |
 | Rolling baseline (`AnomalyDetector`) | Time-insensitive: mean and standard deviation over all usable `dlr_amps` |
 
-How a forecast built across a gap is used by G6 is set in the next section.
+How a forecast built across a gap is used by G6 is set in [Forecast use across gaps](#forecast-use-across-gaps-clean-02), below.
+
+## Forecast use across gaps (CLEAN-02)
+
+This is a use rule, not a cleaning rule: no row is excluded and no value changes. `data_cleaning.forecast_gap_reason(report, forecast_method)` reads the cleaning report and says whether a forecast built from that history may gate G6.
+
+| Constant | Value | Unit | Reasoning |
+|---|---|---|---|
+| `MAX_TRAILING_GAP_SLOTS` | 1 | slots | The band is calibrated one step (60 min) ahead of its newest row. One skipped cycle before the run is tolerated; more means the band describes an older hour than the one being rated |
+| `ML_LOOKBACK_ROWS` | 7 | rows | Derived from `config.FORECAST_ML_LAG_HOURS` and `config.FORECAST_ML_ROLLING_WINDOW_HOURS` as the largest of the lags and the rolling window, plus one. `build_ml_features` lags by row position, so the newest row's features are the trained hourly features only when these rows sit on consecutive hours |
+
+The `ml` lookback applies to the `ml` method only; `naive` and `ewm` ignore it. With no usable rows the guard is not consulted.
+
+When a forecast is withheld it is still computed and reported in `pipeline["forecast"]`, `forecast_used_by_g6` is False, and one INFO line names the reason. G6 then uses the rolling baseline with 24 or more usable rows, otherwise cold start, exactly as for a zero-width band. A gap is never filled to keep a forecast usable.
+
+Owner decision OD-3 makes `ml` the live forecast method, so after a skipped cycle G6 runs without the forecast for up to seven hours, until the lookback is unbroken again. Both values are provisional until Phase 3.
 
 ## One row per slot (CLEAN-03)
 
