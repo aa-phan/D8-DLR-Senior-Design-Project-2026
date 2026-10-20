@@ -153,9 +153,28 @@ proposals.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| LAND-01..04, PIPE-01 | Phase 1 | Complete (01-05, 2026-10-20) |
-| CLEAN-01..04 | Phase 2 | Pending |
-| VAL-01..03 | Phase 3 | Pending |
-| DB-01..05 | Phase 4 | Pending |
-| PIPE-02, SCHED-01..02 | Phase 5 | Pending |
-| API-01..02, E2E-01..03 | Phase 6 | Pending |
+| LAND-01 | Phase 1 | Complete |
+| LAND-02 | Phase 1 | Complete |
+| LAND-03 | Phase 1 | Complete |
+| LAND-04 | Phase 1 | Complete |
+| PIPE-01 | Phase 1 | Complete |
+| CLEAN-01 | Phase 2 | Pending |
+| CLEAN-02 | Phase 2 | Pending |
+| CLEAN-03 | Phase 2 | Pending |
+| CLEAN-04 | Phase 2 | Pending |
+| VAL-01 | Phase 3 | Pending |
+| VAL-02 | Phase 3 | Pending |
+| VAL-03 | Phase 3 | Pending |
+| DB-01 | Phase 4 | Pending |
+| DB-02 | Phase 4 | Pending |
+| DB-03 | Phase 4 | Pending |
+| DB-04 | Phase 4 | Pending |
+| DB-05 | Phase 4 | Pending |
+| PIPE-02 | Phase 5 | Pending |
+| SCHED-01 | Phase 5 | Pending |
+| SCHED-02 | Phase 5 | Pending |
+| API-01 | Phase 6 | Pending |
+| API-02 | Phase 6 | Pending |
+| E2E-01 | Phase 6 | Pending |
+| E2E-02 | Phase 6 | Pending |
+| E2E-03 | Phase 6 | Pending |

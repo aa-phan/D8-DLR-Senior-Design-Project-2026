@@ -30,7 +30,7 @@ infrastructure is created.
 
 ## Phases
 
-- [ ] **Phase 1: Land PR #7** — relocate, fix tests, add tests, merge
+- [x] **Phase 1: Land PR #7** — relocate, fix tests, add tests, merge (completed 2026-10-19)
 - [ ] **Phase 2: Data Cleaning** — cross-row outlier, gap and duplicate handling on city history
 - [ ] **Phase 3: Real-Data Validation** — ratings and calibration on backfilled data; production go/no-go
 - [ ] **Phase 4: Supabase Store & Writer** — schema migration, Postgres read/write, backfill load, secrets
@@ -55,7 +55,7 @@ tests for every new module.
   4. The re-review checklist from the 2026-10-18 review (relocation, CRLF, unchanged
      `dlr_pipeline.py`, 19 fixture failures, uncollected test, misplaced PRD amendment) is
      resolved item by item.
-**Plans**: 5/5 plans executed
+**Plans**: 5/5 plans complete
 
 Plans:
 - [x] 01-01-PLAN.md — Tracer: offline backfill -> orchestrator -> city pipeline -> composer run, plus backfill resume/log/interrupt tests (wave 1)
@@ -194,7 +194,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Land PR #7 | 5/5 | In Progress | - |
+| 1. Land PR #7 | 5/5 | Complete    | 2026-10-19 |
 | 2. Data Cleaning | 0/4 | Planned | - |
 | 3. Real-Data Validation | 0/5 | Planned | - |
 | 4. Supabase Store & Writer | 0/6 | Planned | - |
