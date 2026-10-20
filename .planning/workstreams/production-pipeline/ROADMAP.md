@@ -77,7 +77,8 @@ per slot.
   2. Missing hourly slots are handled by the documented strategy, and tests cover a skipped-cycle
      gap.
   3. Appending an already-present (`city`, `datetime_utc`) never creates a second row, for both
-     `append_observation` and the orchestrator path (not only backfill).
+     `append_observation` and the orchestrator path (not only backfill). Exception (owner,
+     2026-10-20): a computed row may follow a fallback row, and cleaning keeps only the computed one.
   4. Cleaned rows carry a marker (column or flag) that tells them apart from raw rows.
 
 **Plans**: 4/4 plans executed

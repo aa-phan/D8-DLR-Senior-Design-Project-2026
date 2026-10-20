@@ -62,7 +62,9 @@ proposals.
 - [x] **CLEAN-02**: A documented gap-handling strategy covers missing hourly slots in a city's
   history before the forecast and anomaly detector consume it.
 - [x] **CLEAN-03**: At most one row exists per (`city`, `datetime_utc`) slot. Re-running a window
-  never appends a duplicate or conflicting row.
+  never appends a duplicate or conflicting row. Exception (owner, 2026-10-20, review WR-01): in the
+  CSV a computed row may follow a fallback row for its instant so a rerun repairs a fallback cycle;
+  cleaning keeps only the computed row.
 - [x] **CLEAN-04**: Rows touched by cleaning stay distinguishable from rows as written, so
   validation can tell raw readings from cleaned ones.
 - [ ] **VAL-01**: Over a backfilled real-data window for all four cities, the pipeline's ratings
