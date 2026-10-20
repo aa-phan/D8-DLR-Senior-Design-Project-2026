@@ -549,8 +549,8 @@ def _install_providers(monkeypatch):
                                       wind_speed=2.0, wind_direction=10.0, solar_radiation=100.0))
 
     def tceq(cams_id, start, end):
-        return _hourly(lambda h: dict(air_temp=19.0, wind_speed=2.0 + 0.6 * (h % 5),
-                                      wind_direction=float((35 * h) % 360)))
+        return _hourly(lambda h: dict(air_temp=19.0, wind_speed=3.0 + 0.4 * (h % 5),
+                                      wind_direction=100.0 + 7.0 * (h % 6)))
 
     def nsrdb(lat, lon, start, end):
         return _hourly(lambda h: dict(solar_radiation=40.0 + 50.0 * h))
@@ -650,7 +650,7 @@ def test_replay_fidelity_flags_a_changed_observation(tmp_path, monkeypatch, caps
     for line in lines:
         record = json.loads(line)
         if record["run_end_utc"] == target:
-            record["observation"]["temp"] = 80.0  # past the G3 range limit; the record still says ok
+            record["observation"]["solar"] = 2000.0  # past the G3 range limit; the record still says ok
         edited.append(json.dumps(record, sort_keys=True))
     orig["trace"].write_text("\n".join(edited) + "\n", encoding="utf-8")
     outs = _out_paths(tmp_path)
@@ -724,3 +724,51 @@ def test_replay_never_touches_the_network(tmp_path, monkeypatch):
     assert attempts == []
     assert len(rdv.load_trace(outs["trace"])) == _R_STEPS
     assert os.path.getsize(outs["archive"]) > 0
+
+
+def _report_with_replay(orig, outs, out_dir):
+    return rdv.main([
+        "report", "--archive", str(orig["archive"]), "--trace", str(orig["trace"]),
+        "--start", _R_START, "--end", _R_END, "--warmup-hours", "2", "--cities", _CITY,
+        "--out-dir", str(out_dir), "--replay-archive", str(outs["archive"]),
+        "--replay-trace", str(outs["trace"])])
+
+
+def test_report_shows_the_naive_replay_beside_the_original_and_fails_on_drift(tmp_path, monkeypatch):
+    orig = _original_run(tmp_path, monkeypatch)
+    clean = _out_paths(tmp_path, "clean")
+    _replay(orig, clean)
+
+    code = _report_with_replay(orig, clean, tmp_path / "report_clean")
+
+    assert code == 0
+    out_dir = tmp_path / "report_clean"
+    forecast = pd.read_csv(out_dir / "val02_forecast_by_city.csv")
+    assert list(forecast["method"]) == ["naive", "naive_replay"]
+    detector = pd.read_csv(out_dir / "val02_detector_by_city.csv")
+    assert list(detector["method"]) == ["naive", "naive_replay"]
+    assert (detector["n_g6_evaluated"] > 0).all()
+    fidelity = json.loads((out_dir / "replay_fidelity.json").read_text(encoding="utf-8"))
+    assert fidelity["mismatches"] == 0 and fidelity["compared"] == _R_STEPS
+    meta = json.loads((out_dir / "report_meta.json").read_text(encoding="utf-8"))
+    assert meta["val02_method_labels"] == ["naive", "naive_replay"]
+    assert meta["replay"]["reference_only"] is True and meta["replay_fidelity_mismatches"] == 0
+    assert "counterfactual reference" in (out_dir / "tables.md").read_text(encoding="utf-8")
+    ratings = pd.read_csv(out_dir / "val01_ratings_by_city.csv")
+    assert len(ratings) == 1  # VAL-01 stays on the original run only
+
+    # A replay fed a drifted trace no longer matches the original: report exits 1,
+    # after writing its files.
+    drifted_trace = tmp_path / "drifted_trace.jsonl"
+    records = [json.loads(line) for line in orig["trace"].read_text(encoding="utf-8").splitlines()]
+    records[5]["observation"]["solar"] = 2000.0
+    drifted_trace.write_text("\n".join(json.dumps(r, sort_keys=True) for r in records) + "\n",
+                             encoding="utf-8")
+    drift = _out_paths(tmp_path, "drift")
+    rdv.replay(str(drifted_trace), _R_START, _R_END, 1.0, [_CITY], "naive", str(drift["archive"]),
+               str(drift["trace"]), str(drift["log"]), require_models=False, out=lambda *_: None)
+
+    assert _report_with_replay(orig, drift, tmp_path / "report_drift") == 1
+    drift_fidelity = json.loads((tmp_path / "report_drift" / "replay_fidelity.json").read_text(encoding="utf-8"))
+    assert drift_fidelity["mismatches"] >= 1
+    assert (tmp_path / "report_drift" / "tables.md").exists()

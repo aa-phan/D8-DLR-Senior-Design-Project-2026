@@ -17,7 +17,9 @@ This module is offline: it never touches the network or the .env file, and it
 never modifies an input. Every number it reports is PROVISIONAL (OD-5): the
 static ratings, plausibility bounds and line bearings are assumptions the owner
 has not yet confirmed. The module measures and reports; it changes no rating
-policy.
+policy. The `replay` subcommand is the one command that runs the pipeline code
+itself; it still makes no network call (a fetcher serves the traced observations)
+and writes only NEW files, refusing to start if any already exists.
 
 Subcommands (run from the repository root with PYTHONPATH=backend):
   completeness  per-city step counts: trace records, archive rows, log rows,
@@ -27,6 +29,11 @@ Subcommands (run from the repository root with PYTHONPATH=backend):
   report        VAL-01 and VAL-02 tables, report_meta.json and tables.md; exits 1
                 when a self-check counts a disagreement between trace, archive
                 and the recomputed ampacity
+  replay        re-run the real per-city pipeline offline on the traced
+                observations with another forecast method (default naive) into
+                NEW files, then check it against the original run; a
+                counterfactual reference, not a record of the live system. Exits
+                2 on a refusal or missing input, 1 on a fidelity mismatch
 
     python backend/real_data_validation.py completeness --archive A --trace T \\
         --log L --start 2026-09-07T00:00:00Z --end 2026-09-27T23:00:00Z --out OUT.csv
@@ -36,14 +43,17 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
+from collections import Counter
 
 import numpy as np
 import pandas as pd
 
 import ampacity_forecast
 import anomaly_detector
+import backfill_archive
 import city_point
 import config
 import data_cleaning
@@ -681,6 +691,9 @@ _G6_EVALUATED = ("ok", "G6")  # outcomes of steps that passed G1-G5, so G6 ran o
 _VOTE_ORDER = ("forecast", "rolling", "model", "error")
 G6_TRIPS_PER_CITY = 50
 
+# Counts that are empty (pd.NA) rather than 0 when the trace cannot supply them.
+_NULLABLE_COUNT_COLUMNS = frozenset((
+    "n_cold_start", "n_silent_forecast_failure", "n_cleaning_failure_suspect", "n_detector_model_missing"))
 _FORECAST_COLUMNS_OUT = [
     "city", "method", "n_warmup", "n_scored", "n_not_g6", "n_g6_evaluated", "n_with_forecast",
     "n_cold_start", "n_silent_forecast_failure", "n_cleaning_failure_suspect",
@@ -1043,9 +1056,14 @@ def val02_tables(method_frames, cities) -> dict:
     steps). Rows are city-major (config.LOCATIONS order), then in the order given.
     """
     def stack(builder, columns, **kwargs):
-        parts = [builder(frame, label, [city], **kwargs)
-                 for city in cities for label, frame in method_frames]
-        return _round(pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=columns))
+        # Rebuilt from records rather than pd.concat: concatenating tables with empty or
+        # all-NaN columns is deprecated in pandas and its result dtypes will change.
+        records = [rec for city in cities for label, frame in method_frames
+                   for rec in builder(frame, label, [city], **kwargs).to_dict("records")]
+        table = pd.DataFrame(records, columns=columns)
+        for column in _NULLABLE_COUNT_COLUMNS & set(columns):
+            table[column] = table[column].astype("Int64")
+        return _round(table)
 
     return {
         "val02_forecast_by_city": stack(forecast_table, _FORECAST_COLUMNS_OUT),
@@ -1087,6 +1105,215 @@ def _val02_markdown(tables: dict, method_labels, notes) -> list:
     return sections
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Offline naive replay (a counterfactual reference, not a record of the live run)
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# The replay runs the REAL per-city pipeline again (Phase 2 cleaning, the forecast,
+# gates G1-G6, the archive) over the same window, feeding every step exactly the
+# observation the original run rated, read back from the trace. Only the forecast
+# method differs (naive by default). Its numbers answer "what would the same
+# observations have produced with a different forecast method"; they are NOT what
+# the live system did, and they never replace or switch the live method (OD-3).
+
+REPLAY_STID_PREFIX = "REPLAY_"
+REPLAY_LABEL_DEFAULT = "naive_replay"
+FIDELITY_TOLERANCE_A = 1e-9
+FIDELITY_EXAMPLES = 20
+# Outcomes decided before the forecast could matter: they must repeat exactly.
+_FIDELITY_FIXED_OUTCOMES = ("G1", "G2", "G3", "G4_low", "G4_high", "G5", "EXHAUSTED")
+_FIDELITY_EXCLUDED_OUTCOMES = ("ERROR", "NO_TRACE", "MISSING")
+_REPLAY_FRAME_COLUMNS = ["stid", "datetime_utc", "air_temp", "wind_speed", "wind_direction",
+                         "solar_radiation", "temp_source", "wind_source", "solar_source"]
+
+
+class ReplayRefused(Exception):
+    """The replay must not start: an output already exists, or an anomaly model file is absent."""
+
+
+def replay_stations(city) -> pd.DataFrame:
+    """
+    A one-row station frame, `stid = "REPLAY_" + city`, at the city's own
+    coordinates. The replay runs one city per backfill call with only this
+    station, so the probe can never borrow another city's reading when a step has none.
+    """
+    lat, lon = config.CITY_COORDINATES[city]
+    return pd.DataFrame([{"stid": REPLAY_STID_PREFIX + city, "name": f"replay {city}",
+                          "lat": lat, "lon": lon}])
+
+
+def _replay_reading(rec):
+    """The four traced inputs the replay serves for a step, or None when any is missing."""
+    values = {key: _num(rec.get(key)) for key in ("obs_temp", "obs_wind_raw", "obs_wind_direction", "obs_solar")}
+    if any(np.isnan(v) for v in values.values()):
+        return None
+    return values
+
+
+def make_replay_fetcher(trace_df):
+    """
+    A fetcher with the call shape `city_rating` uses for the station path,
+    `(location, start, end, provider=None, **_ignored)`, serving the observation
+    the ORIGINAL run rated at (city, end) from the trace: air_temp = obs_temp,
+    wind_speed = obs_wind_raw (the measured speed; `rate_city` projects it again
+    with the same bearing), the traced wind direction, solar, the three traced
+    `*_source` columns and the traced observation hour. A step the original run
+    did not rate (exhausted, errored, untraced) is served as an empty frame, so
+    the replay exhausts it too. It carries `.errors` (an empty Counter) and
+    `.provenance` (one record per served reading, mirroring the original sources
+    and hour) so `backfill` and the trace treat it like the composed fetcher.
+    """
+    records = {}
+    if len(trace_df):
+        for rec in trace_df.to_dict("records"):
+            records[(rec["city"], rec["run_end_utc"])] = rec
+    provenance: list = []
+    errors: Counter = Counter()
+
+    def fetcher(location, start, end, provider=None, **_ignored):
+        stid = str(location[0])
+        if not stid.startswith(REPLAY_STID_PREFIX):
+            return pd.DataFrame(columns=_REPLAY_FRAME_COLUMNS)
+        city = stid[len(REPLAY_STID_PREFIX):]
+        step = _utc(end)
+        rec = records.get((city, step))
+        values = None if rec is None else _replay_reading(rec)
+        if values is None:
+            return pd.DataFrame(columns=_REPLAY_FRAME_COLUMNS)
+        hour = pd.to_datetime(_text(rec.get("observation_hour")), utc=True, errors="coerce")
+        hour = step if pd.isna(hour) else hour
+        row = {"stid": stid, "datetime_utc": hour, "air_temp": values["obs_temp"],
+               "wind_speed": values["obs_wind_raw"], "wind_direction": values["obs_wind_direction"],
+               "solar_radiation": values["obs_solar"], "temp_source": _text(rec.get("temp_source")),
+               "wind_source": _text(rec.get("wind_source")), "solar_source": _text(rec.get("solar_source"))}
+        provenance.append({"stid": stid, "hour": hour.strftime(_TS_FMT),
+                           "air_temp": row["temp_source"], "wind_speed": row["wind_source"],
+                           "solar_radiation": row["solar_source"]})
+        return pd.DataFrame([row], columns=_REPLAY_FRAME_COLUMNS)
+
+    fetcher.provenance = provenance
+    fetcher.errors = errors
+    return fetcher
+
+
+def _per_day_printer(sink):
+    """Wrap `sink` so a backfill progress line is passed on once per simulated UTC day."""
+    seen = {"day": None}
+
+    def out(line, *args, **kwargs):
+        match = re.match(r"^\[\d+/\d+\] (\d{4}-\d{2}-\d{2})", str(line))
+        if match is None:
+            sink(line, *args, **kwargs)
+        elif match.group(1) != seen["day"]:
+            seen["day"] = match.group(1)
+            sink(line, *args, **kwargs)
+
+    return out
+
+
+def _refuse_existing(paths) -> None:
+    present = [str(p) for p in paths if os.path.exists(p)]
+    if present:
+        raise ReplayRefused("output file already exists, refusing to overwrite or append: "
+                            + ", ".join(present))
+
+
+def replay(trace_path, start, end, step_hours, cities, method, archive_out, trace_out, log_out,
+           require_models=True, out=None) -> dict:
+    """
+    Re-run the real per-city pipeline offline over [start, end] with forecast
+    `method` (default use: naive), feeding each step the observation the original
+    run rated, read from `trace_path`, into NEW files `archive_out`, `trace_out`
+    and `log_out`. This is a counterfactual reference: same observations, a
+    different forecast method. It is not a record of what the live system did.
+
+    Raises `ReplayRefused` (the CLI maps it to exit 2) when any output file
+    already exists, so a replay can never be mixed into an earlier one, or, with
+    `require_models`, when any requested city's anomaly model file is absent (and,
+    for method "ml", its forecast model file), so a replay can never silently run
+    heuristics-only. Returns {city: backfill totals}. `out` receives at most one
+    progress line per simulated UTC day (default: print).
+    """
+    cities = list(cities)
+    _refuse_existing([archive_out, trace_out, log_out])
+    if require_models:
+        paths = [anomaly_detector._model_path_for(city) for city in cities]
+        if method == "ml":
+            paths += [ampacity_forecast._model_path_for(city) for city in cities]
+        absent = [p for p in paths if not os.path.isfile(p)]
+        if absent:
+            raise ReplayRefused("model file missing, refusing to replay without it: " + ", ".join(absent))
+    trace = load_trace(trace_path)
+    progress = _per_day_printer(print if out is None else out)
+    for path in (archive_out, trace_out, log_out):
+        os.makedirs(os.path.dirname(str(path)) or ".", exist_ok=True)
+    totals = {}
+    for city in cities:
+        totals[city] = backfill_archive.backfill(
+            start, end, step_hours, archive_path=archive_out, log_path=log_out, cities=[city],
+            forecast_method=method, stations=replay_stations(city),
+            fetcher=make_replay_fetcher(trace), out=progress, trace_path=trace_out)
+    return totals
+
+
+def replay_fidelity(original_steps, replay_steps) -> dict:
+    """
+    Compare two classified-step frames (`classify_steps` of the original run and
+    of the replay) on every (city, step) both cover. Original ERROR, NO_TRACE and
+    MISSING steps are excluded and counted. A step is a mismatch when
+      (a) its original outcome is G1, G2, G3, G4_low, G4_high, G5 or EXHAUSTED and
+          the replay outcome differs (`mismatch_outcome`),
+      (b) the computed rating differs by more than 1e-9 A where both exist
+          (`mismatch_computed`), or
+      (c) the original reached G6 (outcome ok or G6) and the replay outcome is
+          neither ok nor G6 (`mismatch_g6_reach`).
+    `mismatches` is the sum of the three counts. With the forecast method
+    unchanged the replay reproduces the original, so a non-zero count means the
+    replayed inputs or the pipeline drifted. `examples` holds at most 20 rows,
+    sorted by city then step.
+    """
+    keys = ["city", "run_end_utc"]
+    left = original_steps[keys + ["outcome", "computed_a"]].rename(
+        columns={"outcome": "original_outcome", "computed_a": "original_computed_a"})
+    right = replay_steps[keys + ["outcome", "computed_a"]].rename(
+        columns={"outcome": "replay_outcome", "computed_a": "replay_computed_a"})
+    both = left.merge(right, on=keys, how="inner")
+    excluded = both["original_outcome"].isin(_FIDELITY_EXCLUDED_OUTCOMES)
+    cmp_ = both[~excluded].copy()
+    fixed = cmp_["original_outcome"].isin(_FIDELITY_FIXED_OUTCOMES) & (
+        cmp_["original_outcome"] != cmp_["replay_outcome"])
+    diff = (cmp_["original_computed_a"] - cmp_["replay_computed_a"]).abs()
+    computed = diff > FIDELITY_TOLERANCE_A  # NaN compares False: a missing side is not a computed mismatch
+    reach = cmp_["original_outcome"].isin(_G6_EVALUATED) & ~cmp_["replay_outcome"].isin(_G6_EVALUATED)
+    bad = cmp_[fixed | computed | reach].sort_values(keys, kind="mergesort")
+
+    def number(value):
+        return None if value is None or pd.isna(value) else float(value)
+
+    examples = []
+    for rec in bad.head(FIDELITY_EXAMPLES).to_dict("records"):
+        flagged = (rec["original_outcome"] in _FIDELITY_FIXED_OUTCOMES
+                   and rec["original_outcome"] != rec["replay_outcome"],
+                   bool(abs(rec["original_computed_a"] - rec["replay_computed_a"]) > FIDELITY_TOLERANCE_A),
+                   rec["original_outcome"] in _G6_EVALUATED and rec["replay_outcome"] not in _G6_EVALUATED)
+        examples.append({
+            "city": rec["city"], "run_end_utc": rec["run_end_utc"].strftime(_TS_FMT),
+            "original_outcome": rec["original_outcome"], "replay_outcome": rec["replay_outcome"],
+            "original_computed_a": number(rec["original_computed_a"]),
+            "replay_computed_a": number(rec["replay_computed_a"]),
+            "kinds": [name for name, hit in zip(("outcome", "computed", "g6_reach"), flagged) if hit]})
+    counts = {"mismatch_outcome": int(fixed.sum()), "mismatch_computed": int(computed.sum()),
+              "mismatch_g6_reach": int(reach.sum())}
+    return {"compared": int((~excluded).sum()), "excluded": int(excluded.sum()),
+            "mismatches": sum(counts.values()), **counts, "examples": examples}
+
+
+def _write_json(payload: dict, path) -> None:
+    os.makedirs(os.path.dirname(str(path)) or ".", exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+
 # ── rendering ─────────────────────────────────────────────────────────────────
 
 def _cell(value) -> str:
@@ -1123,13 +1350,20 @@ def _requested_cities(requested):
 
 
 def build_report(archive_path, trace_path, start, end, step_hours, warmup_hours, cities, out_dir,
-                 method_label=None) -> int:
+                 method_label=None, replay_archive=None, replay_trace=None,
+                 replay_label=REPLAY_LABEL_DEFAULT) -> int:
     """
     Write the VAL-01 and VAL-02 tables, report_meta.json and tables.md to
     `out_dir`, then return 1 if any self-check (a key of report_meta ending in
     `mismatches`) counted a disagreement, else 0. Files are written before the
     exit code is decided, so a failing run still leaves its evidence. The VAL-02
     method label defaults to the forecast method recorded in the trace.
+
+    With `replay_archive` and `replay_trace` (the files `replay` wrote) the VAL-02
+    tables gain a second set of rows labelled `replay_label`, `replay_fidelity.json`
+    is written, and a fidelity mismatch makes the exit code 1. The replay rows are a
+    counterfactual reference (same observations, different forecast method), never
+    the live system's result; VAL-01 stays on the original run.
     """
     steps = expected_steps(start, end, step_hours)
     start_ts = _utc(start)
@@ -1146,7 +1380,15 @@ def build_report(archive_path, trace_path, start, end, step_hours, warmup_hours,
         "val01_drivers_by_city": _round(_drivers_table(frame, cities)),
     }
     label = method_label or _trace_methods(trace)
-    val02 = val02_tables([(label, frame)], cities)
+    method_frames = [(label, frame)]
+    fidelity = None
+    if replay_archive is not None and replay_trace is not None:
+        replay_frame = classify_steps(
+            load_trace(replay_trace), historical_archive.read_history(path=replay_archive, validate=True),
+            cities, steps, start_ts, warmup_hours)
+        fidelity = replay_fidelity(frame, replay_frame)
+        method_frames.append((replay_label, replay_frame))
+    val02 = val02_tables(method_frames, cities)
     notes = [] if usable_history_known(frame) else [
         "usable_history_rows is absent from the trace, so n_cold_start, n_silent_forecast_failure and "
         "n_cleaning_failure_suspect are left empty."]
@@ -1155,7 +1397,7 @@ def build_report(archive_path, trace_path, start, end, step_hours, warmup_hours,
         "nominal_coverage_target": round(NOMINAL_COVERAGE, _RATE_DECIMALS),
         "bootstrap": {"n_resamples": BOOTSTRAP_RESAMPLES, "seed": BOOTSTRAP_SEED,
                       "conf": BOOTSTRAP_CONF, "block": "UTC day"},
-        "val02_method_labels": [label],
+        "val02_method_labels": [name for name, _ in method_frames],
         "val02_notes": notes,
         "window": {"start": start_ts.strftime(_TS_FMT), "end": _utc(end).strftime(_TS_FMT),
                    "step_hours": float(step_hours), "steps_per_city": int(len(steps))},
@@ -1170,12 +1412,18 @@ def build_report(archive_path, trace_path, start, end, step_hours, warmup_hours,
         "computed_vs_reported_mismatches": computed_vs_reported_mismatches(frame),
     }
     meta.update(archive_checks(archive, trace, cities, steps))
+    if fidelity is not None:
+        meta["replay"] = {"label": replay_label, "reference_only": True,
+                          "compared": fidelity["compared"], "excluded": fidelity["excluded"]}
+        meta["replay_fidelity_mismatches"] = fidelity["mismatches"]
 
     os.makedirs(out_dir, exist_ok=True)
     for name, table in {**tables, **val02}.items():
         _write_csv(table, os.path.join(out_dir, f"{name}.csv"))
     with open(os.path.join(out_dir, "report_meta.json"), "w", encoding="utf-8", newline="\n") as fh:
         fh.write(json.dumps(meta, indent=2, sort_keys=True) + "\n")
+    if fidelity is not None:
+        _write_json(fidelity, os.path.join(out_dir, "replay_fidelity.json"))
     cleaning = pd.DataFrame([
         {"city": city, "rows_in": b["rows_in"], "rows_usable": b["rows_usable"],
          "rows_excluded": b["rows_excluded"], "missing_slots": b["missing_slots"],
@@ -1187,7 +1435,7 @@ def build_report(archive_path, trace_path, start, end, step_hours, warmup_hours,
     for name, table in tables.items():
         sections += [f"## {name}", "", _markdown_table(table), ""]
     sections += ["## Cleaning activity", "", _markdown_table(cleaning), ""]
-    sections += _val02_markdown(val02, [label], notes)
+    sections += _val02_markdown(val02, [name for name, _ in method_frames], notes)
     with open(os.path.join(out_dir, "tables.md"), "w", encoding="utf-8", newline="\n") as fh:
         fh.write("\n".join(sections))
     failed = sorted(k for k, v in meta.items() if k.endswith("mismatches") and v)
@@ -1324,8 +1572,52 @@ def _cmd_report(args) -> int:
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
+    if (args.replay_archive is None) != (args.replay_trace is None):
+        print("--replay-archive and --replay-trace go together", file=sys.stderr)
+        return 2
+    missing = _missing_inputs(*[p for p in (args.replay_archive, args.replay_trace) if p])
+    if missing:
+        for path in missing:
+            print(f"input file not found: {path}", file=sys.stderr)
+        return 2
     return build_report(args.archive, args.trace, args.start, args.end, args.step_hours,
-                        args.warmup_hours, cities, args.out_dir, method_label=args.method_label)
+                        args.warmup_hours, cities, args.out_dir, method_label=args.method_label,
+                        replay_archive=args.replay_archive, replay_trace=args.replay_trace,
+                        replay_label=args.replay_label)
+
+
+def _cmd_replay(args) -> int:
+    missing = _missing_inputs(args.archive, args.trace)
+    if missing:
+        for path in missing:
+            print(f"input file not found: {path}", file=sys.stderr)
+        return 2
+    try:
+        cities = _requested_cities(args.cities)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    try:
+        _refuse_existing([args.fidelity_out])
+        replay(args.trace, args.start, args.end, args.step_hours, cities, args.method,
+               args.archive_out, args.trace_out, args.log_out)
+    except ReplayRefused as exc:
+        print(f"replay refused: {exc}", file=sys.stderr)
+        return 2
+    steps = expected_steps(args.start, args.end, args.step_hours)
+    start_ts = _utc(args.start)
+    original = classify_steps(
+        load_trace(args.trace), historical_archive.read_history(path=args.archive, validate=True),
+        cities, steps, start_ts, args.warmup_hours)
+    replayed = classify_steps(
+        load_trace(args.trace_out), historical_archive.read_history(path=args.archive_out, validate=True),
+        cities, steps, start_ts, args.warmup_hours)
+    fidelity = replay_fidelity(original, replayed)
+    _write_json(fidelity, args.fidelity_out)
+    print("replay fidelity: " + ", ".join(
+        f"{key}={fidelity[key]}" for key in ("compared", "excluded", "mismatches", "mismatch_outcome",
+                                             "mismatch_computed", "mismatch_g6_reach")))
+    return 1 if fidelity["mismatches"] else 0
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -1371,7 +1663,29 @@ def _build_parser() -> argparse.ArgumentParser:
     rep.add_argument("--out-dir", required=True)
     rep.add_argument("--method-label",
                      help="VAL-02 method label (default: the forecast method recorded in the trace)")
+    rep.add_argument("--replay-archive", help="archive the `replay` subcommand wrote")
+    rep.add_argument("--replay-trace", help="trace the `replay` subcommand wrote")
+    rep.add_argument("--replay-label", default=REPLAY_LABEL_DEFAULT,
+                     help="method label of the replay rows (default: %(default)s)")
     rep.set_defaults(func=_cmd_report)
+
+    rpl = sub.add_parser(
+        "replay", help="offline replay of the real pipeline on the traced observations with another "
+                       "forecast method (a counterfactual reference, not the live run)")
+    rpl.add_argument("--archive", required=True, help="the ORIGINAL run's archive")
+    rpl.add_argument("--trace", required=True, help="the ORIGINAL run's trace")
+    rpl.add_argument("--start", required=True)
+    rpl.add_argument("--end", required=True)
+    rpl.add_argument("--step-hours", type=float, default=1.0)
+    rpl.add_argument("--cities", nargs="*")
+    rpl.add_argument("--method", default="naive", choices=ampacity_forecast.FORECAST_METHODS,
+                     help="forecast method of the replay (default: %(default)s)")
+    rpl.add_argument("--archive-out", required=True, help="NEW archive file (must not exist)")
+    rpl.add_argument("--trace-out", required=True, help="NEW trace file (must not exist)")
+    rpl.add_argument("--log-out", required=True, help="NEW log file (must not exist)")
+    rpl.add_argument("--fidelity-out", required=True, help="NEW fidelity JSON (must not exist)")
+    rpl.add_argument("--warmup-hours", type=float, default=168.0)
+    rpl.set_defaults(func=_cmd_replay)
     return parser
 
 
