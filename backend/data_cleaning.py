@@ -32,13 +32,16 @@ log = logging.getLogger(__name__)
 CLEANING_POLICY_VERSION: int = 1
 
 # The order rules run in, and the order flags are joined in `clean_flags`.
-FLAG_ORDER: tuple[str, ...] = ("bad_timestamp", "duplicate", "fallback")
+# `after_gap` marks a row without excluding it.
+FLAG_ORDER: tuple[str, ...] = (
+    "bad_timestamp", "duplicate", "fallback", "at_or_after_run", "same_hour", "after_gap",
+)
 
-# Flags that take a row out of `usable`.
-EXCLUDING_FLAGS: frozenset[str] = frozenset({"bad_timestamp", "duplicate", "fallback"})
+# Flags that take a row out of `usable`: every flag except `after_gap`.
+EXCLUDING_FLAGS: frozenset[str] = frozenset(FLAG_ORDER) - {"after_gap"}
 
 # Columns appended to the cleaned frame, never persisted.
-MARKER_COLUMNS: tuple[str, ...] = ("clean_flags", "clean_excluded")
+MARKER_COLUMNS: tuple[str, ...] = ("clean_flags", "clean_excluded", "gap_slots")
 
 _AS_OF_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
@@ -83,7 +86,8 @@ class CleanedHistory:
                  last), with the marker columns appended.
     `usable`  -- the rows of `frame` with `clean_excluded` false, index reset.
     `report`  -- dict: policy_version, rows_in, rows_usable, rows_excluded,
-                 flag_counts (every name in FLAG_ORDER), as_of.
+                 flag_counts (every name in FLAG_ORDER), as_of, missing_slots,
+                 trailing_gap_slots, contiguous_tail_rows.
     """
 
     def __init__(self, frame: pd.DataFrame, usable: pd.DataFrame, report: dict):
@@ -98,25 +102,51 @@ class CleanedHistory:
         )
 
 
+def _hours_since_epoch(instants: pd.Series) -> pd.Series:
+    """Whole hours between the Unix epoch and each (hour-floored, UTC) instant."""
+    return (instants - pd.Timestamp("1970-01-01", tz="UTC")) // pd.Timedelta(hours=1)
+
+
 def clean_history(history: pd.DataFrame, as_of=None) -> CleanedHistory:
     """
     Flag and select the usable rows of one city's archive history.
 
-    Rules, run in `FLAG_ORDER` order (a row can carry several flags, joined
-    with "|" in that order in `clean_flags`):
-      bad_timestamp -- `datetime_utc` is missing or unparseable.
-      duplicate     -- another row at the same UTC instant came first in
-                       input order; the first row written owns the instant
-                       (matching `historical_archive.append_observation`).
-      fallback      -- `fallback` is true, as a bool or any-case text. Fallback
-                       cycles archive the static rating as dlr_amps; learning
-                       from them makes the naive forecast equal the static
-                       rating and latches G6.
-    All three exclude the row from `usable`; `frame` keeps every row.
+    A row's hourly slot is its parsed UTC time floored to the hour. Rules run
+    in `FLAG_ORDER` order (a row can carry several flags, joined with "|" in
+    that order in `clean_flags`). Row-local rules see every row; cross-row
+    rules see only the rows earlier rules left usable:
+      bad_timestamp   -- `datetime_utc` is missing or unparseable.
+      duplicate       -- another row at the same UTC instant came first in
+                         input order; the first row written owns the instant
+                         (matching `historical_archive.append_observation`).
+      fallback        -- `fallback` is true, as a bool or any-case text. Fallback
+                         cycles archive the static rating as dlr_amps; learning
+                         from them makes the naive forecast equal the static
+                         rating and latches G6.
+      at_or_after_run -- with `as_of` given, the row's slot is at or after
+                         `as_of`'s slot. The history a run learns from ends
+                         before the slot it rates, so a rerun or an
+                         out-of-order backfill sees what the first in-order
+                         run saw (no look-ahead).
+      same_hour       -- among usable rows in one slot, all but the one with
+                         the latest timestamp (the fresher reading).
+      after_gap       -- the row follows a missing slot. Marks the row, does
+                         not exclude it.
+    Every flag but `after_gap` excludes the row from `usable`; `frame` keeps
+    every row.
+
+    Missing hourly slots are marked, never filled: no row is invented and no
+    value is imputed. `gap_slots` is, per usable row, the number of hourly
+    slots missing since the previous usable row (0 for the first; 0 on
+    excluded rows). An excluded row leaves its hour missing.
 
     `as_of` is the end of the run window: None, or anything
-    `pd.to_datetime(..., utc=True, format="ISO8601")` parses. No rule uses it
-    yet; it is reported as the canonical `%Y-%m-%dT%H:%M:%SZ` string.
+    `pd.to_datetime(..., utc=True, format="ISO8601")` parses. It is reported as
+    the canonical `%Y-%m-%dT%H:%M:%SZ` string. The report also carries
+    `missing_slots` (sum of `gap_slots`), `trailing_gap_slots` (hourly slots
+    between the newest usable row and `as_of`'s slot; None without `as_of` or
+    without usable rows) and `contiguous_tail_rows` (the newest usable rows on
+    consecutive slots; 0 when none).
 
     The input frame is never modified. Raises `ValueError` when the frame
     holds more than one non-null city (cross-row rules are per city; loop over
@@ -130,6 +160,7 @@ def clean_history(history: pd.DataFrame, as_of=None) -> CleanedHistory:
             )
 
     as_of_text = None
+    as_of_slot = None
     if as_of is not None:
         try:
             as_of_ts = pd.to_datetime(as_of, utc=True, format="ISO8601")
@@ -138,6 +169,7 @@ def clean_history(history: pd.DataFrame, as_of=None) -> CleanedHistory:
         if pd.isna(as_of_ts):
             raise ValueError(f"as_of {as_of!r} does not parse as a timestamp")
         as_of_text = as_of_ts.strftime(_AS_OF_FORMAT)
+        as_of_slot = as_of_ts.floor("h")
 
     frame = history.copy().reset_index(drop=True)
     if "datetime_utc" in frame.columns:
@@ -150,16 +182,41 @@ def clean_history(history: pd.DataFrame, as_of=None) -> CleanedHistory:
     order = parsed.sort_values(kind="mergesort", na_position="last").index
     frame = frame.loc[order].reset_index(drop=True)
     parsed = parsed.loc[order].reset_index(drop=True)
+    slots = parsed.dt.floor("h")
+    no_rows = pd.Series(False, index=frame.index, dtype=bool)
 
-    masks = {
-        "bad_timestamp": parsed.isna(),
-        "duplicate": parsed.notna() & parsed.duplicated(keep="first"),
-        "fallback": (
-            frame["fallback"].astype(str).str.lower() == "true"
-            if "fallback" in frame.columns
-            else pd.Series(False, index=frame.index)
-        ),
-    }
+    masks = {}
+
+    # Row-local rules: every row.
+    masks["bad_timestamp"] = parsed.isna()
+    masks["duplicate"] = parsed.notna() & parsed.duplicated(keep="first")
+    masks["fallback"] = (
+        frame["fallback"].astype(str).str.lower() == "true"
+        if "fallback" in frame.columns
+        else no_rows.copy()
+    )
+    masks["at_or_after_run"] = (
+        parsed.notna() & (slots >= as_of_slot) if as_of_slot is not None else no_rows.copy()
+    )
+    excluded = (
+        masks["bad_timestamp"] | masks["duplicate"] | masks["fallback"] | masks["at_or_after_run"]
+    )
+
+    # Cross-row rules: only rows the earlier rules left usable.
+    live = ~excluded
+    same_hour = (
+        slots[live].duplicated(keep="last").reindex(frame.index, fill_value=False).astype(bool)
+    )
+    masks["same_hour"] = same_hour
+    excluded = excluded | same_hour
+
+    # Gaps: hours missing between consecutive usable rows. Excluded rows carry 0.
+    gap_slots = pd.Series(0, index=frame.index, dtype="int64")
+    usable_pos = frame.index[~excluded]
+    if len(usable_pos):
+        usable_hours = _hours_since_epoch(slots[usable_pos])
+        gap_slots[usable_pos] = (usable_hours.diff().fillna(1).astype("int64") - 1).clip(lower=0)
+    masks["after_gap"] = gap_slots > 0
 
     # One string per row: the names of its true masks, in FLAG_ORDER order.
     hits = zip(*[masks[name].tolist() for name in FLAG_ORDER])
@@ -167,15 +224,23 @@ def clean_history(history: pd.DataFrame, as_of=None) -> CleanedHistory:
         ["|".join(name for name, hit in zip(FLAG_ORDER, row) if hit) for row in hits],
         index=frame.index, dtype=object,
     )
-    excluded = pd.Series(False, index=frame.index, dtype=bool)
-    for name in FLAG_ORDER:
-        if name in EXCLUDING_FLAGS:
-            excluded = excluded | masks[name]
 
     frame["clean_flags"] = flags
     frame["clean_excluded"] = excluded.astype(bool)
+    frame["gap_slots"] = gap_slots
 
     usable = frame[~frame["clean_excluded"]].reset_index(drop=True)
+
+    trailing_gap_slots = None
+    contiguous_tail_rows = 0
+    if len(usable_pos):
+        if as_of_slot is not None:
+            newest_hour = int(_hours_since_epoch(slots[usable_pos]).iloc[-1])
+            as_of_hour = int(_hours_since_epoch(pd.Series([as_of_slot])).iloc[0])
+            trailing_gap_slots = as_of_hour - newest_hour - 1
+        gaps = usable["gap_slots"].tolist()
+        broken_at = [i for i, g in enumerate(gaps) if g > 0]
+        contiguous_tail_rows = len(gaps) - (broken_at[-1] if broken_at else 0)
 
     report = {
         "policy_version": CLEANING_POLICY_VERSION,
@@ -184,5 +249,8 @@ def clean_history(history: pd.DataFrame, as_of=None) -> CleanedHistory:
         "rows_excluded": int(len(frame) - len(usable)),
         "flag_counts": {name: int(masks[name].sum()) for name in FLAG_ORDER},
         "as_of": as_of_text,
+        "missing_slots": int(gap_slots.sum()),
+        "trailing_gap_slots": trailing_gap_slots,
+        "contiguous_tail_rows": int(contiguous_tail_rows),
     }
     return CleanedHistory(frame=frame, usable=usable, report=report)

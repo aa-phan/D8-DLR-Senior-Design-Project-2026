@@ -25,8 +25,8 @@ import historical_archive
 
 _CITY = "AUSTIN"
 _DAY = "2025-06-01"
-_START = f"{_DAY}T10:00:00Z"
-_END = f"{_DAY}T11:00:00Z"
+_START = f"{_DAY}T17:00:00Z"
+_END = f"{_DAY}T18:00:00Z"
 
 
 @pytest.fixture(autouse=True)
@@ -75,9 +75,9 @@ def _archive_row(city, hour, dlr_amps=1200.0, fallback=False):
     return {
         "datetime_utc": f"{_DAY}T{hour:02d}:00:00Z",
         "city": city,
-        "air_temp": 25.0,
-        "wind_speed": 5.0,
-        "solar_radiation": 500.0,
+        "air_temp": 25.0 + 0.1 * hour,
+        "wind_speed": 5.0 + 0.05 * hour,
+        "solar_radiation": 500.0 + hour,
         "dlr_amps": dlr_amps,
         "static_rating": 1825.0,
         "status": "fallback" if fallback else "ok",

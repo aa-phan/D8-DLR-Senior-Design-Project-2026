@@ -110,7 +110,9 @@ def test_fallback_is_matched_as_bool_or_any_case_text():
     cleaned = data_cleaning.clean_history(history)
 
     flags = _flags_by_amps(cleaned)
-    assert [flags[1000.0 + h] for h in range(5)] == ["fallback", "", "fallback", "fallback", ""]
+    # Hour 4 follows hour 1 with hours 2 and 3 excluded, so it is marked after_gap.
+    assert [flags[1000.0 + h] for h in range(5)] == [
+        "fallback", "", "fallback", "fallback", "after_gap"]
     assert list(cleaned.usable["dlr_amps"]) == [1001.0, 1004.0]
     assert cleaned.report["flag_counts"]["fallback"] == 3
 
@@ -204,7 +206,10 @@ def test_report_counts_rows_and_names_the_policy_version():
 
     assert report["policy_version"] == data_cleaning.CLEANING_POLICY_VERSION
     assert set(report["flag_counts"]) == set(data_cleaning.FLAG_ORDER)
-    assert report["flag_counts"] == {"bad_timestamp": 1, "duplicate": 1, "fallback": 1}
+    assert report["flag_counts"] == {
+        **{name: 0 for name in data_cleaning.FLAG_ORDER},
+        "bad_timestamp": 1, "duplicate": 1, "fallback": 1,
+    }
     assert (report["rows_in"], report["rows_usable"], report["rows_excluded"]) == (4, 1, 3)
     assert all(type(v) is int for v in report["flag_counts"].values())
     assert report["as_of"] == f"{_DAY}T12:00:00Z"
@@ -227,6 +232,172 @@ def test_offset_and_naive_spellings_in_one_frame_are_parsed_independently():
 
     assert list(cleaned.frame["dlr_amps"]) == [1004.0, 1001.0, 1003.0, 1002.0]
     assert _flags_by_amps(cleaned) == {
-        1004.0: "", 1001.0: "", 1003.0: "duplicate", 1002.0: "",
+        1004.0: "", 1001.0: "after_gap", 1003.0: "duplicate", 1002.0: "",
     }
     assert list(cleaned.usable["dlr_amps"]) == [1004.0, 1001.0, 1002.0]
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Hourly slots: rows at or after the run, several rows in one hour, gaps (CLEAN-02)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _at(hour, minute=0):
+    return f"{_DAY}T{hour:02d}:{minute:02d}:00Z"
+
+
+def _hourly(hours, **kw):
+    """Computed hourly rows at `hours`; dlr_amps is 1000 + the hour."""
+    return _rows(*[(_at(h), 1000.0 + h, False) for h in hours], **kw)
+
+
+def test_rows_at_or_after_the_rated_slot_are_excluded():
+    history = _rows(
+        (_at(10), 1001.0, False),
+        (_at(11), 1002.0, False),
+        (_at(12), 1003.0, False),
+        (_at(12, 10), 1004.0, False),
+        (_at(13), 1005.0, False),
+    )
+
+    cleaned = data_cleaning.clean_history(history, as_of=_at(12, 25))
+
+    assert _flags_by_amps(cleaned) == {
+        1001.0: "", 1002.0: "", 1003.0: "at_or_after_run",
+        1004.0: "at_or_after_run", 1005.0: "at_or_after_run",
+    }
+    assert list(cleaned.usable["dlr_amps"]) == [1001.0, 1002.0]
+    assert cleaned.report["flag_counts"]["at_or_after_run"] == 3
+
+
+def test_without_as_of_no_row_is_excluded_for_its_time():
+    history = _hourly([10, 11, 12, 23])
+
+    cleaned = data_cleaning.clean_history(history)
+
+    assert cleaned.report["flag_counts"]["at_or_after_run"] == 0
+    assert len(cleaned.usable) == 4
+
+
+def test_a_rerun_does_not_learn_from_its_own_slot():
+    history = _hourly([10, 11, 12])
+
+    cleaned = data_cleaning.clean_history(history, as_of=_at(12))
+
+    assert _flags_by_amps(cleaned)[1012.0] == "at_or_after_run"
+    assert list(cleaned.usable["dlr_amps"]) == [1010.0, 1011.0]
+    # One minute before the slot boundary the 12:00 row is still in the future.
+    assert len(data_cleaning.clean_history(history, as_of=_at(11, 59)).usable) == 1
+    # The last hour before the run is usable.
+    assert len(data_cleaning.clean_history(history, as_of=_at(13)).usable) == 3
+
+
+def test_rows_sharing_an_hour_keep_the_latest():
+    history = _rows(
+        (_at(10), 1001.0, False),
+        (_at(10, 5), 1002.0, False),
+        (_at(10, 55), 1003.0, False),
+        (_at(11), 1004.0, False),
+    )
+
+    cleaned = data_cleaning.clean_history(history)
+
+    assert _flags_by_amps(cleaned) == {
+        1001.0: "same_hour", 1002.0: "same_hour", 1003.0: "", 1004.0: "",
+    }
+    assert list(cleaned.usable["dlr_amps"]) == [1003.0, 1004.0]
+    assert cleaned.report["flag_counts"]["same_hour"] == 2
+
+
+def test_a_fallback_row_does_not_displace_a_computed_row_in_its_hour():
+    history = _rows(
+        (_at(11, 5), 1001.0, False),
+        (_at(11, 30), 1825.0, True),
+    )
+
+    cleaned = data_cleaning.clean_history(history)
+
+    assert _flags_by_amps(cleaned) == {1001.0: "", 1825.0: "fallback"}
+    assert list(cleaned.usable["dlr_amps"]) == [1001.0]
+
+
+def test_skipped_cycle_leaves_one_missing_slot_marked_on_the_next_row():
+    history = _hourly([0, 1, 2, 3, 4, 6, 7, 8, 9])      # 05:00 never ran
+
+    cleaned = data_cleaning.clean_history(history, as_of=_at(10))
+
+    assert _flags_by_amps(cleaned)[1006.0] == "after_gap"
+    gap_by_amps = dict(zip(cleaned.frame["dlr_amps"], cleaned.frame["gap_slots"]))
+    assert gap_by_amps[1006.0] == 1
+    assert sum(gap_by_amps.values()) == 1
+    # after_gap marks the row, it does not exclude it.
+    assert len(cleaned.usable) == 9
+    assert not cleaned.frame["clean_excluded"].any()
+    assert cleaned.report["missing_slots"] == 1
+    assert cleaned.report["trailing_gap_slots"] == 0
+    assert cleaned.report["flag_counts"]["after_gap"] == 1
+    # No row is invented for the missing hour.
+    assert len(cleaned.frame) == 9
+
+
+def test_gap_slots_count_missing_hours_between_usable_rows():
+    history = _hourly([0, 1, 2, 4, 5, 8])
+
+    cleaned = data_cleaning.clean_history(history)
+
+    assert list(cleaned.frame["gap_slots"]) == [0, 0, 0, 1, 0, 2]
+    assert [bool(f) for f in cleaned.frame["clean_flags"] == "after_gap"] == [
+        False, False, False, True, False, True]
+    assert cleaned.report["missing_slots"] == 3
+    assert cleaned.report["contiguous_tail_rows"] == 1
+    assert pd.api.types.is_integer_dtype(cleaned.frame["gap_slots"])
+
+
+def test_an_excluded_row_leaves_its_hour_missing():
+    history = _rows(
+        (_at(0), 1001.0, False),
+        (_at(1), 1825.0, True),
+        (_at(2), 1003.0, False),
+    )
+
+    cleaned = data_cleaning.clean_history(history)
+
+    gap_by_amps = dict(zip(cleaned.frame["dlr_amps"], cleaned.frame["gap_slots"]))
+    assert gap_by_amps == {1001.0: 0, 1825.0: 0, 1003.0: 1}
+    assert _flags_by_amps(cleaned)[1003.0] == "after_gap"
+    assert _flags_by_amps(cleaned)[1825.0] == "fallback"
+
+
+def test_trailing_gap_is_measured_against_as_of():
+    history = _hourly(range(0, 9))
+
+    assert data_cleaning.clean_history(history, as_of=_at(9)).report["trailing_gap_slots"] == 0
+    assert data_cleaning.clean_history(history, as_of=_at(10)).report["trailing_gap_slots"] == 1
+    assert data_cleaning.clean_history(history, as_of=_at(11, 30)).report["trailing_gap_slots"] == 2
+    assert data_cleaning.clean_history(history).report["trailing_gap_slots"] is None
+    assert all(type(data_cleaning.clean_history(history, as_of=_at(10)).report[key]) is int
+               for key in ("missing_slots", "trailing_gap_slots", "contiguous_tail_rows"))
+
+    # Nothing usable: no trailing gap to measure and no unbroken tail.
+    all_fallback = _rows((_at(0), 1825.0, True), (_at(1), 1825.0, True))
+    report = data_cleaning.clean_history(all_fallback, as_of=_at(10)).report
+    assert report["trailing_gap_slots"] is None
+    assert report["contiguous_tail_rows"] == 0
+    assert report["missing_slots"] == 0
+
+
+def test_contiguous_tail_counts_the_newest_unbroken_run():
+    assert data_cleaning.clean_history(_hourly(range(10))).report["contiguous_tail_rows"] == 10
+    broken = _hourly([0, 1, 2, 3, 5, 6, 7, 8, 9])
+    assert data_cleaning.clean_history(broken).report["contiguous_tail_rows"] == 5
+
+
+def test_a_frame_without_rows_has_an_integer_gap_slots_column_and_zero_gap_report(tmp_path):
+    history = historical_archive.read_history(path=str(tmp_path / "missing.csv"))
+
+    cleaned = data_cleaning.clean_history(history, as_of=_at(10))
+
+    assert list(cleaned.frame["gap_slots"]) == []
+    assert pd.api.types.is_integer_dtype(cleaned.frame["gap_slots"])
+    assert cleaned.report["missing_slots"] == 0
+    assert cleaned.report["trailing_gap_slots"] is None
+    assert cleaned.report["contiguous_tail_rows"] == 0
