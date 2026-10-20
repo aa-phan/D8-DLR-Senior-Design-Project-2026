@@ -1,0 +1,240 @@
+"""
+Tests for backend/city_pipeline.py::run_city_pipeline -- the per-city
+orchestrator that reads the archived history, drops fallback rows, forecasts,
+builds the anomaly detector and rates the city.
+
+History comes from a tmp_path archive, weather from an injected fetcher, and
+what the forecast and the detector receive is captured by spies. The tests
+assert on what each stage is given and what the `pipeline` key reports, never
+on a rating value. Follows backend/tests/city_rating_test.py's conventions
+(module-level imports, plain asserts, no test classes, no network).
+"""
+
+import logging
+
+import pandas as pd
+import pytest
+import requests
+
+import ampacity_forecast
+import anomaly_detector
+import city_pipeline
+import city_point
+import config
+import historical_archive
+
+_CITY = "AUSTIN"
+_DAY = "2025-06-01"
+_START = f"{_DAY}T10:00:00Z"
+_END = f"{_DAY}T11:00:00Z"
+
+
+@pytest.fixture(autouse=True)
+def _no_network(monkeypatch):
+    """
+    Replace `requests.get` for every test. The composer and `rate_city` catch
+    every provider exception, so raising alone could be swallowed; the teardown
+    assert on the recorded attempts cannot be.
+    """
+    attempts = []
+
+    def boom(url, *args, **kwargs):
+        attempts.append(url)
+        raise AssertionError("requests.get must not be called in this test")
+
+    monkeypatch.setattr(requests, "get", boom)
+    yield
+    assert attempts == []
+
+
+@pytest.fixture(autouse=True)
+def _offline_env(tmp_path, monkeypatch):
+    # Another test module loads `.env` into the process at import time.
+    for name in ("SYNOPTIC_TOKEN", "NREL_API_KEY", "NREL_API_EMAIL"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(config, "HISTORICAL_ARCHIVE_PATH", str(tmp_path / "default_archive.csv"))
+    # Trained models are git-ignored, so a test must not depend on whether this
+    # checkout has them.
+    monkeypatch.setattr(anomaly_detector, "_load_city_model_or_none", lambda city: None)
+
+
+def _station_at(city):
+    lat, lon = config.CITY_COORDINATES[city]
+    return pd.DataFrame([{"stid": "T1", "name": "t", "lat": lat, "lon": lon}])
+
+
+def _good_fetch(stids, start, end, provider="synoptic", **_):
+    # Wind blows across AUSTIN's line, so the projected speed equals the measured
+    # one; 25 C / 6.5 m/s / 500 W/m2 stays inside the gates, so G6 is evaluated.
+    across = (city_point.city_point(_CITY).bearing_deg + 90) % 360
+    return pd.DataFrame([{"stid": stids[0], "air_temp": 25.0, "wind_speed": 6.5,
+                          "wind_direction": across, "solar_radiation": 500.0}])
+
+
+def _archive_row(city, hour, dlr_amps=1200.0, fallback=False):
+    return {
+        "datetime_utc": f"{_DAY}T{hour:02d}:00:00Z",
+        "city": city,
+        "air_temp": 25.0,
+        "wind_speed": 5.0,
+        "solar_radiation": 500.0,
+        "dlr_amps": dlr_amps,
+        "static_rating": 1825.0,
+        "status": "fallback" if fallback else "ok",
+        "fallback": fallback,
+        "schema_version": historical_archive.ARCHIVE_SCHEMA_VERSION,
+    }
+
+
+def _write_archive(path, rows):
+    pd.DataFrame(rows, columns=historical_archive.ARCHIVE_COLUMNS).to_csv(path, index=False)
+
+
+class _SpyDetector:
+    signal = "spy"
+    model_source = None
+
+    def check(self, raw_data, rating):
+        return False, ""
+
+
+def _spy_detector(monkeypatch, detector=None):
+    """Stand in for AnomalyDetector; record what `for_city` was given."""
+    seen = {}
+    built = detector or _SpyDetector()
+
+    class _StandIn:
+        @staticmethod
+        def for_city(city, forecast=None, history=None, **kw):
+            seen["city"] = city
+            seen["forecast"] = forecast
+            seen["history"] = history
+            return built
+
+    monkeypatch.setattr(city_pipeline, "AnomalyDetector", _StandIn)
+    seen["detector"] = built
+    return seen
+
+
+def _spy_forecast(monkeypatch, result=None, raises=None):
+    """Replace forecast_ampacity; record the history and method it was given."""
+    seen = {}
+
+    def fake(history, method="naive", **kw):
+        seen["history"] = history
+        seen["method"] = method
+        if raises is not None:
+            raise raises
+        return result
+
+    monkeypatch.setattr(ampacity_forecast, "forecast_ampacity", fake)
+    return seen
+
+
+def _run(tmp_path, **kw):
+    args = dict(archive=False, archive_path=str(tmp_path / "archive.csv"),
+                fetch_weather=_good_fetch)
+    args.update(kw)
+    return city_pipeline.run_city_pipeline(_CITY, _START, _END, _station_at(_CITY), **args)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# History filtering, city scoping, forecast failure, cold start
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_fallback_rows_are_left_out_of_the_history_the_forecast_and_detector_see(
+        tmp_path, monkeypatch):
+    fallback_hours = {3, 7, 11, 15}
+    rows = [
+        _archive_row(_CITY, h, dlr_amps=1825.0, fallback=True) if h in fallback_hours
+        else _archive_row(_CITY, h, dlr_amps=1200.0 + h)
+        for h in range(18)
+    ]
+    _write_archive(tmp_path / "archive.csv", rows)
+    detector_seen = _spy_detector(monkeypatch)
+    forecast_seen = _spy_forecast(monkeypatch)
+
+    result = _run(tmp_path)
+
+    history = forecast_seen["history"]
+    assert len(history) == 14
+    assert not history["fallback"].astype(str).str.lower().eq("true").any()
+    assert 1825.0 not in set(history["dlr_amps"])
+    assert detector_seen["history"] is forecast_seen["history"]
+    assert result["pipeline"]["history_rows"] == 18
+    assert result["pipeline"]["usable_history_rows"] == 14
+
+
+def test_fallback_flag_is_matched_as_case_insensitive_text(tmp_path, monkeypatch):
+    flags = ["TRUE", "false", True, "True", False]
+    frame = pd.DataFrame({
+        "datetime_utc": [f"{_DAY}T{h:02d}:00:00Z" for h in range(5)],
+        "city": [_CITY] * 5,
+        "dlr_amps": [1300.0, 1301.0, 1302.0, 1303.0, 1304.0],
+        "fallback": pd.Series(flags, dtype=object),
+    })
+    monkeypatch.setattr(city_pipeline.historical_archive, "read_history", lambda **kw: frame)
+    _spy_detector(monkeypatch)
+    forecast_seen = _spy_forecast(monkeypatch)
+
+    result = _run(tmp_path)
+
+    history = forecast_seen["history"]
+    assert list(history["dlr_amps"]) == [1301.0, 1304.0]
+    assert result["pipeline"]["history_rows"] == 5
+    assert result["pipeline"]["usable_history_rows"] == 2
+
+
+def test_history_is_read_for_this_city_only(tmp_path, monkeypatch):
+    rows = [_archive_row(_CITY, h) for h in range(3)]
+    rows += [_archive_row("EL_PASO", h) for h in range(3, 5)]
+    _write_archive(tmp_path / "archive.csv", rows)
+    _spy_detector(monkeypatch)
+    forecast_seen = _spy_forecast(monkeypatch)
+
+    result = _run(tmp_path)
+
+    history = forecast_seen["history"]
+    assert len(history) == 3
+    assert set(history["city"]) == {_CITY}
+    assert result["pipeline"]["history_rows"] == 3
+
+
+def test_forecast_exception_leaves_no_forecast_and_the_city_still_rates(
+        tmp_path, monkeypatch, caplog):
+    detector_seen = _spy_detector(monkeypatch)
+    _spy_forecast(monkeypatch, raises=RuntimeError("no trained artifact"))
+
+    with caplog.at_level(logging.WARNING, logger="city_pipeline"):
+        result = _run(tmp_path, forecast_method="ml")
+
+    pipeline = result["pipeline"]
+    assert pipeline["forecast"] is None
+    assert pipeline["forecast_used_by_g6"] is False
+    assert pipeline["forecast_method"] == "ml"
+    assert detector_seen["forecast"] is None
+    assert result["exhausted"] is False
+    assert "rating" in result
+    warnings = [r for r in caplog.records
+                if r.name == "city_pipeline" and r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    message = warnings[0].getMessage()
+    assert "method='ml'" in message
+    assert "AUSTIN" in message
+    assert "continuing without a forecast" in message
+
+
+def test_cold_start_with_no_archive_rates_without_a_forecast(tmp_path):
+    # Empty edge: no archive file, real forecast, real detector (no model).
+    assert not (tmp_path / "archive.csv").exists()
+
+    result = _run(tmp_path)
+
+    pipeline = result["pipeline"]
+    assert pipeline["history_rows"] == 0
+    assert pipeline["usable_history_rows"] == 0
+    assert pipeline["forecast"] is None
+    assert pipeline["forecast_used_by_g6"] is False
+    assert pipeline["detector_signal"] == "cold_start"
+    assert pipeline["detector_model"] is None
+    assert result["exhausted"] is False
