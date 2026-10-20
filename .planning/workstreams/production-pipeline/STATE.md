@@ -1,18 +1,18 @@
 ---
 gsd_state_version: "1.0"
 current_phase: 02
-current_plan: 2
+current_plan: 3
 status: executing
-stopped_at: Completed 02-01-PLAN.md
-last_updated: "2026-10-20T05:31:20.305Z"
+stopped_at: Completed 02-02-PLAN.md
+last_updated: "2026-10-20T05:41:28.724Z"
 last_activity: 2026-10-20
 last_activity_desc: Phase 02 execution started
-state_head: be9facd337f932b73ce013f5454e80d7ee2c2096
+state_head: 7bf8d10e7eeea6e184d2aab776f0c734bb671c2f
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 35
-  completed_plans: 6
+  completed_plans: 7
   percent: 17
 milestone_name: Production Pipeline (Supabase + live ratings)
 workstream: production-pipeline
@@ -37,7 +37,7 @@ whoever owns that analysis; they are not work items here.
 
 **Status:** Ready to execute
 **Current Phase:** 02
-**Current Plan:** 2
+**Current Plan:** 3
 **Total Plans in Phase:** 4
 **Last Activity:** 2026-10-20 — Phase 02 execution started
 **Last Activity Description:** Phase 02 execution started
@@ -122,6 +122,7 @@ These block or affect stringing the system together and belong to the phases nam
 - [Phase 02]: Cleaning is a read-time view: clean_flags/clean_excluded live on the cleaned frame only, never persisted (ARCHIVE_COLUMNS is imported by forecast_training and the shadow collection)
 - [Phase 02]: CSV append is first-write-wins on the exact (city, UTC instant); CSV-only, differs on purpose from OD-7 (Postgres: hour-slot key, retry overwrites)
 - [Phase 02]: A clean_history exception gives forecast and detector an empty history (cold start), not unvetted history
+- [Phase 02]: 02-02: historical_archive._parse_utc parses explicit-offset and naive timestamps in separate batches (pandas 2.3 carries an earlier offset into a later naive value); same defect in data_cleaning._parse_utc deferred to 02-03
 
 ## Open Decisions
 
@@ -135,9 +136,9 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 
 ## Session Continuity
 
-**Last session:** 2026-10-20T05:31:20.149Z
+**Last session:** 2026-10-20T05:41:28.584Z
 
-**Stopped At:** Completed 02-01-PLAN.md
+**Stopped At:** Completed 02-02-PLAN.md
 **Resume File:** None
 
 ## Performance Metrics
@@ -150,3 +151,4 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 | Phase 01 P04 | 6 min | 2 tasks | 1 files |
 | Phase 01 P05 | 9 min | 2 tasks | 0 files |
 | Phase 02 P01 | 22 min | 2 tasks | 6 files |
+| Phase 02 P02 | 9 min | 2 tasks | 2 files |

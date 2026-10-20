@@ -61,7 +61,7 @@ proposals.
   are inconsistent with neighboring readings.
 - [ ] **CLEAN-02**: A documented gap-handling strategy covers missing hourly slots in a city's
   history before the forecast and anomaly detector consume it.
-- [ ] **CLEAN-03**: At most one row exists per (`city`, `datetime_utc`) slot. Re-running a window
+- [x] **CLEAN-03**: At most one row exists per (`city`, `datetime_utc`) slot. Re-running a window
   never appends a duplicate or conflicting row.
 - [ ] **CLEAN-04**: Rows touched by cleaning stay distinguishable from rows as written, so
   validation can tell raw readings from cleaned ones.
@@ -160,7 +160,7 @@ proposals.
 | PIPE-01 | Phase 1 | Complete |
 | CLEAN-01 | Phase 2 | Pending |
 | CLEAN-02 | Phase 2 | Pending |
-| CLEAN-03 | Phase 2 | Pending |
+| CLEAN-03 | Phase 2 | Complete |
 | CLEAN-04 | Phase 2 | Pending |
 | VAL-01 | Phase 3 | Pending |
 | VAL-02 | Phase 3 | Pending |
