@@ -73,7 +73,7 @@ def test_manifest_is_deterministic_and_flags_missing_models(tmp_path, monkeypatc
     anomaly_dir.mkdir()
     monkeypatch.setattr(config, "FORECAST_ML_MODEL_DIR", str(forecast_dir))
     monkeypatch.setattr(config, "ANOMALY_ML_MODEL_DIR", str(anomaly_dir))
-    # Models for AUSTIN only: every other city's two model files are missing.
+    # Models for AUSTIN only: MIDLAND's two model files are missing.
     (forecast_dir / config.FORECAST_ML_MODEL_FILENAME_TEMPLATE.format(city="AUSTIN")).write_bytes(b"f")
     (anomaly_dir / config.ANOMALY_ML_MODEL_FILENAME_TEMPLATE.format(city="AUSTIN")).write_bytes(b"a")
 
@@ -82,28 +82,28 @@ def test_manifest_is_deterministic_and_flags_missing_models(tmp_path, monkeypatc
     trace.write_text(_trace_line("AUSTIN", 10) + "\n" + _trace_line("AUSTIN", 11) + "\n",
                      encoding="utf-8")
     _write_log(log, "AUSTIN", [10, 11])
-    argv = ["--start", _step(10), "--end", _step(11), "--cities", "AUSTIN"]
+    argv = ["--start", _step(10), "--end", _step(11), "--cities", "AUSTIN", "MIDLAND"]
     base = ["manifest", "--archive", str(archive), "--trace", str(trace), "--log", str(log),
-            "--start", _step(10), "--end", _step(11), "--cities", "AUSTIN",
+            "--start", _step(10), "--end", _step(11), "--cities", "AUSTIN", "MIDLAND",
             "--forecast-method", "naive"]
 
     first, second = tmp_path / "m1.json", tmp_path / "m2.json"
     code1 = real_data_validation.main(base + ["--out", str(first), "--"] + argv)
     code2 = real_data_validation.main(base + ["--out", str(second), "--"] + argv)
 
-    assert code1 == 1 and code2 == 1  # models missing for the other cities
+    assert code1 == 1 and code2 == 1  # MIDLAND has no model files
     assert first.read_bytes() == second.read_bytes()
     manifest = json.loads(first.read_text(encoding="utf-8"))
     assert manifest["schema"] == "real_data_validation_manifest/1"
     assert manifest["window"] == {
         "start": _step(10), "end": _step(11), "step_hours": 1.0, "steps_per_city": 2,
         "warmup_hours": 168.0, "scored_start": "2025-06-08T10:00:00Z"}
-    assert manifest["cities"] == ["AUSTIN"]
+    assert manifest["cities"] == ["AUSTIN", "MIDLAND"]
     assert manifest["backfill_argv"] == argv
     assert repr(argv) in manifest["command"]
     assert manifest["command"] == real_data_validation.OWNER_COMMAND_TEMPLATE.replace(
         "{argv}", repr(argv))
-    assert manifest["archive_rows_by_city"] == {"AUSTIN": 2}
+    assert manifest["archive_rows_by_city"] == {"AUSTIN": 2, "MIDLAND": 0}
     assert set(manifest["files"]) == {"archive", "trace", "log"}
     assert manifest["files"]["archive"]["bytes"] == archive.stat().st_size
     assert len(manifest["files"]["archive"]["sha256"]) == 64

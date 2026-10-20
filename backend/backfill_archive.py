@@ -51,6 +51,14 @@ _GATE_RE = re.compile(r"\b(G[1-6]) FAIL")
 # Per-step validation trace (see `_trace_records`).
 TRACE_SCHEMA = "backfill_trace/1"
 _OBSERVATION_KEYS = ("temp", "wind", "wind_raw", "wind_direction", "solar")
+_TRACE_TEXT_LIMIT = 200
+# `name=value` where the name ends in a credential-shaped word (token, api_key,
+# NREL_API_KEY, access_token, email, ...). The value runs to the next separator.
+_SECRET_PAIR = re.compile(
+    r"([\w-]*(?:token|api_key|apikey|key|email|password|secret))=([^&\s,;)\"']+)", re.IGNORECASE)
+_NULL_RECORD_KEYS = (
+    "station_id", "rating_a", "static_rating_a", "status", "fallback", "exhausted", "archived",
+    "fallback_gates", "alerts", "observation", "observation_hour", "sources", "pipeline")
 
 
 _LOG_HEADER = "run_end_utc,city,rating_a,fallback,exhausted,archived,gates,error"
@@ -78,6 +86,17 @@ def _already_archived(path: str) -> dict:
         for city, t in zip(hist["city"], ts):
             done.setdefault(city, set()).add(t)
     return done
+
+
+def _redact(text) -> str:
+    """
+    Replace the value of every credential-shaped `name=value` pair with
+    `REDACTED`, then cut to 200 characters. Redaction runs first so a cut can
+    never leave half of a secret behind. Applied to every alert and error
+    string written to the trace, because a requests error can echo a query
+    string.
+    """
+    return _SECRET_PAIR.sub(r"\1=REDACTED", str(text))[:_TRACE_TEXT_LIMIT]
 
 
 def _trace_records(run: dict, ts_text: str, forecast_method: str, provenance: list) -> list:
@@ -111,13 +130,19 @@ def _trace_records(run: dict, ts_text: str, forecast_method: str, provenance: li
             "exhausted": result["exhausted"],
             "archived": result["archived"],
             "fallback_gates": row["fallback_gates"],
-            "alerts": [str(a) for a in result["alerts"]],
+            "alerts": [_redact(a) for a in result["alerts"]],
             "observation": None if obs is None else {k: float(obs[k]) for k in _OBSERVATION_KEYS},
             "observation_hour": None if match is None else match.get("hour"),
             "sources": None if match is None else {
                 k: match.get(k) for k in ("air_temp", "wind_speed", "solar_radiation")},
             "pipeline": result.get("pipeline"),
         })
+    for city, message in run.get("errors", {}).items():
+        record = {"schema": TRACE_SCHEMA, "run_end_utc": ts_text, "city": city,
+                  "forecast_method": run.get("forecast_method", forecast_method),
+                  "error": _redact(message)}
+        record.update({key: None for key in _NULL_RECORD_KEYS})
+        records.append(record)
     return records
 
 
