@@ -31,7 +31,7 @@ log = logging.getLogger(__name__)
 
 # Bump whenever a rule or threshold changes, so a validation result can name
 # the policy behind its flags.
-CLEANING_POLICY_VERSION: int = 1
+CLEANING_POLICY_VERSION: int = 2
 
 # Thresholds below are PROVISIONAL: they are written down with their reasoning
 # and are not fitted to data. Phase 3 measures their per-city flag rates on real
@@ -42,14 +42,19 @@ CLEANING_POLICY_VERSION: int = 1
 STUCK_FIELDS: tuple[str, ...] = ("air_temp", "wind_speed", "solar_radiation")
 
 # Consecutive usable rows with one identical value that mark a stuck sensor.
-# Hourly temperature at whole-degree resolution can repeat for a few hours
+# A run counts rows on consecutive hourly slots: a missing hour (no row at all)
+# ends it, a row excluded by an earlier rule does not. Hourly temperature at whole-degree resolution can repeat for a few hours
 # overnight; six identical hourly readings of one field is beyond that, and it
 # equals the ML forecast's six-row lookback (config.FORECAST_ML_ROLLING_WINDOW_HOURS).
 STUCK_MIN_RUN_ROWS: int = 6
 
 # Values that may repeat without meaning a stuck sensor. Solar radiation is
-# exactly 0.0 every night.
-STUCK_EXEMPT_VALUES: dict[str, tuple[float, ...]] = {"solar_radiation": (0.0,)}
+# exactly 0.0 every night. Archived wind_speed is the line-perpendicular
+# component and station calm reports are exactly 0.0, so calm nights repeat it.
+STUCK_EXEMPT_VALUES: dict[str, tuple[float, ...]] = {
+    "solar_radiation": (0.0,),
+    "wind_speed": (0.0,),
+}
 
 # Fields the spike rule checks.
 SPIKE_FIELDS: tuple[str, ...] = STUCK_FIELDS
@@ -170,17 +175,29 @@ def _hours_since_epoch(instants: pd.Series) -> pd.Series:
     return (instants - pd.Timestamp("1970-01-01", tz="UTC")) // pd.Timedelta(hours=1)
 
 
-def _stuck_mask(values: pd.Series, live: pd.Series, min_run: int, exempt) -> pd.Series:
+def _stuck_mask(
+    values: pd.Series, hours: pd.Series, live: pd.Series, min_run: int, exempt
+) -> pd.Series:
     """
     Rows in a run of at least `min_run` consecutive identical values, judged
-    over the rows `live` leaves usable (a run continues across excluded rows).
-    NaN never equals itself, so it never forms a run; `exempt` values never do.
+    over the rows `live` leaves usable. A run continues across hours held only
+    by excluded rows and ends at an hour with no row at all, so readings days
+    apart never form one run. NaN never equals itself, so it never forms a
+    run; `exempt` values never do.
     """
     out = pd.Series(False, index=values.index, dtype=bool)
     seq = values[live]
     if seq.empty:
         return out
-    run_id = (seq != seq.shift()).cumsum()
+    # Rank of each live row's hour among every hour that holds any row: two
+    # live rows are on consecutive held hours when their ranks and their
+    # hours step by the same amount.
+    held = pd.Series(sorted(hours.dropna().unique()))
+    rank = pd.Series(held.index, index=held.to_numpy())
+    h = hours[live]
+    r = h.map(rank)
+    contiguous = (h - h.shift()) == (r - r.shift())
+    run_id = ((seq != seq.shift()) | ~contiguous).cumsum()
     long_run = run_id.map(run_id.value_counts()) >= min_run
     flagged = long_run & seq.notna() & ~seq.isin(list(exempt))
     out[flagged.index[flagged.to_numpy()]] = True
@@ -213,15 +230,22 @@ def clean_history(
     """
     Flag and select the usable rows of one city's archive history.
 
-    A row's hourly slot is its parsed UTC time floored to the hour. Rules run
+    A row's hourly slot is its parsed UTC time floored to the hour, the same
+    rule as OD-7's `valid_time` (the run end truncated to the hour). Gaps are
+    counted in slots, not elapsed time: hourly runs must end inside their own
+    hour (the live schedule dispatches at hh:05), and a run that slips past
+    the next hour boundary reads as a missing slot. Rules run
     in `FLAG_ORDER` order (a row can carry several flags, joined with "|" in
     that order in `clean_flags`). Row-local rules see every row; cross-row
     rules see only the rows earlier rules left usable:
       bad_timestamp   -- `datetime_utc` is missing or unparseable.
-      duplicate       -- another row at the same UTC instant came first in
-                         input order; the first row written owns the instant
-                         (matching `historical_archive.append_observation`).
-      fallback        -- `fallback` is true, as a bool or any-case text. Fallback
+      duplicate       -- a computed (non-fallback) row, and another computed
+                         row at the same UTC instant came first in input
+                         order; the first computed row written owns the
+                         instant, even after a fallback row (matching
+                         `historical_archive.append_observation`).
+      fallback        -- `fallback` is true, as a bool or text equal to "true"
+                         in any case (no other spelling). Fallback
                          cycles archive the static rating as dlr_amps; learning
                          from them makes the naive forecast equal the static
                          rating and latches G6.
@@ -235,8 +259,10 @@ def clean_history(
       stuck_<field>   -- the row is in a run of `stuck_min_run_rows`
                          consecutive usable rows with the identical value in
                          air_temp, wind_speed or solar_radiation (a run
-                         continues across excluded rows; NaN never forms a
-                         run; solar 0.0 at night is exempt).
+                         continues across hours held by excluded rows and
+                         ends at an hour with no row; NaN never forms a run;
+                         values in STUCK_EXEMPT_VALUES, solar 0.0 at night
+                         and calm wind 0.0, are exempt).
       spike_<field>   -- the row's previous and next usable rows sit on the
                          adjacent hourly slots and its value differs from both
                          by more than `spike_max_step[field]` in the same
@@ -310,11 +336,16 @@ def clean_history(
 
     # Row-local rules: every row.
     masks["bad_timestamp"] = parsed.isna()
-    masks["duplicate"] = parsed.notna() & parsed.duplicated(keep="first")
     masks["fallback"] = (
         frame["fallback"].astype(str).str.lower() == "true"
         if "fallback" in frame.columns
         else no_rows.copy()
+    )
+    # Judged over computed rows only, so a computed row written after a
+    # fallback row at the same instant owns it (matching append_observation).
+    computed = parsed.notna() & ~masks["fallback"]
+    masks["duplicate"] = (
+        parsed[computed].duplicated(keep="first").reindex(frame.index, fill_value=False).astype(bool)
     )
     masks["at_or_after_run"] = (
         parsed.notna() & (slots >= as_of_slot) if as_of_slot is not None else no_rows.copy()
@@ -343,7 +374,7 @@ def clean_history(
         values = numeric(field)
         masks[f"stuck_{field}"] = (
             no_rows.copy() if values is None
-            else _stuck_mask(values, live, min_run, STUCK_EXEMPT_VALUES.get(field, ()))
+            else _stuck_mask(values, slot_hours, live, min_run, STUCK_EXEMPT_VALUES.get(field, ()))
         )
     for field in STUCK_FIELDS:
         excluded = excluded | masks[f"stuck_{field}"]

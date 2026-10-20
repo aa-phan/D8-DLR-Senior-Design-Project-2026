@@ -301,6 +301,37 @@ def test_append_accepts_another_city_or_another_instant(tmp_path):
     assert len(ha.read_history(path=str(path), validate=False)) == 3
 
 
+def _fallback_row(datetime_utc):
+    row = _row(dlr_amps=1200.0, datetime_utc=datetime_utc)
+    row.update(status="fallback", fallback=True)
+    return row
+
+
+def test_a_computed_row_may_follow_a_fallback_row_for_its_instant(tmp_path):
+    # A rerun after a provider outage repairs the fallback cycle.
+    path = tmp_path / "ampacity_history.csv"
+
+    assert ha.append_observation(_fallback_row("2026-01-01T00:00:00Z"), path=str(path)) is True
+    assert ha.append_observation(_row(dlr_amps=1300.0, datetime_utc="2026-01-01T00:00:00"),
+                                 path=str(path)) is True
+    # Once a computed row holds the instant, nothing else is appended.
+    assert ha.append_observation(_row(dlr_amps=1400.0, datetime_utc="2026-01-01T00:00:00Z"),
+                                 path=str(path)) is False
+    assert ha.append_observation(_fallback_row("2026-01-01T00:00:00Z"), path=str(path)) is False
+
+    df = ha.read_history(path=str(path), validate=False)
+    assert list(df["dlr_amps"]) == [1200.0, 1300.0]
+
+
+def test_a_fallback_row_never_follows_another_row_for_its_instant(tmp_path):
+    path = tmp_path / "ampacity_history.csv"
+
+    assert ha.append_observation(_fallback_row("2026-01-01T00:00:00Z"), path=str(path)) is True
+    assert ha.append_observation(_fallback_row("2026-01-01T00:00:00Z"), path=str(path)) is False
+
+    assert len(ha.read_history(path=str(path), validate=False)) == 1
+
+
 def test_a_refused_slot_logs_one_info_line_and_no_warning(tmp_path, caplog):
     path = tmp_path / "ampacity_history.csv"
     assert ha.append_observation(_row(), path=str(path)) is True

@@ -11,10 +11,15 @@ The row shape (`ARCHIVE_COLUMNS`) reuses `units_def.PIPELINE_SCHEMA`'s
 column spellings for every numeric field so `validate_pipeline_row` vets
 an archive row with no change to that validator and no parallel schema
 object (T-04-01, the archive-poisoning mitigation). Storage is an
-append-only CSV at `config.HISTORICAL_ARCHIVE_PATH` holding at most one row
+append-only CSV at `config.HISTORICAL_ARCHIVE_PATH` holding one computed row
 per (city, datetime_utc) instant: `append_observation` refuses a second row
 for an instant already archived for that city, in any ISO-8601 spelling, and
-the first write wins (CLEAN-03). Retention is unbounded this phase (D-09) —
+the first computed write wins (CLEAN-03). The one exception is a computed row
+after a fallback row: a rerun may repair a fallback cycle, and the read-side
+cleaning lets the computed row own the instant. The guard is best effort, not
+an invariant: the check and the append are not atomic, so two concurrent
+writers can both append, and the read-side `duplicate` rule then keeps the
+first computed row. Retention is unbounded this phase (D-09) —
 this module does not implement rotation/compaction.
 
 First-write-wins is a CSV-only rule: an append-only file cannot replace a row
@@ -165,24 +170,37 @@ def _existing_header(path: str):
     return list(pd.read_csv(path, nrows=0).columns)
 
 
+def _is_fallback(value) -> bool:
+    """A bool true or text equal to "true" in any case, as data_cleaning reads it."""
+    return str(value).lower() == "true"
+
+
 def _slot_archived(path: str, header: list, row: dict) -> bool:
     """
     True when the CSV at `path` already holds a row for the same city at the
-    same UTC instant as `row`. Reads only the city and `datetime_utc` columns.
-    Instants are compared parsed, so "...T10:00:00Z", "...T10:00:00+00:00" and
-    a naive "...T10:00:00" are one slot; a new timestamp that does not parse
-    is matched by its exact string.
+    same UTC instant as `row` that `row` must not follow: any row when `row`
+    is a fallback row, and a computed row when `row` is computed (a computed
+    row may follow fallback rows only). A file without a `fallback` column
+    counts every row as computed. Reads only the city, `datetime_utc` and
+    `fallback` columns. Instants are compared parsed, so "...T10:00:00Z",
+    "...T10:00:00+00:00" and a naive "...T10:00:00" are one slot; a new
+    timestamp that does not parse is matched by its exact string.
     """
     city_col = "city" if "city" in header else "corridor"
-    existing = pd.read_csv(path, usecols=[city_col, "datetime_utc"], dtype=str)
+    columns = [city_col, "datetime_utc"] + (["fallback"] if "fallback" in header else [])
+    existing = pd.read_csv(path, usecols=columns, dtype=str)
     same_city = existing[city_col] == str(row["city"])
     if not same_city.any():
         return False
     new_value = row.get("datetime_utc")
     new_instant = _parse_utc([new_value]).iloc[0]
     if pd.isna(new_instant):
-        return bool((same_city & (existing["datetime_utc"] == str(new_value))).any())
-    return bool((same_city & (_parse_utc(existing["datetime_utc"]) == new_instant)).any())
+        same_slot = same_city & (existing["datetime_utc"] == str(new_value))
+    else:
+        same_slot = same_city & (_parse_utc(existing["datetime_utc"]) == new_instant)
+    if not _is_fallback(row.get("fallback")) and "fallback" in existing.columns:
+        same_slot = same_slot & ~existing["fallback"].map(_is_fallback)
+    return bool(same_slot.any())
 
 
 def append_observation(row: dict, path: str = None) -> bool:
@@ -200,10 +218,13 @@ def append_observation(row: dict, path: str = None) -> bool:
     A row that fails `units_def.validate_pipeline_row` (T-04-01 — the
     archive-poisoning mitigation) is logged and rejected, not persisted.
 
-    One row per slot (CLEAN-03): when the file already holds a row for the
-    same city at the same UTC instant (any ISO-8601 spelling), nothing is
-    written, the skip is logged and the return value is False. The first
-    write stays. This is a CSV-only rule; the Postgres writer follows OD-7.
+    One computed row per slot (CLEAN-03): when the file already holds a row
+    for the same city at the same UTC instant (any ISO-8601 spelling), nothing
+    is written, the skip is logged and the return value is False, unless
+    `row` is computed and every existing row at that instant is a fallback
+    row; then `row` is appended so a rerun repairs the fallback cycle. Best
+    effort: the check and the append are not atomic. This is a CSV-only rule;
+    the Postgres writer follows OD-7.
     """
     if path is None:
         path = config.HISTORICAL_ARCHIVE_PATH

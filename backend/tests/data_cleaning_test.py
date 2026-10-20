@@ -11,6 +11,7 @@ imports, plain asserts, no test classes).
 
 import math
 import os
+import re
 
 import pandas as pd
 import pytest
@@ -121,23 +122,38 @@ def test_fallback_is_matched_as_bool_or_any_case_text():
 def test_a_row_can_carry_several_flags_in_flag_order():
     history = _rows(
         (_hour(10), 1001.0, False),
-        (_hour(10), 1002.0, True),     # later duplicate and a fallback row
-        (_hour(11), 1003.0, True),     # fallback only
+        (_hour(10), 1002.0, False),    # later duplicate, at the run's slot
+        (_hour(11), 1003.0, True),     # fallback, after the run's slot
     )
 
-    cleaned = data_cleaning.clean_history(history)
+    cleaned = data_cleaning.clean_history(history, as_of=_hour(10))
 
     assert _flags_by_amps(cleaned) == {
-        1001.0: "", 1002.0: "duplicate|fallback", 1003.0: "fallback",
+        1001.0: "at_or_after_run",
+        1002.0: "duplicate|at_or_after_run",
+        1003.0: "fallback|at_or_after_run",
     }
-    # The first row written for an instant owns it, even when it is a fallback row.
-    reversed_ = data_cleaning.clean_history(_rows(
-        (_hour(10), 1001.0, True),
-        (_hour(10), 1002.0, False),
-    ))
-    assert _flags_by_amps(reversed_) == {1001.0: "fallback", 1002.0: "duplicate"}
-    assert len(reversed_.usable) == 0
     assert data_cleaning.FLAG_ORDER.index("duplicate") < data_cleaning.FLAG_ORDER.index("fallback")
+
+
+def test_a_computed_row_owns_its_instant_even_after_a_fallback_row():
+    # A fallback row is never a duplicate's owner: the computed row written
+    # after it (a rerun repairing the cycle) stays usable.
+    repaired = data_cleaning.clean_history(_rows(
+        (_hour(10), 1825.0, True),
+        (_hour(10), 1002.0, False),
+        (_hour(10), 1003.0, False),
+    ))
+    assert _flags_by_amps(repaired) == {1825.0: "fallback", 1002.0: "", 1003.0: "duplicate"}
+    assert list(repaired.usable["dlr_amps"]) == [1002.0]
+
+    # A fallback row after a computed row is a fallback row, not a duplicate.
+    later = data_cleaning.clean_history(_rows(
+        (_hour(10), 1001.0, False),
+        (_hour(10), 1825.0, True),
+    ))
+    assert _flags_by_amps(later) == {1001.0: "", 1825.0: "fallback"}
+    assert later.report["flag_counts"]["duplicate"] == 0
 
 
 def test_cleaning_never_changes_a_cell_and_never_mutates_its_input():
@@ -236,6 +252,20 @@ def test_offset_and_naive_spellings_in_one_frame_are_parsed_independently():
         1004.0: "", 1001.0: "after_gap", 1003.0: "duplicate", 1002.0: "",
     }
     assert list(cleaned.usable["dlr_amps"]) == [1004.0, 1001.0, 1002.0]
+
+
+def test_read_and_write_side_parsers_agree():
+    # The two _parse_utc twins must read every spelling as the same instant, or
+    # the write-side slot guard and the read-side sort would disagree.
+    values = [
+        f"{_DAY}T10:00:00Z", f"{_DAY}T10:00:00+00:00", f"{_DAY}T16:00:00+06:00",
+        f"{_DAY}T10:00:00", f"{_DAY}T10:00:00.5Z", f"{_DAY}T04:00:00-0600",
+        _DAY, "garbage", "", math.nan,
+    ]
+    read_side = data_cleaning._parse_utc(values)
+    write_side = historical_archive._parse_utc(values)
+
+    pd.testing.assert_series_equal(read_side, write_side)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -404,6 +434,30 @@ def test_a_frame_without_rows_has_an_integer_gap_slots_column_and_zero_gap_repor
     assert cleaned.report["contiguous_tail_rows"] == 0
 
 
+def test_a_row_belongs_to_its_run_ends_own_hour():
+    # Rows are stamped with the run end floored to 5 minutes; a run's slot is
+    # that end's own hour (OD-7's valid_time). Runs dispatched at hh:05 and
+    # delayed within their hour leave no gap.
+    history = _rows(
+        (_at(10, 5), 1010.0, False),
+        (_at(11, 40), 1011.0, False),
+        (_at(12, 55), 1012.0, False),
+        (_at(13, 10), 1013.0, False),
+    )
+
+    cleaned = data_cleaning.clean_history(history, as_of=_at(14, 5))
+
+    assert _flag_list(cleaned) == [""] * 4
+    assert cleaned.report["trailing_gap_slots"] == 0
+    assert cleaned.report["contiguous_tail_rows"] == 4
+
+    # A run that slips past the next hour boundary reads as a missing slot.
+    slipped = data_cleaning.clean_history(
+        _rows((_at(10, 55), 1010.0, False), (_at(12, 0), 1012.0, False))
+    )
+    assert _flag_list(slipped) == ["", "after_gap"]
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Stuck-sensor runs and spikes across rows (CLEAN-01)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -438,6 +492,34 @@ def test_night_time_zero_solar_is_not_a_stuck_run():
 
     daylight = data_cleaning.clean_history(_with_values("solar_radiation", [350.0] * 6))
     assert _flag_list(daylight) == ["stuck_solar_radiation"] * 6
+
+
+def test_calm_wind_is_not_a_stuck_run():
+    calm = data_cleaning.clean_history(_with_values("wind_speed", [0.0] * 12))
+    assert _flag_list(calm) == [""] * 12
+
+    steady = data_cleaning.clean_history(_with_values("wind_speed", [3.0] * 6))
+    assert _flag_list(steady) == ["stuck_wind_speed"] * 6
+
+
+def test_a_missing_hour_ends_a_stuck_run():
+    # Seven identical readings, one per day: never on consecutive hours.
+    days = _rows(*[(f"2025-06-{d:02d}T10:00:00Z", 1000.0 + d, False) for d in range(1, 8)])
+    days["air_temp"] = [20.0] * 7
+    daily = data_cleaning.clean_history(days)
+    assert [f for f in _flag_list(daily) if "stuck" in f] == []
+
+    # Three and three around one missing hour: two runs of three.
+    split = data_cleaning.clean_history(
+        _with_values("air_temp", [20.0] * 6, hours=[0, 1, 2, 4, 5, 6])
+    )
+    assert split.report["flag_counts"]["stuck_air_temp"] == 0
+
+    # Six on consecutive hours after the gap still flag.
+    after = data_cleaning.clean_history(
+        _with_values("air_temp", [20.0] * 7, hours=[0, 2, 3, 4, 5, 6, 7])
+    )
+    assert after.report["flag_counts"]["stuck_air_temp"] == 6
 
 
 def test_a_stuck_run_spans_rows_already_excluded():
@@ -569,8 +651,13 @@ def test_policy_doc_names_every_flag_and_threshold():
     def named(name):
         return f"`{name}`" in text
 
-    def line_has(*needles):
-        return any(all(needle in line for needle in needles) for line in lines)
+    def line_has(*needles, cells=()):
+        # Values must fill a whole table cell, so "1" never matches "| 10 |".
+        return any(
+            all(needle in line for needle in needles)
+            and all(re.search(rf"\|\s*{re.escape(cell)}\s*\|", line) for cell in cells)
+            for line in lines
+        )
 
     assert f"**Policy version:** {data_cleaning.CLEANING_POLICY_VERSION}" in text
     for name in (*data_cleaning.FLAG_ORDER, *data_cleaning.MARKER_COLUMNS):
@@ -586,11 +673,11 @@ def test_policy_doc_names_every_flag_and_threshold():
         if isinstance(value, bool):
             continue
         if isinstance(value, (int, float)):
-            assert line_has(f"`{name}`", str(value)), f"{name} = {value} is not stated"
+            assert line_has(f"`{name}`", cells=[str(value)]), f"{name} = {value} is not stated"
         elif isinstance(value, dict):
             for key, item in value.items():
                 parts = item if isinstance(item, tuple) else (item,)
-                assert line_has(f"`{name}`", f"`{key}`", *[str(p) for p in parts]), (
+                assert line_has(f"`{name}`", f"`{key}`", cells=[str(p) for p in parts]), (
                     f"{name}[{key!r}] = {item} is not stated")
         elif isinstance(value, (tuple, frozenset)):
             for member in value:

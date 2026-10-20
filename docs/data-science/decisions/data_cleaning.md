@@ -2,7 +2,9 @@
 
 **Status:** Adopted 2026-10-19 with provisional thresholds (production-pipeline Phase 2, CLEAN-01..04). Phase 3 measures flag rates on real data; thresholds change only on that evidence.
 
-**Policy version:** 1
+**Policy version:** 2
+
+**Version 2 (2026-10-20, Phase 2 review WR-01 to WR-04):** calm wind (0.0) is exempt from the stuck rule; a stuck run ends at a missing hour; a computed row owns its instant even after a fallback row; slots are documented as the run end's own hour.
 
 **Decision:** A city's archive history is cleaned at read time, before the forecast and the anomaly detector learn from it. Cleaning flags rows and selects the usable ones; it never changes a value, never adds or drops a row, and never fills a missing hour. Stuck-sensor runs, one-hour spikes, fallback rows, duplicate instants, several rows in one hour, and rows at or after the slot being rated are excluded. A missing hourly slot is marked on the next row and measured in a report, not repaired.
 
@@ -37,12 +39,12 @@ One row per flag, in rule order:
 | Flag | Rule | Excludes | Requirement |
 |---|---|---|---|
 | `bad_timestamp` | `datetime_utc` is missing or does not parse | yes | CLEAN-03 |
-| `duplicate` | Another row at the same UTC instant came first | yes | CLEAN-03 |
-| `fallback` | `fallback` is true (bool or any-case text) | yes | CLEAN-01 |
+| `duplicate` | A computed row, and another computed row at the same UTC instant came first | yes | CLEAN-03 |
+| `fallback` | `fallback` is true (bool, or the text "true" in any case) | yes | CLEAN-01 |
 | `at_or_after_run` | The row's slot is at or after the slot of `as_of` | yes | CLEAN-02 |
 | `same_hour` | A later usable row exists in the same hourly slot | yes | CLEAN-02 |
 | `stuck_air_temp` | In a run of `STUCK_MIN_RUN_ROWS` or more identical `air_temp` values | yes | CLEAN-01 |
-| `stuck_wind_speed` | Same, for `wind_speed` | yes | CLEAN-01 |
+| `stuck_wind_speed` | Same, for `wind_speed`, except exempt values | yes | CLEAN-01 |
 | `stuck_solar_radiation` | Same, for `solar_radiation`, except exempt values | yes | CLEAN-01 |
 | `spike_air_temp` | One-hour `air_temp` excursion beyond its step on both sides | yes | CLEAN-01 |
 | `spike_wind_speed` | Same, for `wind_speed` | yes | CLEAN-01 |
@@ -51,14 +53,14 @@ One row per flag, in rule order:
 
 ## Rules, in order
 
-A row's hourly slot is its parsed UTC `datetime_utc` floored to the hour. Row-local rules (1-4) see every row. Cross-row rules (5-8) see only the rows the earlier rules left usable, so a flagged row never changes another row's verdict through a rule that comes later than it.
+A row's hourly slot is its parsed UTC `datetime_utc` floored to the hour (see [Hour alignment](#hour-alignment)). Row-local rules (1-4) see every row. Cross-row rules (5-8) see only the rows the earlier rules left usable, so a flagged row never changes another row's verdict through a rule that comes later than it.
 
 1. `bad_timestamp`: `datetime_utc` is missing, empty or does not parse as an ISO-8601 instant. Naive values read as UTC. Values with an explicit offset and values without one are parsed in separate batches, because pandas 2.3 otherwise applies an earlier value's offset to a later naive one. Unparseable rows sort last.
-2. `duplicate`: among rows with a timestamp, every row after the first at one UTC instant, in input order. The first row written owns the instant, matching `append_observation`.
-3. `fallback`: `fallback` is a bool true or text equal to "true" in any case. A fallback cycle archives the static rating as `dlr_amps`; learning from it makes the naive forecast equal the static rating and latches G6.
+2. `duplicate`: among computed (non-fallback) rows with a timestamp, every row after the first at one UTC instant, in input order. The first computed row written owns the instant, even when a fallback row for that instant came before it, matching `append_observation`. A fallback row is flagged `fallback`, never `duplicate`.
+3. `fallback`: `fallback` is a bool true or text equal to "true" in any case. No other spelling ("1", "yes") counts; the writer only emits a bool. A fallback cycle archives the static rating as `dlr_amps`; learning from it makes the naive forecast equal the static rating and latches G6.
 4. `at_or_after_run`: only when `as_of` is given. The row has a timestamp and its slot is at or after `as_of` floored to the hour. The history a run learns from ends before the slot it rates, so a rerun or an out-of-order backfill sees what the first in-order run saw (no look-ahead). Without `as_of` no row is excluded for its time.
 5. `same_hour`: of the rows still usable in one slot, the one with the latest timestamp stays and the others are flagged (a fresher reading suits a 60-minute-ahead forecast). A fallback row is excluded earlier and never displaces a computed row in its hour.
-6. `stuck_air_temp`, `stuck_wind_speed`, `stuck_solar_radiation`: over the rows left usable by rule 5, in time order, a run is consecutive rows with an identical value of the field. A run of `STUCK_MIN_RUN_ROWS` or more whose value is not in the field's `STUCK_EXEMPT_VALUES` flags every row in it. A run continues across rows excluded by earlier rules. A missing value never equals another, so it never forms a run. A field whose column is absent is skipped. The three fields are judged against the same rows.
+6. `stuck_air_temp`, `stuck_wind_speed`, `stuck_solar_radiation`: over the rows left usable by rule 5, in time order, a run is consecutive rows with an identical value of the field. A run of `STUCK_MIN_RUN_ROWS` or more whose value is not in the field's `STUCK_EXEMPT_VALUES` flags every row in it. A run continues across hours held only by rows excluded by earlier rules, and ends at an hour with no row at all, so identical readings hours or days apart never form one run. A missing value never equals another, so it never forms a run. A field whose column is absent is skipped. The three fields are judged against the same rows.
 7. `spike_air_temp`, `spike_wind_speed`, `spike_solar_radiation`: over the rows left usable by rule 6, a row is flagged when its previous and next usable rows sit on the hourly slots exactly one hour before and after its own, and its value differs from both by more than `SPIKE_MAX_STEP` for the field, in the same direction. A difference equal to the step is not a spike. Steps, ramps, rows next to a gap and the first and last usable rows are never spikes. Every row is judged against the same set, so an oscillating sensor flags every interior row. A missing value never flags. The three fields are judged against the same rows.
 8. `after_gap`: over the rows left usable by rule 7, `gap_slots` is the hours between the row's slot and the previous usable row's slot, minus one; rows with `gap_slots` above 0 carry `after_gap`. This flag marks the row and does not exclude it.
 
@@ -70,9 +72,10 @@ None of these values was derived from or tuned on real archives. Each is a state
 
 | Constant | Field | Value | Unit | Reasoning |
 |---|---|---|---|---|
-| `CLEANING_POLICY_VERSION` | - | 1 | - | Version of the rules and constants in this document |
+| `CLEANING_POLICY_VERSION` | - | 2 | - | Version of the rules and constants in this document |
 | `STUCK_MIN_RUN_ROWS` | - | 6 | rows | Hourly temperature at whole-degree resolution can repeat for a few hours overnight; six identical hourly readings of one field is beyond that, and equals the ML forecast's six-row lookback |
 | `STUCK_EXEMPT_VALUES` | `solar_radiation` | 0.0 | W/m2 | Solar radiation is exactly 0.0 every night, for far more than six hours |
+| `STUCK_EXEMPT_VALUES` | `wind_speed` | 0.0 | m/s | Archived wind is the line-perpendicular component and calm reports are exactly 0.0, so calm nights repeat it for many hours |
 | `SPIKE_MAX_STEP` | `air_temp` | 10.0 | degC per hour | A front is a step that stays; a swing this large that returns within the hour is more likely a sensor fault |
 | `SPIKE_MAX_STEP` | `wind_speed` | 10.0 | m/s per hour | Archived wind is the line-perpendicular component, so direction swings move it; a larger swing that returns is suspect |
 | `SPIKE_MAX_STEP` | `solar_radiation` | 700.0 | W/m2 per hour | Clouds swing hourly solar widely, so only a larger excursion counts |
@@ -87,7 +90,15 @@ Tuple and set constants, by name and members:
 - `EXCLUDING_FLAGS`: every member of `FLAG_ORDER` except `after_gap`, i.e. `bad_timestamp`, `duplicate`, `fallback`, `at_or_after_run`, `same_hour`, `stuck_air_temp`, `stuck_wind_speed`, `stuck_solar_radiation`, `spike_air_temp`, `spike_wind_speed`, `spike_solar_radiation`
 - `MARKER_COLUMNS`: `clean_flags`, `clean_excluded`, `gap_slots`
 
-Phase 3 is expected to look first at wind stuck runs on calm nights (El Paso, Midland) and at solar spikes on cloudy days.
+Phase 3 is expected to look first at wind stuck runs on calm nights (El Paso, Midland; calm 0.0 is exempt, but a light wind repeated at the same value is not) and at solar spikes on cloudy days.
+
+## Hour alignment
+
+Each archive row is stamped with its run's window end (`dlr_orchestrator._default_window`: now in UTC, floored to 5 minutes). Its slot is that end's own hour, the same rule as OD-7's `valid_time` (the run end truncated to the hour). Gaps are counted in slots, not in elapsed time.
+
+- This relies on each hourly run ending inside its own hour. The live schedule (Phase 5) dispatches at hh:05 UTC, which leaves up to 55 minutes of queue or retry delay in the slot.
+- A run that slips past the next hour boundary (ends 10:55, next ends 12:00) leaves its hour empty: the next row carries `after_gap`, and for `ml` the forecast is withheld from G6 until the lookback is unbroken. Two runs ending in one hour leave one row there (`same_hour`).
+- Postgres rows (Phase 4) are keyed by the same hour, so the models see one row per slot from either store.
 
 ## Missing hourly slots (CLEAN-02)
 
@@ -127,8 +138,9 @@ Owner decision OD-3 makes `ml` the live forecast method, so after a skipped cycl
 
 ## One row per slot (CLEAN-03)
 
-- **CSV write side.** `append_observation` refuses a second row for a (city, UTC instant) in any ISO-8601 spelling. The first write wins; it returns False and logs INFO. Corridor-era files are matched on `corridor`.
-- **Read side.** The `duplicate` rule keeps the first row in `read_history`'s stable time order.
+- **CSV write side.** `append_observation` refuses a second row for a (city, UTC instant) in any ISO-8601 spelling. The first computed write wins; a refused append returns False and logs INFO. The one exception: a computed row is appended when every existing row at its instant is a fallback row, so a rerun after a provider outage repairs the hour. A fallback row is never appended to an instant that already has a row. Corridor-era files are matched on `corridor`; a file without a `fallback` column counts every row as computed.
+- **Read side.** The `duplicate` rule keeps the first computed row in `read_history`'s stable time order; a fallback row before it is flagged `fallback`.
+- **Best effort.** The write-side check and the append are not atomic, so two concurrent writers (a backfill next to a live run) can both append one instant. The read-side `duplicate` rule then keeps the first computed row.
 - **Why first-write-wins in the CSV.** The file is append-only, so replacing a row would mean rewriting it inside a best-effort path that must never raise, and the CSV only has to make reruns and backfill resumes safe.
 - **A deliberate CSV-only divergence, not the Phase 4 contract.** Owner decision OD-7 (REQUIREMENTS.md) governs the Postgres rating table: `valid_time` is the hour-truncated UTC run slot of the window end, a same-slot retry overwrites (`ON CONFLICT (city, valid_time) DO UPDATE`, with `first_written_at` immutable), and the aligned weather hour is stored separately as `observation_time`.
 - **The key semantics differ.** The CSV key is the exact `datetime_utc` instant; the Postgres key is the run's hour. On the read side the `same_hour` rule keeps the latest reading in an hour, so the models see one row per hour from either store, the same row an OD-7 overwrite would leave.
@@ -143,5 +155,8 @@ Per city, run `clean_history(read_history(path, city=c), as_of=None)`. `frame["c
 - A row `read_history` drops as invalid still holds its slot for `append_observation`.
 - Consumers parse `datetime_utc` themselves and cleaning does not rewrite it, so an archive mixing tz-aware and naive spellings makes `ewm` fall back to row order and `ml` fail to a no-forecast run. Rows from `dlr_orchestrator` and `backfill_archive` are always `%Y-%m-%dT%H:%M:%SZ`.
 - A two-hour excursion is not a spike.
-- A stuck sensor that repeats within fewer than six rows is not flagged.
+- A stuck sensor that repeats within fewer than six rows is not flagged, and one whose run is broken by a missing hour is judged as two shorter runs.
+- A sensor stuck at exactly 0.0 wind or solar is not flagged, because those values are exempt.
+- A run that ends after the next hour boundary reads as a missing slot (see Hour alignment).
+- The timestamp parser is duplicated in `data_cleaning` and `historical_archive` (each keeps its own imports); a test asserts both read the same spellings as the same instants.
 - Frames with several cities are rejected, not split.
