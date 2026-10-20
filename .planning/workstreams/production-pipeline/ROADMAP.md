@@ -103,10 +103,10 @@ a recorded go/no-go.
      explanations for outliers.
   3. A go/no-go decision is written and signed by the owner. On no-go, the blocking fixes are listed
      and Phase 4 does not start.
-**Plans**: 5 plans
+**Plans**: 1/5 plans executed
 
 Plans:
-- [ ] 03-01-PLAN.md — Wave 1: backfill validation trace (`--trace-path`) and offline analysis CLI (completeness, manifest, VAL-01 report); phase tracer
+- [x] 03-01-PLAN.md — Wave 1: backfill validation trace (`--trace-path`) and offline analysis CLI (completeness, manifest, VAL-01 report); phase tracer
 - [ ] 03-02-PLAN.md — Wave 2: preflight, owner runs the 2026-09-08..09-28 backfill (ml, composed), completeness + manifest committed (checkpoint)
 - [ ] 03-03-PLAN.md — Wave 2: VAL-02 band coverage and detector trip tables; offline naive replay with fidelity check
 - [ ] 03-04-PLAN.md — Wave 3: run replay + report on the hashed archive, commit tables, write the validation doc with go/no-go options
@@ -197,7 +197,7 @@ Plans:
 |-------|----------------|--------|-----------|
 | 1. Land PR #7 | 5/5 | Complete    | 2026-10-19 |
 | 2. Data Cleaning | 4/4 | Complete    | 2026-10-20 |
-| 3. Real-Data Validation | 0/5 | Planned | - |
+| 3. Real-Data Validation | 1/5 | In Progress | - |
 | 4. Supabase Store & Writer | 0/6 | Planned | - |
 | 5. Scheduled Live Runs | 0/8 | Planned | - |
 | 6. Exposure & E2E Verification | 0/7 | Planned | - |

@@ -1,19 +1,19 @@
 ---
 gsd_state_version: "1.0"
-current_phase: 03 — Real-Data Validation
-current_plan: Not started
+current_phase: 03
+current_plan: 2
 status: executing
-stopped_at: Phase 2 complete, ready to execute Phase 03
-last_updated: "2026-10-20T21:59:36.185Z"
+stopped_at: Completed 03-01-PLAN.md
+last_updated: "2026-10-20T23:10:58.026Z"
 last_activity: 2026-10-20
-last_activity_desc: Phase 2 complete, transitioned to Phase 03
-state_head: 53e5b99105d7ab51b4e379d7749f20f6807c87e3
+last_activity_desc: Phase 03 execution started
+state_head: 28188ab2cee7651b76fc551d4f57eb047a9dda93
 progress:
   total_phases: 6
   completed_phases: 2
   total_plans: 35
-  completed_plans: 9
-  percent: 33
+  completed_plans: 10
+  percent: 29
 milestone_name: Production Pipeline (Supabase + live ratings)
 workstream: production-pipeline
 created: 2026-10-18
@@ -36,11 +36,11 @@ whoever owns that analysis; they are not work items here.
 ## Current Position
 
 **Status:** Ready to execute
-**Current Phase:** 03 — Real-Data Validation
-**Current Plan:** Not started
-**Total Plans in Phase:** 4
-**Last Activity:** 2026-10-20
-**Last Activity Description:** Phase 2 complete, transitioned to Phase 03
+**Current Phase:** 03
+**Current Plan:** 2
+**Total Plans in Phase:** 5
+**Last Activity:** 2026-10-20 — Phase 03 execution started
+**Last Activity Description:** Phase 03 execution started
 
 ## Planning Summary (2026-10-19)
 
@@ -127,6 +127,9 @@ These block or affect stringing the system together and belong to the phases nam
 - [Phase 02]: 02-03: at_or_after_run excludes rows whose slot is at or after as_of's slot, so reruns and out-of-order backfills have no look-ahead
 - [Phase 02]: 02-03: stuck (6 rows, solar 0.0 exempt) and spike (10 degC, 10 m/s, 700 W/m2 per hour) thresholds are provisional and unfitted; Phase 3 measures flag rates; each rule family judges its fields against one shared row set
 - [Phase 02]: A forecast is withheld from G6 when the newest usable row is more than 1 hourly slot before the run, or (ml only) when fewer than 7 newest usable rows sit on consecutive hours; both provisional until Phase 3
+- [Phase 03]: Phase 03-01: rate denominators are the expected steps of the period, so exhausted, errored, untraced and missing steps stay in every rate
+- [Phase 03]: Phase 03-01: a G4 fallback whose recomputed ampacity is inside the bounds is classed ERROR and counted as a computed-vs-reported mismatch
+- [Phase 03]: Phase 03-01: archive rows without a trace record are NO_TRACE in outcomes and completeness, not archive-vs-trace mismatches
 
 ## Open Decisions
 
@@ -140,9 +143,9 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 
 ## Session Continuity
 
-**Last session:** 2026-10-20T16:54:14.163Z
+**Last session:** 2026-10-20T23:10:57.975Z
 
-**Stopped At:** Phase 2 complete, ready to execute Phase 03
+**Stopped At:** Completed 03-01-PLAN.md
 **Resume File:** None
 
 ## Performance Metrics
@@ -158,3 +161,4 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 | Phase 02 P02 | 9 min | 2 tasks | 2 files |
 | Phase 02 P03 | 40 min | 3 tasks | 5 files |
 | Phase 02 P04 | 6 min | 2 tasks | 4 files |
+| Phase 03 P01 | 15 min | 3 tasks | 4 files |
