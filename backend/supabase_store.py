@@ -56,6 +56,28 @@ PIPELINE_RUN_TABLE = "public.pipeline_run"
 CITY_RATING_SCHEMA_VERSION = 1
 KEY_COLUMNS = ("city", "valid_time")
 
+# The pipeline_run columns, in migration order. run_id is the primary key; the
+# jsonb columns are bound as JSON text and cast in the statement.
+PIPELINE_RUN_COLUMNS = (
+    "run_id",
+    "run_attempt",
+    "started_at",
+    "finished_at",
+    "window_end",
+    "provider",
+    "forecast_method",
+    "pipeline_version",
+    "cities_ok",
+    "cities_failed",
+    "provider_errors",
+    "sources",
+)
+PIPELINE_RUN_JSONB = ("cities_failed", "provider_errors", "sources")
+PIPELINE_RUN_KEY = "run_id"
+_RUN_ERROR_MAX_CHARS = 1000
+# A city whose forecast ran (or cold-started) and whose anomaly model loaded is healthy.
+_HEALTHY_FORECAST_STATUSES = ("ok", "cold_start")
+
 # The city_rating columns the writer supplies, in migration order. first_written_at
 # and computed_at are set by the database and are not part of the row.
 CITY_RATING_COLUMNS = (
@@ -651,6 +673,125 @@ def upsert_rating(conn, row: dict) -> None:
         raise StoreError(f"could not write the {row.get('city')} rating: {failure}")
 
 
+def _city_rank(city) -> int:
+    """Position in config.LOCATIONS; a city outside it sorts last."""
+    try:
+        return list(config.LOCATIONS).index(city)
+    except ValueError:
+        return len(config.LOCATIONS)
+
+
+def _redact_keys(by_city):
+    """A per-city dict of dicts with every key of the inner dicts redacted (error keys can echo secrets)."""
+    if by_city is None:
+        return None
+    return {
+        str(city): {redact(key): value for key, value in (inner or {}).items()}
+        for city, inner in by_city.items()
+    }
+
+
+def build_run_row(run_ctx: dict, *, window_end, provider, forecast_method, started_at,
+                  finished_at, city_records, provider_errors=None, sources=None) -> dict:
+    """
+    One `pipeline_run` row (no database access). Keys are exactly
+    `PIPELINE_RUN_COLUMNS`.
+
+    `city_records` holds one dict per city the run reached (city, written, error,
+    forecast_status, detector_model_loaded). A city that was written with a
+    forecast_status of "ok" or "cold_start" and an anomaly model loaded is in
+    `cities_ok`; one that was written otherwise is in `cities_failed` with
+    outcome "degraded"; one that was not written is there with outcome "error"
+    (OD-9: it has no rating row, so this row is its only record). Every error
+    string goes through `redact()` and is cut to 1000 characters. `cities_ok` and
+    `cities_failed` follow config.LOCATIONS order. `provider_errors` and `sources`
+    are dicts keyed by city (or None).
+    """
+    ordered = sorted(city_records, key=lambda rec: _city_rank(rec["city"]))
+    cities_ok = []
+    cities_failed = {}
+    for rec in ordered:
+        city = rec["city"]
+        written = bool(rec.get("written"))
+        status = rec.get("forecast_status")
+        loaded = bool(rec.get("detector_model_loaded"))
+        if written and status in _HEALTHY_FORECAST_STATUSES and loaded:
+            cities_ok.append(city)
+            continue
+        error = rec.get("error")
+        cities_failed[city] = {
+            "outcome": "degraded" if written else "error",
+            "written": written,
+            "forecast_status": status,
+            "detector_model_loaded": loaded,
+            "error": None if error is None else redact(error)[:_RUN_ERROR_MAX_CHARS],
+        }
+    row = {
+        "run_id": run_ctx.get("run_id"),
+        "run_attempt": run_ctx.get("run_attempt"),
+        "started_at": _to_utc(started_at).to_pydatetime(),
+        "finished_at": _to_utc(finished_at).to_pydatetime(),
+        "window_end": _to_utc(window_end).to_pydatetime(),
+        "provider": _opt_str(provider),
+        "forecast_method": _opt_str(forecast_method),
+        "pipeline_version": run_ctx.get("pipeline_version"),
+        "cities_ok": cities_ok,
+        "cities_failed": cities_failed,
+        "provider_errors": _redact_keys(provider_errors),
+        "sources": None if sources is None else {str(c): v for c, v in sources.items()},
+    }
+    if tuple(row) != PIPELINE_RUN_COLUMNS:
+        raise RuntimeError("build_run_row keys drifted from PIPELINE_RUN_COLUMNS")
+    return row
+
+
+def upsert_run(conn, row: dict) -> None:
+    """
+    Upsert one `pipeline_run` row keyed by run_id, in one transaction. `row` may
+    be any subset of `PIPELINE_RUN_COLUMNS` that includes run_id; every given
+    non-key column is updated on conflict, so a re-run attempt (same
+    GITHUB_RUN_ID) replaces the row. Column names are only ever taken from
+    `PIPELINE_RUN_COLUMNS` (an unknown key raises ValueError); values are bound
+    parameters. Phase 5's live_run_log may delegate to this function.
+    """
+    unknown = [key for key in row if key not in PIPELINE_RUN_COLUMNS]
+    if unknown:
+        raise ValueError(f"not pipeline_run columns: {unknown}")
+    if row.get(PIPELINE_RUN_KEY) is None:
+        raise ValueError("a pipeline_run row needs a run_id")
+
+    columns = [column for column in PIPELINE_RUN_COLUMNS if column in row]
+    placeholders = [
+        f"%({column})s::jsonb" if column in PIPELINE_RUN_JSONB else f"%({column})s"
+        for column in columns
+    ]
+    updates = [f"{column} = excluded.{column}" for column in columns if column != PIPELINE_RUN_KEY]
+    if updates:
+        conflict = "on conflict (run_id) do update set " + ", ".join(updates)
+    else:
+        conflict = "on conflict (run_id) do nothing"
+    sql = (
+        f"insert into {PIPELINE_RUN_TABLE} ({', '.join(columns)}) "
+        f"values ({', '.join(placeholders)}) {conflict}"
+    )
+    params = {
+        column: (
+            json.dumps(row[column], allow_nan=False, default=str)
+            if column in PIPELINE_RUN_JSONB and row[column] is not None else row[column]
+        )
+        for column in columns
+    }
+
+    failure = None
+    try:
+        with conn.transaction():
+            conn.execute(sql, params)
+    except Exception as exc:  # noqa: BLE001 - re-raised below as a redacted StoreError
+        failure = redact(str(exc))
+    if failure is not None:
+        raise StoreError(f"could not write the pipeline_run row: {failure}")
+
+
 def read_history(conn, city: str, end, days=None) -> pd.DataFrame:
     """
     The last `days` (default config.DB_HISTORY_WINDOW_DAYS, OD-8) days of `city`
@@ -706,6 +847,10 @@ class SupabaseStore:
         row = build_rating_row(result, end, self.run_ctx, provenance)
         upsert_rating(self.conn, row)
         return True
+
+    def record_run(self, row: dict) -> None:
+        """Upsert the run's `pipeline_run` row (see `upsert_run`)."""
+        upsert_run(self.conn, row)
 
     def close(self) -> None:
         self.conn.close()
