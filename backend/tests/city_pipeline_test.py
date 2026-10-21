@@ -21,6 +21,7 @@ import anomaly_detector
 import city_pipeline
 import city_point
 import config
+import data_cleaning
 import historical_archive
 
 _CITY = "AUSTIN"
@@ -297,8 +298,8 @@ def test_pipeline_key_reports_history_forecast_and_detector(tmp_path, monkeypatc
 
     pipeline = result["pipeline"]
     assert set(pipeline) == {
-        "history_rows", "usable_history_rows", "forecast_method", "forecast_used_by_g6",
-        "forecast", "detector_signal", "detector_model",
+        "history_rows", "usable_history_rows", "forecast_method", "forecast_status",
+        "forecast_used_by_g6", "forecast", "detector_signal", "detector_model",
     }
     assert set(pipeline["forecast"]) == {
         "amps", "ci_lower_amps", "ci_upper_amps", "n_observations", "horizon_min",
@@ -340,3 +341,93 @@ def test_rate_city_gets_the_detector_and_the_callers_arguments(tmp_path, monkeyp
     assert kwargs["provider"] == "open_meteo"
     assert {k: v for k, v in result.items() if k != "pipeline"} == {"city": _CITY, "rating": 1.0}
     assert "pipeline" in result
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# History reader seam (DB-02) and forecast status (OD-3)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_history_reader_replaces_the_archive_read(tmp_path, monkeypatch):
+    frame = pd.DataFrame(
+        [_archive_row(_CITY, h) for h in range(4)], columns=historical_archive.ARCHIVE_COLUMNS)
+    calls = []
+
+    def reader(city, end):
+        calls.append((city, end))
+        return frame
+
+    def archive_read_must_not_run(**kw):
+        raise AssertionError("historical_archive.read_history must not be called")
+
+    monkeypatch.setattr(historical_archive, "read_history", archive_read_must_not_run)
+    cleaned_seen = {}
+    real_clean = data_cleaning.clean_history
+
+    def spy_clean(history, as_of=None, **kw):
+        cleaned_seen["history"] = history
+        cleaned_seen["as_of"] = as_of
+        return real_clean(history, as_of=as_of, **kw)
+
+    monkeypatch.setattr(data_cleaning, "clean_history", spy_clean)
+    _spy_detector(monkeypatch)
+    _spy_forecast(monkeypatch)
+
+    result = _run(tmp_path, history_reader=reader)
+
+    assert calls == [(_CITY, _END)]
+    assert cleaned_seen["history"] is frame
+    assert cleaned_seen["as_of"] == _END
+    assert result["pipeline"]["history_rows"] == len(frame) == 4
+
+
+def test_without_a_history_reader_the_csv_archive_is_read(tmp_path, monkeypatch):
+    archive_path = str(tmp_path / "archive.csv")
+    calls = []
+    real_read = historical_archive.read_history
+
+    def spy_read(**kw):
+        calls.append(kw)
+        return real_read(**kw)
+
+    monkeypatch.setattr(historical_archive, "read_history", spy_read)
+    _spy_detector(monkeypatch)
+    _spy_forecast(monkeypatch)
+
+    _run(tmp_path)
+
+    assert calls == [{"path": archive_path, "city": _CITY}]
+
+
+@pytest.mark.parametrize(
+    "spy_kwargs, expected",
+    [
+        ({"result": _forecast_result(1150.0, 1250.0)}, "ok"),
+        ({"result": None}, "cold_start"),
+        ({"raises": RuntimeError("no trained artifact")}, "failed"),
+    ],
+    ids=["band", "none", "raised"],
+)
+def test_forecast_status_reports_ok_cold_start_and_failed(
+        tmp_path, monkeypatch, spy_kwargs, expected):
+    _spy_detector(monkeypatch)
+    _spy_forecast(monkeypatch, **spy_kwargs)
+
+    result = _run(tmp_path)
+
+    assert result["pipeline"]["forecast_status"] == expected
+    assert "rating" in result
+    assert result["exhausted"] is False
+
+
+def test_a_forecast_withheld_by_the_gap_guard_is_still_status_ok(tmp_path, monkeypatch):
+    # The status describes the forecast call; forecast_used_by_g6 says whether G6 got it.
+    _write_archive(tmp_path / "archive.csv", [_archive_row(_CITY, h) for h in range(3)])
+    detector_seen = _spy_detector(monkeypatch)
+    _spy_forecast(monkeypatch, result=_forecast_result(1150.0, 1250.0))
+    monkeypatch.setattr(data_cleaning, "forecast_gap_reason", lambda report, method: "stale newest row")
+
+    result = _run(tmp_path)
+
+    assert detector_seen["forecast"] is None
+    assert result["pipeline"]["forecast_used_by_g6"] is False
+    assert result["pipeline"]["forecast_status"] == "ok"

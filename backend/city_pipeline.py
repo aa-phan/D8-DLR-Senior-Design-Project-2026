@@ -29,6 +29,7 @@ def run_city_pipeline(
     forecast_method: str = "naive",
     archive: bool = True,
     fetch_weather=None,
+    history_reader=None,
 ) -> dict:
     """
     Full Track 1 integration for one city, one run:
@@ -39,10 +40,18 @@ def run_city_pipeline(
       4. build the city's anomaly detector from the forecast + history
       5. rate the city with that detector wired into G6
 
+    `history_reader` is how the Postgres store (DB-02) supplies history: a
+    callable `(city, end) -> frame` returning that city's rows before the
+    run's slot, shaped like `historical_archive.ARCHIVE_COLUMNS`. None keeps
+    the CSV archive (`archive_path`).
+
     Returns whatever `rate_city` returns, plus a `pipeline` key describing
     what steps 1-4 produced (history rows, forecast, detector signal).
     """
-    history = historical_archive.read_history(path=archive_path, city=city)
+    if history_reader is not None:
+        history = history_reader(city, end)
+    else:
+        history = historical_archive.read_history(path=archive_path, city=city)
 
     total_rows = int(len(history))
 
@@ -71,14 +80,17 @@ def run_city_pipeline(
 
     # A forecast failure (e.g. method="ml" with no trained artifact) must not
     # take the rating down: G6 degrades to the rolling baseline / cold start.
+    forecast_status = "cold_start"
     try:
         forecast = ampacity_forecast.forecast_ampacity(history, method=forecast_method)
+        forecast_status = "ok" if forecast is not None else "cold_start"
     except Exception as exc:
         log.warning(
             "forecast_ampacity(method=%r) failed for %s (%s) -- continuing without a forecast",
             forecast_method, city, exc,
         )
         forecast = None
+        forecast_status = "failed"
 
     # A forecast whose band has zero width (too few backtest residuals to
     # span both signs) has no discriminating power: G6 would flag any
@@ -117,6 +129,10 @@ def run_city_pipeline(
         "history_rows": total_rows,
         "usable_history_rows": int(len(history)),
         "forecast_method": forecast_method,
+        # OD-3: describes the forecast call, not whether G6 used it
+        # (`forecast_used_by_g6` says that), so a forecast withheld by the gap
+        # guard or a zero-width band is still "ok".
+        "forecast_status": forecast_status,
         "forecast_used_by_g6": forecast_for_detector is not None,
         "forecast": (
             None if forecast is None else {
