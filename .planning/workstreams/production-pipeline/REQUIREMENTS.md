@@ -74,7 +74,7 @@ proposals.
 - [x] **VAL-02**: The naive/EWM forecast band's empirical coverage and the anomaly detector's flag
   rate are measured on that window and documented. This covers the current `city_pipeline` path
   only; it does not re-evaluate the ML shadow candidates.
-- [ ] **VAL-03**: A written go/no-go for production that cites VAL-01/02's results. Phase 4 does not
+- [x] **VAL-03**: A written go/no-go for production that cites VAL-01/02's results. Phase 4 does not
   start on a no-go.
 
 ### Supabase store and writer (Phase 4)
@@ -166,7 +166,7 @@ proposals.
 | CLEAN-04 | Phase 2 | Complete |
 | VAL-01 | Phase 3 | Complete |
 | VAL-02 | Phase 3 | Complete |
-| VAL-03 | Phase 3 | Pending |
+| VAL-03 | Phase 3 | Complete |
 | DB-01 | Phase 4 | Pending |
 | DB-02 | Phase 4 | Pending |
 | DB-03 | Phase 4 | Pending |
