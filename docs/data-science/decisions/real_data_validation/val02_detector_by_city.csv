@@ -1,0 +1,9 @@
+city,method,n_g6_evaluated,n_g6_trips,trip_rate,trip_rate_ci_lo,trip_rate_ci_hi,forecast_runs,rolling_runs,model_runs,cold_start_runs,forecast_votes,rolling_votes,model_votes,detector_errors,n_g6_trips_unattributed,model_trip_rate,n_detector_model_missing,anomaly_ml_max_false_positive_rate
+AUSTIN,ml,111,4,0.036,0.0,0.0935,15,96,111,0,0,4,0,0,0,0.0,0,0.05
+AUSTIN,naive_replay,111,0,0.0,0.0,0.0,83,28,111,0,0,0,0,0,0,0.0,0,0.05
+CORPUS_CHRISTI,ml,336,37,0.1101,0.0595,0.1637,233,103,336,0,0,0,37,0,0,0.1101,0,0.05
+CORPUS_CHRISTI,naive_replay,336,37,0.1101,0.0595,0.1637,316,20,336,0,0,0,37,0,0,0.1101,0,0.05
+MIDLAND,ml,268,2,0.0075,0.0,0.0229,169,99,268,0,2,0,0,0,0,0.0,0,0.05
+MIDLAND,naive_replay,268,0,0.0,0.0,0.0,252,16,268,0,0,0,0,0,0,0.0,0,0.05
+EL_PASO,ml,336,1,0.003,0.0,0.0089,330,6,336,0,0,0,1,0,0,0.003,0,0.05
+EL_PASO,naive_replay,336,1,0.003,0.0,0.0089,336,0,336,0,0,0,1,0,0,0.003,0,0.05

@@ -1,0 +1,9 @@
+city,method,n_warmup,n_scored,n_not_g6,n_g6_evaluated,n_with_forecast,n_cold_start,n_silent_forecast_failure,n_cleaning_failure_suspect,n_degenerate_band,n_no_computed,n_band,n_withheld_gap,n_used_by_g6,coverage_nominal,nominal_target,coverage_ci_lo,coverage_ci_hi,coverage_widened,width_mean_a,width_median_a,mae_a,bias_a,n_all_computed,coverage_all_computed
+AUSTIN,ml,168,336,225,111,111,0,0,0,0,0,111,96,15,0.8108,0.9,0.7327,0.88,1.0,257.6,262.5,104.1,87.6,336,0.4851
+AUSTIN,naive_replay,168,336,225,111,111,0,0,0,0,0,111,28,83,0.8649,0.9,0.7475,0.9549,1.0,225.6,228.6,62.3,0.4,336,0.503
+CORPUS_CHRISTI,ml,168,336,0,336,336,0,0,0,0,0,336,103,233,0.8958,0.9,0.8452,0.9435,1.0,343.8,335.3,86.4,41.9,336,0.8958
+CORPUS_CHRISTI,naive_replay,168,336,0,336,336,0,0,0,0,0,336,20,316,0.9018,0.9,0.8661,0.9345,1.0,324.8,319.9,62.9,2.5,336,0.9018
+MIDLAND,ml,168,336,68,268,268,0,0,0,0,0,268,99,169,0.8134,0.9,0.7719,0.8567,0.9882,268.6,261.4,94.2,49.8,336,0.6994
+MIDLAND,naive_replay,168,336,68,268,268,0,0,0,0,0,268,16,252,0.8097,0.9,0.7553,0.8605,1.0,273.9,263.3,80.3,-0.5,336,0.6935
+EL_PASO,ml,168,336,0,336,336,0,0,0,0,0,336,6,330,0.8839,0.9,0.8363,0.9256,1.0,444.2,454.3,126.7,77.6,336,0.8839
+EL_PASO,naive_replay,168,336,0,336,336,0,0,0,0,0,336,0,336,0.881,0.9,0.8274,0.9316,1.0,507.2,517.0,117.3,0.0,336,0.881

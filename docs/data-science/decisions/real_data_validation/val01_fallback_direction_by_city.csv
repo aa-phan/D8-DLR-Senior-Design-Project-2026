@@ -1,0 +1,17 @@
+city,gate,fallback_steps,upward,downward,none,unknown,upward_rate,overstatement_median,overstatement_p95,overstatement_max
+AUSTIN,G4_low,225,225,0,0,0,0.6696,782.6,919.2,992.7
+AUSTIN,G4_high,0,0,0,0,0,0.0,,,
+AUSTIN,G6,4,4,0,0,0,0.0119,315.0,342.2,346.7
+AUSTIN,all,229,229,0,0,0,0.6815,780.1,919.1,992.7
+CORPUS_CHRISTI,G4_low,0,0,0,0,0,0.0,,,
+CORPUS_CHRISTI,G4_high,0,0,0,0,0,0.0,,,
+CORPUS_CHRISTI,G6,37,32,5,0,0,0.0952,113.9,379.3,410.7
+CORPUS_CHRISTI,all,37,32,5,0,0,0.0952,113.9,379.3,410.7
+MIDLAND,G4_low,68,68,0,0,0,0.2024,717.2,904.4,958.0
+MIDLAND,G4_high,0,0,0,0,0,0.0,,,
+MIDLAND,G6,2,2,0,0,0,0.006,497.1,528.2,531.6
+MIDLAND,all,70,70,0,0,0,0.2083,712.3,903.6,958.0
+EL_PASO,G4_low,0,0,0,0,0,0.0,,,
+EL_PASO,G4_high,0,0,0,0,0,0.0,,,
+EL_PASO,G6,1,0,1,0,0,0.0,,,
+EL_PASO,all,1,0,1,0,0,0.0,,,

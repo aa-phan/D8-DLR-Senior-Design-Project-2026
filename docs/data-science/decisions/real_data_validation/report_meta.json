@@ -1,0 +1,134 @@
+{
+  "archive_duplicate_slot_mismatches": 0,
+  "archive_rows_dropped_by_validation": 0,
+  "archive_rows_outside_window": 0,
+  "archive_vs_trace_mismatches": 0,
+  "bootstrap": {
+    "block": "UTC day",
+    "conf": 0.95,
+    "n_resamples": 2000,
+    "seed": 20261019
+  },
+  "cities": [
+    "AUSTIN",
+    "CORPUS_CHRISTI",
+    "MIDLAND",
+    "EL_PASO"
+  ],
+  "cleaning": {
+    "AUSTIN": {
+      "flag_counts": {
+        "after_gap": 56,
+        "at_or_after_run": 0,
+        "bad_timestamp": 0,
+        "duplicate": 0,
+        "fallback": 353,
+        "same_hour": 0,
+        "spike_air_temp": 0,
+        "spike_solar_radiation": 0,
+        "spike_wind_speed": 0,
+        "stuck_air_temp": 0,
+        "stuck_solar_radiation": 0,
+        "stuck_wind_speed": 0
+      },
+      "live_excluded_rows_max": 353,
+      "live_excluded_rows_median": 184.5,
+      "missing_slots": 350,
+      "rows_excluded": 353,
+      "rows_in": 504,
+      "rows_usable": 151
+    },
+    "CORPUS_CHRISTI": {
+      "flag_counts": {
+        "after_gap": 33,
+        "at_or_after_run": 0,
+        "bad_timestamp": 0,
+        "duplicate": 0,
+        "fallback": 98,
+        "same_hour": 0,
+        "spike_air_temp": 0,
+        "spike_solar_radiation": 0,
+        "spike_wind_speed": 0,
+        "stuck_air_temp": 6,
+        "stuck_solar_radiation": 0,
+        "stuck_wind_speed": 0
+      },
+      "live_excluded_rows_max": 104,
+      "live_excluded_rows_median": 85.0,
+      "missing_slots": 103,
+      "rows_excluded": 104,
+      "rows_in": 504,
+      "rows_usable": 400
+    },
+    "EL_PASO": {
+      "flag_counts": {
+        "after_gap": 2,
+        "at_or_after_run": 0,
+        "bad_timestamp": 0,
+        "duplicate": 0,
+        "fallback": 3,
+        "same_hour": 0,
+        "spike_air_temp": 0,
+        "spike_solar_radiation": 0,
+        "spike_wind_speed": 0,
+        "stuck_air_temp": 0,
+        "stuck_solar_radiation": 0,
+        "stuck_wind_speed": 0
+      },
+      "live_excluded_rows_max": 3,
+      "live_excluded_rows_median": 2.0,
+      "missing_slots": 3,
+      "rows_excluded": 3,
+      "rows_in": 504,
+      "rows_usable": 501
+    },
+    "MIDLAND": {
+      "flag_counts": {
+        "after_gap": 25,
+        "at_or_after_run": 0,
+        "bad_timestamp": 0,
+        "duplicate": 0,
+        "fallback": 79,
+        "same_hour": 0,
+        "spike_air_temp": 0,
+        "spike_solar_radiation": 0,
+        "spike_wind_speed": 0,
+        "stuck_air_temp": 0,
+        "stuck_solar_radiation": 0,
+        "stuck_wind_speed": 0
+      },
+      "live_excluded_rows_max": 79,
+      "live_excluded_rows_median": 14.0,
+      "missing_slots": 79,
+      "rows_excluded": 79,
+      "rows_in": 504,
+      "rows_usable": 425
+    }
+  },
+  "computed_vs_reported_mismatches": 0,
+  "label": "PROVISIONAL (OD-5): static ratings, rating bounds and line bearings are unconfirmed assumptions; these tables measure, they do not decide.",
+  "nominal_coverage_target": 0.9,
+  "replay": {
+    "compared": 2016,
+    "excluded": 0,
+    "label": "naive_replay",
+    "reference_only": true
+  },
+  "replay_fidelity_mismatches": 0,
+  "scored_start": "2026-09-15T00:00:00Z",
+  "trace_duplicates": 0,
+  "trace_records": 2016,
+  "trace_records_out_of_window": 0,
+  "val02_method_labels": [
+    "ml",
+    "naive_replay"
+  ],
+  "val02_notes": [],
+  "warmup_hours": 168.0,
+  "window": {
+    "end": "2026-09-28T23:00:00Z",
+    "start": "2026-09-08T00:00:00Z",
+    "step_hours": 1.0,
+    "steps_per_city": 504
+  }
+}

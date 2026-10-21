@@ -1,0 +1,13 @@
+city,group,n,temp_median,solar_median,wind_raw_median,wind_proj_median,perp_fraction_median,wind_open_meteo_share,solar_open_meteo_share,lag_over_1h_share
+AUSTIN,below_lower,225,26.778,0.0,1.699,0.78,0.3559,0.0,1.0,0.0
+AUSTIN,within,111,30.889,304.0,2.414,2.034,0.9345,0.0,1.0,0.0
+AUSTIN,above_upper,0,,,,,,,,
+CORPUS_CHRISTI,below_lower,0,,,,,,,,
+CORPUS_CHRISTI,within,336,29.444,21.0,3.398,2.678,0.8585,0.0,1.0,0.0357
+CORPUS_CHRISTI,above_upper,0,,,,,,,,
+MIDLAND,below_lower,68,28.111,19.0,2.727,1.17,0.342,0.0,1.0,0.0
+MIDLAND,within,268,26.667,7.0,4.605,3.85,0.8946,0.0,1.0,0.0
+MIDLAND,above_upper,0,,,,,,,,
+EL_PASO,below_lower,0,,,,,,,,
+EL_PASO,within,336,25.028,3.5,2.012,1.083,0.5801,0.0,1.0,0.0
+EL_PASO,above_upper,0,,,,,,,,
