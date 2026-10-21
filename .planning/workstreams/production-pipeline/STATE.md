@@ -1,19 +1,19 @@
 ---
 gsd_state_version: "1.0"
 current_phase: 03
-current_plan: 3
+current_plan: 4
 status: executing
-stopped_at: Completed 03-03-PLAN.md
-last_updated: "2026-10-20T23:26:50.728Z"
+stopped_at: Completed 03-02-PLAN.md
+last_updated: "2026-10-21T05:05:39.320Z"
 last_activity: 2026-10-20
 last_activity_desc: Phase 03 execution started
-state_head: 4c90ec27ea586995ea49f3a5b8f02c1ca1e669cb
+state_head: fd289ea4853fe7b1b17fc57db065d6016ba321a4
 progress:
   total_phases: 6
   completed_phases: 2
   total_plans: 35
-  completed_plans: 11
-  percent: 31
+  completed_plans: 12
+  percent: 33
 milestone_name: Production Pipeline (Supabase + live ratings)
 workstream: production-pipeline
 created: 2026-10-18
@@ -37,7 +37,7 @@ whoever owns that analysis; they are not work items here.
 
 **Status:** Ready to execute
 **Current Phase:** 03
-**Current Plan:** 3
+**Current Plan:** 4
 **Total Plans in Phase:** 5
 **Last Activity:** 2026-10-20 — Phase 03 execution started
 **Last Activity Description:** Phase 03 execution started
@@ -132,6 +132,7 @@ These block or affect stringing the system together and belong to the phases nam
 - [Phase 03]: Phase 03-01: archive rows without a trace record are NO_TRACE in outcomes and completeness, not archive-vs-trace mismatches
 - [Phase 03]: 03-03: VAL-02 coverage population n_band = scored steps that reached G6 with a positive-width forecast band and a computed rating (used by G6 or withheld across a gap); every other step is counted in its own column
 - [Phase 03]: 03-03: replay is a counterfactual reference (same traced observations, different forecast method), refuses without anomaly models or over existing outputs, and is gated by replay_fidelity mismatches == 0
+- [Phase 03]: 03-02: real backfill window 2026-09-08..09-28 (168 h warm-up, 14 scored days) ran complete for all four cities with ml forecast; manifest pins archive sha256 18f999aa... and 504 rows per city for the Phase 4 DB-03 load
 
 ## Open Decisions
 
@@ -145,9 +146,9 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 
 ## Session Continuity
 
-**Last session:** 2026-10-20T23:26:50.675Z
+**Last session:** 2026-10-21T05:05:39.268Z
 
-**Stopped At:** Completed 03-03-PLAN.md
+**Stopped At:** Completed 03-02-PLAN.md
 **Resume File:** None
 
 ## Performance Metrics
@@ -165,3 +166,4 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 | Phase 02 P04 | 6 min | 2 tasks | 4 files |
 | Phase 03 P01 | 15 min | 3 tasks | 4 files |
 | Phase 03 P03 | 12 min | 2 tasks | 3 files |
+| Phase 03 P02 | 336 min | 3 tasks | 2 files |
