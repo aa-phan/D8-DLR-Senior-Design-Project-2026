@@ -1,18 +1,18 @@
 ---
 gsd_state_version: "1.0"
 current_phase: 03
-current_plan: 4
+current_plan: 5
 status: executing
-stopped_at: Completed 03-02-PLAN.md
-last_updated: "2026-10-21T05:05:39.320Z"
+stopped_at: Completed 03-04-PLAN.md
+last_updated: "2026-10-21T05:22:12.996Z"
 last_activity: 2026-10-20
 last_activity_desc: Phase 03 execution started
-state_head: fd289ea4853fe7b1b17fc57db065d6016ba321a4
+state_head: f5944246b44372a55743718c1f368137c6281aaa
 progress:
   total_phases: 6
   completed_phases: 2
   total_plans: 35
-  completed_plans: 12
+  completed_plans: 13
   percent: 33
 milestone_name: Production Pipeline (Supabase + live ratings)
 workstream: production-pipeline
@@ -35,9 +35,9 @@ whoever owns that analysis; they are not work items here.
 
 ## Current Position
 
-**Status:** Ready to execute
+**Status:** Ready to execute 03-05 (owner go/no-go decision)
 **Current Phase:** 03
-**Current Plan:** 4
+**Current Plan:** 5
 **Total Plans in Phase:** 5
 **Last Activity:** 2026-10-20 — Phase 03 execution started
 **Last Activity Description:** Phase 03 execution started
@@ -133,6 +133,8 @@ These block or affect stringing the system together and belong to the phases nam
 - [Phase 03]: 03-03: VAL-02 coverage population n_band = scored steps that reached G6 with a positive-width forecast band and a computed rating (used by G6 or withheld across a gap); every other step is counted in its own column
 - [Phase 03]: 03-03: replay is a counterfactual reference (same traced observations, different forecast method), refuses without anomaly models or over existing outputs, and is gated by replay_fidelity mismatches == 0
 - [Phase 03]: 03-02: real backfill window 2026-09-08..09-28 (168 h warm-up, 14 scored days) ran complete for all four cities with ml forecast; manifest pins archive sha256 18f999aa... and 504 rows per city for the Phase 4 DB-03 load
+- [Phase 03]: 03-04: AUSTIN publishes above computed at 68.15% of scored steps (median +780 A), MIDLAND 20.83%: measured, findings and options recorded for the owner, no policy changed
+- [Phase 03]: 03-04: the validation doc leaves the Decision section as 'Pending owner decision.'; GO / GO WITH CONDITIONS / NO-GO is taken at 03-05's checkpoint
 
 ## Open Decisions
 
@@ -146,9 +148,9 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 
 ## Session Continuity
 
-**Last session:** 2026-10-21T05:05:39.268Z
+**Last session:** 2026-10-21T05:22:08.658Z
 
-**Stopped At:** Completed 03-02-PLAN.md
+**Stopped At:** Completed 03-04-PLAN.md
 **Resume File:** None
 
 ## Performance Metrics
@@ -167,3 +169,4 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 | Phase 03 P01 | 15 min | 3 tasks | 4 files |
 | Phase 03 P03 | 12 min | 2 tasks | 3 files |
 | Phase 03 P02 | 336 min | 3 tasks | 2 files |
+| Phase 03 P04 | 14min | 2 tasks | 13 files |

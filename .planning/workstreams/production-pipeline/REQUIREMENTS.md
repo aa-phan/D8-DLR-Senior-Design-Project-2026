@@ -67,11 +67,11 @@ proposals.
   cleaning keeps only the computed row.
 - [x] **CLEAN-04**: Rows touched by cleaning stay distinguishable from rows as written, so
   validation can tell raw readings from cleaned ones.
-- [ ] **VAL-01**: Over a backfilled real-data window for all four cities, the pipeline's ratings
+- [x] **VAL-01**: Over a backfilled real-data window for all four cities, the pipeline's ratings
   are compared against each city's static rating (`config.STATIC_RATINGS`, provisional) and
   `RATING_BOUNDS_BY_LOCATION`. Fallback rate per gate and per city is reported, and implausible
   ratings are explained or fixed.
-- [ ] **VAL-02**: The naive/EWM forecast band's empirical coverage and the anomaly detector's flag
+- [x] **VAL-02**: The naive/EWM forecast band's empirical coverage and the anomaly detector's flag
   rate are measured on that window and documented. This covers the current `city_pipeline` path
   only; it does not re-evaluate the ML shadow candidates.
 - [ ] **VAL-03**: A written go/no-go for production that cites VAL-01/02's results. Phase 4 does not
@@ -164,8 +164,8 @@ proposals.
 | CLEAN-02 | Phase 2 | Complete |
 | CLEAN-03 | Phase 2 | Complete |
 | CLEAN-04 | Phase 2 | Complete |
-| VAL-01 | Phase 3 | Pending |
-| VAL-02 | Phase 3 | Pending |
+| VAL-01 | Phase 3 | Complete |
+| VAL-02 | Phase 3 | Complete |
 | VAL-03 | Phase 3 | Pending |
 | DB-01 | Phase 4 | Pending |
 | DB-02 | Phase 4 | Pending |
