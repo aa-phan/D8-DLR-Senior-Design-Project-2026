@@ -7,8 +7,8 @@ current_phase_name: "Shadow Collector: Five-Method Side-by-Side Challenger Recor
 status: completed
 stopped_at: Phase 05 complete (all 5 plans)
 last_updated: "2026-10-08T00:42:13.533Z"
-last_activity: 2026-10-13
-last_activity_desc: "Phase 05 complete: five-candidate shadow collection verified 11/11, live on scheduled GitHub Actions runs"
+last_activity: 2026-10-21
+last_activity_desc: "Shadow collection fix: persistence_24h cold start on every run (runner had an empty log); fixed and verified live 2026-10-21"
 state_head: c6f73dd46e9aee09a146d444d43142f6bb4195fb
 progress:
   total_phases: 5
@@ -142,7 +142,15 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-10-13 (Phase 05 completed; per-city retrain and scorer quick tasks below)
+Last session: 2026-10-21 (complete). Fixed the shadow collector running against an empty log on the runner, which
+made persistence_24h a cold start (`unavailable`) in every v3 row. shadow_collect.yml now clones
+shadow-collection-data before collecting and symlinks data/shadow/predictions into it; the push replays
+only this run's rows if rejected; the health check uses --max-age-minutes 60. The data branch README
+reconstructs past persistence_24h values (28-29 per city, matching Persistence24hShadowMethod exactly);
+the JSONL logs are unchanged and no reconstructed rows were written to them (owner decision). Commit
+762a0cd; verified by run 39666133426 (data commit 208ee80). The first live persistence match is expected
+on the next scheduled run (prior row valid 2026-10-22T00Z). The live-log check has no persistence rows
+before 2026-10-21.
 Stopped at: Phase 05 complete (all 5 plans); awaiting the 2026-11-24 shadow evaluation
 Resume file: None
 
