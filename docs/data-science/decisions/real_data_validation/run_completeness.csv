@@ -1,0 +1,5 @@
+city,expected_steps,trace_records,archive_rows,log_rows,exhausted,errors,no_trace,missing
+AUSTIN,504,504,504,504,0,0,0,0
+CORPUS_CHRISTI,504,504,504,504,0,0,0,0
+MIDLAND,504,504,504,504,0,0,0,0
+EL_PASO,504,504,504,504,0,0,0,0
