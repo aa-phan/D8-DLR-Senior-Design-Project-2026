@@ -176,6 +176,7 @@ ethical commitment, not a nice-to-have).
 | Anomaly detection (G6) trained on a rolling baseline with per-corridor control limits, additive to (never replacing) the G1-G5 fallback chain | C10 needed a cold-start path since historical archives start empty; wider-of-two-endpoint-cities control limit avoids one city's noisier readings suppressing detection at the other endpoint | ✓ Resolved 2026-09-09 — Phase 4 (04-01/04-03); `AnomalyDetector.for_corridor` resolves per-corridor limits, `rate_corridor` wires it as an optional constructor param, fail-safe on exception |
 | Forecast confidence band: in-sample residual vs. true out-of-sample backtest | An in-sample band would understate real forecast error; only an expanding-window walk-forward backtest measures the model against data it hasn't seen | ✓ Resolved 2026-09-09 — Phase 4 (04-02) — replaced the tracer's in-sample band with a true walk-forward backtest; added EWM as a second Tier 1 method behind the same signature |
 | DS-F5 wiring scope: silently fall back to `DEFAULT_STATIC_RATING` on unknown/omitted city vs. validate-and-raise (as `corridor_discretization.py` does) | Phase 5 chose the conservative-silent path for the flat-pipeline consumers since `DEFAULT_STATIC_RATING` (900A) is strictly lower than every configured city rating, so an unrecognized city can't cause an optimistic overstatement — deliberately asymmetric with the corridor path, which validates and raises | ✓ Resolved 2026-09-10 — Phase 5 (05-01); flagged as tech debt for future consistency review, not a defect (see `.planning/milestones/v1.0-MILESTONE-AUDIT.md`) |
+| Production go/no-go on the per-city pipeline after a 21-day real-data backfill (production-pipeline VAL-03) | AUSTIN fell back to its static rating on 68% of scored hours (MIDLAND 21%), mostly to a value far above the computed rating; the conductor model (one 795 Drake ACSR at 75 C, 900 m) is the likely cause, and public filings point to larger or hotter-rated Austin-area 345 kV conductors | NO-GO, signed by Aaron Phan 2026-10-21 (production-pipeline Phase 3); blocking on B1 conductor/rating basis, B2 ml wind feature, B4 CORPUS_CHRISTI detector rate, B5 forecast availability after fallbacks; see `docs/data-science/decisions/real_data_validation.md` |
 
 ## Evolution
 
@@ -195,4 +196,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-09-15 after v1.1 milestone*
+*Last updated: 2026-10-21 after production-pipeline Phase 3*

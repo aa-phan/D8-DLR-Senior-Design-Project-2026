@@ -32,7 +32,7 @@ infrastructure is created.
 
 - [x] **Phase 1: Land PR #7** — relocate, fix tests, add tests, merge (completed 2026-10-19)
 - [x] **Phase 2: Data Cleaning** — cross-row outlier, gap and duplicate handling on city history (completed 2026-10-20)
-- [ ] **Phase 3: Real-Data Validation** — ratings and calibration on backfilled data; production go/no-go
+- [x] **Phase 3: Real-Data Validation** — ratings and calibration on backfilled data; production go/no-go (completed 2026-10-21)
 - [ ] **Phase 4: Supabase Store & Writer** — schema migration, Postgres read/write, backfill load, secrets
 - [ ] **Phase 5: Scheduled Live Runs** — new workflow, cron-job.org trigger, failure isolation, runbook
 - [ ] **Phase 6: Exposure & E2E Verification** — REST via RLS, `latest_rating` view, soak test
@@ -103,7 +103,7 @@ a recorded go/no-go.
      explanations for outliers.
   3. A go/no-go decision is written and signed by the owner. On no-go, the blocking fixes are listed
      and Phase 4 does not start.
-**Plans**: 5/5 plans executed
+**Plans**: 5/5 plans complete
 
 Plans:
 - [x] 03-01-PLAN.md — Wave 1: backfill validation trace (`--trace-path`) and offline analysis CLI (completeness, manifest, VAL-01 report); phase tracer
@@ -197,7 +197,7 @@ Plans:
 |-------|----------------|--------|-----------|
 | 1. Land PR #7 | 5/5 | Complete    | 2026-10-19 |
 | 2. Data Cleaning | 4/4 | Complete    | 2026-10-20 |
-| 3. Real-Data Validation | 5/5 | In Progress | - |
+| 3. Real-Data Validation | 5/5 | Complete    | 2026-10-21 |
 | 4. Supabase Store & Writer | 0/6 | Planned | - |
 | 5. Scheduled Live Runs | 0/8 | Planned | - |
 | 6. Exposure & E2E Verification | 0/7 | Planned | - |

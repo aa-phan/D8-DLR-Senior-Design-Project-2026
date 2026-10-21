@@ -1,23 +1,23 @@
 ---
 gsd_state_version: "1.0"
-current_phase: 03
-current_plan: 5
+current_phase: 04 — Supabase Store & Writer
+current_plan: Not started
 status: executing
-stopped_at: Completed 03-05-PLAN.md
-last_updated: "2026-10-21T07:08:35.500Z"
-last_activity: 2026-10-20
-last_activity_desc: Phase 03 execution started
-state_head: 7ad3253f4ae92d3359c3bcd26685dada94bb13a7
+stopped_at: Phase 03 complete (VAL-03 NO-GO); Phase 04 blocked on B1, B2, B4, B5
+last_updated: "2026-10-21T07:33:53.330Z"
+last_activity: 2026-10-21
+last_activity_desc: Phase 03 complete with a signed NO-GO; Phase 04 blocked
+state_head: 6aa2cc61ef9af9e7a304eb8bce499b404016ec73
 progress:
   total_phases: 6
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 35
   completed_plans: 14
-  percent: 33
+  percent: 50
 milestone_name: Production Pipeline (Supabase + live ratings)
 workstream: production-pipeline
 created: 2026-10-18
-current_phase_name: Real-Data Validation
+current_phase_name: Supabase Store & Writer
 ---
 
 # Project State
@@ -35,12 +35,12 @@ whoever owns that analysis; they are not work items here.
 
 ## Current Position
 
-**Status:** Ready to execute 03-05 (owner go/no-go decision)
-**Current Phase:** 03
-**Current Plan:** 5
+**Status:** Blocked — Phase 04 does not start until B1, B2, B4 and B5 are resolved and the validation is repeated (see Blockers)
+**Current Phase:** 04 — Supabase Store & Writer
+**Current Plan:** Not started
 **Total Plans in Phase:** 5
-**Last Activity:** 2026-10-20 — Phase 03 execution started
-**Last Activity Description:** Phase 03 execution started
+**Last Activity:** 2026-10-21
+**Last Activity Description:** Phase 03 complete (verified, UAT passed, threats_open 0, Nyquist-compliant) with a signed NO-GO; Phase 04 blocked
 
 ## Planning Summary (2026-10-19)
 
@@ -151,12 +151,13 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 ## Blockers
 
 - Phase 4 blocked by VAL-03 NO-GO (2026-10-21): B1 fallback policy and rating basis (conductor type, max operating temperature, elevation, azimuth; with Power Systems), B2 ml wind feature train/serve alignment, B4 CORPUS_CHRISTI detector trip rate (11.01%), B5 fallback effect on forecast availability. See docs/data-science/decisions/real_data_validation.md.
+- Timing constraint on B1/B2 (2026-10-21): the shadow collector rates through the same `city_point` conductor config, so the B1 conductor change and any B2 retrain land after the ml-modeling shadow evaluation (model freeze 2026-11-01, rows before 2026-11-17, single run 2026-11-24T00:00Z) unless that workstream amends its protocol. The B3 top-up backfill (2026-09-29 onward) also waits for 2026-11-24 (anti-peeking).
 
 ## Session Continuity
 
 **Last session:** 2026-10-21T07:08:35.442Z
 
-**Stopped At:** Completed 03-05-PLAN.md
+**Stopped At:** Phase 03 complete; Phase 04 blocked by the VAL-03 NO-GO. Next: B1 answers from Power Systems and the B4 anomaly-model re-check now; B1 config change, B2 decision and retrain after the 2026-11-24 shadow evaluation; then offline re-validation and a new go/no-go
 **Resume File:** None
 
 ## Performance Metrics
