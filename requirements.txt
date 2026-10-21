@@ -32,3 +32,8 @@ matplotlib==3.10.8
 # gridstatus (ERCOT historical load, backend/ercot_data_retriever.py): added 2026-10-13. 0.35.0 was
 # verified in a fresh venv with every pin above (`pip check` clean) and a 2026 ERCOT pull succeeded.
 gridstatus==0.35.0
+# Postgres driver for the Supabase store (production-pipeline Phase 4, DB-02/DB-04). Package
+# legitimacy confirmed by the owner at plan 04-01 Task 1 (2026-10-21). psycopg-binary must stay
+# equal to psycopg. Both installed in .venv; `pip check` clean.
+psycopg==3.3.6
+psycopg-binary==3.3.6

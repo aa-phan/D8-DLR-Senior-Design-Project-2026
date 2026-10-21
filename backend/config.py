@@ -248,6 +248,35 @@ LINE_VOLTAGE_KV: float = 345.0  # ERCOT West Texas standard backbone
 POWER_FACTOR: float = 0.95      # Standard conservative assumption for grid power
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Rating store labels and history window (production-pipeline Phase 4)
+# ──────────────────────────────────────────────────────────────────────────────
+# Written into every public.city_rating row by backend/supabase_store.py so a
+# consumer can always tell what a stored value is (OD-5). Not the shadow
+# bundle labels above (BUNDLE_*), which describe a different quantity.
+RATING_BASIS: str = (
+    "Per-conductor amperes from the IEEE 738 thermal model at one rating point "
+    "per city. Static ratings are owner-supplied 345 kV bundle averages divided "
+    "by an assumed subconductor count; line bearings are assumed, not measured. "
+    "Not a verified equipment-limited circuit rating. Values are provisional "
+    "until Phase 7's re-validation go (REVAL-01) lifts this label."
+)
+
+# Human-readable label of the rating assumption set (DB-06). Bump it whenever
+# any per-city conductor parameter (conductor type, diameter, AC resistance,
+# emissivity, absorptivity, maximum operating temperature, elevation, line
+# azimuth), STATIC_RATINGS, RATING_BOUNDS_BY_LOCATION, CITY_LINE_BEARING_DEG,
+# CITY_COORDINATES, SUBCONDUCTORS_PER_PHASE, LINE_VOLTAGE_KV, POWER_FACTOR or a
+# G6/forecast parameter changes (same discipline as BUNDLE_CONFIG_VERSION).
+# Every row also stores `config_fingerprint` (supabase_store.rating_config_fingerprint),
+# which changes automatically with any of them, so a forgotten bump is still
+# visible in the data; the fingerprint is the authoritative identity.
+RATING_CONFIG_VERSION: str = "v1-provisional-2026-10-13"
+
+# OD-8: the forecast and the detector read the last 30 days per city from
+# Postgres (supabase_store.read_history).
+DB_HISTORY_WINDOW_DAYS: int = 30
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Predictive layer (C9 ampacity forecasting, C10 learned anomaly detection)
 # ──────────────────────────────────────────────────────────────────────────────
 # Phase 4. Every tunable the forecast/anomaly modules read lives here so
