@@ -86,7 +86,7 @@ proposals.
   exhausted, resolved station, forecast amps with CI bounds and horizon, detector signal, per-field
   provider sources, run id and pipeline version, and `computed_at`. Every value carries its unit in
   its column name or in the schema doc.
-- [ ] **DB-02**: The pipeline reads its forecast/detector history from Postgres and writes its
+- [x] **DB-02**: The pipeline reads its forecast/detector history from Postgres and writes its
   result to Postgres, replacing the CSV archive on the production path. The CSV path stays usable
   offline for tests and backfill. Writes are idempotent upserts on the unique key, which also
   satisfies CLEAN-03 at the database level.
@@ -205,7 +205,7 @@ proposals.
 | VAL-02 | Phase 3 | Complete |
 | VAL-03 | Phase 3 | Complete |
 | DB-01 | Phase 4 | Pending |
-| DB-02 | Phase 4 | Pending |
+| DB-02 | Phase 4 | Complete |
 | DB-03 | Phase 4 | Pending |
 | DB-04 | Phase 4 | Pending |
 | DB-05 | Phase 4 | Pending |

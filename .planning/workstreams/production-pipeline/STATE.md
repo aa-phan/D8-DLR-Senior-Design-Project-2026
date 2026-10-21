@@ -1,18 +1,18 @@
 ---
 gsd_state_version: "1.0"
 current_phase: 04
-current_plan: 2
+current_plan: 3
 status: executing
-stopped_at: Completed 04-01-PLAN.md
-last_updated: "2026-10-21T22:55:54.093Z"
+stopped_at: Completed 04-02-PLAN.md
+last_updated: "2026-10-21T23:09:51.416Z"
 last_activity: 2026-10-21
 last_activity_desc: Phase 04 execution started
-state_head: 06318238e8e77b045d589d0a534dc3b51eba0a51
+state_head: 9e9d2250a8afc9ff0c64749974ee84fa131baaef
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 35
-  completed_plans: 15
+  completed_plans: 16
   percent: 43
 milestone_name: Production Pipeline (Supabase + live ratings)
 workstream: production-pipeline
@@ -37,7 +37,7 @@ whoever owns that analysis; they are not work items here.
 
 **Status:** Ready to execute
 **Current Phase:** 04
-**Current Plan:** 2
+**Current Plan:** 3
 **Total Plans in Phase:** 6
 **Last Activity:** 2026-10-21 — Phase 04 execution started
 **Last Activity Description:** Phase 04 execution started
@@ -140,6 +140,9 @@ These block or affect stringing the system together and belong to the phases nam
 - [Phase 04]: valid_time is the hour-truncated UTC run slot (CHECK-enforced); upsert is ON CONFLICT (city, valid_time) DO UPDATE with first_written_at never updated (OD-7) — A same-hour retry must overwrite, not duplicate
 - [Phase 04]: DB-06 identity: automatic per-city sha256 config_fingerprint plus model-file hashes on every row; RATING_CONFIG_VERSION v1-provisional-2026-10-13 is its label — Fingerprint is authoritative; a conductor or model change alters values, never the schema
 - [Phase 04]: connect() pins session time zone to UTC; dlr_writer is policy-based (no BYPASSRLS) with no credential in the migration — Hour CHECK truncates in session zone; least privilege (DB-04)
+- [Phase 04]: 04-02: forecast_status describes the forecast call (ok/cold_start/failed), not G6 use; a forecast withheld by the gap guard stays ok
+- [Phase 04]: 04-02: with a store the orchestrator runs each city with archive=False and writes the rating row itself; a failed city or failed write has no row (OD-9) and is recorded in pipeline_run as error; written-but-unhealthy is degraded
+- [Phase 04]: 04-02: Phase 5 children use --store postgres --no-run-row; row-written flag is summary archived; upsert_run(conn,row) takes any subset of PIPELINE_RUN_COLUMNS with run_id
 
 ## Open Decisions
 
@@ -159,9 +162,9 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 
 ## Session Continuity
 
-**Last session:** 2026-10-21T22:55:54.034Z
+**Last session:** 2026-10-21T23:09:51.317Z
 
-**Stopped At:** Completed 04-01-PLAN.md
+**Stopped At:** Completed 04-02-PLAN.md
 **Resume File:** None
 
 ## Performance Metrics
@@ -183,6 +186,7 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 | Phase 03 P04 | 14min | 2 tasks | 13 files |
 | Phase 03 P05 | 6min | 2 tasks | 2 files |
 | Phase 04 P01 | 55 min | 3 tasks | 8 files |
+| Phase 04 P02 | 10 min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
