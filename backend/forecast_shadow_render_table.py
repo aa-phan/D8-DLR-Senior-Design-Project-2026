@@ -413,6 +413,100 @@ def _render_latest_summary(latest: list[tuple[str, dict]]) -> list[str]:
     return block
 
 
+# 2026-10-21 ("for the past results, can we not append it to the readme"): until
+# 2026-10-21 the workflow ran the collector against an empty runner log, so every
+# row's live persistence_24h was a cold start (`unavailable`). Persistence is only
+# a lookup over earlier rows of the same log, so it can be recomputed exactly here.
+# Duplicated from `forecast_shadow_pipeline._PERSISTENCE_VALID_TIME_TOLERANCE` (same
+# dependency-light reason as CANDIDATE_METHOD_NAMES); update both together.
+PERSISTENCE_TOLERANCE_MINUTES = 90
+
+RECONSTRUCTED_PERSISTENCE_NOTE = (
+    "Before 2026-10-21 the collector ran against an empty log on the GitHub runner, so "
+    "`persistence_24h` was logged `unavailable` (cold start) in every row. The values below "
+    "are recomputed from this branch's logs each time this README renders, using the "
+    "collector's own rule: the city's raw_forecast from the earlier row, same NWP model, whose "
+    "valid time is closest to this row's decision time (within 90 minutes), looking only at "
+    "rows logged before this one. They were not logged live and the JSONL rows are unchanged; "
+    "rows with no match are omitted."
+)
+
+
+def _parse_ts(value):
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def reconstruct_persistence(entries_in_file_order: list[dict]) -> list[tuple[dict, dict]]:
+    """
+    `(row, matched_prior_row)` for every row whose logged persistence_24h is a
+    cold-start `unavailable` but which `Persistence24hShadowMethod`'s lookup would
+    have matched had the runner seen the full log. Mirrors that method: only rows
+    EARLIER in the file (what existed at that row's decision time), same
+    `forecast_model`, smallest |valid_time - decision_time| within the tolerance,
+    first-in-file on a tie; the match only counts if its raw_forecast is `ok`.
+    """
+    tolerance_s = PERSISTENCE_TOLERANCE_MINUTES * 60
+    out = []
+    for i, row in enumerate(entries_in_file_order):
+        logged = (row.get("candidates") or {}).get("persistence_24h") or {}
+        if logged.get("status") == "ok" or not str(logged.get("reason") or "").startswith("no prior entry"):
+            continue
+        decision = _parse_ts(row.get("decision_time"))
+        if decision is None:
+            continue
+        model = _entry_forecast_model(row)
+        best, best_delta = None, None
+        for prior in entries_in_file_order[:i]:
+            valid = _parse_ts(prior.get("valid_time"))
+            if valid is None or _entry_forecast_model(prior) != model:
+                continue
+            delta = abs((valid - decision).total_seconds())
+            if delta <= tolerance_s and (best_delta is None or delta < best_delta):
+                best, best_delta = prior, delta
+        if best is None:
+            continue
+        raw = (best.get("candidates") or {}).get("raw_forecast") or {}
+        if raw.get("status") == "ok" and isinstance(raw.get("ampacity_amps"), (int, float)):
+            out.append((row, best))
+    return out
+
+
+def _render_reconstructed_persistence(per_city: list[tuple[str, list[tuple[dict, dict]]]]) -> list[str]:
+    """One collapsible table per city, most recent first; `[]` when nothing was reconstructed."""
+    per_city = [(city, pairs) for city, pairs in per_city if pairs]
+    if not per_city:
+        return []
+    block = [
+        "## Reconstructed persistence_24h (rows logged before 2026-10-21)",
+        "",
+        RECONSTRUCTED_PERSISTENCE_NOTE,
+        "",
+    ]
+    for city, pairs in per_city:
+        pairs = sorted(pairs, key=lambda p: p[0].get("decision_time", ""), reverse=True)
+        block += [
+            f"<details><summary>{city}: {len(pairs)} row(s)</summary>",
+            "",
+            "| Decision time | Valid time | NWP model | persistence_24h (reconstructed) | "
+            "Bundle (reconstructed) | Reused from row valid at |",
+            "|---|---|---|---|---|---|",
+        ]
+        for row, prior in pairs:
+            raw = prior["candidates"]["raw_forecast"]
+            block.append(
+                f"| {_format_timestamp(row.get('decision_time'))} | "
+                f"{_format_timestamp(row.get('valid_time'))} | {_entry_forecast_model(row)} | "
+                f"{raw['ampacity_amps']:.1f} | {_render_bundle_cell(raw)} | "
+                f"{_format_timestamp(prior.get('valid_time'))} |"
+            )
+        block += ["", "</details>", ""]
+    return block
+
+
 def render_markdown(predictions_dir: str) -> str:
     """
     Pure function: `predictions_dir` (a directory of `<CITY>.jsonl` files,
@@ -445,6 +539,7 @@ def render_markdown(predictions_dir: str) -> str:
     paths = sorted(glob.glob(os.path.join(predictions_dir, "*.jsonl")))
 
     city_sections: list[tuple[str, list[dict], int]] = []
+    reconstructed: list[tuple[str, list[tuple[dict, dict]]]] = []
     legacy_logs: list[str] = []
     for path in paths:
         name = os.path.splitext(os.path.basename(path))[0]
@@ -453,6 +548,7 @@ def render_markdown(predictions_dir: str) -> str:
             legacy_logs.append(os.path.basename(path))
             continue
         current = [e for e in entries if _is_current_entry(e, name)]
+        reconstructed.append((name, reconstruct_persistence(current)))  # file order, before the sort
         current.sort(key=lambda e: e.get("decision_time", ""), reverse=True)
         city_sections.append((name, current, len(entries) - len(current)))
 
@@ -479,6 +575,8 @@ def render_markdown(predictions_dir: str) -> str:
                 )
                 lines.append("")
             lines.append("")
+
+        lines.extend(_render_reconstructed_persistence(reconstructed))
 
     if legacy_logs:
         lines.append(

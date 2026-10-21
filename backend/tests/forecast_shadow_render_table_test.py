@@ -550,3 +550,53 @@ def test_render_keeps_the_five_row_cap_with_the_tag_column(tmp_path):
         _write_entry(path, _new_shape_entry(decision_time=f"2026-10-13T{i:02d}:00:00+00:00", forecast_model="gfs_seamless"))
     markdown = render_table.render_markdown(str(tmp_path))
     assert "most recent 5 of 8 shown" in markdown
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 2026-10-21: reconstructed persistence_24h for rows logged while the runner
+# started from an empty log (every live persistence value was a cold start).
+# ──────────────────────────────────────────────────────────────────────
+
+
+def _cycle(decision_time: str, valid_time: str, raw_amps: float, **overrides) -> dict:
+    entry = _new_shape_entry(decision_time=decision_time, valid_time=valid_time, **overrides)
+    entry["candidates"]["raw_forecast"]["ampacity_amps"] = raw_amps
+    return entry
+
+
+def test_reconstructs_persistence_from_the_earlier_row_valid_at_this_decision_time(tmp_path):
+    path = str(tmp_path / "AUSTIN.jsonl")
+    _write_entry(path, _cycle("2026-10-14T00:05:00+00:00", "2026-10-15T00:00:00+00:00", 611.0))
+    _write_entry(path, _cycle("2026-10-15T00:10:00+00:00", "2026-10-16T00:00:00+00:00", 622.0))
+    before = open(path).read()
+
+    markdown = render_table.render_markdown(str(tmp_path))
+
+    section = markdown.split("## Reconstructed persistence_24h")[1]
+    assert "AUSTIN: 1 row(s)" in section
+    assert "| 611.0 |" in section  # the first row's raw_forecast, reused by the second
+    assert "622.0" not in section
+    assert open(path).read() == before  # the log itself is never rewritten
+
+
+def test_reconstruction_only_looks_at_rows_logged_earlier():
+    later_match = _cycle("2026-10-13T23:00:00+00:00", "2026-10-15T00:00:00+00:00", 999.0)
+    row = _cycle("2026-10-15T00:10:00+00:00", "2026-10-16T00:00:00+00:00", 622.0)
+    assert render_table.reconstruct_persistence([row, later_match]) == []
+
+
+def test_reconstruction_skips_other_models_out_of_tolerance_and_live_ok_rows():
+    prior = _cycle("2026-10-14T00:05:00+00:00", "2026-10-15T00:00:00+00:00", 611.0)
+    other_model = _cycle("2026-10-15T00:10:00+00:00", "2026-10-16T00:00:00+00:00", 1.0,
+                         forecast_model="gfs_seamless")
+    too_far = _cycle("2026-10-15T01:31:00+00:00", "2026-10-16T00:00:00+00:00", 1.0)
+    live_ok = _cycle("2026-10-15T00:10:00+00:00", "2026-10-16T00:00:00+00:00", 1.0)
+    live_ok["candidates"]["persistence_24h"].update(status="ok", ampacity_amps=611.0, reason=None)
+
+    for row in (other_model, too_far, live_ok):
+        assert render_table.reconstruct_persistence([prior, row]) == []
+
+
+def test_no_reconstructed_section_when_nothing_matches(tmp_path):
+    _write_entry(str(tmp_path / "AUSTIN.jsonl"), _new_shape_entry())
+    assert "Reconstructed persistence_24h" not in render_table.render_markdown(str(tmp_path))

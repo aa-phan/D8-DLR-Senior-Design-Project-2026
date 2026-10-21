@@ -62,6 +62,39 @@ jobs:
         run: |
           PYTHONPATH=backend python backend/forecast_shadow_check_models.py
 
+      - name: Check out shadow-collection-data as the prediction log directory
+        # 2026-10-21: the collector used to start from an empty, git-ignored
+        # data/shadow/predictions/ on every run, so persistence_24h (which looks
+        # up the ~24h-ago entry in the city's own log) was a cold start and came
+        # back `unavailable` in every row. The data branch is now cloned BEFORE
+        # collecting and data/shadow/predictions is symlinked into the clone, so
+        # the collector reads the full history and appends straight onto the
+        # branch's own files -- no copy step, nothing to de-duplicate.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          rm -rf /tmp/shadow-data-branch
+          if git ls-remote --exit-code --heads origin shadow-collection-data >/dev/null 2>&1; then
+            git clone --branch shadow-collection-data --single-branch "$REPO_URL" /tmp/shadow-data-branch
+          else
+            echo "shadow-collection-data branch does not exist yet -- creating it as an orphan branch."
+            git clone "$REPO_URL" /tmp/shadow-data-branch
+            (cd /tmp/shadow-data-branch && git checkout --orphan shadow-collection-data && git rm -rf . >/dev/null 2>&1 || true)
+          fi
+          mkdir -p /tmp/shadow-data-branch/data/shadow/predictions
+          # Line count of each log as cloned, so the commit step can tell which
+          # rows THIS run appended if it has to replay them onto a newer tip.
+          for f in /tmp/shadow-data-branch/data/shadow/predictions/*.jsonl; do
+            [ -e "$f" ] || continue
+            echo "$(basename "$f") $(wc -l < "$f")"
+          done > /tmp/shadow-baseline-lines.txt
+          # Fresh checkout of main: data/shadow/predictions is git-ignored, so it
+          # cannot already exist; fail loudly rather than link into a stray dir.
+          test ! -e data/shadow/predictions
+          ln -s /tmp/shadow-data-branch/data/shadow/predictions data/shadow/predictions
+
       - name: Run shadow collector
         env:
           SYNOPTIC_TOKEN: ${{ secrets.SYNOPTIC_TOKEN }}
@@ -78,62 +111,75 @@ jobs:
         #         false serializing runs, but is non-fatal if it ever does.
 
       - name: Health check
+        # --max-age-minutes 60: the log now holds the full history, so the
+        # default 24h window would pass a city that wrote nothing THIS run on
+        # the strength of an earlier run's entry. 60 covers the 30-min job.
         run: |
-          PYTHONPATH=backend python backend/forecast_shadow_healthcheck.py
+          PYTHONPATH=backend python backend/forecast_shadow_healthcheck.py --max-age-minutes 60
 
       - name: Commit predictions to shadow-collection-data branch
         env:
           GH_TOKEN: ${{ github.token }}
+        # The collector already appended onto the clone made before collecting, via
+        # the data/shadow/predictions symlink; this step only renders and pushes.
+        # The legacy corridor logs in the clone are left untouched.
+        #
+        # The branch can't be locked to this workflow (rulesets and branch protection
+        # need GitHub Pro on a private personal repo), and it is cloned up to ~25 min
+        # before this push. If anything else pushed in between, the push is rejected:
+        # re-fetch the tip, re-append only the rows this run added, re-render, retry.
         run: |
           set -euo pipefail
-          REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          rm -rf /tmp/shadow-data-branch
-          if git ls-remote --exit-code --heads origin shadow-collection-data >/dev/null 2>&1; then
-            git clone --branch shadow-collection-data --single-branch "$REPO_URL" /tmp/shadow-data-branch
-          else
-            echo "shadow-collection-data branch does not exist yet -- creating it as an orphan branch."
-            git clone "$REPO_URL" /tmp/shadow-data-branch
-            (cd /tmp/shadow-data-branch && git checkout --orphan shadow-collection-data && git rm -rf . >/dev/null 2>&1 || true)
-          fi
-          mkdir -p /tmp/shadow-data-branch/data/shadow/predictions
-          # APPEND, never overwrite (fixed 2026-10-07): `cp` here previously
-          # replaced the destination file wholesale every run, so the data
-          # branch only ever held the SINGLE most recent run's entry per
-          # log file -- 10 real runs' worth of predictions were silently
-          # destroyed before this was caught. `>>` onto a nonexistent file
-          # creates it, so the very first run (and a brand-new per-city
-          # file) still works correctly.
-          # Only per-city {CITY}.jsonl files exist here: data/shadow/predictions/ is
-          # git-ignored, so legacy corridor logs (AUSTIN_CORPUS_CHRISTI.jsonl,
-          # MIDLAND_EL_PASO.jsonl) are absent on the runner and are never copied;
-          # the data branch's own copies of them are left untouched.
-          found_any=0
-          for f in data/shadow/predictions/*.jsonl; do
+          CLONE=/tmp/shadow-data-branch
+          PRED="$CLONE/data/shadow/predictions"
+
+          rm -rf /tmp/shadow-new-rows
+          mkdir -p /tmp/shadow-new-rows
+          for f in "$PRED"/*.jsonl; do
             [ -e "$f" ] || continue
-            found_any=1
             bn=$(basename "$f")
-            cat "$f" >> "/tmp/shadow-data-branch/data/shadow/predictions/$bn"
+            n=$(awk -v b="$bn" '$1 == b {print $2}' /tmp/shadow-baseline-lines.txt)
+            tail -n +"$(( ${n:-0} + 1 ))" "$f" > "/tmp/shadow-new-rows/$bn"
+            [ -s "/tmp/shadow-new-rows/$bn" ] || rm "/tmp/shadow-new-rows/$bn"
           done
-          [ "$found_any" -eq 1 ] || echo "No prediction files produced this run (all cities may have hit an unexpected early error)."
+          [ -n "$(ls -A /tmp/shadow-new-rows)" ] || echo "No prediction rows produced this run (all cities may have hit an unexpected early error)."
 
-          # Render the top-level README.md table (2026-10-07): ran from
-          # THIS checkout (main) so backend/forecast_shadow_render_table.py
-          # resolves, but reading the data branch's own (just-appended)
-          # predictions directory and writing the data branch's own
-          # top-level README.md -- GitHub renders a branch's root
-          # README.md automatically, so switching to shadow-collection-data
-          # shows this table immediately, no digging into raw JSONL.
-          PYTHONPATH=backend python backend/forecast_shadow_render_table.py \
-            /tmp/shadow-data-branch/data/shadow/predictions \
-            /tmp/shadow-data-branch/README.md
+          git -C "$CLONE" config user.name "github-actions[bot]"
+          git -C "$CLONE" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for attempt in 1 2 3; do
+            if [ "$attempt" -gt 1 ]; then
+              echo "Push rejected (branch moved since it was cloned); replaying this run's rows onto the new tip, attempt $attempt."
+              git -C "$CLONE" fetch origin shadow-collection-data
+              git -C "$CLONE" reset --hard FETCH_HEAD
+              mkdir -p "$PRED"
+              for f in /tmp/shadow-new-rows/*.jsonl; do
+                [ -e "$f" ] || continue
+                cat "$f" >> "$PRED/$(basename "$f")"
+              done
+            fi
 
-          cd /tmp/shadow-data-branch
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -f data/shadow/predictions/*.jsonl README.md 2>/dev/null || true
-          if ! git diff --cached --quiet; then
-            git commit -m "shadow collection: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-            git push origin shadow-collection-data
-          else
-            echo "No changes to commit this run."
-          fi
+            # Render the top-level README.md table (2026-10-07): ran from
+            # THIS checkout (main) so backend/forecast_shadow_render_table.py
+            # resolves, but reading the data branch's own (just-appended)
+            # predictions directory and writing the data branch's own
+            # top-level README.md -- GitHub renders a branch's root
+            # README.md automatically, so switching to shadow-collection-data
+            # shows this table immediately, no digging into raw JSONL.
+            PYTHONPATH=backend python backend/forecast_shadow_render_table.py "$PRED" "$CLONE/README.md"
+
+            (cd "$CLONE" && git add -f data/shadow/predictions/*.jsonl README.md 2>/dev/null || true)
+            if git -C "$CLONE" diff --cached --quiet; then
+              echo "No changes to commit this run."
+              exit 0
+            fi
+            git -C "$CLONE" commit -m "shadow collection: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            if git -C "$CLONE" push origin shadow-collection-data; then
+              exit 0
+            fi
+          done
+          echo "::error::Could not push to shadow-collection-data after 3 attempts; this run's rows follow so they can be appended by hand."
+          for f in /tmp/shadow-new-rows/*.jsonl; do
+            [ -e "$f" ] || continue
+            echo "== $(basename "$f")"; cat "$f"
+          done
+          exit 1
