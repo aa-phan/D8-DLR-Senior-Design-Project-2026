@@ -1,19 +1,19 @@
 ---
 gsd_state_version: "1.0"
-current_phase: 04 — Supabase Store & Writer
-current_plan: Not started
+current_phase: 04
+current_plan: 2
 status: executing
-stopped_at: Phase 03 complete (VAL-03 NO-GO); Phase 04 blocked on B1, B2, B4, B5
-last_updated: "2026-10-21T22:38:34.942Z"
+stopped_at: Completed 04-01-PLAN.md
+last_updated: "2026-10-21T22:55:54.093Z"
 last_activity: 2026-10-21
-last_activity_desc: Phase 4 planning complete — 6 plans ready
-state_head: 9786d346be2f57742dab018afef55e274511b16f
+last_activity_desc: Phase 04 execution started
+state_head: 06318238e8e77b045d589d0a534dc3b51eba0a51
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 35
-  completed_plans: 14
-  percent: 40
+  completed_plans: 15
+  percent: 43
 milestone_name: Production Pipeline (Supabase + live ratings)
 workstream: production-pipeline
 created: 2026-10-18
@@ -35,12 +35,12 @@ whoever owns that analysis; they are not work items here.
 
 ## Current Position
 
-**Status:** Blocked — Phase 04 does not start until B1, B2, B4 and B5 are resolved and the validation is repeated (see Blockers)
-**Current Phase:** 04 — Supabase Store & Writer
-**Current Plan:** Not started
+**Status:** Ready to execute
+**Current Phase:** 04
+**Current Plan:** 2
 **Total Plans in Phase:** 6
-**Last Activity:** 2026-10-21 — Phase 4 planning complete
-**Last Activity Description:** Phase 4 planning complete — 6 plans ready
+**Last Activity:** 2026-10-21 — Phase 04 execution started
+**Last Activity Description:** Phase 04 execution started
 
 ## Planning Summary (2026-10-19)
 
@@ -137,6 +137,9 @@ These block or affect stringing the system together and belong to the phases nam
 - [Phase 03]: 03-04: the validation doc leaves the Decision section as 'Pending owner decision.'; GO / GO WITH CONDITIONS / NO-GO is taken at 03-05's checkpoint
 - 2026-10-21: VAL-03 production go/no-go: NO-GO, signed by Aaron Phan (docs/data-science/decisions/real_data_validation.md).
 - 2026-10-21: B6 (Finding 5, input provenance): owner accepts Open-Meteo reanalysis solar (Option A) and asks for it to be documented. Phase 4 input: the schema carries a per-row solar source column. Before Phase 5: confirm the Open-Meteo Archive API serves the current hour, else add a near-real-time solar source.
+- [Phase 04]: valid_time is the hour-truncated UTC run slot (CHECK-enforced); upsert is ON CONFLICT (city, valid_time) DO UPDATE with first_written_at never updated (OD-7) — A same-hour retry must overwrite, not duplicate
+- [Phase 04]: DB-06 identity: automatic per-city sha256 config_fingerprint plus model-file hashes on every row; RATING_CONFIG_VERSION v1-provisional-2026-10-13 is its label — Fingerprint is authoritative; a conductor or model change alters values, never the schema
+- [Phase 04]: connect() pins session time zone to UTC; dlr_writer is policy-based (no BYPASSRLS) with no credential in the migration — Hour CHECK truncates in session zone; least privilege (DB-04)
 
 ## Open Decisions
 
@@ -156,9 +159,9 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 
 ## Session Continuity
 
-**Last session:** 2026-10-21T07:08:35.442Z
+**Last session:** 2026-10-21T22:55:54.034Z
 
-**Stopped At:** Roadmap re-sequenced 2026-10-21. Next, in parallel: Phase 4 plan revision (`/gsd-plan-phase 4`: drop the GO precondition, add DB-06) then execution; Phase 7 discuss/plan, starting with the v4 protocol draft for owner signature.
+**Stopped At:** Completed 04-01-PLAN.md
 **Resume File:** None
 
 ## Performance Metrics
@@ -179,6 +182,7 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 | Phase 03 P02 | 336 min | 3 tasks | 2 files |
 | Phase 03 P04 | 14min | 2 tasks | 13 files |
 | Phase 03 P05 | 6min | 2 tasks | 2 files |
+| Phase 04 P01 | 55 min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
