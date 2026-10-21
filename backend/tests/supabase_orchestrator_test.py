@@ -656,3 +656,28 @@ def test_orchestrator_reads_its_history_from_postgres(tmp_path, monkeypatch, _pg
     assert run["summary"][0]["archived"] is False
     assert _admin_rows(_pg_admin_url, "select count(*) as n from public.city_rating")[0]["n"] == 3
     assert _admin_rows(_pg_admin_url, "select count(*) as n from public.pipeline_run")[0]["n"] == 0
+
+
+def test_history_window_boundary_against_postgres(_pg_admin_url):
+    _reset(_pg_admin_url)
+    db_url = _writer_url(_pg_admin_url)
+    slot = datetime(2025, 7, 1, 12, 0, tzinfo=timezone.utc)
+    ctx = {"run_id": "boundary", "run_attempt": 1, "pipeline_version": "abc1234"}
+    offsets = {
+        "30 days before the slot": pd.Timedelta(days=30),
+        "30 days and an hour before": pd.Timedelta(days=30, hours=1),
+        "the slot itself": pd.Timedelta(0),
+        "the hour before the slot": pd.Timedelta(hours=1),
+    }
+    with supabase_store.SupabaseStore(supabase_store.connect(db_url), run_ctx=ctx) as store:
+        for offset in offsets.values():
+            at = (slot - offset.to_pytimedelta()).strftime("%Y-%m-%dT%H:%M:%SZ")
+            result = _city_result("AUSTIN", station_id="T_AUSTIN", detector_model=None)
+            result["observation"] = {"temp": 25.0, "wind": 6.5, "solar": 500.0, "wind_raw": 6.5,
+                                     "wind_direction": 180.0}
+            result["pipeline"]["forecast_method"] = "naive"
+            supabase_store.upsert_rating(store.conn, supabase_store.build_rating_row(result, at, ctx))
+
+        frame = store.read_history("AUSTIN", "2025-07-01T12:20:00Z")
+
+    assert list(frame["datetime_utc"]) == ["2025-06-01T12:00:00Z", "2025-07-01T11:00:00Z"]

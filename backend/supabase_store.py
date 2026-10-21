@@ -814,14 +814,24 @@ def read_history(conn, city: str, end, days=None) -> pd.DataFrame:
     if failure is not None:
         raise StoreError(f"could not read {city} history: {failure}")
 
-    if not rows:
-        return pd.DataFrame(columns=historical_archive.ARCHIVE_COLUMNS)
-    frame = pd.DataFrame(rows, columns=names)
-    for column in ("air_temp", "wind_speed", "solar_radiation", "dlr_amps", "static_rating"):
-        frame[column] = pd.to_numeric(frame[column], errors="coerce").astype("float64")
-    frame["fallback"] = frame["fallback"].astype(bool)
-    frame["schema_version"] = historical_archive.ARCHIVE_SCHEMA_VERSION
-    return frame[historical_archive.ARCHIVE_COLUMNS].reset_index(drop=True)
+    if rows:
+        frame = pd.DataFrame(rows, columns=names)
+        for column in ("air_temp", "wind_speed", "solar_radiation", "dlr_amps", "static_rating"):
+            frame[column] = pd.to_numeric(frame[column], errors="coerce").astype("float64")
+        frame["fallback"] = frame["fallback"].astype(bool)
+        frame["schema_version"] = historical_archive.ARCHIVE_SCHEMA_VERSION
+        # The same row check the CSV archive applies before history trains anything.
+        frame = historical_archive.validate_history_frame(frame, f"postgres:{city}")
+        frame = frame[historical_archive.ARCHIVE_COLUMNS].reset_index(drop=True)
+    else:
+        frame = pd.DataFrame(columns=historical_archive.ARCHIVE_COLUMNS)
+    if frame.empty:
+        log.warning(
+            "%s: no usable history in Postgres for the %d days before %s -- cold start "
+            "(after the backfill load this points at the RLS policy or the writer role)",
+            city, window, slot.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        )
+    return frame
 
 
 class SupabaseStore:

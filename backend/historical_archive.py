@@ -280,6 +280,37 @@ def append_observation(row: dict, path: str = None) -> bool:
         return False
 
 
+def validate_history_frame(df: pd.DataFrame, source) -> pd.DataFrame:
+    """
+    Drop the rows of an archive-shaped frame that `units_def.validate_pipeline_row`
+    (strict=False, via `_validation_row`) rejects, and return the rest with the
+    original index. If any rows are dropped, one warning-level log line names the
+    count, `source` and the first offending message: one line per call, not one
+    per row, so a corrupted source cannot flood the log.
+
+    Shared by the CSV reader (`read_history`, `source` is the file path) and the
+    Postgres store (DB-02, `source` is "postgres:<city>"), so both apply the
+    archive-poisoning check before the history trains the forecast or detector
+    (T-04-07 / T-04-08 of the original archive threat model).
+    """
+    if len(df) == 0:
+        return df
+    row_dicts = df.to_dict(orient="records")
+    error_lists = [
+        units_def.validate_pipeline_row(_validation_row(r), strict=False)
+        for r in row_dicts
+    ]
+    keep_mask = pd.Series([len(errs) == 0 for errs in error_lists], index=df.index)
+    dropped = int((~keep_mask).sum())
+    if dropped:
+        first_bad_pos = next(i for i, errs in enumerate(error_lists) if errs)
+        logger.warning(
+            "historical_archive dropped %d invalid row(s) reading %s: %s",
+            dropped, source, error_lists[first_bad_pos][0],
+        )
+    return df[keep_mask]
+
+
 def read_history(
     path: str = None, city: str = None, validate: bool = True, corridor: str = None
 ) -> pd.DataFrame:
@@ -325,20 +356,7 @@ def read_history(
         df = df.rename(columns={"corridor": "city"})
 
     if validate and len(df) > 0:
-        row_dicts = df.to_dict(orient="records")
-        error_lists = [
-            units_def.validate_pipeline_row(_validation_row(r), strict=False)
-            for r in row_dicts
-        ]
-        keep_mask = pd.Series([len(errs) == 0 for errs in error_lists], index=df.index)
-        dropped = int((~keep_mask).sum())
-        if dropped:
-            first_bad_pos = next(i for i, errs in enumerate(error_lists) if errs)
-            logger.warning(
-                "historical_archive dropped %d invalid row(s) reading %s: %s",
-                dropped, path, error_lists[first_bad_pos][0],
-            )
-        df = df[keep_mask]
+        df = validate_history_frame(df, path)
 
     if city is not None and "city" in df.columns:
         df = df[df["city"] == city]

@@ -356,10 +356,73 @@ _HISTORY_NAMES = ["datetime_utc", "city", "air_temp", "wind_speed", "solar_radia
                   "dlr_amps", "static_rating", "status", "fallback"]
 
 
+def _history_conn(rows):
+    return FakeConn(rows=rows, names=_HISTORY_NAMES)
+
+
+def test_db_history_is_validated_like_the_csv_archive(caplog):
+    rows = [
+        ("2025-06-01T10:00:00Z", "AUSTIN", 25.0, 6.5, 500.0, 1700.0, 1825.0, "ok", False),
+        ("2025-06-01T11:00:00Z", "AUSTIN", 999.0, 6.5, 500.0, 1700.0, 1825.0, "ok", False),
+        ("2025-06-01T12:00:00Z", "AUSTIN", 26.0, 6.5, 500.0, 1700.0, 1825.0, "ok", False),
+        ("2025-06-01T13:00:00Z", "AUSTIN", 27.0, 6.5, 500.0, 1700.0, 1825.0, "ok", False),
+    ]
+    # A second bad row must not add a second warning: one per call, not one per row.
+    rows[3] = ("2025-06-01T13:00:00Z", "AUSTIN", 27.0, -500.0, 500.0, 1700.0, 1825.0, "ok", False)
+    with caplog.at_level(logging.WARNING):
+        frame = supabase_store.read_history(
+            _history_conn(rows), "AUSTIN", "2025-06-01T15:05:00Z")
+
+    assert list(frame["datetime_utc"]) == ["2025-06-01T10:00:00Z", "2025-06-01T12:00:00Z"]
+    assert list(frame.columns) == historical_archive.ARCHIVE_COLUMNS
+    dropped = [r for r in caplog.records if r.name == "historical_archive"]
+    assert len(dropped) == 1 and dropped[0].levelno == logging.WARNING
+    assert "dropped 2 invalid row(s)" in dropped[0].getMessage()
+    assert "postgres:AUSTIN" in dropped[0].getMessage()
+
+
+def test_empty_db_history_logs_one_cold_start_warning_naming_the_city(caplog):
+    with caplog.at_level(logging.INFO):
+        empty = supabase_store.read_history(_history_conn([]), "EL_PASO", "2025-06-01T15:05:00Z")
+        healthy = supabase_store.read_history(
+            _history_conn([("2025-06-01T10:00:00Z", "AUSTIN", 25.0, 6.5, 500.0, 1700.0, 1825.0,
+                            "ok", False)]), "AUSTIN", "2025-06-01T15:05:00Z")
+
+    assert empty.empty and list(empty.columns) == historical_archive.ARCHIVE_COLUMNS
+    assert len(healthy) == 1
+    warnings = [r for r in caplog.records if r.name == "supabase_store" and r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert "EL_PASO" in warnings[0].getMessage()
+    assert "cold start" in warnings[0].getMessage()
+
+    # Rows that all fail validation leave nothing usable: that is a cold start too.
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        none_left = supabase_store.read_history(
+            _history_conn([("2025-06-01T10:00:00Z", "AUSTIN", 999.0, 6.5, 500.0, 1700.0, 1825.0,
+                            "ok", False)]), "AUSTIN", "2025-06-01T15:05:00Z")
+    assert none_left.empty and list(none_left.columns) == historical_archive.ARCHIVE_COLUMNS
+    assert len([r for r in caplog.records if r.name == "supabase_store"]) == 1
+
+
+def test_history_window_starts_exactly_thirty_days_before_the_slot():
+    conn = FakeConn()
+
+    supabase_store.read_history(conn, "AUSTIN", "2025-07-01T12:20:00Z")
+
+    params = conn.calls[0][1]
+    assert params["slot"] == datetime(2025, 7, 1, 12, 0, tzinfo=_UTC)
+    assert params["since"] == datetime(2025, 6, 1, 12, 0, tzinfo=_UTC)
+    sql = conn.calls[0][0]
+    assert "valid_time >= %(since)s" in sql and "valid_time < %(slot)s" in sql
+
+
 def test_history_frame_has_archive_columns_and_csv_spelling():
     rows = [
         ("2025-06-01T10:00:00Z", "AUSTIN", 25.0, 6.5, 500.0, 1700.0, 1825.0, "ok", False),
-        ("2025-06-01T11:00:00Z", "AUSTIN", None, 6.0, 450.0, 1825.0, 1825.0, "fallback", True),
+        # solar_radiation is the optional column (air_temp is required, and the archive's
+        # row check drops a row without it), so a missing value is shown there.
+        ("2025-06-01T11:00:00Z", "AUSTIN", 24.0, 6.0, None, 1825.0, 1825.0, "fallback", True),
     ]
     conn = FakeConn(rows=rows, names=_HISTORY_NAMES)
     frame = supabase_store.read_history(conn, "AUSTIN", "2025-06-01T15:05:00Z")
@@ -368,7 +431,7 @@ def test_history_frame_has_archive_columns_and_csv_spelling():
     assert list(frame["datetime_utc"]) == ["2025-06-01T10:00:00Z", "2025-06-01T11:00:00Z"]
     for column in ("air_temp", "wind_speed", "solar_radiation", "dlr_amps", "static_rating"):
         assert str(frame[column].dtype) == "float64", column
-    assert math.isnan(frame["air_temp"].iloc[1])
+    assert math.isnan(frame["solar_radiation"].iloc[1])
     assert frame["fallback"].tolist() == [False, True]
     assert (frame["schema_version"] == historical_archive.ARCHIVE_SCHEMA_VERSION).all()
 
