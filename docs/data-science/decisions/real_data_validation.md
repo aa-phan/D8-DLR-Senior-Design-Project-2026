@@ -1,6 +1,7 @@
 # Real-data validation and production go/no-go (2026-10, production-pipeline Phase 3)
 
-**Status:** the measurements are complete and the decision is pending the owner (plan 03-05). Nothing was
+**Status:** the measurements are complete and the owner's decision was made and signed on 2026-10-21: NO-GO,
+blocking on B1, B2, B4 and B5 (see "Decision"; plan 03-05). Nothing was
 changed to produce these numbers: no rating bound, static rating, line bearing, conductor model, fallback
 policy, forecast method, quantile, control limit or model file. Findings below are recorded with options for
 the owner; none is applied.
@@ -858,7 +859,30 @@ Each is tied to a finding above and is a candidate only. None is applied.
 
 ## Decision
 
-Pending owner decision.
+**Decision:** NO-GO
+
+**Owner's words:**
+
+> 0305 is no go, blocking on b1, b2, b4, b5. record that decision
+
+**Blocking fixes:**
+
+1. **B1 (Findings 1, 9).** A decision on the fallback policy and the rating basis: either confirm that a fallback may
+   publish more than the computed rating at the measured rates, or change the policy; and confirm or correct the
+   static ratings, bounds, conductor model and bearings that drive those rates. (Context, not the owner's words: the
+   owner confirmed the subconductor counts, 2 / 2 / 2 / 1, are correct, so the open question is the conductor type,
+   maximum operating temperature, elevation and azimuth; those questions are with the Power Systems team.)
+2. **B2 (Finding 2).** Align the ml wind feature between training and serving, or confirm the offset is acceptable.
+3. **B4 (Finding 4).** Decide whether the CORPUS_CHRISTI detector trip rate (11.01%) is acceptable.
+4. **B5 (Finding 8).** Decide whether fallbacks may reduce the forecast branch's availability as measured.
+
+Not blocking: B3 (Finding 6) and B6 (Finding 5).
+
+Phase 4 does not start until these are resolved and the validation is repeated.
+
+**Signed by:** Aaron Phan, 2026-10-21
+
+**Recorded by:** the executor, from the owner's reply at plan 03-05's checkpoint.
 
 ## Reproduce
 

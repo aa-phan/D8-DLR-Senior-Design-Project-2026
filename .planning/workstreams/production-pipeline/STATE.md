@@ -135,6 +135,7 @@ These block or affect stringing the system together and belong to the phases nam
 - [Phase 03]: 03-02: real backfill window 2026-09-08..09-28 (168 h warm-up, 14 scored days) ran complete for all four cities with ml forecast; manifest pins archive sha256 18f999aa... and 504 rows per city for the Phase 4 DB-03 load
 - [Phase 03]: 03-04: AUSTIN publishes above computed at 68.15% of scored steps (median +780 A), MIDLAND 20.83%: measured, findings and options recorded for the owner, no policy changed
 - [Phase 03]: 03-04: the validation doc leaves the Decision section as 'Pending owner decision.'; GO / GO WITH CONDITIONS / NO-GO is taken at 03-05's checkpoint
+- 2026-10-21: VAL-03 production go/no-go: NO-GO, signed by Aaron Phan (docs/data-science/decisions/real_data_validation.md).
 
 ## Open Decisions
 
@@ -145,6 +146,10 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 - OD-8: 30-day read window.
 - OD-9: a failed city appears in the run log only.
 - OD-10: models committed to git.
+
+## Blockers
+
+- Phase 4 blocked by VAL-03 NO-GO (2026-10-21): B1 fallback policy and rating basis (conductor type, max operating temperature, elevation, azimuth; with Power Systems), B2 ml wind feature train/serve alignment, B4 CORPUS_CHRISTI detector trip rate (11.01%), B5 fallback effect on forecast availability. See docs/data-science/decisions/real_data_validation.md.
 
 ## Session Continuity
 
