@@ -11,7 +11,17 @@ workstream:
    in a go/no-go (Phase 3);
 3. moves storage to Supabase Postgres (Phase 4);
 4. runs the pipeline on a cron-job.org schedule (Phase 5);
-5. exposes the data through Supabase REST and proves end-to-end, always-fresh results (Phase 6).
+5. exposes the data through Supabase REST and proves end-to-end, always-fresh results (Phase 6);
+6. in parallel with Phases 4-6, moves to per-city conductor configurations, refits the
+   conductor-dependent shadow candidates and selects the forecast method by 2026-11-01 (Phase 7).
+
+**Re-sequencing (owner, 2026-10-21).** The VAL-03 NO-GO no longer blocks the database. Supabase
+(Phase 4) runs first because the web app and the PSS/E hand-off both depend on reading the data.
+Conductor, model and forecast-method changes only alter the values the pipeline pushes, and every
+row records the configuration and models behind it. Phases 4-6 therefore proceed with rows
+labelled provisional (OD-5). The NO-GO now gates only lifting that label: Phase 7 closes B1, B2, B4
+and B5, re-runs the Phase 3 validation and records a new go/no-go. Phase 7 has no dependency on
+Phases 4-6 and starts now.
 
 Phase numbering starts at 1 and is independent of other workstreams. It supersedes
 `pipeline-integration` (see REQUIREMENTS.md).
@@ -19,13 +29,16 @@ Phase numbering starts at 1 and is independent of other workstreams. It supersed
 **Why cleaning and validation come before Supabase:** `backfill_archive.py` (in PR #7) produces a
 multi-day, multi-city archive without any scheduler, so the defects cleaning targets and the data
 validation needs both exist before production storage does. Validating first means Phase 4 loads
-history that has already been checked, and the go/no-go (VAL-03) is made before any shared
-infrastructure is created.
+history that has already been checked. (The original rule that the go/no-go comes before any shared
+infrastructure was replaced on 2026-10-21; see "Re-sequencing" above.)
 
 **Constraints that hold across every phase:**
-- Do not modify `shadow_collect.yml`, the shadow logs, or the frozen evaluation modules before the
-  2026-11-24 confirmation run. The live workflow is a separate file.
-- Anti-peeking: nothing in this workstream may score shadow predictions against truth.
+- Do not modify `shadow_collect.yml`, the shadow logs, the 12 frozen Drake shadow artifacts or the
+  frozen evaluation modules, except as a signed confirmation protocol v4 (Phase 7) explicitly
+  allows. The live workflow is a separate file.
+- Anti-peeking: no outcome for any shadow prediction with `valid_time` after 2026-09-29 is computed
+  or read except in the single evaluation v4 defines, at the instant it defines. Until v4 is
+  signed, protocol v3 (instant 2026-11-24T00:00Z) governs.
 - Commit with explicit paths; ask before pushing anything that changes live CI.
 
 ## Phases
@@ -36,6 +49,7 @@ infrastructure is created.
 - [ ] **Phase 4: Supabase Store & Writer** — schema migration, Postgres read/write, backfill load, secrets
 - [ ] **Phase 5: Scheduled Live Runs** — new workflow, cron-job.org trigger, failure isolation, runbook
 - [ ] **Phase 6: Exposure & E2E Verification** — REST via RLS, `latest_rating` view, soak test
+- [ ] **Phase 7: Per-City Conductors, Shadow Refit and Early Model Selection** — protocol v4, per-city conductor configs, cooling/reference refit, selection by 2026-11-01, re-validation and go/no-go (parallel with 4-6)
 
 ## Phase Details
 
@@ -115,32 +129,52 @@ Plans:
 ### Phase 4: Supabase Store & Writer
 
 **Goal**: Postgres on Supabase is the production system of record for per-city ratings.
-**Depends on**: Phase 3 (go)
-**Requirements**: DB-01, DB-02, DB-03, DB-04, DB-05
+**Depends on**: Phase 3 (complete). The VAL-03 NO-GO does not block this phase (owner, 2026-10-21);
+rows are labelled provisional until Phase 7's go.
+**Requirements**: DB-01, DB-02, DB-03, DB-04, DB-05, DB-06
 **Success Criteria**:
   1. Applying the committed migration to an empty Supabase project creates the schema. Re-applying
      it is a no-op or fails safely.
   2. A pipeline run pointed at Supabase reads history from Postgres and upserts one row per city.
      Re-running the same window changes no row count.
-  3. The validated backfill is loaded, and per-city row counts match the Phase 3 archive.
+  3. The Phase 3 backfill archive is loaded, labelled provisional, and per-city row counts match
+     the Phase 3 archive.
   4. A GitHub-hosted runner can connect using only repository secrets. A secret scan of the repo
      finds no keys.
   5. The consumer schema doc is published under `docs/`, and `api-contract.md` /
      `pss_e_handoff.md` point to it.
+  6. Every row names what produced it: a rating config version that changes with any per-city
+     conductor parameter (type, diameter, resistance, maximum temperature, elevation, azimuth)
+     as well as static ratings, bounds and bearings, plus the identity (hash) of the forecast
+     method/model and anomaly model used. A conductor or model change therefore alters only the
+     values pushed, never the schema.
+**Re-plan note (2026-10-21, done)**: plans revised the same day: 04-01 no longer requires a Phase 3
+GO, and DB-06 (`config_fingerprint`, `forecast_model_sha256`, `anomaly_model_sha256`) is covered
+across 04-01..04-06. Plan checker: passed, info advisories only.
 **Plans**: 6 plans
 
 Plans:
+**Wave 1**
 - [ ] 04-01-PLAN.md — psycopg legitimacy gate; tracer: migration, writer and history read for one city-hour on a throwaway Postgres; schema, privilege and secret-hygiene contract tests (wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
 - [ ] 04-02-PLAN.md — Pipeline seam: history reader and forecast_status in city_pipeline, `--store postgres` / `--no-run-row`, one pipeline_run row per run (OD-9), validated 30-day history (wave 2)
 - [ ] 04-03-PLAN.md — Manifest-checked backfill loader (DO NOTHING, per-city parity), smoke test, secret scan, dispatch-only Actions smoke workflow (wave 2)
+
+**Wave 3** *(blocked on Wave 2 completion)*
 - [ ] 04-04-PLAN.md — Consumer schema contract `city_rating_v1.md`; api-contract.md and pss_e_handoff.md point to it (wave 3)
+
+**Wave 4** *(blocked on Wave 3 completion)*
 - [ ] 04-05-PLAN.md — Owner: CLI legitimacy gate, schema approval, [BLOCKING] schema push, writer credential, local smoke (wave 4)
+
+**Wave 5** *(blocked on Wave 4 completion)*
 - [ ] 04-06-PLAN.md — Owner: GitHub secret, approved push, Actions smoke, backfill load; executor verifies and commits the evidence (wave 5)
 
 ### Phase 5: Scheduled Live Runs
 
 **Goal**: Ratings accrue in Supabase on a fixed cadence with no human involved.
-**Depends on**: Phase 4
+**Depends on**: Phase 4. Live rows stay labelled provisional until Phase 7's go; adopting Phase 7's
+conductor configs, refit models or forecast method later is a config/model swap, not a re-plan.
 **Requirements**: PIPE-02, SCHED-01, SCHED-02
 **Success Criteria**:
   1. A new workflow file, separate from `shadow_collect.yml`, has a `workflow_dispatch` trigger
@@ -167,7 +201,8 @@ Plans:
 
 **Goal**: Consumers can read current ratings for every city at any time through a documented,
 read-only REST interface.
-**Depends on**: Phase 5
+**Depends on**: Phase 5. Not gated on Phase 7: the web app and PSS/E read provisional rows (the label
+is visible per row), and Phase 7's go lifts the label.
 **Requirements**: API-01, API-02, E2E-01, E2E-02, E2E-03
 **Success Criteria**:
   1. `GET /rest/v1/latest_rating` with the anon key returns exactly four rows (one per city) with
@@ -191,6 +226,52 @@ Plans:
 - [ ] 06-06-PLAN.md — Owner: soak migration, pg_cron, freshness alarm; 12-24 h dry soak report; go/no-go for the 72 h clock
 - [ ] 06-07-PLAN.md — 72 h soak report, end-of-soak privilege and write re-check, owner sign-off, soak job removal
 
+### Phase 7: Per-City Conductors, Shadow Refit and Early Model Selection
+
+**Goal**: Each city is rated with its own conductor configuration; the conductor-dependent shadow
+candidates are refit under it; and a signed, pre-registered procedure decides by 2026-11-01 which
+shadow model, if any, replaces the `ml` forecast. That decision replaces the 2026-11-24 evaluation.
+The phase ends with the NO-GO blockers closed and a new go/no-go.
+**Depends on**: Phase 3 (findings B1, B2, B4, B5). Runs in parallel with Phases 4-6.
+External gate: Power Systems' conductor answers. Provisional per-city values, each with a source,
+are used until they arrive.
+**Requirements**: COND-01, COND-02, SEL-01, SEL-02, SEL-03, SEL-04, REVAL-01
+**Context**: `docs/data-science/decisions/shadow_early_decision_options.md` (options, conductor
+analysis, proposed non-FRESH test); `confirmation_protocol_v3_per_city.md` (signed v3, which v4
+amends); `real_data_validation.md` (B1-B5);
+`phases/03-real-data-validation/03-05-CONDUCTOR-RESEARCH.md`. The amendment changes the
+ml-modeling workstream's evaluation; record it in that workstream's STATE.md as well.
+**Success Criteria**:
+  1. Confirmation protocol v4 is signed by the owner before any FRESH-basis outcome is computed or
+     read. It does all of the following:
+     - retires the 2026-11-24 run;
+     - fixes one early evaluation instant (about 2026-11-01) and its valid-time cutoff;
+     - names the evidence bases (ABLATION re-score, per-city TEST-split scoring, one early FRESH
+       read) and what each may support;
+     - states the selection rule with a conductor-independent (relative) threshold;
+     - states the outcome if no candidate qualifies.
+  2. Per-city conductor configurations (conductor type, diameter, AC resistance, maximum operating
+     temperature, elevation, azimuth) are in config with a recorded source per value. The production
+     rating, training and validation paths use them. The shadow collector and the frozen
+     evaluation keep the Drake configuration they were frozen with, proven by a byte-identical
+     golden test. Power Systems' values replace provisional ones with a config-version bump and no
+     code change.
+  3. `ml_cooling_corrected` and `reference_ml_refit_24h` are refit per city under the production
+     conductor configs. Only rows before 2026-03-17 are used (asserted). The refits are saved as new,
+     hashed artifacts; the 12 frozen Drake artifacts are not overwritten. `ml_wind_corrected` is
+     reused without a refit.
+  4. Before the FRESH read, two analyses are run with criteria pre-registered in v4 and reported:
+     - an ABLATION conductor-invariance re-score (fit on train, score on validation, under
+       bracketing conductor configs);
+     - per-city TEST-split scoring.
+  5. By 2026-11-01, the single FRESH read runs once under v4, and a recorded owner decision names:
+     - which shadow model moves forward, if any;
+     - the interim G6 forecast method (OD-3 revisited: naive, or `ml` with B2 fixed).
+
+     After that decision, B1, B2, B4 and B5 are closed, the Phase 3 validation is re-run on the same
+     non-FRESH window, and a new go/no-go is signed. A GO lifts the provisional label on stored rows.
+**Plans**: 0 plans (run `/gsd-discuss-phase 7` or `/gsd-plan-phase 7`)
+
 ## Progress
 
 | Phase | Plans Complete | Status | Completed |
@@ -201,3 +282,4 @@ Plans:
 | 4. Supabase Store & Writer | 0/6 | Planned | - |
 | 5. Scheduled Live Runs | 0/8 | Planned | - |
 | 6. Exposure & E2E Verification | 0/7 | Planned | - |
+| 7. Per-City Conductors, Shadow Refit and Early Model Selection | 0/0 | Not planned | - |

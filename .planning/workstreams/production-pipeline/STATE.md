@@ -4,16 +4,16 @@ current_phase: 04 — Supabase Store & Writer
 current_plan: Not started
 status: executing
 stopped_at: Phase 03 complete (VAL-03 NO-GO); Phase 04 blocked on B1, B2, B4, B5
-last_updated: "2026-10-21T07:33:53.330Z"
+last_updated: "2026-10-21T22:38:34.942Z"
 last_activity: 2026-10-21
-last_activity_desc: Phase 03 complete with a signed NO-GO; Phase 04 blocked
-state_head: 6aa2cc61ef9af9e7a304eb8bce499b404016ec73
+last_activity_desc: Phase 4 planning complete — 6 plans ready
+state_head: 9786d346be2f57742dab018afef55e274511b16f
 progress:
-  total_phases: 6
+  total_phases: 7
   completed_phases: 3
   total_plans: 35
   completed_plans: 14
-  percent: 50
+  percent: 40
 milestone_name: Production Pipeline (Supabase + live ratings)
 workstream: production-pipeline
 created: 2026-10-18
@@ -38,9 +38,9 @@ whoever owns that analysis; they are not work items here.
 **Status:** Blocked — Phase 04 does not start until B1, B2, B4 and B5 are resolved and the validation is repeated (see Blockers)
 **Current Phase:** 04 — Supabase Store & Writer
 **Current Plan:** Not started
-**Total Plans in Phase:** 5
-**Last Activity:** 2026-10-21
-**Last Activity Description:** Phase 03 complete (verified, UAT passed, threats_open 0, Nyquist-compliant) with a signed NO-GO; Phase 04 blocked
+**Total Plans in Phase:** 6
+**Last Activity:** 2026-10-21 — Phase 4 planning complete
+**Last Activity Description:** Phase 4 planning complete — 6 plans ready
 
 ## Planning Summary (2026-10-19)
 
@@ -150,14 +150,15 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 
 ## Blockers
 
-- Phase 4 blocked by VAL-03 NO-GO (2026-10-21): B1 fallback policy and rating basis (conductor type, max operating temperature, elevation, azimuth; with Power Systems), B2 ml wind feature train/serve alignment, B4 CORPUS_CHRISTI detector trip rate (11.01%), B5 fallback effect on forecast availability. See docs/data-science/decisions/real_data_validation.md.
-- Timing constraint on B1/B2 (2026-10-21): the shadow collector rates through the same `city_point` conductor config, so the B1 conductor change and any B2 retrain land after the ml-modeling shadow evaluation (model freeze 2026-11-01, rows before 2026-11-17, single run 2026-11-24T00:00Z) unless that workstream amends its protocol. The B3 top-up backfill (2026-09-29 onward) also waits for 2026-11-24 (anti-peeking).
+- VAL-03 NO-GO (2026-10-21) blockers B1 (fallback policy and rating basis: conductor type, max operating temperature, elevation, azimuth; with Power Systems), B2 (ml wind feature train/serve alignment), B4 (CORPUS_CHRISTI detector trip rate 11.01%) and B5 (fallback effect on forecast availability) now gate only lifting the provisional label (re-sequenced by the owner 2026-10-21; closed in Phase 7, REVAL-01). Phases 4-6 are no longer blocked. See docs/data-science/decisions/real_data_validation.md.
+- Phase 7 external gate: Power Systems' per-city conductor answers (provisional values with sources until then). Protocol v4 must be signed before any FRESH-basis outcome is read; until then v3 (2026-11-24) governs. Options and conductor analysis: docs/data-science/decisions/shadow_early_decision_options.md.
+- Superseded (2026-10-21): the earlier timing note that B1/B2 wait for 2026-11-24. Phase 7 decouples the production conductor from the frozen shadow path (COND-02) and moves the evaluation to about 2026-11-01 under v4.
 
 ## Session Continuity
 
 **Last session:** 2026-10-21T07:08:35.442Z
 
-**Stopped At:** Phase 03 complete; Phase 04 blocked by the VAL-03 NO-GO. Next: B1 answers from Power Systems and the B4 anomaly-model re-check now; B1 config change, B2 decision and retrain after the 2026-11-24 shadow evaluation; then offline re-validation and a new go/no-go
+**Stopped At:** Roadmap re-sequenced 2026-10-21. Next, in parallel: Phase 4 plan revision (`/gsd-plan-phase 4`: drop the GO precondition, add DB-06) then execution; Phase 7 discuss/plan, starting with the v4 protocol draft for owner signature.
 **Resume File:** None
 
 ## Performance Metrics
@@ -178,3 +179,11 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 | Phase 03 P02 | 336 min | 3 tasks | 2 files |
 | Phase 03 P04 | 14min | 2 tasks | 13 files |
 | Phase 03 P05 | 6min | 2 tasks | 2 files |
+
+## Accumulated Context
+
+### Roadmap Evolution
+
+- Phase 7 added: Per-City Conductors, Shadow Refit and Early Model Selection (protocol v4 retires the 2026-11-24 run; selection by 2026-11-01; parallel with 4-6)
+- Phase 4 edited: NO-GO no longer blocks Phases 4-6 (owner 2026-10-21); rows provisional until Phase 7 GO; DB-06 config/model identity per row; 04-01 precondition needs re-plan
+- Phase 6 edited: Not gated on Phase 7; web app and PSS/E read provisional rows

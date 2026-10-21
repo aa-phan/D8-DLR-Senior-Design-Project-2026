@@ -75,7 +75,8 @@ proposals.
   rate are measured on that window and documented. This covers the current `city_pipeline` path
   only; it does not re-evaluate the ML shadow candidates.
 - [x] **VAL-03**: A written go/no-go for production that cites VAL-01/02's results. Phase 4 does not
-  start on a no-go.
+  start on a no-go. *(Amended 2026-10-21 by the owner: the NO-GO no longer blocks Phases 4-6; it gates
+  lifting the provisional label, decided under REVAL-01.)*
 
 ### Supabase store and writer (Phase 4)
 
@@ -97,6 +98,10 @@ proposals.
 - [ ] **DB-05**: A schema contract doc for consumers (tables, columns, units, the meaning of
   fallback, freshness expectations), replacing the corresponding open items in
   `docs/frontend/specs/api-contract.md` and `docs/data-science/decisions/pss_e_handoff.md`.
+- [ ] **DB-06**: Every rating row records what produced it: a rating config version that changes with
+  any per-city conductor parameter, static rating, bound or bearing, and the identity (hash) of the
+  forecast method/model and the anomaly model used. Conductor, model or forecast-method changes
+  alter only the values pushed, never the schema; consumers see the change through these columns.
 
 ### Scheduled live runs (Phase 5)
 
@@ -125,6 +130,38 @@ proposals.
 - [ ] **E2E-03**: Write protection: an anon-key request that tries to insert, update or delete is
   rejected.
 
+### Per-city conductors, shadow refit and early model selection (Phase 7)
+
+- [ ] **COND-01**: Each city has its own conductor configuration (conductor type, diameter, AC
+  resistance, maximum operating temperature, elevation, azimuth) in config, with a recorded source
+  for every value. Values are provisional until Power Systems confirms them; replacing them is a
+  config change with a version bump, not a code change.
+- [ ] **COND-02**: The production rating, training and validation paths use the per-city
+  configurations. The shadow collector, the 12 frozen shadow artifacts and the frozen evaluation
+  modules keep the Drake configuration they were frozen with. A golden test proves their outputs
+  are byte-identical before and after the change.
+- [ ] **SEL-01**: Confirmation protocol v4, amending signed v3, is drafted for the owner and signed
+  before any FRESH-basis outcome is computed or read. It contains:
+  - the retirement of the 2026-11-24 run;
+  - one early evaluation instant (about 2026-11-01) and its cutoff;
+  - the evidence bases and what each may support;
+  - a conductor-independent (relative) selection threshold;
+  - the action if no candidate qualifies.
+- [ ] **SEL-02**: `ml_cooling_corrected` and `reference_ml_refit_24h` are refit per city under the
+  production conductor configs, on rows before 2026-03-17 only (asserted). They are saved as new,
+  hashed artifacts without overwriting the frozen Drake artifacts. `ml_wind_corrected` is reused
+  without a refit.
+- [ ] **SEL-03**: Before the FRESH read, two analyses are run and reported against criteria
+  pre-registered in v4:
+  - an ABLATION conductor-invariance re-score (fit on train, score on validation, under
+    bracketing conductor configs);
+  - per-city TEST-split scoring.
+- [ ] **SEL-04**: By 2026-11-01 the single v4 FRESH read runs once. A recorded owner decision names
+  which shadow model, if any, replaces `ml`, and the interim G6 forecast method (OD-3 revisited).
+- [ ] **REVAL-01**: After SEL-04, B1, B2, B4 and B5 are closed, the Phase 3 validation is re-run on the
+  same non-FRESH window with the new configs and models, and a new go/no-go is signed. A GO lifts
+  the provisional label on stored rows.
+
 ## Owner decisions (fixed 2026-10-19)
 
 | # | Decision | Needed by | Decided |
@@ -148,8 +185,8 @@ proposals.
 | `frontend/` dashboard build | Software team, who consume this workstream's contract |
 | PSS/E-side ingestion and N-1 analysis | Power Systems team, who consume this workstream's contract |
 | PSS/E results back into the database (F7) | A follow-on table once Power Systems produce output |
-| Changes to `shadow_collect.yml`, the shadow logs, or the frozen evaluation modules | Frozen until the 2026-11-24 confirmation run (anti-peeking rules) |
-| Re-evaluating the ML shadow candidates | `ml-modeling` workstream / protocol v3 |
+| Changes to `shadow_collect.yml`, the shadow logs, or the frozen evaluation modules | Frozen except as signed protocol v4 (SEL-01) explicitly allows; v3 governs until then |
+| Wiring a selected shadow model into the live path (runtime forecast fetch, hourly series, band for G6) | A follow-on phase, added once SEL-04 names a model |
 
 ## Traceability
 
@@ -172,6 +209,7 @@ proposals.
 | DB-03 | Phase 4 | Pending |
 | DB-04 | Phase 4 | Pending |
 | DB-05 | Phase 4 | Pending |
+| DB-06 | Phase 4 | Pending |
 | PIPE-02 | Phase 5 | Pending |
 | SCHED-01 | Phase 5 | Pending |
 | SCHED-02 | Phase 5 | Pending |
@@ -180,3 +218,10 @@ proposals.
 | E2E-01 | Phase 6 | Pending |
 | E2E-02 | Phase 6 | Pending |
 | E2E-03 | Phase 6 | Pending |
+| COND-01 | Phase 7 | Pending |
+| COND-02 | Phase 7 | Pending |
+| SEL-01 | Phase 7 | Pending |
+| SEL-02 | Phase 7 | Pending |
+| SEL-03 | Phase 7 | Pending |
+| SEL-04 | Phase 7 | Pending |
+| REVAL-01 | Phase 7 | Pending |
