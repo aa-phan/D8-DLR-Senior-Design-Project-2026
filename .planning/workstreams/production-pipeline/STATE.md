@@ -136,6 +136,7 @@ These block or affect stringing the system together and belong to the phases nam
 - [Phase 03]: 03-04: AUSTIN publishes above computed at 68.15% of scored steps (median +780 A), MIDLAND 20.83%: measured, findings and options recorded for the owner, no policy changed
 - [Phase 03]: 03-04: the validation doc leaves the Decision section as 'Pending owner decision.'; GO / GO WITH CONDITIONS / NO-GO is taken at 03-05's checkpoint
 - 2026-10-21: VAL-03 production go/no-go: NO-GO, signed by Aaron Phan (docs/data-science/decisions/real_data_validation.md).
+- 2026-10-21: B6 (Finding 5, input provenance): owner accepts Open-Meteo reanalysis solar (Option A) and asks for it to be documented. Phase 4 input: the schema carries a per-row solar source column. Before Phase 5: confirm the Open-Meteo Archive API serves the current hour, else add a near-real-time solar source.
 
 ## Open Decisions
 

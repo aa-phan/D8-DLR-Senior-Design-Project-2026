@@ -716,6 +716,11 @@ three variables, so for temperature and wind the live inputs differ in kind from
   - Option B: pursue a measured or NSRDB solar source for the current year. Trade-off: provider work and cost.
   - Option C: measure the effect of the solar and temperature source on the rating before deciding. Trade-off:
     more analysis, no change to this run.
+  - **Owner decision (2026-10-21): Option A.** Owner's words: "for b6, let's accept open mateo and document it".
+    Solar stays Open-Meteo reanalysis (a modelled estimate, not a sensor or a forecast), and each stored row records
+    its solar source: Phase 4's schema carries a per-row solar source column. Follow-up before Phase 5's live runs:
+    confirm the Open-Meteo Archive API returns a value for the current hour; if it lags real time, the live path
+    needs a near-real-time solar source. This decision is separate from the signed NO-GO below and does not change it.
 
 **6. History gap between 2026-09-28 and go-live; OD-8 read window (Phase 4 input).** Evidence: manifest window;
 `data_cleaning.py` lines 75-92 (`MAX_TRAILING_GAP_SLOTS` = 1, `ML_LOOKBACK_ROWS` = 7). The archive ends at
