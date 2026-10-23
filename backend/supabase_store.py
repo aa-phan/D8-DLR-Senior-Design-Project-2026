@@ -204,6 +204,34 @@ def _url_secrets(url) -> list:
     return found
 
 
+def _connection_identifiers(url) -> list:
+    """
+    The host, the user and the project reference (the part of a pooler user after the
+    dot) of a connection URL. They name the project, so a connection-failure message
+    must not carry them (DB-04).
+    """
+    if not url or not isinstance(url, str):
+        return []
+    try:
+        parts = urlsplit(url)
+        host, user = parts.hostname, parts.username
+    except ValueError:
+        return []
+    found = []
+    if user:
+        user = unquote(user)
+        found.append(user)
+        if "." in user:
+            found.append(user.split(".", 1)[1])
+    if host:
+        found.append(host)
+    return [item for item in found if len(item) >= 3]
+
+
+# libpq's failure text names the server it tried, with its resolved address in parentheses.
+_RESOLVED_ADDRESS_RE = re.compile(r"\((?:\d{1,3}\.){3}\d{1,3}\)|\((?:[0-9a-fA-F]{0,4}:){2,}[0-9a-fA-F:.]*\)")
+
+
 def redact(text, secrets=None) -> str:
     """
     Return `text` with every secret removed: postgres(ql):// URLs, key=value
@@ -254,7 +282,9 @@ def connect(url=None):
         # session default can never make an hour-aligned UTC slot look off-hour.
         conn.execute("set timezone = 'UTC'")
     except Exception as exc:  # noqa: BLE001 - re-raised below as a redacted StoreError
-        failure = redact(str(exc), secrets)
+        failure = _RESOLVED_ADDRESS_RE.sub(
+            "(REDACTED)", redact(str(exc), secrets + _connection_identifiers(url))
+        )
         if conn is not None:
             try:
                 conn.close()
