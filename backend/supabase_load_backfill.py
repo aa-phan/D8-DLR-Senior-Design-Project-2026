@@ -270,9 +270,14 @@ def prepare_rows(csv_path, manifest, identity):
     anomaly_model_sha256. Rows the archive's own row check rejects are dropped and
     counted. Any row that is not on a whole UTC hour or lies outside the manifest
     window, belongs to another city, or has no usable rating raises ValueError
-    naming the count, before anything is sent to a database. Two rows for one city
-    and hour keep the first in file order (Phase 2's `duplicate` rule and the CSV's
-    first-write-wins); the others are counted per city.
+    naming the count, before anything is sent to a database. Two or more rows for
+    one city and UTC instant keep the first computed row in file order, and only
+    when every row is a fallback row the first fallback row; the others are counted
+    per city and the kept rows stay in file order. This is the archive's own rule
+    (`historical_archive.append_observation`: a computed row may follow fallback
+    rows and then owns the slot) and the rule Phase 2's `duplicate` flag applies
+    (`data_cleaning.clean_history` judges it over computed rows only), so a
+    fallback row followed by a computed row loads the computed row.
     """
     rows_read = len(historical_archive.read_history(csv_path, validate=False))
     frame = historical_archive.read_history(csv_path, validate=True)
@@ -302,9 +307,15 @@ def prepare_rows(csv_path, manifest, identity):
         raise ValueError(f"{int(unusable.sum())} archive row(s) have no finite positive dlr_amps or static_rating")
 
     frame = frame.assign(_time=times)
-    # Same rule as Phase 2's `duplicate` flag and the CSV's first-write-wins. read_history
-    # sorts stably, so rows for one instant are still in file order here.
-    duplicate = frame.duplicated(subset=["city", "_time"], keep="first")
+    # The first computed row of a slot owns it, and a fallback row owns it only when no
+    # computed row exists (the archive's rule and Phase 2's `duplicate` flag). read_history
+    # sorts stably, so rows for one instant are still in file order here. Rank computed
+    # rows ahead of fallback rows with a stable sort (file order kept inside each class),
+    # mark duplicates keep-first over that ranking, then map the mark back to the original
+    # index so the kept rows stay in file order.
+    is_fallback = frame["fallback"].map(_parse_fallback)
+    ranked = frame.assign(_is_fallback=is_fallback).sort_values("_is_fallback", kind="mergesort")
+    duplicate = ranked.duplicated(subset=["city", "_time"], keep="first").reindex(frame.index)
     duplicates_dropped = {city: int(((frame["city"] == city) & duplicate).sum()) for city in config.LOCATIONS}
     frame = frame[~duplicate]
 
