@@ -384,6 +384,25 @@ def test_report_exits_one_when_a_reported_rating_disagrees_with_physics(tmp_path
     assert code == 1 and meta["computed_vs_reported_mismatches"] == 1
 
 
+def test_torn_trace_line_is_skipped_counted_and_fails_the_report(tmp_path):
+    records = [_record("AUSTIN", h) for h in range(7)]
+    archive, trace, _ = _write_run(tmp_path, records)
+    with open(trace, "a", encoding="utf-8") as fh:
+        fh.write('{"schema": "backfill_trace/1", "city": "AUSTIN", "run_end')  # killed mid-write
+    out_dir = tmp_path / "report"
+
+    assert real_data_validation.load_trace(trace).attrs["unparseable"] == 1
+    code = real_data_validation.main([
+        "report", "--archive", str(archive), "--trace", str(trace), "--start", _START,
+        "--end", _ts(6), "--warmup-hours", str(_WARMUP_H), "--cities", "AUSTIN",
+        "--out-dir", str(out_dir)])
+
+    meta = json.loads((out_dir / "report_meta.json").read_text(encoding="utf-8"))
+    assert code == 1  # the evidence is written, and the damaged trace is flagged
+    assert meta["trace_unparseable_line_mismatches"] == 1
+    assert meta["trace_records"] == 7
+
+
 def test_duplicate_archive_slot_counts_as_a_mismatch(tmp_path):
     records = [_record("AUSTIN", h) for h in range(7)]
     archive, trace, _ = _write_run(tmp_path, records)

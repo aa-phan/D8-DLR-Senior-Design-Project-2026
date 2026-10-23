@@ -148,15 +148,27 @@ def load_trace(path) -> pd.DataFrame:
     `run_end_utc` parsed to UTC Timestamps. A resumed backfill re-rates steps
     that errored or were exhausted, so the same (city, step) can appear more
     than once; the LAST record in file order wins. `DataFrame.attrs` carries
-    `{"duplicates": n, "records": n}` (records read, records dropped as
-    superseded).
+    `{"duplicates": n, "records": n, "unparseable": n}` (records read, records
+    dropped as superseded, non-empty lines that were not a JSON object). A killed
+    backfill can leave a torn final line; such a line is skipped and counted, never
+    fatal, and `build_report` turns a non-zero count into a failing self-check.
     """
     records = []
+    unparseable = 0
     with open(path, encoding="utf-8") as fh:
         for line in fh:
             line = line.strip()
-            if line:
-                records.append(_flatten_record(json.loads(line)))
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                unparseable += 1
+                continue
+            if not isinstance(record, dict):
+                unparseable += 1
+                continue
+            records.append(_flatten_record(record))
     frame = pd.DataFrame(records)
     if "run_end_utc" not in frame.columns:
         frame["run_end_utc"] = pd.Series(dtype="datetime64[ns, UTC]")
@@ -165,7 +177,8 @@ def load_trace(path) -> pd.DataFrame:
     frame["run_end_utc"] = pd.to_datetime(frame["run_end_utc"], utc=True)
     before = len(frame)
     frame = frame.drop_duplicates(subset=["city", "run_end_utc"], keep="last").reset_index(drop=True)
-    frame.attrs = {"duplicates": before - len(frame), "records": before}
+    frame.attrs = {"duplicates": before - len(frame), "records": before,
+                   "unparseable": unparseable}
     return frame
 
 
@@ -1425,6 +1438,7 @@ def build_report(archive_path, trace_path, start, end, step_hours, warmup_hours,
         "cities": list(cities),
         "trace_records": int(trace.attrs.get("records", len(trace))),
         "trace_duplicates": int(trace.attrs.get("duplicates", 0)),
+        "trace_unparseable_line_mismatches": int(trace.attrs.get("unparseable", 0)),
         "trace_records_out_of_window": count_out_of_window(trace, steps),
         "archive_rows_dropped_by_validation": int(raw_rows - len(archive)),
         "cleaning": cleaning_summary(archive_path, trace, cities),

@@ -300,6 +300,21 @@ def test_redact_removes_configured_secret_values_in_any_shape(monkeypatch):
     assert backfill_archive._redact("abc stays") == "abc stays"
 
 
+def test_resumed_run_starts_on_a_fresh_line_after_a_torn_trace_line(tmp_path, monkeypatch):
+    trace_path = tmp_path / "trace.jsonl"
+    trace_path.write_text('{"schema": "backfill_trace/1", "city": "AUS', encoding="utf-8")  # torn
+    monkeypatch.setattr(backfill_archive, "run_dlr_pipeline",
+                        lambda **kwargs: _fake_run(kwargs["end"]))
+
+    _backfill_one_step(tmp_path, trace_path, _StubFetcher())
+
+    lines = trace_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2 and lines[0].endswith('"AUS')
+    assert json.loads(lines[1])["city"] == _CITY  # the new record is intact, not glued on
+    frame = real_data_validation.load_trace(trace_path)
+    assert len(frame) == 1 and frame.attrs["unparseable"] == 1
+
+
 def test_trace_takes_the_last_provenance_record_of_the_rated_station(tmp_path, monkeypatch):
     fetcher = _StubFetcher()
     earlier = {"stid": "OTHER", "hour": f"{_DAY}T09:00:00Z", "air_temp": "synoptic",
@@ -356,7 +371,7 @@ def test_resumed_step_keeps_the_last_trace_record(tmp_path, monkeypatch):
     assert len(_read_trace(trace_path)) == 4
     trace = real_data_validation.load_trace(trace_path)
     assert len(trace) == 2
-    assert trace.attrs == {"duplicates": 2, "records": 4}
+    assert trace.attrs == {"duplicates": 2, "records": 4, "unparseable": 0}
     assert trace["error"].isna().all()
     assert (trace["rating_a"] > 0).all()
     assert list(trace["run_end_utc"]) == [pd.Timestamp(f"{_DAY}T10:00:00Z"),

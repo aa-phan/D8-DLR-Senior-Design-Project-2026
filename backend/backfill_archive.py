@@ -115,6 +115,20 @@ def _known_secrets() -> list:
     return sorted(values, key=len, reverse=True)
 
 
+def _terminate_last_line(path) -> None:
+    """
+    If an existing file does not end in a newline (a run killed mid-write left a
+    torn last line), add one, so the next appended record starts on its own line
+    instead of being glued onto the fragment and lost with it.
+    """
+    if not os.path.exists(path) or os.path.getsize(path) == 0:
+        return
+    with open(path, "rb+") as fh:
+        fh.seek(-1, os.SEEK_END)
+        if fh.read(1) != b"\n":
+            fh.write(b"\n")
+
+
 def _redact(text, limit=_TRACE_TEXT_LIMIT) -> str:
     """
     Remove credentials from `text`, then cut it to `limit` characters (None for
@@ -207,6 +221,7 @@ def backfill(start, end, step_hours=1.0, archive_path=DEFAULT_ARCHIVE, log_path=
     trace_cm = contextlib.nullcontext()
     if trace_path:
         os.makedirs(os.path.dirname(str(trace_path)) or ".", exist_ok=True)
+        _terminate_last_line(trace_path)
         trace_cm = open(trace_path, "a", encoding="utf-8")
 
     with open(log_path, "a", encoding="utf-8") as log_fh, trace_cm as trace_fh:
