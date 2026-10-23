@@ -27,6 +27,7 @@ opened or written.
 
 import argparse
 import contextlib
+import csv
 import io
 import json
 import logging
@@ -302,8 +303,14 @@ def backfill(start, end, step_hours=1.0, archive_path=DEFAULT_ARCHIVE, log_path=
                     totals["errors"][c] += 1
                     # redact before the cut so no partial secret survives; collapse
                     # whitespace so a multi-line message stays one CSV row
-                    msg_safe = " ".join(_redact(msg, limit=None).split())
-                    log_fh.write(f"{ts.strftime(_TS_FMT)},{c},,,,,,{msg_safe.replace(',', ';')[:120]}\n")
+                    printable = "".join(ch if ch.isprintable() else " "
+                                        for ch in _redact(msg, limit=None))  # NUL, control chars
+                    msg_safe = " ".join(printable.split())
+                    # csv.writer quotes the field (a leading `"`, a stray quote, a NUL), so
+                    # `_read_log` can parse whatever the message holds; commas still become
+                    # `;` so a naive `split(",")` reader sees the same columns
+                    csv.writer(log_fh, lineterminator="\n").writerow(
+                        [ts.strftime(_TS_FMT), c, "", "", "", "", "", msg_safe.replace(",", ";")[:120]])
                     parts.append(f"{c[:6]} ERROR")
                 log_fh.flush()
                 elapsed = time.time() - t0

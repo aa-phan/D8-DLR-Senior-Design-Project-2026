@@ -265,6 +265,35 @@ def test_multi_line_error_stays_one_log_row_that_completeness_can_read(tmp_path,
     assert "abc123" not in row["error"]
 
 
+@pytest.mark.parametrize("message", [
+    '"boom',                         # a leading quote with no partner
+    '"',
+    '"x" ' * 100,                    # the 120-character cut slices a quoted run
+    'say "hi", then "bye',
+    "'single 'quoted",
+    "nul\x00byte and \x1f separator   line sep",
+    ",,,\"\",\"",
+    "",
+])
+def test_any_error_text_leaves_a_log_row_that_read_log_can_parse(tmp_path, monkeypatch, message):
+    def failing_run(**kwargs):
+        return {"start": kwargs["end"], "end": kwargs["end"], "provider": "composed",
+                "forecast_method": "naive", "results": [], "summary": [],
+                "errors": {_CITY: message}}
+
+    monkeypatch.setattr(backfill_archive, "run_dlr_pipeline", failing_run)
+
+    _backfill_one_step(tmp_path, tmp_path / "trace.jsonl", _StubFetcher())
+
+    log = real_data_validation._read_log(tmp_path / "log.csv")
+    (row,) = log.to_dict("records")
+    assert row["city"] == _CITY
+    printable = "".join(ch if ch.isprintable() else " " for ch in message)
+    expected = " ".join(printable.split()).replace(",", ";")[:120]
+    got = row["error"] if isinstance(row["error"], str) else ""
+    assert got == expected
+
+
 def test_alert_text_is_redacted_before_it_reaches_the_trace(tmp_path, monkeypatch):
     run = _fake_run(f"{_DAY}T10:00:00Z")
     run["results"][0]["alerts"] = ["G1 FAIL (provider said api_key=SECRET42) - fallback"]
