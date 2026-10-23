@@ -58,32 +58,49 @@ _TRACE_TEXT_LIMIT = 200
 _SECRET_ENV_NAMES = ("SYNOPTIC_TOKEN", "NREL_API_KEY", "NREL_API_EMAIL")
 _MIN_SECRET_LENGTH = 4
 # `name<sep>value` where the name ends in a credential-shaped word (token,
-# api_key, NREL_API_KEY, access_token, secret_key, email, authorization, ...) and the
-# separator is `=`, `:` or a percent-encoded `=`, optionally with a quote after the
-# name (JSON and dict forms) and whitespace around it. The value is a quoted string
-# (backslash escapes allowed) or runs to the next `&`/whitespace/quote, so a comma or
-# an inner `)` cannot leave a tail. One trailing `)` is left outside the value so
+# api_key, NREL_API_KEY, access_token, accessKey, secret_key, email, authorization, ...)
+# and the separator is `=`, `:` or a percent-encoded `=`, with a quote after the name
+# (JSON and dict forms, `"token":` or, inside a JSON string, `\"token\":`) and any
+# amount of whitespace around it. The value is, in order: an escaped-quote string
+# (`\"abc\"`), a quoted string (backslash escapes allowed), a `Bearer`-style scheme
+# plus its credential, or a bare run to the next `&`/whitespace/quote. A quoted value
+# with no closing quote (a message cut short) runs to the end of the text, and a comma
+# or an inner `)` cannot leave a tail. One trailing `)` is left outside a bare value so
 # "(api_key=X)" keeps its bracket.
 # The words that are also ordinary diagnostic vocabulary (`key`, `auth`, `sig`)
 # only count in query/assignment form (`key=abc`, `%3D`) or as a quoted JSON/dict
 # name (`"key": "abc"`), so "missing key: temp" and "hotkey: F5 failed" survive;
-# `_BARE_KEY_COLON` below still masks a `key: <credential-looking value>`.
+# `_bare_colon` below still masks a `key:`/`auth:`/`sig:` followed by a value that looks
+# like a credential.
+_NAME_QUOTE = r"""(?:\\?["'])?"""
 _SECRET_PAIR = re.compile(
     r"""(?<![\w-])("""
     r"""(?:[\w-]*(?:token|api[_-]?key|[_-]key|"""
     r"""(?:access|secret|private|signing|subscription|client|auth|encryption|master)key|"""
     r"""email|password|passwd|pwd|secret|credential|"""
-    r"""authorization)["']?\s{0,4}(?:=|:|%3D)"""
-    r"""|(?:key|auth|sig)(?:["']?\s{0,4}(?:=|%3D)|["']\s{0,4}:))"""
+    r"""authorization)""" + _NAME_QUOTE + r"""\s*(?:=|:|%3D)"""
+    r"""|(?:key|auth|sig)(?:""" + _NAME_QUOTE + r"""\s*(?:=|%3D)|\\?["']\s*:))"""
     r"""\s*)"""
-    r"""(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|"""
+    r"""(?:\\"(?:(?!\\")[\s\S])*(?:\\"|$)|\\'(?:(?!\\')[\s\S])*(?:\\'|$)|"""
+    r""""(?:[^"\\]|\\[\s\S]?)*(?:"|$)|'(?:[^'\\]|\\[\s\S]?)*(?:'|$)|"""
     r"""(?:Bearer|Basic|Token|Digest|Negotiate)\s+[^&\s"']+|[^&\s"']*[^&\s"')])""",
     re.IGNORECASE)
-# `key: <value>` in prose is usually a field name ("missing key: temp"), but a
-# value that is 20+ credential-alphabet characters containing a digit is a secret.
-_BARE_KEY_COLON = re.compile(
-    r"(?<![\w-])(key\s{0,4}:\s*)(?=[\w.~+/=-]{20,}(?![\w.~+/=-]))(?=[\w.~+/=-]*\d)[\w.~+/=-]+",
-    re.IGNORECASE)
+
+
+def _bare_colon(names: str, min_length: int):
+    """
+    `<name>: <value>` for the words that are usually diagnostic vocabulary
+    ("missing key: temp", "auth: failed"): only a value of `min_length`+
+    credential-alphabet characters that contains a digit is a secret. The value may
+    sit in quotes; the quotes stay.
+    """
+    return re.compile(
+        r"(?<![\w-])((?:" + names + r")\s*:\s*[\"']?)"
+        r"(?=[\w.~+/=-]{" + str(min_length) + r",}(?![\w.~+/=-]))(?=[\w.~+/=-]*\d)[\w.~+/=-]+",
+        re.IGNORECASE)
+
+
+_BARE_COLON_PATTERNS = (_bare_colon("key", 20), _bare_colon("auth|sig", 8))
 _BEARER = re.compile(r"\bBearer\s+[\w.~+/=-]+", re.IGNORECASE)
 _NULL_RECORD_KEYS = (
     "station_id", "rating_a", "static_rating_a", "status", "fallback", "exhausted", "archived",
@@ -160,7 +177,8 @@ def _redact(text, limit=_TRACE_TEXT_LIMIT) -> str:
     for secret in _known_secrets():
         out = out.replace(secret, "REDACTED")
     out = _SECRET_PAIR.sub(r"\1REDACTED", out)
-    out = _BARE_KEY_COLON.sub(r"\1REDACTED", out)
+    for pattern in _BARE_COLON_PATTERNS:
+        out = pattern.sub(r"\1REDACTED", out)
     out = _BEARER.sub("Bearer REDACTED", out)
     return out if limit is None else out[:limit]
 

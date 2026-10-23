@@ -320,6 +320,16 @@ def test_trace_is_written_before_the_log_row_so_an_interrupt_cannot_lose_it(tmp_
     ("accesskey=abcdefg", "abcdefg"),
     ('{"signingKey": "abc123"}', "abc123"),
     ("subscriptionKey=abc123&x=1", "abc123"),
+    ('key: "abcdefghij0123456789"', "abcdefghij0123456789"),  # quoted value after a bare `key:`
+    ("auth: abc123secret", "abc123secret"),                 # colon form of auth / sig
+    ("sig: abcdef0123456789abcdef", "abcdef0123456789abcdef"),
+    ('{"body": "{\\"token\\": \\"abc123\\"}"}', "abc123"),  # JSON nested in a JSON string
+    ('{\\"api_key\\": \\"abc123\\", \\"x\\": 1}', "abc123"),
+    ('token=\\"abc123\\"', "abc123"),                       # escaped-quote value
+    ('token="abc123', "abc123"),                            # unterminated quote (cut message)
+    ("token='abc123", "abc123"),
+    ('token="abc123\\', "abc123"),                          # ... ending in a lone backslash
+    ("api_key          =    abc123", "abc123"),             # wide spacing around the separator
     ("key: AIzaSyA1b2C3d4E5f6G7h8I9j0", "AIzaSyA1b2C3d4E5f6G7h8I9j0"),  # credential-looking value
 ])
 def test_redact_masks_every_credential_shape(text, secret):
@@ -336,6 +346,9 @@ def test_redact_masks_every_credential_shape(text, secret):
     "author: bob",
     "monkey: see; turkey=dinner; hotkey F5 failed",         # `key` only as a credential suffix
     "keyboard=us",
+    "missing key: 'temp'",                                  # quotes alone do not make a secret
+    "auth: 401",
+    "sig: ok",
 ])
 def test_redact_leaves_diagnostic_text_that_only_mentions_a_key(text):
     assert backfill_archive._redact(text) == text
