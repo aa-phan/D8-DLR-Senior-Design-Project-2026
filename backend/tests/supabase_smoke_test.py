@@ -13,6 +13,7 @@ asserts, no test classes, no network).
 import json
 import logging
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -273,3 +274,74 @@ def test_expect_rows_fails_on_an_empty_city(monkeypatch, capsys, _pg_admin_url):
     assert "check rows_visible: FAILED" in out and "SMOKE FAILED: rows_visible" in out
     for city in config.LOCATIONS:
         assert city in out.split("no rows for:")[1].splitlines()[0]
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# The Actions workflow (text checks, no YAML library)
+# ──────────────────────────────────────────────────────────────────────────────
+
+_WORKFLOW = os.path.join(os.path.dirname(__file__), "..", "..", ".github", "workflows", "supabase_smoke.yml")
+_GITIGNORE = os.path.join(os.path.dirname(__file__), "..", "..", ".gitignore")
+
+
+def _top_level_block(lines, key):
+    """The lines under a top-level `key:` up to the next top-level key."""
+    start = next(i for i, line in enumerate(lines) if line.rstrip() == f"{key}:")
+    block = []
+    for line in lines[start + 1:]:
+        if line.strip() and not line.startswith((" ", "#")):
+            break
+        block.append(line)
+    return block
+
+
+def _run_blocks(lines):
+    """The text of every `run:` step: the same-line command or the indented block after `run: |`."""
+    blocks = []
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped.startswith("run:"):
+            continue
+        text = [stripped[len("run:"):].strip()]
+        if text[0] in ("|", ">", "|-", ">-"):
+            text = []
+            indent = len(line) - len(line.lstrip())
+            for follow in lines[index + 1:]:
+                if follow.strip() and len(follow) - len(follow.lstrip()) <= indent:
+                    break
+                text.append(follow.strip())
+        blocks.append("\n".join(text))
+    return blocks
+
+
+def test_smoke_workflow_is_dispatch_only_and_passes_the_secret_by_env():
+    with open(_WORKFLOW, encoding="utf-8") as handle:
+        text = handle.read()
+    lines = text.splitlines()
+
+    triggers = [line.strip().rstrip(":") for line in _top_level_block(lines, "on") if line.strip() and not line.strip().startswith("#")]
+    assert triggers == ["workflow_dispatch"]
+    for forbidden in ("push", "pull_request", "pull_request_target", "schedule", "workflow_run"):
+        assert forbidden not in triggers
+
+    permissions = [line.strip() for line in _top_level_block(lines, "permissions") if line.strip()]
+    assert permissions == ["contents: read"]
+
+    # The secret is mapped once, on an env line.
+    assert text.count("${{ secrets.SUPABASE_DB_URL }}") == 1
+    assert text.count("secrets.") == 1
+    secret_index = next(i for i, line in enumerate(lines) if "${{ secrets.SUPABASE_DB_URL }}" in line)
+    assert lines[secret_index].strip() == "SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}"
+    above = [line for line in lines[:secret_index] if line.strip()]
+    assert above[-1].strip() == "env:"
+    assert "supabase_smoke.py" in "\n".join(lines[secret_index + 1:])
+
+    # No expression in a run block, no tracing, no admin URL, no echo of the secret.
+    runs = _run_blocks(lines)
+    assert len(runs) == 2 and not any("${{" in block for block in runs)
+    assert "set -x" not in text and "SUPABASE_ADMIN" not in text
+    assert not [line for line in lines if re.match(r"\s*(-\s+)?echo\b", line) and "SUPABASE" in line]
+
+    with open(_GITIGNORE, encoding="utf-8") as handle:
+        ignored = handle.read().splitlines()
+    assert "/supabase/.temp/" in ignored and "/supabase/.branches/" in ignored

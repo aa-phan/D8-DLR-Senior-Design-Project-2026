@@ -24,6 +24,10 @@
 /data/shadow/predictions/
 /data/shadow/.collect.lock
 .env
+# Supabase CLI scratch directories can hold the project reference and pooler details; only
+# supabase/migrations/ is source.
+/supabase/.temp/
+/supabase/.branches/
 __pycache__/
 *.pyc
 .claude
