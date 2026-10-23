@@ -59,9 +59,9 @@ findings:
     severity: warning
     disposition: fixed
     title: "The manifest is not deterministic as documented, and its `command` is not shell-safe"
-open: 9
+open: 7
 total: 14
-recorded: 2026-10-23T19:08:30.024Z
+recorded: 2026-10-23T19:24:32.452Z
 ---
 
 # Phase 03: Code Review Disposition
