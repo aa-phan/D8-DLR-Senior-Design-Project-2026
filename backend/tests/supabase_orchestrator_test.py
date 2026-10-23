@@ -272,8 +272,9 @@ def _fake_city_pipeline(monkeypatch, behaviors=None):
     """
     Replace `run_city_pipeline` in the orchestrator's namespace. `behaviors` maps
     a city to: `error` (raise RuntimeError with this text), `forecast_status`,
-    `detector_model`, `station_id`, `provenance` (records the fetcher gains) and
-    `provider_errors` (counts the fetcher gains). Returns the recorded calls.
+    `detector_model`, `station_id`, `provenance` (records the fetcher gains),
+    `provider_errors` (counts the fetcher gains) and `cleaning_error` (text the
+    pipeline reports for a cleaning failure). Returns the recorded calls.
     """
     behaviors = behaviors or {}
     calls = []
@@ -288,10 +289,13 @@ def _fake_city_pipeline(monkeypatch, behaviors=None):
             fetcher.errors[key] += count
         if "error" in spec:
             raise RuntimeError(spec["error"])
-        return _city_result(
+        result = _city_result(
             name, station_id=spec.get("station_id", "T1"),
             forecast_status=spec.get("forecast_status", "ok"),
             detector_model=spec.get("detector_model", "anomaly.joblib"))
+        if "cleaning_error" in spec:
+            result["pipeline"]["cleaning_error"] = spec["cleaning_error"]
+        return result
 
     monkeypatch.setattr(orch, "run_city_pipeline", fake)
     return calls
@@ -453,6 +457,28 @@ def test_run_row_classifies_ok_degraded_and_error_with_per_city_provider_counts(
     assert run["provider_errors"]["nsrdb: ValueError: down"] == 7
     assert run["sources"]["air_temp"] == {"synoptic": 1}
     assert "run_log_error" not in run
+
+
+def test_a_cleaning_failure_is_a_degraded_city_with_its_error_in_the_run_row(monkeypatch):
+    # WR-02: the row is written (forecast_status 'failed'), the city is degraded,
+    # and the redacted cleaning error is in the run row, not in cities_ok.
+    _fake_city_pipeline(monkeypatch, {"MIDLAND": {
+        "forecast_status": "failed",
+        "cleaning_error": "data cleaning failed: bad frame token=s3cr3tv"}})
+    store = FakeStore()
+
+    run = _run(store)
+
+    assert [w["city"] for w in store.writes] == list(config.LOCATIONS)
+    assert run["errors"] == {}
+    row, = store.run_rows
+    assert "MIDLAND" not in row["cities_ok"]
+    assert row["cities_failed"] == {"MIDLAND": {
+        "outcome": "degraded", "written": True, "forecast_status": "failed",
+        "detector_model_loaded": True,
+        "error": "data cleaning failed: bad frame token=REDACTED",
+    }}
+    assert "s3cr3tv" not in repr(row)
 
 
 def test_run_log_failure_is_logged_redacted_and_main_returns_one(monkeypatch, caplog, capsys):

@@ -300,7 +300,9 @@ def test_pipeline_key_reports_history_forecast_and_detector(tmp_path, monkeypatc
     assert set(pipeline) == {
         "history_rows", "usable_history_rows", "forecast_method", "forecast_status",
         "forecast_used_by_g6", "forecast", "detector_signal", "detector_model",
+        "cleaning_error",
     }
+    assert pipeline["cleaning_error"] is None
     assert set(pipeline["forecast"]) == {
         "amps", "ci_lower_amps", "ci_upper_amps", "n_observations", "horizon_min",
     }
@@ -431,3 +433,52 @@ def test_a_forecast_withheld_by_the_gap_guard_is_still_status_ok(tmp_path, monke
     assert detector_seen["forecast"] is None
     assert result["pipeline"]["forecast_used_by_g6"] is False
     assert result["pipeline"]["forecast_status"] == "ok"
+
+
+def _raising_clean(monkeypatch, text="boom"):
+    def raiser(history, as_of=None, **kw):
+        raise RuntimeError(text)
+
+    monkeypatch.setattr(data_cleaning, "clean_history", raiser)
+
+
+def test_cleaning_failure_on_existing_history_reports_forecast_failed(
+        tmp_path, monkeypatch, caplog):
+    # WR-02: a cleaning bug that throws away real history is not a cold start.
+    _write_archive(tmp_path / "archive.csv", [_archive_row(_CITY, h) for h in range(3)])
+    detector_seen = _spy_detector(monkeypatch)
+    forecast_seen = _spy_forecast(monkeypatch)
+    _raising_clean(monkeypatch, "boom")
+
+    with caplog.at_level(logging.WARNING, logger="city_pipeline"):
+        result = _run(tmp_path)
+
+    pipeline = result["pipeline"]
+    assert pipeline["history_rows"] == 3
+    assert pipeline["usable_history_rows"] == 0
+    assert pipeline["forecast_status"] == "failed"
+    assert pipeline["cleaning_error"].startswith("data cleaning failed:")
+    assert "boom" in pipeline["cleaning_error"]
+    assert pipeline["detector_signal"] is not None
+    # unvetted history still never reaches the forecast or the detector (Phase 2 rule)
+    assert len(forecast_seen["history"]) == 0
+    assert len(detector_seen["history"]) == 0
+    assert "rating" in result
+    warnings = [r.getMessage() for r in caplog.records
+                if r.name == "city_pipeline" and r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert _CITY in warnings[0] and "cold start" in warnings[0]
+
+
+def test_cleaning_failure_on_empty_history_stays_cold_start(tmp_path, monkeypatch):
+    _spy_detector(monkeypatch)
+    _spy_forecast(monkeypatch)
+    _raising_clean(monkeypatch, "boom")
+
+    result = _run(tmp_path)
+
+    pipeline = result["pipeline"]
+    assert pipeline["history_rows"] == 0
+    assert pipeline["forecast_status"] == "cold_start"
+    assert pipeline["cleaning_error"].startswith("data cleaning failed:")
+    assert "boom" in pipeline["cleaning_error"]
