@@ -1558,7 +1558,11 @@ def build_manifest(archive, trace, log, start, end, step_hours=1.0, warmup_hours
     rows per city, sha256 of the per-city model files and the git HEAD. No
     timestamp or working directory is written and file paths are normalised
     (repo-relative when inside the repository), so equal inputs give equal bytes
-    from any directory. Phase 4 uses it to
+    from any directory of the SAME checkout. The one deliberate exception is
+    `command`: it names `_REPO_ROOT` and `<repo>/.venv/bin/python` as absolute
+    paths so it can be pasted and run as it stands, which makes it differ between
+    two checkouts (or a worktree, which has no `.venv`) of the same commit.
+    Compare the other fields across checkouts, not `command`. Phase 4 uses it to
     prove it loads the archive this phase validated.
     """
     cities = list(cities) if cities else list(config.LOCATIONS)
