@@ -1,18 +1,18 @@
 ---
 gsd_state_version: "1.0"
 current_phase: 04
-current_plan: 5
+current_plan: 6
 status: executing
-stopped_at: Completed 04-10-PLAN.md
-last_updated: "2026-10-23T22:06:05.580Z"
+stopped_at: Completed 04-11-PLAN.md
+last_updated: "2026-10-23T22:13:28.277Z"
 last_activity: 2026-10-23
 last_activity_desc: Phase 04 execution started
-state_head: 303345c31327eb37c75d4d52e17517dae420eae7
+state_head: 852e0046a5ea9a2df5c96ca04545aa1c2f5ae97a
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 41
-  completed_plans: 24
+  completed_plans: 25
   percent: 43
 milestone_name: Production Pipeline (Supabase + live ratings)
 workstream: production-pipeline
@@ -37,7 +37,7 @@ whoever owns that analysis; they are not work items here.
 
 **Status:** Ready to execute
 **Current Phase:** 04
-**Current Plan:** 5
+**Current Plan:** 6
 **Total Plans in Phase:** 12
 **Last Activity:** 2026-10-23 — Phase 04 execution started
 **Last Activity Description:** Phase 04 execution started
@@ -152,6 +152,8 @@ These block or affect stringing the system together and belong to the phases nam
 - [Phase 04]: 04-09 IN-05: smoke workflow actions pinned by SHA (checkout v4.4.0, setup-python v5.6.0), persist-credentials false, main-only job; protected environment documented not configured
 - [Phase 04]: 04-10 IN-01: redact() takes limit (default stays 300); run-log errors and provider-error keys cut at 1000 after redaction; colliding keys sum their counts; the orchestrator leaves redaction to build_run_row
 - [Phase 04]: 04-10 IN-04: supabase_store.finite is public; the loader uses supabase_store.file_sha256 and finite (no copy, no private access)
+- [Phase 04]: 04-11: the identity recipe lives in backend/rating_identity.py (stdlib, config, city_point only); the Phase 3 fingerprint child imports only it from live code and refuses any other live backend module — A live module that reads a new config name at import time (Phase 7) must not break the backfill identity re-run
+- [Phase 04]: 04-11: backfill de-duplication keeps the first computed row of a slot, the first fallback row only when every row is fallback — Matches historical_archive.append_observation and data_cleaning's duplicate flag
 
 ## Open Decisions
 
@@ -171,9 +173,9 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 
 ## Session Continuity
 
-**Last session:** 2026-10-23T22:06:05.482Z
+**Last session:** 2026-10-23T22:13:28.155Z
 
-**Stopped At:** Completed 04-10-PLAN.md
+**Stopped At:** Completed 04-11-PLAN.md
 **Resume File:** None
 
 ## Performance Metrics
@@ -201,6 +203,7 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 | Phase 04 P08 | 7 min | 2 tasks | 5 files |
 | Phase 04 P09 | 9 min | 3 tasks | 5 files |
 | Phase 04 P10 | 5 min | 2 tasks | 6 files |
+| Phase 04 P11 | 8min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
