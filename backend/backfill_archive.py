@@ -64,9 +64,11 @@ _MIN_SECRET_LENGTH = 4
 # the next `&`/whitespace/quote, so a comma or an inner `)` cannot leave a tail.
 # One trailing `)` is left outside the value so "(api_key=X)" keeps its bracket.
 _SECRET_PAIR = re.compile(
-    r"""(?<![\w-])([\w-]*(?:token|api[_-]?key|key|email|password|secret|authorization)"""
-    r"""["']?\s{0,4}(?:=|:|%3D)\s*)"""
-    r"""(?:"[^"]*"|'[^']*'|(?:Bearer\s+)?[^&\s"']*[^&\s"')])""", re.IGNORECASE)
+    r"""(?<![\w-])([\w-]*(?:token|api[_-]?key|key|email|password|passwd|pwd|secret|credential|"""
+    r"""auth|authorization)["']?\s{0,4}(?:=|:|%3D)\s*)"""
+    r"""(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|"""
+    r"""(?:Bearer|Basic|Token|Digest|Negotiate)\s+[^&\s"']+|[^&\s"']*[^&\s"')])""",
+    re.IGNORECASE)
 _BEARER = re.compile(r"\bBearer\s+[\w.~+/=-]+", re.IGNORECASE)
 _NULL_RECORD_KEYS = (
     "station_id", "rating_a", "static_rating_a", "status", "fallback", "exhausted", "archived",

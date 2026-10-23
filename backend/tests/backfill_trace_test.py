@@ -279,6 +279,15 @@ def test_trace_is_written_before_the_log_row_so_an_interrupt_cannot_lose_it(tmp_
     ("url?api_key=abc,123&x", "123"),                       # comma inside the value
     ("url?token=a)bc", "bc"),                               # bracket inside the value
     ("Bearer abc123", "abc123"),                            # bare bearer token
+    ("Authorization: Basic dXNlcjpwYXNz", "dXNlcjpwYXNz"),  # other header schemes
+    ("Authorization: Token abc123", "abc123"),
+    ("Proxy-Authorization: Basic abc123", "abc123"),
+    ('{"token": "ab\\"cd"}', 'cd"'),                        # tail after an escaped quote
+    ("params={'token': 'ab\\'cd'}", "cd'"),
+    ("url?pwd=abc123", "abc123"),                           # more credential names
+    ("url?passwd=xyz789", "xyz789"),
+    ("url?auth=abc123", "abc123"),
+    ("url?credential=abc123", "abc123"),
 ])
 def test_redact_masks_every_credential_shape(text, secret):
     assert secret not in backfill_archive._redact(text)
