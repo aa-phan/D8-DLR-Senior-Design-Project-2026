@@ -17,31 +17,31 @@ findings:
     title: "The backfill log row is built by string formatting, so an error message that starts with an unbalanced `\"` makes `_read_log` (and `completeness`) fail"
   - id: IN-01
     severity: info
-    disposition: open
+    disposition: fixed
     title: "`TRACE_SCHEMA` is never checked on read (still present)"
   - id: IN-02
     severity: info
-    disposition: open
+    disposition: fixed
     title: "`zip(run[\"results\"], run[\"summary\"])` silently truncates (still present)"
   - id: IN-03
     severity: info
-    disposition: open
+    disposition: fixed
     title: "Duplicated helpers and constants (still present)"
   - id: IN-04
     severity: info
-    disposition: open
+    disposition: fixed
     title: "Trace file handle can leak; replay output paths are not cross-checked (still present)"
   - id: IN-05
     severity: info
-    disposition: open
+    disposition: fixed
     title: "The manifest is still tied to the checkout location (still present)"
   - id: IN-06
     severity: info
-    disposition: open
+    disposition: fixed
     title: "`_terminate_last_line` covers only the trace; the log can still get a row glued onto a torn line (still present)"
   - id: IN-07
     severity: info
-    disposition: open
+    disposition: fixed
     title: "A torn line in the replay trace is silently dropped by the fidelity check and the replay-side report (still present)"
   - id: CR-01
     severity: critical
@@ -59,7 +59,7 @@ findings:
     severity: warning
     disposition: fixed
     title: "The manifest is not deterministic as documented, and its `command` is not shell-safe"
-open: 7
+open: 0
 total: 14
 recorded: 2026-10-23T19:24:32.452Z
 ---
@@ -71,13 +71,13 @@ recorded: 2026-10-23T19:24:32.452Z
 | WR-01 | warning | fixed | 03-REVIEW-FIX.md (pass 3, 17c436b; hand-set, id reused across passes) |
 | WR-02 | warning | fixed | 03-REVIEW-FIX.md |
 | WR-03 | warning | fixed | 03-REVIEW-FIX.md (pass 3, 8a9ab91; hand-set, id reused across passes) |
-| IN-01 | info | open | - |
-| IN-02 | info | open | - |
-| IN-03 | info | open | - |
-| IN-04 | info | open | - |
-| IN-05 | info | open | - |
-| IN-06 | info | open | - |
-| IN-07 | info | open | - |
+| IN-01 | info | fixed | 03-REVIEW-FIX.md (hand-set; fix-report title differs) |
+| IN-02 | info | fixed | 03-REVIEW-FIX.md (hand-set; fix-report title differs) |
+| IN-03 | info | fixed | 03-REVIEW-FIX.md (hand-set; fix-report title differs) |
+| IN-04 | info | fixed | 03-REVIEW-FIX.md (hand-set; fix-report title differs) |
+| IN-05 | info | fixed | 03-REVIEW-FIX.md (hand-set; fix-report title differs) |
+| IN-06 | info | fixed | 03-REVIEW-FIX.md (hand-set; fix-report title differs) |
+| IN-07 | info | fixed | 03-REVIEW-FIX.md (hand-set; fix-report title differs) |
 | CR-01 | critical | fixed | 03-REVIEW-FIX.iter2.md (not in the current review) |
 | WR-04 | warning | fixed | 03-REVIEW-FIX.iter2.md (not in the current review) |
 | WR-05 | warning | fixed | 03-REVIEW-FIX.iter2.md (not in the current review) |
