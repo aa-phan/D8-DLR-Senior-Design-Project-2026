@@ -16,6 +16,7 @@ Follows backend/tests/city_rating_test.py's conventions (module-level imports,
 plain asserts, no test classes, no network).
 """
 
+import ast
 import contextlib
 import hashlib
 import json
@@ -26,6 +27,7 @@ import subprocess
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
+import numpy as np
 import pandas as pd
 import pytest
 import requests
@@ -425,6 +427,41 @@ def test_rows_map_to_city_rating_columns_with_backfill_labels(archive, working_t
     assert [loader._parse_fallback(v) for v in (True, False, "True", "false", " TRUE ", "FALSE")] == [
         True, False, True, False, True, False
     ]
+
+
+def test_loader_reuses_the_store_helpers_instead_of_copies(archive, working_tree_sources):
+    # IN-04: one file-hash helper and one finite-value helper, both public on the store.
+    assert not hasattr(loader, "sha256_file")
+    assert not hasattr(supabase_store, "_finite")
+    assert supabase_store.finite(float("nan")) is None
+    assert supabase_store.finite(float("inf")) is None
+    assert supabase_store.finite(None) is None
+    assert supabase_store.finite(np.float64(2.5)) == 2.5
+
+    # No production module under backend/ reads a private name of supabase_store.
+    backend = os.path.join(os.path.dirname(__file__), "..")
+    offenders = []
+    for name in sorted(os.listdir(backend)):
+        if not name.endswith(".py") or name == "supabase_store.py":
+            continue
+        path = os.path.join(backend, name)
+        with open(path, encoding="utf-8") as handle:
+            tree = ast.parse(handle.read(), filename=path)
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Attribute) and node.attr.startswith("_")
+                    and isinstance(node.value, ast.Name) and node.value.id == "supabase_store"):
+                offenders.append(f"{name}:{node.lineno} supabase_store.{node.attr}")
+            if (isinstance(node, ast.ImportFrom) and node.module == "supabase_store"
+                    and any(alias.name.startswith("_") for alias in node.names)):
+                offenders.append(f"{name}:{node.lineno} from supabase_store import a private name")
+    assert offenders == []
+
+    # The archive hash and run id the loader reports are the store's file hash.
+    csv_path, manifest, _ = archive
+    sha = supabase_store.file_sha256(csv_path)
+    rows, _stats = loader.prepare_rows(csv_path, manifest, _live_identity())
+    assert sha == _sha256(csv_path)
+    assert {row["run_id"] for row in rows} == {"backfill-" + sha[:12]}
 
 
 def test_backfill_rows_carry_provisional_labels_and_phase3_model_hashes(archive, monkeypatch):
