@@ -80,7 +80,7 @@ proposals.
 
 ### Supabase store and writer (Phase 4)
 
-- [ ] **DB-01**: A versioned SQL migration in the repo creates the schema. At minimum it has a
+- [x] **DB-01**: A versioned SQL migration in the repo creates the schema. At minimum it has a
   per-city rating table keyed uniquely on (`city`, `valid_time`) with: rating (A), rating (MW, via
   `ercot_dlr_merger.amps_to_mw`), static rating, status/fallback, fallback gates, alerts,
   exhausted, resolved station, forecast amps with CI bounds and horizon, detector signal, per-field
@@ -204,7 +204,7 @@ proposals.
 | VAL-01 | Phase 3 | Complete |
 | VAL-02 | Phase 3 | Complete |
 | VAL-03 | Phase 3 | Complete |
-| DB-01 | Phase 4 | Pending |
+| DB-01 | Phase 4 | Complete |
 | DB-02 | Phase 4 | Complete |
 | DB-03 | Phase 4 | Complete |
 | DB-04 | Phase 4 | Complete |
