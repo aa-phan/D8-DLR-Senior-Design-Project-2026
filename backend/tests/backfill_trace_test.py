@@ -239,6 +239,37 @@ def test_alert_text_is_redacted_before_it_reaches_the_trace(tmp_path, monkeypatc
     assert record["alerts"] == ["G1 FAIL (provider said api_key=REDACTED) - fallback"]
 
 
+@pytest.mark.parametrize("text, secret", [
+    ("params={'token': 'abc123', 'a':1}", "abc123"),        # dict / repr form
+    ('url?token="abc123"', "abc123"),                       # quoted value
+    ('{"api_key": "abc123"}', "abc123"),                    # JSON form
+    ("Authorization: Bearer abc123", "abc123"),             # header form
+    ("X-Api-Key: abc123", "abc123"),
+    ("token%3Dabc123", "abc123"),                           # percent-encoded =
+    ("url?api_key=abc,123&x", "123"),                       # comma inside the value
+    ("url?token=a)bc", "bc"),                               # bracket inside the value
+    ("Bearer abc123", "abc123"),                            # bare bearer token
+])
+def test_redact_masks_every_credential_shape(text, secret):
+    assert secret not in backfill_archive._redact(text)
+    assert "REDACTED" in backfill_archive._redact(text)
+
+
+def test_redact_keeps_the_text_around_a_secret_and_leaves_plain_text_alone():
+    assert backfill_archive._redact("url?api_key=abc,123&x") == "url?api_key=REDACTED&x"
+    assert backfill_archive._redact("KeyError: 'missing'") == "KeyError: 'missing'"
+
+
+def test_redact_removes_configured_secret_values_in_any_shape(monkeypatch):
+    monkeypatch.setenv("SYNOPTIC_TOKEN", "s3cr&t tok")
+    monkeypatch.setenv("NREL_API_EMAIL", "me@example.org")
+    monkeypatch.setenv("NREL_API_KEY", "abc")  # shorter than the minimum: ignored
+    text = "raw s3cr&t tok, encoded s3cr%26t%20tok, plus s3cr%26t+tok, mail me%40example.org"
+    redacted = backfill_archive._redact(text)
+    assert "s3cr" not in redacted and "example" not in redacted
+    assert backfill_archive._redact("abc stays") == "abc stays"
+
+
 def test_trace_takes_the_last_provenance_record_of_the_rated_station(tmp_path, monkeypatch):
     fetcher = _StubFetcher()
     earlier = {"stid": "OTHER", "hour": f"{_DAY}T09:00:00Z", "air_temp": "synoptic",

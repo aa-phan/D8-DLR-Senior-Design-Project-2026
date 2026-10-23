@@ -34,6 +34,7 @@ import os
 import re
 import sys
 import time
+import urllib.parse
 from collections import Counter
 
 import pandas as pd
@@ -52,10 +53,21 @@ _GATE_RE = re.compile(r"\b(G[1-6]) FAIL")
 TRACE_SCHEMA = "backfill_trace/1"
 _OBSERVATION_KEYS = ("temp", "wind", "wind_raw", "wind_direction", "solar")
 _TRACE_TEXT_LIMIT = 200
-# `name=value` where the name ends in a credential-shaped word (token, api_key,
-# NREL_API_KEY, access_token, email, ...). The value runs to the next separator.
+# Environment variables whose actual values are scrubbed wherever they appear
+# (plain or percent-encoded), whatever shape the surrounding text has.
+_SECRET_ENV_NAMES = ("SYNOPTIC_TOKEN", "NREL_API_KEY", "NREL_API_EMAIL")
+_MIN_SECRET_LENGTH = 4
+# `name<sep>value` where the name ends in a credential-shaped word (token,
+# api_key, NREL_API_KEY, access_token, email, authorization, ...) and the separator
+# is `=`, `:` or a percent-encoded `=`, optionally with a quote after the name (JSON
+# and dict forms) and whitespace around it. The value is a quoted string or runs to
+# the next `&`/whitespace/quote, so a comma or an inner `)` cannot leave a tail.
+# One trailing `)` is left outside the value so "(api_key=X)" keeps its bracket.
 _SECRET_PAIR = re.compile(
-    r"([\w-]*(?:token|api_key|apikey|key|email|password|secret))=([^&\s,;)\"']+)", re.IGNORECASE)
+    r"""(?<![\w-])([\w-]*(?:token|api[_-]?key|key|email|password|secret|authorization)"""
+    r"""["']?\s{0,4}(?:=|:|%3D)\s*)"""
+    r"""(?:"[^"]*"|'[^']*'|(?:Bearer\s+)?[^&\s"']*[^&\s"')])""", re.IGNORECASE)
+_BEARER = re.compile(r"\bBearer\s+[\w.~+/=-]+", re.IGNORECASE)
 _NULL_RECORD_KEYS = (
     "station_id", "rating_a", "static_rating_a", "status", "fallback", "exhausted", "archived",
     "fallback_gates", "alerts", "observation", "observation_hour", "sources", "pipeline")
@@ -88,15 +100,37 @@ def _already_archived(path: str) -> dict:
     return done
 
 
-def _redact(text) -> str:
+def _known_secrets() -> list:
     """
-    Replace the value of every credential-shaped `name=value` pair with
-    `REDACTED`, then cut to 200 characters. Redaction runs first so a cut can
-    never leave half of a secret behind. Applied to every alert and error
-    string written to the trace, because a requests error can echo a query
-    string.
+    The configured credential values (and their percent-encoded forms), longest
+    first so a secret that contains another is replaced whole. Read from the
+    environment on every call so a value set after import is still covered.
     """
-    return _SECRET_PAIR.sub(r"\1=REDACTED", str(text))[:_TRACE_TEXT_LIMIT]
+    values = set()
+    for name in _SECRET_ENV_NAMES:
+        value = os.environ.get(name, "")
+        if len(value) >= _MIN_SECRET_LENGTH:
+            values.update({value, urllib.parse.quote(value, safe=""),
+                           urllib.parse.quote_plus(value)})
+    return sorted(values, key=len, reverse=True)
+
+
+def _redact(text, limit=_TRACE_TEXT_LIMIT) -> str:
+    """
+    Remove credentials from `text`, then cut it to `limit` characters (None for
+    no cut). Two passes: every configured secret value is replaced wherever it
+    appears, then every credential-shaped `name=value` / `name: value` pair and
+    `Bearer` token is masked by shape. Redaction runs first so a cut can never
+    leave half of a secret behind. Applied to every alert and error string written
+    to the trace and the log, because a requests error can echo a query string,
+    a kwargs dict or a header.
+    """
+    out = str(text)
+    for secret in _known_secrets():
+        out = out.replace(secret, "REDACTED")
+    out = _SECRET_PAIR.sub(r"\1REDACTED", out)
+    out = _BEARER.sub("Bearer REDACTED", out)
+    return out if limit is None else out[:limit]
 
 
 def _trace_records(run: dict, ts_text: str, forecast_method: str, provenance: list) -> list:
