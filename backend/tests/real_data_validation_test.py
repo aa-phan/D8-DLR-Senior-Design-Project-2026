@@ -121,6 +121,15 @@ def test_manifest_is_deterministic_and_flags_missing_models(tmp_path, monkeypatc
     assert "model file missing" in capsys.readouterr().err
 
 
+def test_git_query_returns_empty_when_git_is_not_installed(monkeypatch):
+    def no_git(*args, **kwargs):
+        raise FileNotFoundError("git")
+
+    monkeypatch.setattr(real_data_validation.subprocess, "run", no_git)
+
+    assert real_data_validation._git("rev-parse", "HEAD") == ""
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # VAL-01: helpers
 # ──────────────────────────────────────────────────────────────────────────────

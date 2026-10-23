@@ -1492,8 +1492,15 @@ def _file_record(path) -> dict:
 
 
 def _git(*args) -> str:
-    """One fixed-argv git query in the repository this module lives in."""
-    done = subprocess.run(["git", *args], cwd=_REPO_ROOT, capture_output=True, text=True, check=False)
+    """
+    One fixed-argv git query in the repository this module lives in. Returns ""
+    when git fails or is not installed, so the manifest is still written.
+    """
+    try:
+        done = subprocess.run(["git", *args], cwd=_REPO_ROOT, capture_output=True, text=True,
+                              check=False)
+    except (OSError, subprocess.SubprocessError):
+        return ""
     return done.stdout.strip() if done.returncode == 0 else ""
 
 
