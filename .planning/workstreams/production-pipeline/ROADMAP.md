@@ -151,7 +151,7 @@ rows are labelled provisional until Phase 7's go.
 **Re-plan note (2026-10-21, done)**: plans revised the same day: 04-01 no longer requires a Phase 3
 GO, and DB-06 (`config_fingerprint`, `forecast_model_sha256`, `anomaly_model_sha256`) is covered
 across 04-01..04-06. Plan checker: passed, info advisories only.
-**Plans**: 2/6 plans executed
+**Plans**: 3/6 plans executed
 
 Plans:
 **Wave 1**
@@ -159,7 +159,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 - [x] 04-02-PLAN.md — Pipeline seam: history reader and forecast_status in city_pipeline, `--store postgres` / `--no-run-row`, one pipeline_run row per run (OD-9), validated 30-day history (wave 2)
-- [ ] 04-03-PLAN.md — Manifest-checked backfill loader (DO NOTHING, per-city parity), smoke test, secret scan, dispatch-only Actions smoke workflow (wave 2)
+- [x] 04-03-PLAN.md — Manifest-checked backfill loader (DO NOTHING, per-city parity), smoke test, secret scan, dispatch-only Actions smoke workflow (wave 2)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 - [ ] 04-04-PLAN.md — Consumer schema contract `city_rating_v1.md`; api-contract.md and pss_e_handoff.md point to it (wave 3)
@@ -279,7 +279,7 @@ ml-modeling workstream's evaluation; record it in that workstream's STATE.md as 
 | 1. Land PR #7 | 5/5 | Complete    | 2026-10-19 |
 | 2. Data Cleaning | 4/4 | Complete    | 2026-10-20 |
 | 3. Real-Data Validation | 5/5 | Complete    | 2026-10-21 |
-| 4. Supabase Store & Writer | 2/6 | In Progress | - |
+| 4. Supabase Store & Writer | 3/6 | In Progress | - |
 | 5. Scheduled Live Runs | 0/8 | Planned | - |
 | 6. Exposure & E2E Verification | 0/7 | Planned | - |
 | 7. Per-City Conductors, Shadow Refit and Early Model Selection | 0/0 | Not planned | - |

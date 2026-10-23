@@ -90,15 +90,15 @@ proposals.
   result to Postgres, replacing the CSV archive on the production path. The CSV path stays usable
   offline for tests and backfill. Writes are idempotent upserts on the unique key, which also
   satisfies CLEAN-03 at the database level.
-- [ ] **DB-03**: The validated backfill window from Phase 3 is loaded into Postgres, so the
+- [x] **DB-03**: The validated backfill window from Phase 3 is loaded into Postgres, so the
   forecast and detector do not cold-start in production.
-- [ ] **DB-04**: Secrets: the writer uses a service-role key or a pooler connection string stored
+- [x] **DB-04**: Secrets: the writer uses a service-role key or a pooler connection string stored
   only as GitHub Actions secrets. Nothing secret is committed or reaches a consumer. The connection
   works from GitHub-hosted runners (the pooler endpoint, because runners lack IPv6).
 - [ ] **DB-05**: A schema contract doc for consumers (tables, columns, units, the meaning of
   fallback, freshness expectations), replacing the corresponding open items in
   `docs/frontend/specs/api-contract.md` and `docs/data-science/decisions/pss_e_handoff.md`.
-- [ ] **DB-06**: Every rating row records what produced it: a rating config version that changes with
+- [x] **DB-06**: Every rating row records what produced it: a rating config version that changes with
   any per-city conductor parameter, static rating, bound or bearing, and the identity (hash) of the
   forecast method/model and the anomaly model used. Conductor, model or forecast-method changes
   alter only the values pushed, never the schema; consumers see the change through these columns.
@@ -206,10 +206,10 @@ proposals.
 | VAL-03 | Phase 3 | Complete |
 | DB-01 | Phase 4 | Pending |
 | DB-02 | Phase 4 | Complete |
-| DB-03 | Phase 4 | Pending |
-| DB-04 | Phase 4 | Pending |
+| DB-03 | Phase 4 | Complete |
+| DB-04 | Phase 4 | Complete |
 | DB-05 | Phase 4 | Pending |
-| DB-06 | Phase 4 | Pending |
+| DB-06 | Phase 4 | Complete |
 | PIPE-02 | Phase 5 | Pending |
 | SCHED-01 | Phase 5 | Pending |
 | SCHED-02 | Phase 5 | Pending |

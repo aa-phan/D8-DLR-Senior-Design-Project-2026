@@ -270,7 +270,7 @@ See `key-decisions`. The `config.LINE_VOLTAGE_KV` and `POWER_FACTOR` used for `r
 - The Task 3 acceptance criterion `git diff --quiet 72832ee -- .github/workflows/shadow_collect.yml` exits 1, as noted in 04-01: commit `762a0cd` changed that file after 72832ee, outside this plan. Against HEAD the file is unchanged by this plan.
 - The plan asks for `Co-Authored-By: Claude Opus 5.5`; the commits carry `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`, the attribution the harness specifies for this session (as in 04-01 and 04-02).
 - The plan's verify text says the live tests need only `DLR_TEST_PG_AUTOSTART=1`; that works because `initdb` and `pg_ctl` are on this machine's PATH (`/opt/homebrew/bin`).
-- `.planning/` has no `.gitignore` effect from this plan; `git ls-files -ci --exclude-standard` lists nothing after the `.gitignore` edit.
+- The `.gitignore` edit hides no tracked file: `git ls-files -ci --exclude-standard` lists nothing.
 - The plan's loader test list and the 11-test count are met; the fixture manifest uses a fake head, so the git-show step is replaced by a working-tree runner exactly as planned, and one test calls the real runner with the repository's HEAD.
 - Status of the push: `git log origin/main..HEAD` listed only the `ci(04-03)` commit when checked after Task 3, so the two earlier plan commits are reachable from `origin/main` in this clone's refs. Nothing was pushed by this plan; the `ci(04-03)` commit and the workflow remain unpushed.
 
@@ -305,7 +305,7 @@ None. The surface added (a loader and smoke test using the writer credential, a 
 
 - FOUND: backend/supabase_load_backfill.py, backend/supabase_smoke.py, backend/tests/supabase_load_backfill_test.py, backend/tests/supabase_smoke_test.py, backend/tests/secret_scan_test.py, .github/workflows/supabase_smoke.yml
 - FOUND commits: abb1d5a, 221cd6e, 2493c8a (ancestors of HEAD)
-- Plan checks: `on conflict (city, valid_time) do nothing`, `REPORT_SCHEMA = "supabase_backfill_parity/1"`, `PHASE3_CONFIG_VERSION = "v1-provisional-2026-10-13"`, `force_rollback=True`, `SMOKE OK` present; no `info.dsn` and no printed `SUPABASE_DB_URL` value; test function counts 11, 5 (6 with the workflow test counted: 5 before Task 3), 3; `grep -c "secrets.SUPABASE_DB_URL"` prints 1; `/supabase/.temp/` ignored.
+- Plan checks: `on conflict (city, valid_time) do nothing`, `REPORT_SCHEMA = "supabase_backfill_parity/1"`, `PHASE3_CONFIG_VERSION = "v1-provisional-2026-10-13"`, `force_rollback=True`, `SMOKE OK` present; no `info.dsn` and no printed `SUPABASE_DB_URL` value; test function counts 11 (loader), 6 (smoke: 5 after Task 2, the workflow test added in Task 3) and 3 (scan); `grep -c "secrets.SUPABASE_DB_URL"` prints 1; `/supabase/.temp/` ignored.
 - Verification: loader file `DLR_TEST_PG_AUTOSTART=1` 11 passed; smoke and scan files 8 passed (9 with the workflow test); `PHASE3_IDENTITY_OK` printed for the real manifest; full suite 1498 passed, 43 skipped, 0 failed; nothing under data/ or outputs/ changed.
 
 ---

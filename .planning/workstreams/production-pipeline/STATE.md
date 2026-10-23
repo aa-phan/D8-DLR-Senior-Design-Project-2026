@@ -1,18 +1,18 @@
 ---
 gsd_state_version: "1.0"
 current_phase: 04
-current_plan: 3
+current_plan: 4
 status: executing
-stopped_at: Completed 04-02-PLAN.md
-last_updated: "2026-10-21T23:09:51.416Z"
+stopped_at: Completed 04-03-PLAN.md
+last_updated: "2026-10-23T05:49:00.673Z"
 last_activity: 2026-10-21
 last_activity_desc: Phase 04 execution started
-state_head: 9e9d2250a8afc9ff0c64749974ee84fa131baaef
+state_head: e600e1b02fd1d7a8af276b2f472ba1bf25ace7a5
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 35
-  completed_plans: 16
+  completed_plans: 17
   percent: 43
 milestone_name: Production Pipeline (Supabase + live ratings)
 workstream: production-pipeline
@@ -37,7 +37,7 @@ whoever owns that analysis; they are not work items here.
 
 **Status:** Ready to execute
 **Current Phase:** 04
-**Current Plan:** 3
+**Current Plan:** 4
 **Total Plans in Phase:** 6
 **Last Activity:** 2026-10-21 — Phase 04 execution started
 **Last Activity Description:** Phase 04 execution started
@@ -143,6 +143,8 @@ These block or affect stringing the system together and belong to the phases nam
 - [Phase 04]: 04-02: forecast_status describes the forecast call (ok/cold_start/failed), not G6 use; a forecast withheld by the gap guard stays ok
 - [Phase 04]: 04-02: with a store the orchestrator runs each city with archive=False and writes the rating row itself; a failed city or failed write has no row (OD-9) and is recorded in pipeline_run as error; written-but-unhealthy is degraded
 - [Phase 04]: 04-02: Phase 5 children use --store postgres --no-run-row; row-written flag is summary archived; upsert_run(conn,row) takes any subset of PIPELINE_RUN_COLUMNS with run_id
+- [Phase 04]: 04-03: backfill rows carry PHASE3_CONFIG_VERSION and a manifest-built PROVISIONAL (OD-5) rating_basis; Phase 3 config fingerprints are evaluated on the manifest commit's sources in an isolated child, model hashes come from the manifest
+- [Phase 04]: 04-03: connect() failure text also redacts host, user, project reference and resolved address so loader, smoke test and orchestrator print nothing naming the project
 
 ## Open Decisions
 
@@ -162,9 +164,9 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 
 ## Session Continuity
 
-**Last session:** 2026-10-21T23:09:51.317Z
+**Last session:** 2026-10-23T05:49:00.581Z
 
-**Stopped At:** Completed 04-02-PLAN.md
+**Stopped At:** Completed 04-03-PLAN.md
 **Resume File:** None
 
 ## Performance Metrics
@@ -187,6 +189,7 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 | Phase 03 P05 | 6min | 2 tasks | 2 files |
 | Phase 04 P01 | 55 min | 3 tasks | 8 files |
 | Phase 04 P02 | 10 min | 3 tasks | 8 files |
+| Phase 04 P03 | 75 min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
