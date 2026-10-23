@@ -1,18 +1,18 @@
 ---
 gsd_state_version: "1.0"
 current_phase: 04
-current_plan: 6
+current_plan: 2
 status: executing
-stopped_at: Completed 04-03-PLAN.md
-last_updated: "2026-10-23T21:25:56.033Z"
-last_activity: 2026-10-21
-last_activity_desc: Phase 04 planning complete — 12 plans ready
-state_head: f7eb3fbbce8f14670a158432fd510761b6cdddfc
+stopped_at: Completed 04-07-PLAN.md
+last_updated: "2026-10-23T21:38:50.575Z"
+last_activity: 2026-10-23
+last_activity_desc: Phase 04 execution started
+state_head: 267bc83a4efe7a833a19a19257d854f767b28762
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 41
-  completed_plans: 20
+  completed_plans: 21
   percent: 43
 milestone_name: Production Pipeline (Supabase + live ratings)
 workstream: production-pipeline
@@ -37,10 +37,10 @@ whoever owns that analysis; they are not work items here.
 
 **Status:** Ready to execute
 **Current Phase:** 04
-**Current Plan:** 6
+**Current Plan:** 2
 **Total Plans in Phase:** 12
-**Last Activity:** 2026-10-21 — Phase 04 execution started
-**Last Activity Description:** Phase 04 planning complete — 12 plans ready
+**Last Activity:** 2026-10-23 — Phase 04 execution started
+**Last Activity Description:** Phase 04 execution started
 
 ## Planning Summary (2026-10-19)
 
@@ -145,6 +145,8 @@ These block or affect stringing the system together and belong to the phases nam
 - [Phase 04]: 04-02: Phase 5 children use --store postgres --no-run-row; row-written flag is summary archived; upsert_run(conn,row) takes any subset of PIPELINE_RUN_COLUMNS with run_id
 - [Phase 04]: 04-03: backfill rows carry PHASE3_CONFIG_VERSION and a manifest-built PROVISIONAL (OD-5) rating_basis; Phase 3 config fingerprints are evaluated on the manifest commit's sources in an isolated child, model hashes come from the manifest
 - [Phase 04]: 04-03: connect() failure text also redacts host, user, project reference and resolved address so loader, smoke test and orchestrator print nothing naming the project
+- [Phase 04]: 04-07: success log names only the server-reported role (select current_user), redacted against URL project reference and host; client-supplied pooler user is never read — CR-01: the pooler user dlr_writer.<project-ref> carries the project reference (DB-04)
+- [Phase 04]: 04-07: SupabaseStore reconnects once and retries once per operation only on a lost connection (closed, broken or failing select 1); healthy-connection failures are never retried — WR-03: a dropped pooler session must not fail the remaining cities and the run row; retrying a data error would hide it
 
 ## Open Decisions
 
@@ -164,9 +166,9 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 
 ## Session Continuity
 
-**Last session:** 2026-10-23T05:49:00.581Z
+**Last session:** 2026-10-23T21:38:50.427Z
 
-**Stopped At:** Completed 04-03-PLAN.md
+**Stopped At:** Completed 04-07-PLAN.md
 **Resume File:** None
 
 ## Performance Metrics
@@ -190,6 +192,7 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 | Phase 04 P01 | 55 min | 3 tasks | 8 files |
 | Phase 04 P02 | 10 min | 3 tasks | 8 files |
 | Phase 04 P03 | 75 min | 3 tasks | 8 files |
+| Phase 04 P07 | 13 min | 3 tasks | 3 files |
 
 ## Accumulated Context
 
