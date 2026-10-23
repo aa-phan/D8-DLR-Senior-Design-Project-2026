@@ -651,6 +651,23 @@ def test_a_failing_fingerprint_child_surfaces_its_whole_redacted_stderr(archive,
     assert "REDACTED" in message
 
 
+def test_a_very_long_child_stderr_keeps_its_first_and_last_lines(archive, monkeypatch):
+    _, manifest, _ = archive
+    child = (
+        "import sys\n"
+        "sys.stderr.write('Traceback FIRSTLINE\\n')\n"
+        "sys.stderr.write(('  File middle frame\\n') * 2000)\n"
+        "sys.stderr.write('AttributeError: LASTLINE\\n')\n"
+        "sys.exit(1)\n"
+    )
+    monkeypatch.setattr(loader, "_FINGERPRINT_CHILD", child)
+    with pytest.raises(ValueError) as caught:
+        loader.phase3_config_fingerprints(manifest, git_show=_working_tree)
+    message = str(caught.value)
+    assert "FIRSTLINE" in message and "LASTLINE" in message
+    assert len(message) < 4200
+
+
 def test_the_fingerprint_child_refuses_another_live_backend_module(archive, monkeypatch):
     _, manifest, _ = archive
     original = loader._FINGERPRINT_CHILD

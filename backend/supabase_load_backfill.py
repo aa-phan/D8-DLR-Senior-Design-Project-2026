@@ -13,11 +13,14 @@ the detector have history in Postgres from the first scheduled run.
   or `config.RATING_BASIS`, which Phase 7 will change.
 * Every row names the configuration and the models of the Phase 3 run (DB-06): the
   models come from the manifest, and the per-city config fingerprint is the live
-  `supabase_store.rating_config_fingerprint` evaluated on `backend/config.py`,
+  `rating_identity.rating_config_fingerprint` evaluated on `backend/config.py`,
   `city_point.py` and `thermal_model.py` as they were at the manifest's git head
   (materialized with `git show`, run in an isolated child process that proves it
-  imported those copies). A Phase 7 change to the live config before the load
-  therefore cannot relabel Phase 3 rows.
+  imported those copies and that no live backend module other than
+  `rating_identity` was loaded: the child never imports the live store or what it
+  pulls in). A Phase 7 change to the live config, or a live module that reads a
+  new config name at import time, therefore cannot relabel Phase 3 rows or break
+  the re-run.
 * Inserts use `ON CONFLICT (city, valid_time) DO NOTHING`: a backfill never
   overwrites any row, live or backfill (a live retry overwrites under OD-7, a
   backfill never does). The whole load is one transaction, all or nothing.
@@ -46,6 +49,7 @@ import pandas as pd
 import config
 import ercot_dlr_merger
 import historical_archive
+import rating_identity
 import supabase_store
 
 REPORT_SCHEMA = "supabase_backfill_parity/1"
@@ -100,6 +104,8 @@ COUNT_SQL = (
 
 _HEX64 = re.compile(r"[0-9a-f]{64}")
 _ARCHIVE_LABEL = "backfill"
+# How much of a failing fingerprint child's redacted stderr the ValueError carries.
+_CHILD_STDERR_MAX_CHARS = 4000
 
 
 def _dig(mapping, dotted):
@@ -174,19 +180,33 @@ def phase3_model_identity(manifest) -> dict:
 
 # The child process of phase3_config_fingerprints. It puts the materialized copies of
 # the Phase 3 sources ahead of the live code, proves that config, city_point and
-# thermal_model came from them, and prints one fingerprint per city as JSON. Run with
-# `python -I`, so neither PYTHONPATH nor the working directory can change the import.
+# thermal_model came from them, proves that the only module it loaded from the live
+# backend directory is rating_identity (which imports only the standard library, config
+# and city_point), and prints one fingerprint per city as JSON. It does not import
+# supabase_store, so no other live module (and no config name such a module reads at
+# import time) can break it. Run with `python -I`, so neither PYTHONPATH nor the working
+# directory can change the import.
 _FINGERPRINT_CHILD = """\
 import json, os, sys
 tmpdir, backend_dir, cities = sys.argv[1], sys.argv[2], sys.argv[3:]
 sys.path[:0] = [tmpdir, backend_dir]
-import config, city_point, thermal_model, supabase_store
+import config, city_point, thermal_model, rating_identity
 root = os.path.realpath(tmpdir)
 for module in (config, city_point, thermal_model):
     if os.path.dirname(os.path.realpath(module.__file__)) != root:
         sys.stderr.write(module.__name__ + " was not imported from the materialized copy\\n")
         sys.exit(3)
-print(json.dumps({city: supabase_store.rating_config_fingerprint(city) for city in cities}))
+live = os.path.realpath(backend_dir)
+extra = sorted(
+    name for name, module in list(sys.modules.items())
+    if getattr(module, "__file__", None)
+    and os.path.dirname(os.path.realpath(module.__file__)) == live
+    and name != "rating_identity"
+)
+if extra:
+    sys.stderr.write("live backend modules were imported: " + ", ".join(extra) + "\\n")
+    sys.exit(3)
+print(json.dumps({city: rating_identity.rating_config_fingerprint(city) for city in cities}))
 """
 
 
@@ -205,13 +225,27 @@ def _git_show(commit, path, repo_root) -> str:
         raise ValueError(f"could not read {path} at commit {commit} with git show") from None
 
 
+def _redacted_head_and_tail(text) -> str:
+    """
+    `text` redacted whole (the cut comes after redaction, so a longer limit never lets
+    a secret through), then, past `_CHILD_STDERR_MAX_CHARS`, its first lines and its
+    last lines: a traceback's call site is at the top and its exception at the bottom.
+    """
+    redacted = supabase_store.redact(text, limit=10 * len(text) + 100)
+    if len(redacted) <= _CHILD_STDERR_MAX_CHARS:
+        return redacted
+    head = _CHILD_STDERR_MAX_CHARS // 4
+    tail = _CHILD_STDERR_MAX_CHARS - head
+    return redacted[:head] + "\n[...]\n" + redacted[-tail:]
+
+
 def phase3_config_fingerprints(manifest, repo_root=None, git_show=None) -> dict:
     """
-    DB-06: each city's `supabase_store.rating_config_fingerprint` evaluated on the
+    DB-06: each city's `rating_identity.rating_config_fingerprint` evaluated on the
     sources of the manifest's git head, so live and backfill fingerprints are
     comparable and the recipe is not copied by hand.
 
-    The three RATING_CONFIG_SOURCE_FILES are read with `git_show(commit, path)` (default:
+    The three `rating_identity.RATING_CONFIG_SOURCE_FILES` are read with `git_show(commit, path)` (default:
     `_git_show`, looked up at call time), written under their base names into a
     temporary directory and evaluated in an isolated child process that refuses to
     answer unless it imported them from there. ValueError on any failure.
@@ -224,7 +258,7 @@ def phase3_config_fingerprints(manifest, repo_root=None, git_show=None) -> dict:
 
     backend_dir = os.path.dirname(os.path.abspath(__file__))
     with tempfile.TemporaryDirectory() as tmpdir:
-        for path in supabase_store.RATING_CONFIG_SOURCE_FILES:
+        for path in rating_identity.RATING_CONFIG_SOURCE_FILES:
             text = git_show(commit, path)
             with open(os.path.join(tmpdir, os.path.basename(path)), "w", encoding="utf-8", newline="") as handle:
                 handle.write(text)
@@ -239,9 +273,12 @@ def phase3_config_fingerprints(manifest, repo_root=None, git_show=None) -> dict:
                 + supabase_store.redact(type(exc).__name__)
             ) from None
     if done.returncode != 0:
-        lines = (done.stderr or "").strip().splitlines()
-        last = lines[-1] if lines else f"child exited with status {done.returncode}"
-        raise ValueError(f"could not evaluate the Phase 3 config fingerprints: {supabase_store.redact(last)}")
+        # The whole stderr (a traceback names the module and the first lines name the call),
+        # redacted before it is cut, never only its last line.
+        stderr = (done.stderr or "").strip() or f"child exited with status {done.returncode}"
+        raise ValueError(
+            "could not evaluate the Phase 3 config fingerprints: " + _redacted_head_and_tail(stderr)
+        )
     try:
         fingerprints = json.loads(done.stdout.strip().splitlines()[-1])
     except (ValueError, IndexError):
