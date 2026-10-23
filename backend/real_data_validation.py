@@ -272,7 +272,7 @@ _QUANTILES = (("min", 0.0), ("p05", 0.05), ("p25", 0.25), ("p50", 0.5), ("p75", 
               ("p95", 0.95), ("max", 1.0))
 _PASS_THROUGH_PREFIXES = ("fc_", "detector_", "pipeline_")
 _PASS_THROUGH_NAMES = ("history_rows", "usable_history_rows", "forecast_used_by_g6")
-_OBS_COLUMNS = ("obs_temp", "obs_wind", "obs_wind_raw", "obs_wind_direction", "obs_solar")
+_OBS_COLUMNS = tuple(_OBSERVATION_COLUMNS.values())  # the flattened trace columns, same order
 _LABEL = ("PROVISIONAL (OD-5): static ratings, rating bounds and line bearings are unconfirmed "
           "assumptions; these tables measure, they do not decide.")
 
@@ -318,12 +318,6 @@ def _num(value) -> float:
         return float("nan") if value is None else float(value)
     except (TypeError, ValueError):
         return float("nan")
-
-
-def _truthy(value) -> bool:
-    if value is None or (isinstance(value, float) and np.isnan(value)):
-        return False
-    return bool(value)
 
 
 def _text(value):
@@ -407,9 +401,9 @@ def classify_steps(trace, archive, cities, steps, start, warmup_hours) -> pd.Dat
                     alerts, (list, tuple, np.ndarray)) else ""
                 if _text(rec.get("error")) is not None:
                     row["kind"] = "error"
-                elif _truthy(rec.get("exhausted")):
+                elif _flag(rec.get("exhausted")):
                     row["kind"] = "exhausted"
-                elif not _truthy(rec.get("fallback")):
+                elif not _flag(rec.get("fallback")):
                     row["kind"] = "ok"
                 else:
                     row["kind"] = "fallback"

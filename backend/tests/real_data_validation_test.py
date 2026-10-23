@@ -461,6 +461,16 @@ def test_torn_trace_line_is_skipped_counted_and_fails_the_report(tmp_path):
     assert meta["trace_records"] == 7
 
 
+def test_one_missing_value_rule_and_one_observation_column_list():
+    # `_flag` is the only "missing counts as False" helper and handles pd.NA too
+    for missing in (None, float("nan"), pd.NA):
+        assert real_data_validation._flag(missing) is False
+    assert real_data_validation._flag(True) is True
+    assert not hasattr(real_data_validation, "_truthy")
+    assert real_data_validation._OBS_COLUMNS == tuple(
+        real_data_validation._OBSERVATION_COLUMNS.values())
+
+
 def test_trace_record_with_another_schema_is_counted_not_read(tmp_path):
     records = [_record("AUSTIN", h) for h in range(3)]
     _, trace, _ = _write_run(tmp_path, records)
