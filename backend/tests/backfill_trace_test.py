@@ -446,6 +446,20 @@ def test_resumed_run_starts_on_a_fresh_line_after_a_torn_trace_line(tmp_path, mo
     assert len(frame) == 1 and frame.attrs["unparseable"] == 1
 
 
+def test_resumed_run_starts_on_a_fresh_line_after_a_torn_log_row(tmp_path, monkeypatch):
+    log_path = tmp_path / "log.csv"
+    log_path.write_text(backfill_archive._LOG_HEADER + "\n2025-06-01T09:00:00Z,AUSTIN,15",
+                        encoding="utf-8")  # killed mid-row, no trailing newline
+    monkeypatch.setattr(backfill_archive, "run_dlr_pipeline",
+                        lambda **kwargs: _fake_run(kwargs["end"]))
+
+    _backfill_one_step(tmp_path, tmp_path / "trace.jsonl", _StubFetcher())
+
+    lines = log_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 3 and lines[1].endswith(",AUSTIN,15")
+    assert lines[2].startswith(f"{_DAY}T10:00:00Z,{_CITY},1500.0,")  # not glued onto the fragment
+
+
 def test_trace_takes_the_last_provenance_record_of_the_rated_station(tmp_path, monkeypatch):
     fetcher = _StubFetcher()
     earlier = {"stid": "OTHER", "hour": f"{_DAY}T09:00:00Z", "air_temp": "synoptic",

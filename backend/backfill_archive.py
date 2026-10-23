@@ -253,6 +253,7 @@ def backfill(start, end, step_hours=1.0, archive_path=DEFAULT_ARCHIVE, log_path=
     done = _already_archived(archive_path)
     os.makedirs(os.path.dirname(log_path) or ".", exist_ok=True)
     _retire_stale_log(log_path)
+    _terminate_last_line(log_path)  # a killed run's torn last row must not take the next one with it
     write_header = not os.path.exists(log_path)
     totals = {"runs": 0, "skipped": 0, "archived": Counter(), "not_archived": Counter(),
               "fallback": Counter(), "exhausted": Counter(), "gates": Counter(), "errors": Counter(),
