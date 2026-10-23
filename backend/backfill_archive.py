@@ -199,7 +199,8 @@ def backfill(start, end, step_hours=1.0, archive_path=DEFAULT_ARCHIVE, log_path=
     _retire_stale_log(log_path)
     write_header = not os.path.exists(log_path)
     totals = {"runs": 0, "skipped": 0, "archived": Counter(), "not_archived": Counter(),
-              "fallback": Counter(), "exhausted": Counter(), "gates": Counter(), "errors": Counter()}
+              "fallback": Counter(), "exhausted": Counter(), "gates": Counter(), "errors": Counter(),
+              "interrupted": False}
     t0 = time.time()
     n = len(times)
 
@@ -256,6 +257,7 @@ def backfill(start, end, step_hours=1.0, archive_path=DEFAULT_ARCHIVE, log_path=
                 eta = elapsed / max(totals["runs"], 1) * (n - i)
                 out(f"[{i}/{n}] {ts.strftime(_TS_FMT)}  " + " | ".join(parts) + f"   (eta {eta/60:.0f} min)")
         except KeyboardInterrupt:
+            totals["interrupted"] = True  # callers that cannot resume (replay) must stop
             out("\nInterrupted -- progress is saved; rerun the same command to continue.")
 
     totals["provider_issues"] = dict(fetcher.errors)

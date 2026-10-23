@@ -1131,6 +1131,21 @@ class ReplayRefused(Exception):
     """The replay must not start: an output already exists, or an anomaly model file is absent."""
 
 
+class ReplayInterrupted(Exception):
+    """
+    The replay was interrupted (Ctrl-C) part-way, so its outputs are incomplete.
+    Unlike the backfill, a replay cannot be resumed (`_refuse_existing` rejects the
+    existing outputs): delete them and run it again. `totals` holds what finished.
+    """
+
+    def __init__(self, city, totals):
+        super().__init__(
+            f"replay interrupted during {city}; the replay outputs are incomplete and "
+            "cannot be resumed -- delete them before running the replay again")
+        self.city = city
+        self.totals = totals
+
+
 def replay_stations(city) -> pd.DataFrame:
     """
     A one-row station frame, `stid = "REPLAY_" + city`, at the city's own
@@ -1231,7 +1246,9 @@ def replay(trace_path, start, end, step_hours, cities, method, archive_out, trac
     already exists, so a replay can never be mixed into an earlier one, or, with
     `require_models`, when any requested city's anomaly model file is absent (and,
     for method "ml", its forecast model file), so a replay can never silently run
-    heuristics-only. Returns {city: backfill totals}. `out` receives at most one
+    heuristics-only. Raises `ReplayInterrupted` (the CLI maps it to exit 130) if a
+    city's backfill is interrupted, instead of carrying on with the next city.
+    Returns {city: backfill totals}. `out` receives at most one
     progress line per simulated UTC day (default: print).
     """
     cities = list(cities)
@@ -1253,6 +1270,8 @@ def replay(trace_path, start, end, step_hours, cities, method, archive_out, trac
             start, end, step_hours, archive_path=archive_out, log_path=log_out, cities=[city],
             forecast_method=method, stations=replay_stations(city),
             fetcher=make_replay_fetcher(trace), out=progress, trace_path=trace_out)
+        if totals[city].get("interrupted"):
+            raise ReplayInterrupted(city, totals)
     return totals
 
 
@@ -1604,6 +1623,9 @@ def _cmd_replay(args) -> int:
     except ReplayRefused as exc:
         print(f"replay refused: {exc}", file=sys.stderr)
         return 2
+    except ReplayInterrupted as exc:
+        print(f"replay interrupted: {exc}", file=sys.stderr)
+        return 130
     steps = expected_steps(args.start, args.end, args.step_hours)
     start_ts = _utc(args.start)
     original = classify_steps(

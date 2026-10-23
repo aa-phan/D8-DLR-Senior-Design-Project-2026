@@ -294,12 +294,14 @@ def test_interrupted_backfill_keeps_progress_and_a_rerun_finishes_the_rest(tmp_p
     assert log_lines[0] == backfill_archive._LOG_HEADER
     assert log_lines[1].startswith(f"{_DAY}T10:00:00Z,AUSTIN,")
     assert lines[-1] == "\nInterrupted -- progress is saved; rerun the same command to continue."
+    assert first["interrupted"] is True
 
     _install_providers(monkeypatch, [])
     second = run()
 
     assert second["runs"] == 2
     assert second["skipped"] == 1
+    assert second["interrupted"] is False
     hist = historical_archive.read_history(path=str(archive))
     assert len(hist) == 3
     assert hist["datetime_utc"].is_unique

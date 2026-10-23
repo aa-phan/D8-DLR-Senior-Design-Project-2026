@@ -674,6 +674,34 @@ def test_replay_fidelity_flags_a_changed_observation(tmp_path, monkeypatch, caps
     assert json.loads(clean_outs["fidelity"].read_text(encoding="utf-8"))["mismatches"] == 0
 
 
+def test_an_interrupted_replay_stops_instead_of_continuing_with_the_next_city(
+        tmp_path, monkeypatch, capsys):
+    orig = _original_run(tmp_path, monkeypatch)
+    outs = _out_paths(tmp_path)
+    calls = []
+
+    def interrupted_backfill(start, end, step_hours, **kwargs):
+        calls.append(kwargs["cities"])
+        return {"runs": 1, "interrupted": True}
+
+    monkeypatch.setattr(rdv.backfill_archive, "backfill", interrupted_backfill)
+
+    with pytest.raises(rdv.ReplayInterrupted) as excinfo:
+        rdv.replay(str(orig["trace"]), _R_START, _R_END, 1.0, [_CITY, "MIDLAND"], "naive",
+                   str(outs["archive"]), str(outs["trace"]), str(outs["log"]),
+                   require_models=False, out=lambda *_: None)
+
+    assert calls == [[_CITY]]  # the second city was never started
+    assert excinfo.value.city == _CITY and "incomplete" in str(excinfo.value)
+
+    # The CLI reports it and exits non-zero without writing a fidelity table.
+    _model_dir(tmp_path, monkeypatch, with_models=True)
+    calls.clear()
+    assert rdv.main(_cli(orig, outs)) == 130
+    assert "replay interrupted" in capsys.readouterr().err
+    assert not outs["fidelity"].exists()
+
+
 def test_replay_refuses_without_anomaly_models_or_over_existing_outputs(tmp_path, monkeypatch, capsys):
     orig = _original_run(tmp_path, monkeypatch)
     model_dir = _model_dir(tmp_path, monkeypatch, with_models=False)
