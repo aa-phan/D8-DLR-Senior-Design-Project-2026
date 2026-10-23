@@ -291,6 +291,9 @@ def connect(url=None):
         url = os.environ.get("SUPABASE_DB_URL")
     if url is None or not str(url).strip():
         raise StoreError("SUPABASE_DB_URL is not set")
+    # A secret pasted with a trailing newline must connect: the stripped URL is the one
+    # that is redacted and the one handed to libpq.
+    url = str(url).strip()
 
     secrets = _url_secrets(url)
     for name in _ENV_URL_NAMES:
