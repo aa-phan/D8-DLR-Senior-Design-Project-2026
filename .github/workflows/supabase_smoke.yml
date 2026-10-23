@@ -8,6 +8,19 @@ name: Supabase Smoke
 # Run with:
 #   gh workflow run supabase_smoke.yml --ref main
 # Pushing this file changes live CI, so the owner approves it first (plan 04-06).
+#
+# Hardening (code-review IN-05):
+#   - Every action is pinned by full commit SHA, resolved read-only on 2026-10-23 from the
+#     official actions/* repositories (the commit each tag pointed to that day); the version
+#     is in the comment on the same line. Bump a pin deliberately, never by a moving tag.
+#   - The checkout does not persist its token (persist-credentials: false); the job needs
+#     no git credential after checkout.
+#   - The job runs only when github.ref is refs/heads/main, so a dispatch from another
+#     branch cannot run an edited copy of the smoke code with the writer secret. A branch
+#     that edits this workflow file itself can remove that guard, so the server-side
+#     control is a protected environment holding SUPABASE_DB_URL with a main-only
+#     deployment-branch rule. The owner may add it later together with the Phase 5
+#     workflow; it is not configured here.
 
 on:
   workflow_dispatch:
@@ -21,11 +34,14 @@ concurrency:
 
 jobs:
   smoke:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.12'
       - name: Install dependencies
