@@ -34,6 +34,7 @@ import requests
 
 import anomaly_detector
 import config
+import data_cleaning
 import ercot_dlr_merger
 import historical_archive
 import supabase_load_backfill as loader
@@ -579,6 +580,69 @@ def test_same_hour_duplicates_keep_the_first_row_and_are_counted(tmp_path, archi
     prepared, stats = loader.prepare_rows(csv_bad, manifest, _live_identity())
     assert stats["rows_dropped_by_validation"] == 1
     assert stats["csv_rows"]["AUSTIN"] == _HOURS - 1
+
+
+def _slot_row(rows, kind, dlr_amps, air_temp):
+    """An AUSTIN 01:00 row of the given kind ("computed" or "fallback") built from the fixture rows."""
+    fallback = kind == "fallback"
+    return dict(
+        rows[1], dlr_amps=dlr_amps, air_temp=air_temp,
+        status="fallback" if fallback else "ok", fallback=fallback,
+    )
+
+
+@pytest.mark.parametrize(
+    "order, kept",
+    [
+        (("fallback", "computed"), 1300.0),
+        (("computed", "fallback"), 1300.0),
+        (("computed", "computed"), 1300.0),
+        (("fallback", "fallback"), 1825.0),
+    ],
+    ids=["fallback_then_computed", "computed_then_fallback", "computed_then_computed", "fallback_then_fallback"],
+)
+def test_same_slot_keeps_the_first_computed_row_before_any_fallback_row(tmp_path, archive, order, kept):
+    _, manifest, _ = archive
+    rows = _archive_rows()
+    # Per kind, the first row of that kind carries `kept`-style values; the second carries other values.
+    values = {"computed": [1300.0, 1400.0], "fallback": [1825.0, 1826.0]}
+    seen = {"computed": 0, "fallback": 0}
+    slot_rows = []
+    for kind in order:
+        index = seen[kind]
+        seen[kind] += 1
+        slot_rows.append(_slot_row(rows, kind, values[kind][index], 35.0 + index))
+    # The two rows replace the fixture's AUSTIN 01:00 row, so the file holds exactly these two for that slot.
+    others = [r for i, r in enumerate(rows) if i != 1]
+    csv_path = _write_archive(tmp_path, others + slot_rows, "slot.csv")
+    prepared, stats = loader.prepare_rows(csv_path, manifest, _live_identity())
+
+    austin_01 = [r for r in prepared if r["city"] == "AUSTIN" and r["valid_time"].hour == 1]
+    assert len(austin_01) == 1
+    assert austin_01[0]["rating_amps"] == kept
+    assert austin_01[0]["fallback"] is (order == ("fallback", "fallback"))
+    assert stats["duplicates_dropped"]["AUSTIN"] == 1
+    assert sum(stats["duplicates_dropped"].values()) == 1
+    assert stats["csv_rows"]["AUSTIN"] == _HOURS
+    # Kept rows stay in file order (hours 0, 1, 2 for AUSTIN).
+    assert [r["valid_time"].hour for r in prepared if r["city"] == "AUSTIN"] == [0, 1, 2]
+
+
+def test_backfill_keeps_the_row_the_cleaning_step_keeps_usable(tmp_path, archive):
+    _, manifest, _ = archive
+    rows = _archive_rows()
+    slot_rows = [_slot_row(rows, "fallback", 1825.0, 35.0), _slot_row(rows, "computed", 1300.0, 36.0)]
+    csv_path = _write_archive(tmp_path, [r for i, r in enumerate(rows) if i != 1] + slot_rows, "clean.csv")
+    prepared, _stats = loader.prepare_rows(csv_path, manifest, _live_identity())
+    kept = [r for r in prepared if r["city"] == "AUSTIN" and r["valid_time"].hour == 1]
+    assert len(kept) == 1
+
+    frame = historical_archive.read_history(csv_path, validate=True)
+    austin = frame[frame["city"] == "AUSTIN"].reset_index(drop=True)
+    usable = data_cleaning.clean_history(austin, as_of=None).usable
+    usable_01 = usable[pd.to_datetime(usable["datetime_utc"], utc=True).dt.hour == 1]
+    assert len(usable_01) == 1
+    assert kept[0]["rating_amps"] == float(usable_01.iloc[0]["dlr_amps"]) == 1300.0
 
 
 def test_off_hour_or_out_of_window_rows_stop_the_load(tmp_path, archive, monkeypatch, capsys, fast_fingerprints):
