@@ -238,7 +238,8 @@ def backfill(start, end, step_hours=1.0, archive_path=DEFAULT_ARCHIVE, log_path=
                     parts.append(f"{c[:6]} {row['rating_a']:.0f}A{'*' if row['fallback'] else ''}{'' if row['archived'] else ' (not archived)'}")
                 for c, msg in run["errors"].items():
                     totals["errors"][c] += 1
-                    log_fh.write(f"{ts.strftime(_TS_FMT)},{c},,,,,,{msg.replace(',', ';')[:120]}\n")
+                    msg_safe = _redact(msg, limit=None)  # redact before the cut so no partial secret survives
+                    log_fh.write(f"{ts.strftime(_TS_FMT)},{c},,,,,,{msg_safe.replace(',', ';')[:120]}\n")
                     parts.append(f"{c[:6]} ERROR")
                 if trace_fh is not None:
                     for record in _trace_records(run, ts.strftime(_TS_FMT), forecast_method,

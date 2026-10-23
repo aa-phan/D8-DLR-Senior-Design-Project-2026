@@ -227,6 +227,23 @@ def test_trace_records_errors_with_credentials_redacted(tmp_path, monkeypatch):
     ) == "GET https://x/?token=REDACTED&email=REDACTED failed"
 
 
+def test_error_text_is_redacted_in_the_backfill_log_too(tmp_path, monkeypatch):
+    message = "GET https://api.example.org/v1?token=abc123&email=me@x.org failed"
+
+    def failing_run(**kwargs):
+        return {"start": kwargs["end"], "end": kwargs["end"], "provider": "composed",
+                "forecast_method": "naive", "results": [], "summary": [],
+                "errors": {_CITY: message}}
+
+    monkeypatch.setattr(backfill_archive, "run_dlr_pipeline", failing_run)
+
+    _backfill_one_step(tmp_path, tmp_path / "trace.jsonl", _StubFetcher())
+
+    log_text = (tmp_path / "log.csv").read_text(encoding="utf-8")
+    assert "abc123" not in log_text and "me@x.org" not in log_text
+    assert "token=REDACTED" in log_text
+
+
 def test_alert_text_is_redacted_before_it_reaches_the_trace(tmp_path, monkeypatch):
     run = _fake_run(f"{_DAY}T10:00:00Z")
     run["results"][0]["alerts"] = ["G1 FAIL (provider said api_key=SECRET42) - fallback"]
