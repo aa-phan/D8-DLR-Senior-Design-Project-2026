@@ -8,8 +8,10 @@ Follows backend/tests/backfill_archive_test.py's conventions (module-level
 imports, plain asserts, no test classes).
 """
 
+import ast
 import json
 import os
+import shlex
 
 import numpy as np
 import pandas as pd
@@ -105,9 +107,8 @@ def test_manifest_is_deterministic_and_flags_missing_models(tmp_path, monkeypatc
         "warmup_hours": 168.0, "scored_start": "2025-06-08T10:00:00Z"}
     assert manifest["cities"] == ["AUSTIN", "MIDLAND"]
     assert manifest["backfill_argv"] == argv
-    assert repr(argv) in manifest["command"]
-    assert manifest["command"] == real_data_validation.OWNER_COMMAND_TEMPLATE.replace(
-        "{argv}", repr(argv))
+    assert manifest["command"] == real_data_validation.owner_command(argv)
+    assert "working_directory" not in manifest
     assert manifest["archive_rows_by_city"] == {"AUSTIN": 2, "MIDLAND": 0}
     assert set(manifest["files"]) == {"archive", "trace", "log"}
     assert manifest["files"]["archive"]["bytes"] == archive.stat().st_size
@@ -119,6 +120,63 @@ def test_manifest_is_deterministic_and_flags_missing_models(tmp_path, monkeypatc
     assert len(manifest["git"]["head"]) == 40 and isinstance(manifest["git"]["backend_dirty"], bool)
     assert "PROVISIONAL" in manifest["label"]
     assert "model file missing" in capsys.readouterr().err
+
+
+def test_manifest_bytes_do_not_depend_on_the_directory_or_how_paths_are_typed(
+        tmp_path, monkeypatch):
+    archive, trace, log = tmp_path / "a.csv", tmp_path / "t.jsonl", tmp_path / "l.csv"
+    _write_archive(archive, "AUSTIN", [10, 11])
+    trace.write_text(_trace_line("AUSTIN", 10) + "\n" + _trace_line("AUSTIN", 11) + "\n",
+                     encoding="utf-8")
+    _write_log(log, "AUSTIN", [10, 11])
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+
+    def manifest_from(directory, archive_arg, trace_arg, log_arg):
+        monkeypatch.chdir(directory)
+        return json.dumps(real_data_validation.build_manifest(
+            archive_arg, trace_arg, log_arg, _step(10), _step(11), cities=["AUSTIN"]),
+            sort_keys=True)
+
+    absolute = manifest_from(tmp_path, str(archive), str(trace), str(log))
+    relative = manifest_from(tmp_path, "a.csv", "t.jsonl", "./l.csv")
+    elsewhere = manifest_from(other, str(archive), str(trace), str(log))
+    elsewhere_relative = manifest_from(other, "../a.csv", "../t.jsonl", "../l.csv")
+
+    assert absolute == relative == elsewhere == elsewhere_relative
+    files = json.loads(absolute)["files"]
+    assert {name: record["path"] for name, record in files.items()} == {
+        "archive": str(archive).replace("\\", "/"), "trace": str(trace).replace("\\", "/"),
+        "log": str(log).replace("\\", "/")}
+
+
+def test_manifest_path_is_repo_relative_inside_the_repository():
+    root = real_data_validation._REPO_ROOT
+    inside = os.path.join(root, "outputs", "run", "trace.jsonl")
+    assert real_data_validation._manifest_path(inside) == "outputs/run/trace.jsonl"
+
+
+def test_owner_command_survives_shell_metacharacters_in_the_argv():
+    argv = ["--cities", "AUSTIN", "--note", "it's \"quoted\" $(touch pwned) `id` $HOME"]
+
+    command = real_data_validation.owner_command(argv)
+
+    words = shlex.split(command)  # what a POSIX shell would hand to the program
+    assert real_data_validation._REPO_ROOT not in command  # same text in every checkout
+    assert words[0] == "PYTHONPATH=backend" and words[2] == "-c" and len(words) == 4
+    assert words[1] == os.path.join(".venv", "bin", "python")
+    program = words[3]
+    assert program.startswith("from dotenv import load_dotenv; ")
+    assert ast.literal_eval(program.split("backfill_archive.main(", 1)[1][:-2]) == argv
+
+
+def test_git_query_returns_empty_when_git_is_not_installed(monkeypatch):
+    def no_git(*args, **kwargs):
+        raise FileNotFoundError("git")
+
+    monkeypatch.setattr(real_data_validation.subprocess, "run", no_git)
+
+    assert real_data_validation._git("rev-parse", "HEAD") == ""
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -382,6 +440,48 @@ def test_report_exits_one_when_a_reported_rating_disagrees_with_physics(tmp_path
     code, out_dir = _report(tmp_path, records, ["AUSTIN"])
     meta = json.loads((out_dir / "report_meta.json").read_text(encoding="utf-8"))
     assert code == 1 and meta["computed_vs_reported_mismatches"] == 1
+
+
+def test_torn_trace_line_is_skipped_counted_and_fails_the_report(tmp_path):
+    records = [_record("AUSTIN", h) for h in range(7)]
+    archive, trace, _ = _write_run(tmp_path, records)
+    with open(trace, "a", encoding="utf-8") as fh:
+        fh.write('{"schema": "backfill_trace/1", "city": "AUSTIN", "run_end')  # killed mid-write
+    out_dir = tmp_path / "report"
+
+    assert real_data_validation.load_trace(trace).attrs["unparseable"] == 1
+    code = real_data_validation.main([
+        "report", "--archive", str(archive), "--trace", str(trace), "--start", _START,
+        "--end", _ts(6), "--warmup-hours", str(_WARMUP_H), "--cities", "AUSTIN",
+        "--out-dir", str(out_dir)])
+
+    meta = json.loads((out_dir / "report_meta.json").read_text(encoding="utf-8"))
+    assert code == 1  # the evidence is written, and the damaged trace is flagged
+    assert meta["trace_unparseable_line_mismatches"] == 1
+    assert meta["trace_records"] == 7
+
+
+def test_one_missing_value_rule_and_one_observation_column_list():
+    # `_flag` is the only "missing counts as False" helper and handles pd.NA too
+    for missing in (None, float("nan"), pd.NA):
+        assert real_data_validation._flag(missing) is False
+    assert real_data_validation._flag(True) is True
+    assert not hasattr(real_data_validation, "_truthy")
+    assert real_data_validation._OBS_COLUMNS == tuple(
+        real_data_validation._OBSERVATION_COLUMNS.values())
+
+
+def test_trace_record_with_another_schema_is_counted_not_read(tmp_path):
+    records = [_record("AUSTIN", h) for h in range(3)]
+    _, trace, _ = _write_run(tmp_path, records)
+    with open(trace, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps({**_record("AUSTIN", 3), "schema": "backfill_trace/2"}) + "\n")
+        fh.write(json.dumps({k: v for k, v in _record("AUSTIN", 4).items() if k != "schema"}) + "\n")
+
+    frame = real_data_validation.load_trace(trace)
+
+    assert frame.attrs["unparseable"] == 2
+    assert len(frame) == 3
 
 
 def test_duplicate_archive_slot_counts_as_a_mismatch(tmp_path):

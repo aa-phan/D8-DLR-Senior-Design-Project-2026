@@ -227,6 +227,191 @@ def test_trace_records_errors_with_credentials_redacted(tmp_path, monkeypatch):
     ) == "GET https://x/?token=REDACTED&email=REDACTED failed"
 
 
+def test_trace_file_is_closed_when_the_log_cannot_be_opened(tmp_path, monkeypatch):
+    opened = []
+    real_open = open
+
+    log_path = tmp_path / "log.csv"
+
+    def tracking_open(path, *args, **kwargs):
+        if str(path) == str(log_path) and "a" in args[:1]:
+            raise PermissionError("log is not writable")  # after the trace is already open
+        fh = real_open(path, *args, **kwargs)
+        opened.append(fh)
+        return fh
+
+    monkeypatch.setattr(backfill_archive, "open", tracking_open, raising=False)
+    trace_path = tmp_path / "trace.jsonl"
+
+    with pytest.raises(PermissionError):
+        backfill_archive.backfill(
+            f"{_DAY}T10:00:00Z", f"{_DAY}T10:00:00Z",
+            archive_path=str(tmp_path / "archive.csv"), log_path=str(log_path),
+            cities=[_CITY], stations=_station_at(_CITY), fetcher=_StubFetcher(),
+            out=lambda *_: None, trace_path=trace_path)
+
+    assert opened and all(fh.closed for fh in opened)
+
+
+def test_trace_records_pair_by_city_when_results_and_summary_disagree():
+    run = _fake_run(f"{_DAY}T10:00:00Z")
+    run["summary"] = []  # desynchronised: the rated city still gets a record
+
+    (record,) = backfill_archive._trace_records(run, f"{_DAY}T10:00:00Z", "naive", [])
+
+    assert record["city"] == _CITY and record["static_rating_a"] is None
+    assert record["fallback_gates"] == []
+
+
+def test_a_step_whose_trace_cannot_be_built_does_not_abort_the_backfill(tmp_path, monkeypatch):
+    run = _fake_run(f"{_DAY}T10:00:00Z")
+    del run["results"][0]["rating"]  # a malformed step
+    monkeypatch.setattr(backfill_archive, "run_dlr_pipeline", lambda **kwargs: run)
+    messages = []
+
+    totals = backfill_archive.backfill(
+        f"{_DAY}T10:00:00Z", f"{_DAY}T11:00:00Z", archive_path=str(tmp_path / "a.csv"),
+        log_path=str(tmp_path / "log.csv"), cities=[_CITY], stations=_station_at(_CITY),
+        fetcher=_StubFetcher(), out=messages.append, trace_path=tmp_path / "t.jsonl")
+
+    assert totals["runs"] == 2 and totals["trace_errors"] == 2  # the second step still ran
+    assert any("trace not written" in m for m in messages)
+
+
+def test_an_interrupt_while_the_trace_is_written_still_writes_it(tmp_path, monkeypatch):
+    monkeypatch.setattr(backfill_archive, "run_dlr_pipeline",
+                        lambda **kwargs: _fake_run(kwargs["end"]))
+    trace_path = tmp_path / "trace.jsonl"
+    real_open = open
+    state = {"raised": False}
+
+    class _Interrupting:
+        def __init__(self, fh):
+            self._fh = fh
+
+        def write(self, text):
+            if not state["raised"] and text.startswith("{"):
+                state["raised"] = True
+                raise KeyboardInterrupt
+            return self._fh.write(text)
+
+        def __getattr__(self, name):
+            return getattr(self._fh, name)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return self._fh.__exit__(*exc)
+
+    def fake_open(path, *args, **kwargs):
+        fh = real_open(path, *args, **kwargs)
+        return _Interrupting(fh) if str(path) == str(trace_path) else fh
+
+    monkeypatch.setattr("builtins.open", fake_open)
+
+    totals = _backfill_one_step(tmp_path, trace_path, _StubFetcher())
+
+    monkeypatch.undo()
+    assert totals["interrupted"] is True
+    (record,) = _read_trace(trace_path)
+    assert record["city"] == _CITY
+
+
+def test_an_empty_log_file_gets_its_header(tmp_path, monkeypatch):
+    log_path = tmp_path / "log.csv"
+    log_path.write_text("", encoding="utf-8")  # created, then killed before the header
+    monkeypatch.setattr(backfill_archive, "run_dlr_pipeline",
+                        lambda **kwargs: _fake_run(kwargs["end"]))
+
+    _backfill_one_step(tmp_path, tmp_path / "trace.jsonl", _StubFetcher())
+
+    assert log_path.read_text(encoding="utf-8").splitlines()[0] == backfill_archive._LOG_HEADER
+
+
+@pytest.mark.parametrize("text", [
+    "invalid token: expired",
+    "Error sending email: connection refused",
+    "password: required",
+    "Authorization: Basic authentication failed",
+    "Token expired",
+])
+def test_redact_leaves_prose_after_a_credential_word_alone(text):
+    assert backfill_archive._redact(text) == text
+
+
+def test_a_short_configured_secret_only_replaces_whole_words(monkeypatch):
+    monkeypatch.setenv("SYNOPTIC_TOKEN", "test")
+    assert backfill_archive._redact("testing a test run, retest") == "testing a REDACTED run, retest"
+
+
+def test_error_text_is_redacted_in_the_backfill_log_too(tmp_path, monkeypatch):
+    message = "GET https://api.example.org/v1?token=abc123&email=me@x.org failed"
+
+    def failing_run(**kwargs):
+        return {"start": kwargs["end"], "end": kwargs["end"], "provider": "composed",
+                "forecast_method": "naive", "results": [], "summary": [],
+                "errors": {_CITY: message}}
+
+    monkeypatch.setattr(backfill_archive, "run_dlr_pipeline", failing_run)
+
+    _backfill_one_step(tmp_path, tmp_path / "trace.jsonl", _StubFetcher())
+
+    log_text = (tmp_path / "log.csv").read_text(encoding="utf-8")
+    assert "abc123" not in log_text and "me@x.org" not in log_text
+    assert "token=REDACTED" in log_text
+
+
+def test_multi_line_error_stays_one_log_row_that_completeness_can_read(tmp_path, monkeypatch):
+    message = "boom\nline two; with comma\r\nline three, token=abc123\n"
+
+    def failing_run(**kwargs):
+        return {"start": kwargs["end"], "end": kwargs["end"], "provider": "composed",
+                "forecast_method": "naive", "results": [], "summary": [],
+                "errors": {_CITY: message}}
+
+    monkeypatch.setattr(backfill_archive, "run_dlr_pipeline", failing_run)
+
+    _backfill_one_step(tmp_path, tmp_path / "trace.jsonl", _StubFetcher())
+
+    log_path = tmp_path / "log.csv"
+    assert len(log_path.read_text(encoding="utf-8").splitlines()) == 2  # header + one row
+    log = real_data_validation._read_log(log_path)
+    (row,) = log.to_dict("records")
+    assert row["city"] == _CITY
+    assert row["error"].startswith("boom line two; with comma line three;")
+    assert "abc123" not in row["error"]
+
+
+@pytest.mark.parametrize("message", [
+    '"boom',                         # a leading quote with no partner
+    '"',
+    '"x" ' * 100,                    # the 120-character cut slices a quoted run
+    'say "hi", then "bye',
+    "'single 'quoted",
+    "nul\x00byte and \x1f separator   line sep",
+    ",,,\"\",\"",
+    "",
+])
+def test_any_error_text_leaves_a_log_row_that_read_log_can_parse(tmp_path, monkeypatch, message):
+    def failing_run(**kwargs):
+        return {"start": kwargs["end"], "end": kwargs["end"], "provider": "composed",
+                "forecast_method": "naive", "results": [], "summary": [],
+                "errors": {_CITY: message}}
+
+    monkeypatch.setattr(backfill_archive, "run_dlr_pipeline", failing_run)
+
+    _backfill_one_step(tmp_path, tmp_path / "trace.jsonl", _StubFetcher())
+
+    log = real_data_validation._read_log(tmp_path / "log.csv")
+    (row,) = log.to_dict("records")
+    assert row["city"] == _CITY
+    printable = "".join(ch if ch.isprintable() else " " for ch in message)
+    expected = " ".join(printable.split()).replace(",", ";")[:120]
+    got = row["error"] if isinstance(row["error"], str) else ""
+    assert got == expected
+
+
 def test_alert_text_is_redacted_before_it_reaches_the_trace(tmp_path, monkeypatch):
     run = _fake_run(f"{_DAY}T10:00:00Z")
     run["results"][0]["alerts"] = ["G1 FAIL (provider said api_key=SECRET42) - fallback"]
@@ -237,6 +422,127 @@ def test_alert_text_is_redacted_before_it_reaches_the_trace(tmp_path, monkeypatc
 
     (record,) = _read_trace(trace_path)
     assert record["alerts"] == ["G1 FAIL (provider said api_key=REDACTED) - fallback"]
+
+
+def test_trace_is_written_before_the_log_row_so_an_interrupt_cannot_lose_it(tmp_path, monkeypatch):
+    run = _fake_run(f"{_DAY}T10:00:00Z")
+    run["summary"][0]["rating_a"] = None  # the log row's `:.1f` format fails after the trace write
+    monkeypatch.setattr(backfill_archive, "run_dlr_pipeline", lambda **kwargs: run)
+    trace_path = tmp_path / "trace.jsonl"
+
+    with pytest.raises(TypeError):
+        _backfill_one_step(tmp_path, trace_path, _StubFetcher())
+
+    (record,) = _read_trace(trace_path)
+    assert record["city"] == _CITY
+
+
+@pytest.mark.parametrize("text, secret", [
+    ("params={'token': 'abc123', 'a':1}", "abc123"),        # dict / repr form
+    ('url?token="abc123"', "abc123"),                       # quoted value
+    ('{"api_key": "abc123"}', "abc123"),                    # JSON form
+    ("Authorization: Bearer abc123", "abc123"),             # header form
+    ("X-Api-Key: abc123", "abc123"),
+    ("token%3Dabc123", "abc123"),                           # percent-encoded =
+    ("url?api_key=abc,123&x", "123"),                       # comma inside the value
+    ("url?token=a)bc", "bc"),                               # bracket inside the value
+    ("Bearer abc123", "abc123"),                            # bare bearer token
+    ("Authorization: Basic dXNlcjpwYXNz", "dXNlcjpwYXNz"),  # other header schemes
+    ("Authorization: Token abc123", "abc123"),
+    ("Proxy-Authorization: Basic abc123", "abc123"),
+    ('{"token": "ab\\"cd"}', 'cd"'),                        # tail after an escaped quote
+    ("params={'token': 'ab\\'cd'}", "cd'"),
+    ("url?pwd=abc123", "abc123"),                           # more credential names
+    ("url?passwd=xyz789", "xyz789"),
+    ("url?auth=abc123", "abc123"),
+    ("url?credential=abc123", "abc123"),
+    ("url?key=abc123&x=1", "abc123"),                       # bare `key` in query form
+    ("key=abc123", "abc123"),
+    ('{"key": "abc123"}', "abc123"),                        # bare `key` as a quoted name
+    ("secret_key: abc123", "abc123"),                       # compound names, any separator
+    ("access-key=abc123", "abc123"),
+    ("accessKey=AKIA123", "AKIA123"),                       # camelCase / concatenated key names
+    ("SecretKey: abc123", "abc123"),
+    ("privatekey=abc123", "abc123"),
+    ("accesskey=abcdefg", "abcdefg"),
+    ('{"signingKey": "abc123"}', "abc123"),
+    ("subscriptionKey=abc123&x=1", "abc123"),
+    ('key: "abcdefghij0123456789"', "abcdefghij0123456789"),  # quoted value after a bare `key:`
+    ("auth: abc123secret", "abc123secret"),                 # colon form of auth / sig
+    ("sig: abcdef0123456789abcdef", "abcdef0123456789abcdef"),
+    ('{"body": "{\\"token\\": \\"abc123\\"}"}', "abc123"),  # JSON nested in a JSON string
+    ('{\\"api_key\\": \\"abc123\\", \\"x\\": 1}', "abc123"),
+    ('token=\\"abc123\\"', "abc123"),                       # escaped-quote value
+    ('token="abc123', "abc123"),                            # unterminated quote (cut message)
+    ("token='abc123", "abc123"),
+    ('token="abc123\\', "abc123"),                          # ... ending in a lone backslash
+    ("api_key          =    abc123", "abc123"),             # wide spacing around the separator
+    ("key: AIzaSyA1b2C3d4E5f6G7h8I9j0", "AIzaSyA1b2C3d4E5f6G7h8I9j0"),  # credential-looking value
+])
+def test_redact_masks_every_credential_shape(text, secret):
+    assert secret not in backfill_archive._redact(text)
+    assert "REDACTED" in backfill_archive._redact(text)
+
+
+@pytest.mark.parametrize("text", [
+    "missing key: temp",                                    # diagnostic prose is evidence,
+    "no data for key: wind_speed in window",                # not a credential: pin that
+    "Max key: 5 reached",
+    "hotkey: F5 failed",
+    "auth: failed",
+    "author: bob",
+    "monkey: see; turkey=dinner; hotkey F5 failed",         # `key` only as a credential suffix
+    "keyboard=us",
+    "missing key: 'temp'",                                  # quotes alone do not make a secret
+    "auth: 401",
+    "sig: ok",
+])
+def test_redact_leaves_diagnostic_text_that_only_mentions_a_key(text):
+    assert backfill_archive._redact(text) == text
+
+
+def test_redact_keeps_the_text_around_a_secret_and_leaves_plain_text_alone():
+    assert backfill_archive._redact("url?api_key=abc,123&x") == "url?api_key=REDACTED&x"
+    assert backfill_archive._redact("KeyError: 'missing'") == "KeyError: 'missing'"
+
+
+def test_redact_removes_configured_secret_values_in_any_shape(monkeypatch):
+    monkeypatch.setenv("SYNOPTIC_TOKEN", "s3cr&t tok")
+    monkeypatch.setenv("NREL_API_EMAIL", "me@example.org")
+    monkeypatch.setenv("NREL_API_KEY", "abc")  # shorter than the minimum: ignored
+    text = "raw s3cr&t tok, encoded s3cr%26t%20tok, plus s3cr%26t+tok, mail me%40example.org"
+    redacted = backfill_archive._redact(text)
+    assert "s3cr" not in redacted and "example" not in redacted
+    assert backfill_archive._redact("abc stays") == "abc stays"
+
+
+def test_resumed_run_starts_on_a_fresh_line_after_a_torn_trace_line(tmp_path, monkeypatch):
+    trace_path = tmp_path / "trace.jsonl"
+    trace_path.write_text('{"schema": "backfill_trace/1", "city": "AUS', encoding="utf-8")  # torn
+    monkeypatch.setattr(backfill_archive, "run_dlr_pipeline",
+                        lambda **kwargs: _fake_run(kwargs["end"]))
+
+    _backfill_one_step(tmp_path, trace_path, _StubFetcher())
+
+    lines = trace_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2 and lines[0].endswith('"AUS')
+    assert json.loads(lines[1])["city"] == _CITY  # the new record is intact, not glued on
+    frame = real_data_validation.load_trace(trace_path)
+    assert len(frame) == 1 and frame.attrs["unparseable"] == 1
+
+
+def test_resumed_run_starts_on_a_fresh_line_after_a_torn_log_row(tmp_path, monkeypatch):
+    log_path = tmp_path / "log.csv"
+    log_path.write_text(backfill_archive._LOG_HEADER + "\n2025-06-01T09:00:00Z,AUSTIN,15",
+                        encoding="utf-8")  # killed mid-row, no trailing newline
+    monkeypatch.setattr(backfill_archive, "run_dlr_pipeline",
+                        lambda **kwargs: _fake_run(kwargs["end"]))
+
+    _backfill_one_step(tmp_path, tmp_path / "trace.jsonl", _StubFetcher())
+
+    lines = log_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 3 and lines[1].endswith(",AUSTIN,15")
+    assert lines[2].startswith(f"{_DAY}T10:00:00Z,{_CITY},1500.0,")  # not glued onto the fragment
 
 
 def test_trace_takes_the_last_provenance_record_of_the_rated_station(tmp_path, monkeypatch):
@@ -295,7 +601,7 @@ def test_resumed_step_keeps_the_last_trace_record(tmp_path, monkeypatch):
     assert len(_read_trace(trace_path)) == 4
     trace = real_data_validation.load_trace(trace_path)
     assert len(trace) == 2
-    assert trace.attrs == {"duplicates": 2, "records": 4}
+    assert trace.attrs == {"duplicates": 2, "records": 4, "unparseable": 0}
     assert trace["error"].isna().all()
     assert (trace["rating_a"] > 0).all()
     assert list(trace["run_end_utc"]) == [pd.Timestamp(f"{_DAY}T10:00:00Z"),
