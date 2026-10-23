@@ -17,6 +17,13 @@ CLI:
     python dlr_orchestrator.py --provider open_meteo --start 2025-07-01 --end 2025-07-02
     python dlr_orchestrator.py --forecast-method ewm --output outputs/run.json
     python dlr_orchestrator.py --store postgres --forecast-method ml   # Supabase (SUPABASE_DB_URL)
+
+Exit status:
+    0  every requested city was rated
+    1  every city failed, the pipeline_run row could not be written, or (with
+       --store postgres) any city failed: a missing row is a data gap in the
+       production table. With the CSV archive a partial run still exits 0.
+    2  a usage error (argparse)
 """
 
 import argparse
@@ -310,7 +317,12 @@ def _print_report(run: dict) -> None:
 
 
 def main(argv=None) -> int:
-    p = argparse.ArgumentParser(description="Run the integrated DLR city pipeline.")
+    p = argparse.ArgumentParser(
+        description="Run the integrated DLR city pipeline.",
+        epilog="exit status: 0 all requested cities ok; 1 every city failed, the run row "
+               "could not be written, or (with --store postgres) any city failed, because a "
+               "missing row is a data gap in the production table; 2 a usage error",
+    )
     p.add_argument("--cities", nargs="*", help="City keys (default: all in config.LOCATIONS)")
     p.add_argument("--start", help="ISO start (default: end - window-hours)")
     p.add_argument("--end", help="ISO end (default: now, UTC)")
@@ -349,6 +361,10 @@ def main(argv=None) -> int:
                       fh, indent=2, default=str)
         print(f"Summary written to {args.output}")
     if run.get("run_log_error"):
+        return 1
+    # WR-01: with the production store any failed city is a data gap, so the
+    # scheduled job must not stay green; the CSV rule (every city failed) stays.
+    if args.store == "postgres" and run["errors"]:
         return 1
     return 1 if run["errors"] and not run["summary"] else 0
 
