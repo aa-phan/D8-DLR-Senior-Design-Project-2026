@@ -900,28 +900,85 @@ class SupabaseStore:
     The pipeline's Postgres store: history in, rating rows out. One instance
     holds one connection and one run context, so every row of a run shares its
     run_id, run_attempt and pipeline_version.
+
+    Reconnect rule (WR-03): a store built with a `reconnect` factory (`from_env`
+    supplies one) replaces its connection once, and retries the operation once,
+    when `read_history`, `write_rating` or `record_run` fails on a lost
+    connection: one that is closed, broken, or fails a `select 1` probe. A
+    connection that is already closed is replaced before the operation. A
+    failure on a healthy connection (a CHECK violation, say) is raised as it
+    was and never retried; a failed reconnect raises a redacted `StoreError` and
+    the next call tries again. The run context is never rebuilt, so rows
+    written after a reconnect keep the run's run_id. A store built from a bare
+    connection has no factory and behaves as if there were no reconnect rule.
     """
 
-    def __init__(self, conn, run_ctx=None, history_days=None):
+    def __init__(self, conn, run_ctx=None, history_days=None, reconnect=None):
         self.conn = conn
         self.run_ctx = run_context() if run_ctx is None else run_ctx
         self.history_days = history_days
+        self._reconnect = reconnect
 
     @classmethod
     def from_env(cls, url=None):
-        return cls(connect(url))
+        # The factory goes back through connect(), so a reconnect re-reads the URL and
+        # re-applies the session settings (statement timeout, UTC).
+        return cls(connect(url), reconnect=lambda: connect(url))
+
+    def _flagged_lost(self) -> bool:
+        return bool(getattr(self.conn, "closed", False) or getattr(self.conn, "broken", False))
+
+    def _lost(self) -> bool:
+        if self._flagged_lost():
+            return True
+        try:
+            self.conn.execute("select 1")
+        except Exception:  # noqa: BLE001 - any failure of the probe means the session is gone
+            return True
+        return False
+
+    def _replace_connection(self, operation: str) -> None:
+        log.warning("Postgres connection lost during %s; reconnecting once", operation)
+        try:
+            self.conn.close()
+        except Exception:  # noqa: BLE001 - the old connection is already unusable
+            pass
+        failure = None
+        try:
+            new_conn = self._reconnect()
+        except StoreError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - re-raised below as a redacted StoreError
+            failure = redact(str(exc))
+        if failure is not None:
+            raise StoreError(f"database reconnect failed: {failure}")
+        self.conn = new_conn
+
+    def _with_reconnect(self, operation: str, action):
+        """Run `action(conn)`; on a lost connection reconnect once and run it once more."""
+        if self._reconnect is not None and self._flagged_lost():
+            self._replace_connection(operation)
+        try:
+            return action(self.conn)
+        except StoreError:
+            if self._reconnect is None or not self._lost():
+                raise
+        self._replace_connection(operation)
+        return action(self.conn)
 
     def read_history(self, city: str, end) -> pd.DataFrame:
-        return read_history(self.conn, city, end, days=self.history_days)
+        return self._with_reconnect(
+            "read_history", lambda conn: read_history(conn, city, end, days=self.history_days))
 
     def write_rating(self, result: dict, end, provenance=None) -> bool:
+        # The row is built once, outside the retry, so a ValueError from row shaping is never retried.
         row = build_rating_row(result, end, self.run_ctx, provenance)
-        upsert_rating(self.conn, row)
+        self._with_reconnect("write_rating", lambda conn: upsert_rating(conn, row))
         return True
 
     def record_run(self, row: dict) -> None:
         """Upsert the run's `pipeline_run` row (see `upsert_run`)."""
-        upsert_run(self.conn, row)
+        self._with_reconnect("record_run", lambda conn: upsert_run(conn, row))
 
     def close(self) -> None:
         self.conn.close()
