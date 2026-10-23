@@ -8,6 +8,7 @@ role. Run it as the role the pipeline will use (`SUPABASE_DB_URL`); it proves:
   role_is_dlr_writer         the session user is the least-privilege writer
   ssl_in_use                 the connection is encrypted
   server_version_ge_15       the server is PostgreSQL 15 or newer
+  session_timezone_utc       the session time zone is UTC after connect() (the writer pins it)
   tables_exist               public.city_rating and public.pipeline_run exist
   rls_enabled                row-level security is on for both
   writer_policies_exist      the dlr_writer policy is present on both (without it the
@@ -18,6 +19,9 @@ role. Run it as the role the pipeline will use (`SUPABASE_DB_URL`); it proves:
                              first_written_at stays as it was (OD-7)
   run_row_idempotent         a sentinel run row written twice leaves one row
   delete_denied              the writer cannot remove a row
+  utc_hour_check_zone_independent
+                             the hour CHECK is evaluated in UTC: in an Asia/Kolkata (UTC+05:30)
+                             session a whole UTC hour is accepted and 01:30Z is refused
   rows_visible               (--expect-rows) every city has at least one row
 
 Every write happens inside ONE transaction that is always rolled back
@@ -53,6 +57,10 @@ POLICY_NAME = "dlr_writer_all"
 SENTINEL_RUN_ID = "smoke-sentinel"
 SENTINEL_END = "2000-01-01T00:00:00Z"
 SENTINEL_FIRST_WRITTEN = "2000-01-02T03:04:05Z"
+HOUR_CHECK_NAME = "city_rating_valid_time_hour_ck"
+ZONE_PROBE_ZONE = "Asia/Kolkata"  # UTC+05:30: whole hours there are half hours in UTC
+ZONE_PROBE_WHOLE_HOUR = "2000-01-01T01:00:00Z"
+ZONE_PROBE_HALF_HOUR = "2000-01-01T01:30:00Z"  # 07:00 in Asia/Kolkata
 CONSUMER_ROLES = ("anon", "authenticated")
 WRITE_PRIVILEGES = ("INSERT", "UPDATE", "DELETE", "TRUNCATE")
 
@@ -149,6 +157,29 @@ def _delete_denied(conn):
     return False
 
 
+def _utc_hour_check_zone_independent(conn):
+    """
+    The hour CHECK holds in UTC whatever the session zone: in a +05:30 session a whole UTC
+    hour is accepted and a UTC half hour that is a whole hour locally is refused. Runs in a
+    nested rolled-back savepoint, so the zone setting and both rows vanish.
+    """
+    import psycopg
+
+    row = _sentinel_row()
+    with conn.transaction(force_rollback=True):
+        conn.execute(f"set local timezone = '{ZONE_PROBE_ZONE}'")
+        try:
+            conn.execute(supabase_store.UPSERT_RATING_SQL, dict(row, valid_time=ZONE_PROBE_WHOLE_HOUR))
+        except psycopg.errors.CheckViolation:
+            return False  # a valid UTC slot was refused: the session-zone form of the CHECK
+        try:
+            with conn.transaction():
+                conn.execute(supabase_store.UPSERT_RATING_SQL, dict(row, valid_time=ZONE_PROBE_HALF_HOUR))
+        except psycopg.errors.CheckViolation as exc:
+            return exc.diag.constraint_name == HOUR_CHECK_NAME
+    return False
+
+
 def _write_report(path, report):
     directory = os.path.dirname(path)
     if directory:
@@ -209,6 +240,7 @@ def main(argv=None) -> int:
         else:
             checks.run("ssl_in_use", lambda: bool(conn.pgconn.ssl_in_use))
         checks.run("server_version_ge_15", lambda: conn.info.server_version >= 150000)
+        checks.run("session_timezone_utc", lambda: _scalar(conn, "show timezone") == "UTC")
         checks.run("tables_exist", lambda: all(
             _scalar(conn, "select to_regclass(%(t)s) is not null", {"t": table}) for table in TABLES))
 
@@ -257,6 +289,7 @@ def main(argv=None) -> int:
             checks.run("rating_upsert_idempotent", lambda: _rating_upsert_idempotent(conn))
             checks.run("run_row_idempotent", lambda: _run_row_idempotent(conn))
             checks.run("delete_denied", lambda: _delete_denied(conn))
+            checks.run("utc_hour_check_zone_independent", lambda: _utc_hour_check_zone_independent(conn))
 
         city_rows = {}
         try:
