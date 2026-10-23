@@ -3,70 +3,85 @@ phase: 03
 review: 03-REVIEW.md
 titles: json
 findings:
-  - id: CR-01
-    severity: critical
-    disposition: open
-    title: "Credential redaction misses quoted, JSON/dict-style, header and encoded forms, and leaks the tail of values containing separators"
   - id: WR-01
     severity: warning
     disposition: open
-    title: "The same error text is written unredacted to the backfill log"
+    title: "Dropping bare `key` from the name list leaks camelCase and concatenated key names (regression from pass 1)"
   - id: WR-02
     severity: warning
-    disposition: open
-    title: "A torn last line in the trace makes the whole analysis crash"
+    disposition: fixed
+    title: "Quoted, escaped, unterminated and `auth:`/`sig:` colon-form credentials still pass through"
   - id: WR-03
     severity: warning
     disposition: open
-    title: "Ctrl-C during `replay` silently continues with the next city and produces a partial replay that cannot be resumed"
-  - id: WR-04
-    severity: warning
-    disposition: open
-    title: "The trace record is written after the archive row and the log row, so an interrupt leaves a step archived with no trace forever"
-  - id: WR-05
-    severity: warning
-    disposition: open
-    title: "`_git` raises when git is not installed"
-  - id: WR-06
-    severity: warning
-    disposition: open
-    title: "The manifest is not deterministic as documented, and its `command` is not shell-safe"
+    title: "The backfill log row is built by string formatting, so an error message that starts with an unbalanced `\"` makes `_read_log` (and `completeness`) fail"
   - id: IN-01
     severity: info
     disposition: open
-    title: "`TRACE_SCHEMA` is never checked on read"
+    title: "`TRACE_SCHEMA` is never checked on read (still present)"
   - id: IN-02
     severity: info
     disposition: open
-    title: "`zip(run[\"results\"], run[\"summary\"])` silently truncates"
+    title: "`zip(run[\"results\"], run[\"summary\"])` silently truncates (still present)"
   - id: IN-03
     severity: info
     disposition: open
-    title: "Duplicated helpers and constants"
+    title: "Duplicated helpers and constants (still present)"
   - id: IN-04
     severity: info
     disposition: open
-    title: "Trace file handle can leak and `replay` output paths are not cross-checked"
-open: 11
-total: 11
-recorded: 2026-10-21T07:14:33.086Z
+    title: "Trace file handle can leak; replay output paths are not cross-checked (still present)"
+  - id: IN-05
+    severity: info
+    disposition: open
+    title: "The manifest is still tied to the checkout location (still present)"
+  - id: IN-06
+    severity: info
+    disposition: open
+    title: "`_terminate_last_line` covers only the trace; the log can still get a row glued onto a torn line (still present)"
+  - id: IN-07
+    severity: info
+    disposition: open
+    title: "A torn line in the replay trace is silently dropped by the fidelity check and the replay-side report (still present)"
+  - id: CR-01
+    severity: critical
+    disposition: fixed
+    title: "Credential redaction misses quoted, JSON/dict-style, header and encoded forms, and leaks the tail of values containing separators"
+  - id: WR-04
+    severity: warning
+    disposition: fixed
+    title: "The trace record is written after the archive row and the log row, so an interrupt leaves a step archived with no trace forever"
+  - id: WR-05
+    severity: warning
+    disposition: fixed
+    title: "`_git` raises when git is not installed"
+  - id: WR-06
+    severity: warning
+    disposition: fixed
+    title: "The manifest is not deterministic as documented, and its `command` is not shell-safe"
+open: 9
+total: 14
+recorded: 2026-10-23T19:08:30.024Z
 ---
 
 # Phase 03: Code Review Disposition
 
 | Finding | Severity | Disposition | Source |
 |---------|----------|-------------|--------|
-| CR-01 | critical | open | - |
 | WR-01 | warning | open | - |
-| WR-02 | warning | open | - |
+| WR-02 | warning | fixed | 03-REVIEW-FIX.md |
 | WR-03 | warning | open | - |
-| WR-04 | warning | open | - |
-| WR-05 | warning | open | - |
-| WR-06 | warning | open | - |
 | IN-01 | info | open | - |
 | IN-02 | info | open | - |
 | IN-03 | info | open | - |
 | IN-04 | info | open | - |
+| IN-05 | info | open | - |
+| IN-06 | info | open | - |
+| IN-07 | info | open | - |
+| CR-01 | critical | fixed | 03-REVIEW-FIX.iter2.md (not in the current review) |
+| WR-04 | warning | fixed | 03-REVIEW-FIX.iter2.md (not in the current review) |
+| WR-05 | warning | fixed | 03-REVIEW-FIX.iter2.md (not in the current review) |
+| WR-06 | warning | fixed | 03-REVIEW-FIX.iter2.md (not in the current review) |
 
 Dispositions: `open` (recorded, not yet triaged), `fixed`, `skipped`, `deferred`.
 Set `deferred` by hand and put the reason in the Source cell; both are preserved. A `|` in the reason is kept as prose and escaped on the next run.
