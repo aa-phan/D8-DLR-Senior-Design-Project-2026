@@ -1,18 +1,18 @@
 ---
 gsd_state_version: "1.0"
 current_phase: 04
-current_plan: 3
+current_plan: 4
 status: executing
-stopped_at: Completed 04-08-PLAN.md
-last_updated: "2026-10-23T21:48:17.698Z"
+stopped_at: Completed 04-09-PLAN.md
+last_updated: "2026-10-23T21:58:00.252Z"
 last_activity: 2026-10-23
 last_activity_desc: Phase 04 execution started
-state_head: d6c72a1691c4df9fbf90d4b480cfda2153554556
+state_head: d8c80a5ef0813ab40d70159ebc2489e6f68e06a0
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 41
-  completed_plans: 22
+  completed_plans: 23
   percent: 43
 milestone_name: Production Pipeline (Supabase + live ratings)
 workstream: production-pipeline
@@ -37,7 +37,7 @@ whoever owns that analysis; they are not work items here.
 
 **Status:** Ready to execute
 **Current Phase:** 04
-**Current Plan:** 3
+**Current Plan:** 4
 **Total Plans in Phase:** 12
 **Last Activity:** 2026-10-23 — Phase 04 execution started
 **Last Activity Description:** Phase 04 execution started
@@ -148,6 +148,8 @@ These block or affect stringing the system together and belong to the phases nam
 - [Phase 04]: 04-07: success log names only the server-reported role (select current_user), redacted against URL project reference and host; client-supplied pooler user is never read — CR-01: the pooler user dlr_writer.<project-ref> carries the project reference (DB-04)
 - [Phase 04]: 04-07: SupabaseStore reconnects once and retries once per operation only on a lost connection (closed, broken or failing select 1); healthy-connection failures are never retried — WR-03: a dropped pooler session must not fail the remaining cities and the run row; retrying a data error would hide it
 - [Phase 04]: 04-08: a --store postgres run exits 1 when any city fails (CSV rule unchanged); a cleaning failure on non-empty history is forecast_status failed with cleaning_error and a degraded city in the run log — WR-01/WR-02: a missing or degraded row must not leave a scheduled job green or a healthy-looking cold_start; the cleaning text goes only to the redacted run row, never city_rating
+- [Phase 04]: 04-09 IN-06: hour CHECK fixed by a new additive migration (UTC-evaluated); applied migration pinned by sha256, never edited
+- [Phase 04]: 04-09 IN-05: smoke workflow actions pinned by SHA (checkout v4.4.0, setup-python v5.6.0), persist-credentials false, main-only job; protected environment documented not configured
 
 ## Open Decisions
 
@@ -167,9 +169,9 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 
 ## Session Continuity
 
-**Last session:** 2026-10-23T21:48:17.549Z
+**Last session:** 2026-10-23T21:58:00.096Z
 
-**Stopped At:** Completed 04-08-PLAN.md
+**Stopped At:** Completed 04-09-PLAN.md
 **Resume File:** None
 
 ## Performance Metrics
@@ -195,6 +197,7 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 | Phase 04 P03 | 75 min | 3 tasks | 8 files |
 | Phase 04 P07 | 13 min | 3 tasks | 3 files |
 | Phase 04 P08 | 7 min | 2 tasks | 5 files |
+| Phase 04 P09 | 9 min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
