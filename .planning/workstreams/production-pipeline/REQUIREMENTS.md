@@ -95,7 +95,7 @@ proposals.
 - [x] **DB-04**: Secrets: the writer uses a service-role key or a pooler connection string stored
   only as GitHub Actions secrets. Nothing secret is committed or reaches a consumer. The connection
   works from GitHub-hosted runners (the pooler endpoint, because runners lack IPv6).
-- [ ] **DB-05**: A schema contract doc for consumers (tables, columns, units, the meaning of
+- [x] **DB-05**: A schema contract doc for consumers (tables, columns, units, the meaning of
   fallback, freshness expectations), replacing the corresponding open items in
   `docs/frontend/specs/api-contract.md` and `docs/data-science/decisions/pss_e_handoff.md`.
 - [x] **DB-06**: Every rating row records what produced it: a rating config version that changes with
@@ -208,7 +208,7 @@ proposals.
 | DB-02 | Phase 4 | Complete |
 | DB-03 | Phase 4 | Complete |
 | DB-04 | Phase 4 | Complete |
-| DB-05 | Phase 4 | Pending |
+| DB-05 | Phase 4 | Complete |
 | DB-06 | Phase 4 | Complete |
 | PIPE-02 | Phase 5 | Pending |
 | SCHED-01 | Phase 5 | Pending |
