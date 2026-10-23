@@ -459,6 +459,20 @@ def test_run_row_classifies_ok_degraded_and_error_with_per_city_provider_counts(
     assert "run_log_error" not in run
 
 
+def test_orchestrator_keeps_every_provider_error_count_for_a_city(monkeypatch):
+    # IN-01: two provider errors that share a long prefix must both reach the run row
+    # with their counts; the orchestrator no longer cuts them before build_run_row.
+    key_a, key_b = 400 * "p" + "A", 400 * "p" + "B"
+    _fake_city_pipeline(monkeypatch, {
+        "AUSTIN": {"provider_errors": {key_a: 2, key_b: 3}}})
+    store = FakeStore()
+
+    _run(store)
+
+    row, = store.run_rows
+    assert row["provider_errors"]["AUSTIN"] == {key_a: 2, key_b: 3}
+
+
 def test_a_cleaning_failure_is_a_degraded_city_with_its_error_in_the_run_row(monkeypatch):
     # WR-02: the row is written (forecast_status 'failed'), the city is degraded,
     # and the redacted cleaning error is in the run row, not in cities_ok.

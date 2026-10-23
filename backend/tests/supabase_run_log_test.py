@@ -173,6 +173,51 @@ def test_run_row_error_text_is_redacted_and_bounded():
     assert len(row["cities_failed"]["EL_PASO"]["error"]) <= 1000
 
 
+def test_redact_limit_defaults_to_300_and_can_be_raised():
+    # IN-01: the default stays 300 for every existing caller; a longer limit is opt-in.
+    assert len(supabase_store.redact("x" * 1000)) == 300
+    assert len(supabase_store.redact("x" * 5000, limit=1000)) == 1000
+    assert len(supabase_store.redact("x" * 50, limit=1000)) == 50
+
+
+def test_run_row_error_text_keeps_up_to_1000_characters():
+    # IN-01: the documented bound is 1000. The secret sits at character 600, past
+    # the old 300 cut, so the test also proves redaction runs before the cut.
+    secret = "tok" + "en=" + "Zq9Mk7Leak"
+    text = "x" * 600 + secret + "y" * 4400
+    assert len(text) > 5000 - 1
+
+    row = _build([_record("EL_PASO", written=False, error="x" * 5000),
+                  _record("AUSTIN", written=False, error=text)])
+
+    assert len(row["cities_failed"]["EL_PASO"]["error"]) == 1000
+    stored = row["cities_failed"]["AUSTIN"]["error"]
+    assert len(stored) == 1000
+    assert "Zq9Mk7Leak" not in stored
+    assert "token=REDACTED" in stored
+
+
+def test_provider_error_keys_that_collide_after_redaction_keep_their_total():
+    # IN-01: distinct keys within 1000 characters survive as two keys...
+    short_a, short_b = 400 * "p" + "A", 400 * "p" + "B"
+    distinct = _build([_record("AUSTIN")],
+                      provider_errors={"AUSTIN": {short_a: 2, short_b: 3}})
+    assert distinct["provider_errors"] == {"AUSTIN": {short_a: 2, short_b: 3}}
+
+    # ...and keys equal after the 1000-character cut are summed, not overwritten.
+    long_a, long_b = 1200 * "p" + "A", 1200 * "p" + "B"
+    colliding = _build([_record("AUSTIN")],
+                       provider_errors={"AUSTIN": {long_a: 2, long_b: 3}})
+    assert colliding["provider_errors"] == {"AUSTIN": {1000 * "p": 5}}
+
+    # keys that differ only by a secret collapse to the same redacted key and add up
+    one = "synoptic: tok" + "en=" + "aaa111"
+    two = "synoptic: tok" + "en=" + "bbb222"
+    secrets_collapsed = _build([_record("AUSTIN")],
+                               provider_errors={"AUSTIN": {one: 1, two: 4}})
+    assert secrets_collapsed["provider_errors"] == {"AUSTIN": {"synoptic: token=REDACTED": 5}}
+
+
 def test_run_row_passes_provider_errors_and_sources_through_keyed_by_city():
     errors = {"AUSTIN": {"nsrdb: ValueError: down": 2}, "EL_PASO": {}}
     sources = {"AUSTIN": {"air_temp": {"synoptic": 1}}, "EL_PASO": {}}
