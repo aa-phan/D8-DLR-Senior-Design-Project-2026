@@ -288,10 +288,28 @@ def test_trace_is_written_before_the_log_row_so_an_interrupt_cannot_lose_it(tmp_
     ("url?passwd=xyz789", "xyz789"),
     ("url?auth=abc123", "abc123"),
     ("url?credential=abc123", "abc123"),
+    ("url?key=abc123&x=1", "abc123"),                       # bare `key` in query form
+    ("key=abc123", "abc123"),
+    ('{"key": "abc123"}', "abc123"),                        # bare `key` as a quoted name
+    ("secret_key: abc123", "abc123"),                       # compound names, any separator
+    ("access-key=abc123", "abc123"),
+    ("key: AIzaSyA1b2C3d4E5f6G7h8I9j0", "AIzaSyA1b2C3d4E5f6G7h8I9j0"),  # credential-looking value
 ])
 def test_redact_masks_every_credential_shape(text, secret):
     assert secret not in backfill_archive._redact(text)
     assert "REDACTED" in backfill_archive._redact(text)
+
+
+@pytest.mark.parametrize("text", [
+    "missing key: temp",                                    # diagnostic prose is evidence,
+    "no data for key: wind_speed in window",                # not a credential: pin that
+    "Max key: 5 reached",
+    "hotkey: F5 failed",
+    "auth: failed",
+    "author: bob",
+])
+def test_redact_leaves_diagnostic_text_that_only_mentions_a_key(text):
+    assert backfill_archive._redact(text) == text
 
 
 def test_redact_keeps_the_text_around_a_secret_and_leaves_plain_text_alone():

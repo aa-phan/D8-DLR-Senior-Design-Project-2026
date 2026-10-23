@@ -58,16 +58,29 @@ _TRACE_TEXT_LIMIT = 200
 _SECRET_ENV_NAMES = ("SYNOPTIC_TOKEN", "NREL_API_KEY", "NREL_API_EMAIL")
 _MIN_SECRET_LENGTH = 4
 # `name<sep>value` where the name ends in a credential-shaped word (token,
-# api_key, NREL_API_KEY, access_token, email, authorization, ...) and the separator
-# is `=`, `:` or a percent-encoded `=`, optionally with a quote after the name (JSON
-# and dict forms) and whitespace around it. The value is a quoted string or runs to
-# the next `&`/whitespace/quote, so a comma or an inner `)` cannot leave a tail.
-# One trailing `)` is left outside the value so "(api_key=X)" keeps its bracket.
+# api_key, NREL_API_KEY, access_token, secret_key, email, authorization, ...) and the
+# separator is `=`, `:` or a percent-encoded `=`, optionally with a quote after the
+# name (JSON and dict forms) and whitespace around it. The value is a quoted string
+# (backslash escapes allowed) or runs to the next `&`/whitespace/quote, so a comma or
+# an inner `)` cannot leave a tail. One trailing `)` is left outside the value so
+# "(api_key=X)" keeps its bracket.
+# The words that are also ordinary diagnostic vocabulary (`key`, `auth`, `sig`)
+# only count in query/assignment form (`key=abc`, `%3D`) or as a quoted JSON/dict
+# name (`"key": "abc"`), so "missing key: temp" and "hotkey: F5 failed" survive;
+# `_BARE_KEY_COLON` below still masks a `key: <credential-looking value>`.
 _SECRET_PAIR = re.compile(
-    r"""(?<![\w-])([\w-]*(?:token|api[_-]?key|key|email|password|passwd|pwd|secret|credential|"""
-    r"""auth|authorization)["']?\s{0,4}(?:=|:|%3D)\s*)"""
+    r"""(?<![\w-])("""
+    r"""(?:[\w-]*(?:token|api[_-]?key|[_-]key|email|password|passwd|pwd|secret|credential|"""
+    r"""authorization)["']?\s{0,4}(?:=|:|%3D)"""
+    r"""|(?:key|auth|sig)(?:["']?\s{0,4}(?:=|%3D)|["']\s{0,4}:))"""
+    r"""\s*)"""
     r"""(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|"""
     r"""(?:Bearer|Basic|Token|Digest|Negotiate)\s+[^&\s"']+|[^&\s"']*[^&\s"')])""",
+    re.IGNORECASE)
+# `key: <value>` in prose is usually a field name ("missing key: temp"), but a
+# value that is 20+ credential-alphabet characters containing a digit is a secret.
+_BARE_KEY_COLON = re.compile(
+    r"(?<![\w-])(key\s{0,4}:\s*)(?=[\w.~+/=-]{20,}(?![\w.~+/=-]))(?=[\w.~+/=-]*\d)[\w.~+/=-]+",
     re.IGNORECASE)
 _BEARER = re.compile(r"\bBearer\s+[\w.~+/=-]+", re.IGNORECASE)
 _NULL_RECORD_KEYS = (
@@ -145,6 +158,7 @@ def _redact(text, limit=_TRACE_TEXT_LIMIT) -> str:
     for secret in _known_secrets():
         out = out.replace(secret, "REDACTED")
     out = _SECRET_PAIR.sub(r"\1REDACTED", out)
+    out = _BARE_KEY_COLON.sub(r"\1REDACTED", out)
     out = _BEARER.sub("Bearer REDACTED", out)
     return out if limit is None else out[:limit]
 
