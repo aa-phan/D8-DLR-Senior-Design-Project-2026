@@ -59,6 +59,7 @@ def run_city_pipeline(
     # is not fed to G6: continue with an empty history (the detector's own
     # convention is no signal, no trips). The fallback-row rule that breaks
     # the static-rating latch lives in data_cleaning.
+    cleaning_error = None
     try:
         cleaned = data_cleaning.clean_history(history, as_of=end)
         history = cleaned.usable
@@ -71,9 +72,12 @@ def run_city_pipeline(
             city, int(len(history)), total_rows, flagged,
         )
     except Exception as exc:
+        cleaning_error = f"data cleaning failed: {exc}"
         log.warning(
-            "data cleaning failed for %s (%s) -- continuing with no history (cold start)",
-            city, str(exc),
+            "data cleaning failed for %s (%s) -- continuing with no history (cold start); "
+            "%d history rows discarded%s",
+            city, str(exc), total_rows,
+            ", forecast status is failed" if total_rows > 0 else "",
         )
         history = history.iloc[0:0]
         cleaned = None
@@ -90,6 +94,11 @@ def run_city_pipeline(
             forecast_method, city, exc,
         )
         forecast = None
+        forecast_status = "failed"
+    # WR-02: discarding real history is not "too little history". With no rows
+    # to begin with the city really is a cold start; otherwise the forecast
+    # ran on nothing because cleaning broke, which is a failed forecast.
+    if cleaning_error is not None and total_rows > 0:
         forecast_status = "failed"
 
     # A forecast whose band has zero width (too few backtest residuals to
@@ -133,6 +142,9 @@ def run_city_pipeline(
         # (`forecast_used_by_g6` says that), so a forecast withheld by the gap
         # guard or a zero-width band is still "ok".
         "forecast_status": forecast_status,
+        # Set when clean_history raised. It reaches the run log only:
+        # build_rating_row maps explicit columns, so it never lands in city_rating.
+        "cleaning_error": cleaning_error,
         "forecast_used_by_g6": forecast_for_detector is not None,
         "forecast": (
             None if forecast is None else {

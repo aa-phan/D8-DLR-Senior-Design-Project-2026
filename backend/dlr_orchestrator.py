@@ -254,6 +254,9 @@ def _run_cities_with_store(out, cities, start, end, stations, rate_provider, fet
                 )
                 pipeline = result.get("pipeline") or {}
                 record["forecast_status"] = pipeline.get("forecast_status")
+                # WR-02: a cleaning failure is carried to the run row, where
+                # build_run_row redacts it and classifies the city as degraded.
+                record["error"] = pipeline.get("cleaning_error")
                 record["detector_model_loaded"] = pipeline.get("detector_model") is not None
                 if archive:
                     result["archived"] = store.write_rating(

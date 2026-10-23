@@ -136,7 +136,7 @@ For consumers: within one city, a change in `config_fingerprint`, `forecast_mode
 ## Forecast fields
 
 - `forecast_amps` is a one-step-ahead forecast of the rating with a 60-minute horizon (`forecast_horizon_min`), and `forecast_ci_lower_amps` / `forecast_ci_upper_amps` are an empirical band from out-of-sample walk-forward residuals.
-- `forecast_status` is `ok` when a forecast was computed (even if the gap guard from Phase 2 or a zero-width band kept it from G6; see `forecast_used_by_g6`), `cold_start` when there was too little history, and `failed` when the forecast raised (for example a missing ML model). It is NULL on backfill rows.
+- `forecast_status` is `ok` when a forecast was computed (even if the gap guard from Phase 2 or a zero-width band kept it from G6; see `forecast_used_by_g6`), `cold_start` when there was too little history, and `failed` when the forecast raised (for example a missing ML model) or when the city's history could not be cleaned, so the forecast ran on no history although the city had history rows; the detector then reports a cold start (`detector_signal`). It is NULL on backfill rows.
 - `forecast_used_by_g6` says whether the forecast fed the G6 detector in that run.
 - Cold start in production: the backfill window ends on 2026-09-28 and the read window is the last 30 days (OD-8). Phase 2's gap guard withholds a forecast after more than one missing hour. So after go-live the forecast and the detector rebuild from live hours: the `ml` method needs 7 consecutive hours of history, and the rolling detector baseline needs 24 usable rows. Until then expect `forecast_status` of `cold_start` and empty forecast columns.
 
@@ -177,6 +177,8 @@ One row per run, written by the scheduled runner (Phase 5) or by a direct `--sto
 | `cities_failed` | `jsonb` | City to outcome (`error` or `degraded`), whether a row was written, and redacted error text. |
 | `provider_errors` | `jsonb` | Provider error summary of the run. |
 | `sources` | `jsonb` | Count of weather sources used per field. |
+
+A city written while its history could not be cleaned is `degraded`, with the redacted cleaning error (`data cleaning failed: ...`) in `cities_failed`; it is not in `cities_ok`.
 
 ## Versioning
 
