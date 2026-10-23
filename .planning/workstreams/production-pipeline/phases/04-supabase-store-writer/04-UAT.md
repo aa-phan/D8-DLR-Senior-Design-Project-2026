@@ -1,5 +1,5 @@
 ---
-status: complete
+status: diagnosed
 phase: 04-supabase-store-writer
 source: [04-VERIFICATION.md]
 started: 2026-10-23T20:00:00Z
@@ -51,6 +51,7 @@ blocked: 0
   artifacts:
     - path: ".planning/workstreams/production-pipeline/phases/04-supabase-store-writer/04-REVIEW.md"
       issue: "12 open findings (1 critical, 5 warning, 6 info)"
+  debug_session: ".planning/workstreams/production-pipeline/phases/04-supabase-store-writer/04-REVIEW.md (the code review is the diagnosis)"
   missing:
     - "Fix all 12 findings (route: /gsd-code-review 4 --fix --all)"
     - "IN-03 needs a new additive migration (column comments) that the owner pushes"
