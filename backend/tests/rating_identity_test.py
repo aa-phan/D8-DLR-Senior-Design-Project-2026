@@ -287,3 +287,23 @@ def test_a_conductor_or_model_change_alters_values_not_columns(tmp_path, monkeyp
     assert differing == {"config_fingerprint", "forecast_model_sha256"}
     assert before["forecast_model_sha256"] == hashlib.sha256(b"model-one").hexdigest()
     assert after["forecast_model_sha256"] == hashlib.sha256(b"model-two").hexdigest()
+
+
+def test_store_reexports_the_identity_recipe():
+    # The recipe lives in rating_identity (a dependency set the Phase 3 backfill child can
+    # load); supabase_store keeps every name as an attribute and is the same object.
+    import rating_identity
+
+    for name in (
+        "RATING_CONFIG_SNAPSHOT_SCHEMA",
+        "RATING_CONFIG_SOURCE_FILES",
+        "RATING_PATH_MODULES",
+        "FINGERPRINTED_CONFIG_NAMES",
+        "UNFINGERPRINTED_CONFIG_NAMES",
+        "rating_config_snapshot",
+        "rating_config_fingerprint",
+    ):
+        assert getattr(supabase_store, name) is getattr(rating_identity, name), name
+    assert _fingerprints() == {
+        city: rating_identity.rating_config_fingerprint(city) for city in config.LOCATIONS
+    }

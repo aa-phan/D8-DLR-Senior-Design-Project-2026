@@ -582,6 +582,104 @@ def test_same_hour_duplicates_keep_the_first_row_and_are_counted(tmp_path, archi
     assert stats["csv_rows"]["AUSTIN"] == _HOURS - 1
 
 
+def _working_tree(commit, path):
+    return _working_tree_git_show(commit, path, _REPO_ROOT)
+
+
+def test_fingerprint_child_imports_only_the_identity_module_from_live_code():
+    child = loader._FINGERPRINT_CHILD
+    assert "import config, city_point, thermal_model, rating_identity" in child
+    assert "supabase_store" not in child
+    assert "rating_identity.rating_config_fingerprint" in child
+
+    # The identity module loads in the child with the Phase 3 copies, so it may import
+    # only the standard library, config and city_point at its top level.
+    path = os.path.join(_REPO_ROOT, "backend", "rating_identity.py")
+    with open(path, encoding="utf-8") as handle:
+        tree = ast.parse(handle.read(), filename=path)
+    imported = set()
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            imported.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            imported.add((node.module or "").split(".")[0])
+    assert imported <= {"json", "hashlib", "config", "city_point"}, sorted(imported)
+    assert {"config", "city_point"} <= imported
+
+
+def test_phase3_fingerprints_survive_a_config_missing_names_live_modules_read_at_import(archive):
+    _, manifest, _ = archive
+
+    # An older config.py lacks names a newer live module reads at import time
+    # (ercot_dlr_merger reads LINE_VOLTAGE_KV and POWER_FACTOR when imported).
+    def older_config(commit, path):
+        text = _working_tree(commit, path)
+        if path == "backend/config.py":
+            lines = text.splitlines(keepends=True)
+            for name in ("LINE_VOLTAGE_KV", "POWER_FACTOR"):
+                hits = [i for i, line in enumerate(lines) if line.startswith(f"{name}:") or line.startswith(f"{name} =")]
+                assert len(hits) == 1, name
+            lines = [line for line in lines if not line.startswith(("LINE_VOLTAGE_KV", "POWER_FACTOR"))]
+            text = "".join(lines)
+        return text
+
+    fingerprints = loader.phase3_config_fingerprints(manifest, git_show=older_config)
+    assert set(fingerprints) == set(_CITIES)
+    assert all(len(v) == 64 and set(v) <= set("0123456789abcdef") for v in fingerprints.values())
+
+
+def test_a_failing_fingerprint_child_surfaces_its_whole_redacted_stderr(archive, monkeypatch):
+    _, manifest, _ = archive
+    # Built from pieces so no connection string sits in the source.
+    secret_url = "post" + "gresql://" + "svc_user:" + "hunter2pw" + "@db.example.invalid:5432/postgres"
+    child = (
+        "import sys\n"
+        "sys.stderr.write('Traceback (most recent call last):\\n')\n"
+        "sys.stderr.write('  File \"x.py\", line 1, in <module>\\n')\n"
+        f"sys.stderr.write('  connecting to {secret_url}\\n')\n"
+        "sys.stderr.write('AttributeError: module config has no attribute NEWNAME\\n')\n"
+        "sys.exit(1)\n"
+    )
+    monkeypatch.setattr(loader, "_FINGERPRINT_CHILD", child)
+    with pytest.raises(ValueError) as caught:
+        loader.phase3_config_fingerprints(manifest, git_show=_working_tree)
+    message = str(caught.value)
+    assert message.startswith("could not evaluate the Phase 3 config fingerprints:")
+    assert "Traceback (most recent call last)" in message
+    assert "AttributeError: module config has no attribute NEWNAME" in message
+    assert "hunter2pw" not in message and "svc_user" not in message and "db.example.invalid" not in message
+    assert "REDACTED" in message
+
+
+def test_the_fingerprint_child_refuses_another_live_backend_module(archive, monkeypatch):
+    _, manifest, _ = archive
+    original = loader._FINGERPRINT_CHILD
+    wider = original.replace(
+        "import config, city_point, thermal_model, rating_identity",
+        "import config, city_point, thermal_model, rating_identity, ercot_dlr_merger",
+    )
+    assert wider != original
+    monkeypatch.setattr(loader, "_FINGERPRINT_CHILD", wider)
+    with pytest.raises(ValueError, match="ercot_dlr_merger"):
+        loader.phase3_config_fingerprints(manifest, git_show=_working_tree)
+
+
+def test_phase3_fingerprints_at_the_manifest_commit_equal_the_loaded_backfill():
+    with open(os.path.join(_REPO_ROOT, loader.DEFAULT_MANIFEST), encoding="utf-8") as handle:
+        manifest = json.load(handle)
+    with open(os.path.join(_REPO_ROOT, "docs", "data-science", "decisions", "supabase_store",
+                           "backfill_parity.json"), encoding="utf-8") as handle:
+        parity = json.load(handle)
+    commit = manifest["git"]["head"]
+    have = subprocess.run(["git", "cat-file", "-e", f"{commit}^{{commit}}"], cwd=_REPO_ROOT, capture_output=True)
+    if have.returncode != 0:
+        pytest.skip(f"commit {commit} is not in this repository's object database")
+    expected = {city: parity["identity"]["per_city"][city]["config_fingerprint"] for city in _CITIES}
+    assert all(len(v) == 64 for v in expected.values())
+    # The older config.py at that commit lacks DB_HISTORY_WINDOW_DAYS, RATING_BASIS and RATING_CONFIG_VERSION.
+    assert loader.phase3_config_fingerprints(manifest, repo_root=_REPO_ROOT) == expected
+
+
 def _slot_row(rows, kind, dlr_amps, air_temp):
     """An AUSTIN 01:00 row of the given kind ("computed" or "fallback") built from the fixture rows."""
     fallback = kind == "fallback"
