@@ -682,6 +682,8 @@ def test_an_interrupted_replay_stops_instead_of_continuing_with_the_next_city(
 
     def interrupted_backfill(start, end, step_hours, **kwargs):
         calls.append(kwargs["cities"])
+        for key in ("archive_path", "log_path", "trace_path"):  # partial outputs of the city
+            open(kwargs[key], "w", encoding="utf-8").close()
         return {"runs": 1, "interrupted": True}
 
     monkeypatch.setattr(rdv.backfill_archive, "backfill", interrupted_backfill)
@@ -693,6 +695,7 @@ def test_an_interrupted_replay_stops_instead_of_continuing_with_the_next_city(
 
     assert calls == [[_CITY]]  # the second city was never started
     assert excinfo.value.city == _CITY and "incomplete" in str(excinfo.value)
+    assert not any(outs[key].exists() for key in ("archive", "trace", "log"))  # nothing stale
 
     # The CLI reports it and exits non-zero without writing a fidelity table.
     _model_dir(tmp_path, monkeypatch, with_models=True)
@@ -700,6 +703,28 @@ def test_an_interrupted_replay_stops_instead_of_continuing_with_the_next_city(
     assert rdv.main(_cli(orig, outs)) == 130
     assert "replay interrupted" in capsys.readouterr().err
     assert not outs["fidelity"].exists()
+
+
+def test_duplicate_output_paths_are_refused_even_when_only_the_case_differs(tmp_path, monkeypatch):
+    monkeypatch.setattr(rdv.sys, "platform", "darwin")
+    with pytest.raises(rdv.ReplayRefused):
+        rdv._refuse_duplicate_paths([tmp_path / "A.csv", tmp_path / "a.csv"])
+    monkeypatch.setattr(rdv.sys, "platform", "linux")  # case-sensitive: two distinct files
+    rdv._refuse_duplicate_paths([tmp_path / "A.csv", tmp_path / "a.csv"])
+
+
+def test_a_torn_line_in_the_original_trace_is_reported_and_fails_the_replay(
+        tmp_path, monkeypatch, capsys):
+    orig = _original_run(tmp_path, monkeypatch)
+    _model_dir(tmp_path, monkeypatch, with_models=True)
+    with open(orig["trace"], "a", encoding="utf-8") as fh:
+        fh.write('{"schema": "backfill_trace/1", "city": "AUS')  # torn last line
+    outs = _out_paths(tmp_path)
+
+    code = rdv.main(_cli(orig, outs))
+
+    assert code == 1
+    assert "unreadable line(s) in the original trace" in capsys.readouterr().err
 
 
 def test_replay_refuses_without_anomaly_models_or_over_existing_outputs(tmp_path, monkeypatch, capsys):

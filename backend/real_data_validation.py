@@ -40,6 +40,7 @@ Subcommands (run from the repository root with PYTHONPATH=backend):
 """
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
@@ -79,16 +80,16 @@ OWNER_COMMAND_PROGRAM_TEMPLATE = (
 
 def owner_command(argv) -> str:
     """
-    The shell command that reruns the backfill with `argv`. The whole `-c` program
-    goes through `shlex.quote`, so an argument holding a quote, `$` or a backtick
-    cannot break or expand when the command is pasted; every path derives from the
-    repository this module lives in (`_REPO_ROOT`).
+    The shell command that reruns the backfill with `argv`, to be run from the
+    repository root. The whole `-c` program goes through `shlex.quote`, so an
+    argument holding a quote, `$` or a backtick cannot break or expand when the
+    command is pasted. Every path is repo-relative (`.venv/bin/python`, `.env`), so
+    the text is the same in every checkout and worktree.
     """
     program = OWNER_COMMAND_PROGRAM_TEMPLATE.format(
-        env_file=repr(os.path.join(_REPO_ROOT, ".env")), argv=repr(list(argv)))
-    python = os.path.join(_REPO_ROOT, ".venv", "bin", "python")
-    return (f"cd {shlex.quote(_REPO_ROOT)} && PYTHONPATH=backend "
-            f"{shlex.quote(python)} -c {shlex.quote(program)}")
+        env_file=repr(".env"), argv=repr(list(argv)))
+    python = os.path.join(".venv", "bin", "python")
+    return (f"PYTHONPATH=backend {shlex.quote(python)} -c {shlex.quote(program)}")
 
 
 COMPLETENESS_COLUMNS = [
@@ -1157,14 +1158,14 @@ class ReplayRefused(Exception):
 class ReplayInterrupted(Exception):
     """
     The replay was interrupted (Ctrl-C) part-way, so its outputs are incomplete.
-    Unlike the backfill, a replay cannot be resumed (`_refuse_existing` rejects the
-    existing outputs): delete them and run it again. `totals` holds what finished.
+    Unlike the backfill, a replay cannot be resumed, so `replay` removes the output
+    files it created before raising: run it again. `totals` holds what finished.
     """
 
     def __init__(self, city, totals):
         super().__init__(
-            f"replay interrupted during {city}; the replay outputs are incomplete and "
-            "cannot be resumed -- delete them before running the replay again")
+            f"replay interrupted during {city}; the incomplete replay outputs were "
+            "removed -- run the replay again")
         self.city = city
         self.totals = totals
 
@@ -1261,6 +1262,8 @@ def _refuse_duplicate_paths(paths) -> None:
     seen = {}
     for path in paths:
         key = os.path.realpath(path)
+        if sys.platform in ("darwin", "win32"):  # default filesystems ignore case
+            key = key.casefold()
         if key in seen:
             raise ReplayRefused(f"output paths must be distinct, but {seen[key]} and {path} "
                                 "name the same file")
@@ -1306,6 +1309,9 @@ def replay(trace_path, start, end, step_hours, cities, method, archive_out, trac
             forecast_method=method, stations=replay_stations(city),
             fetcher=make_replay_fetcher(trace), out=progress, trace_path=trace_out)
         if totals[city].get("interrupted"):
+            for path in (archive_out, trace_out, log_out):  # all three were new (checked above)
+                with contextlib.suppress(OSError):
+                    os.remove(path)
             raise ReplayInterrupted(city, totals)
     return totals
 
@@ -1563,11 +1569,8 @@ def build_manifest(archive, trace, log, start, end, step_hours=1.0, warmup_hours
     rows per city, sha256 of the per-city model files and the git HEAD. No
     timestamp or working directory is written and file paths are normalised
     (repo-relative when inside the repository), so equal inputs give equal bytes
-    from any directory of the SAME checkout. The one deliberate exception is
-    `command`: it names `_REPO_ROOT` and `<repo>/.venv/bin/python` as absolute
-    paths so it can be pasted and run as it stands, which makes it differ between
-    two checkouts (or a worktree, which has no `.venv`) of the same commit.
-    Compare the other fields across checkouts, not `command`. Phase 4 uses it to
+    from any directory of any checkout or worktree: `command` is repo-relative too
+    (run it from the repository root). Phase 4 uses it to
     prove it loads the archive this phase validated.
     """
     cities = list(cities) if cities else list(config.LOCATIONS)
@@ -1696,8 +1699,13 @@ def _cmd_replay(args) -> int:
         return 130
     steps = expected_steps(args.start, args.end, args.step_hours)
     start_ts = _utc(args.start)
+    original_trace = load_trace(args.trace)
+    original_torn = int(original_trace.attrs.get("unparseable", 0))
+    if original_torn:
+        print(f"warning: {original_torn} unreadable line(s) in the original trace {args.trace}; "
+              "the replay input is missing those steps", file=sys.stderr)
     original = classify_steps(
-        load_trace(args.trace), historical_archive.read_history(path=args.archive, validate=True),
+        original_trace, historical_archive.read_history(path=args.archive, validate=True),
         cities, steps, start_ts, args.warmup_hours)
     replay_trace = load_trace(args.trace_out)
     replayed = classify_steps(
@@ -1712,7 +1720,7 @@ def _cmd_replay(args) -> int:
     print("replay fidelity: " + ", ".join(
         f"{key}={fidelity[key]}" for key in ("compared", "excluded", "mismatches", "mismatch_outcome",
                                              "mismatch_computed", "mismatch_g6_reach")))
-    return 1 if fidelity["mismatches"] or torn else 0
+    return 1 if fidelity["mismatches"] or torn or original_torn else 0
 
 
 def _build_parser() -> argparse.ArgumentParser:

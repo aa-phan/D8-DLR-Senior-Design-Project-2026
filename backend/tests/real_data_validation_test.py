@@ -162,10 +162,10 @@ def test_owner_command_survives_shell_metacharacters_in_the_argv():
     command = real_data_validation.owner_command(argv)
 
     words = shlex.split(command)  # what a POSIX shell would hand to the program
-    assert words[:2] == ["cd", real_data_validation._REPO_ROOT] and words[2] == "&&"
-    assert words[3] == "PYTHONPATH=backend" and words[5] == "-c" and len(words) == 7
-    assert words[4] == os.path.join(real_data_validation._REPO_ROOT, ".venv", "bin", "python")
-    program = words[6]
+    assert real_data_validation._REPO_ROOT not in command  # same text in every checkout
+    assert words[0] == "PYTHONPATH=backend" and words[2] == "-c" and len(words) == 4
+    assert words[1] == os.path.join(".venv", "bin", "python")
+    program = words[3]
     assert program.startswith("from dotenv import load_dotenv; ")
     assert ast.literal_eval(program.split("backfill_archive.main(", 1)[1][:-2]) == argv
 

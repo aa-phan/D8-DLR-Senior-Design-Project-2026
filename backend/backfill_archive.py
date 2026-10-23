@@ -58,6 +58,9 @@ _TRACE_TEXT_LIMIT = 200
 # (plain or percent-encoded), whatever shape the surrounding text has.
 _SECRET_ENV_NAMES = ("SYNOPTIC_TOKEN", "NREL_API_KEY", "NREL_API_EMAIL")
 _MIN_SECRET_LENGTH = 4
+# A value shorter than this is only replaced as a whole word, so a short or
+# dictionary-like secret cannot rewrite the inside of unrelated words.
+_WHOLE_WORD_BELOW = 8
 # `name<sep>value` where the name ends in a credential-shaped word (token,
 # api_key, NREL_API_KEY, access_token, accessKey, secret_key, email, authorization, ...)
 # and the separator is `=`, `:` or a percent-encoded `=`, with a quote after the name
@@ -99,6 +102,33 @@ def _bare_colon(names: str, min_length: int):
         r"(?<![\w-])((?:" + names + r")\s*:\s*[\"']?)"
         r"(?=[\w.~+/=-]{" + str(min_length) + r",}(?![\w.~+/=-]))(?=[\w.~+/=-]*\d)[\w.~+/=-]+",
         re.IGNORECASE)
+
+
+_SCHEME_VALUE = re.compile(r"(Bearer|Basic|Token|Digest|Negotiate)\s+", re.IGNORECASE)
+
+
+def _looks_like_credential(value: str) -> bool:
+    """A digit, a capital after the first letter or a base64 symbol: not plain prose."""
+    return any(ch.isdigit() or ch in "+/=" for ch in value) or any(ch.isupper() for ch in value[1:])
+
+
+def _mask_pair(match) -> str:
+    """
+    Mask `name<sep>value`, except where a `name: value` reads as prose rather than a
+    credential: "invalid token: expired", "Error sending email: connection refused",
+    "Basic authentication failed". After a `:` (not `=`, not a quoted value) the value
+    has to look like a credential; `Bearer` always counts.
+    """
+    text = match.group(0)
+    prefix = match.group(1)
+    value = text[len(prefix):]
+    if prefix.rstrip().endswith(":") and value and value[0] not in "\"'\\":
+        scheme = _SCHEME_VALUE.match(value)
+        if scheme is None or scheme.group(1).lower() != "bearer":
+            credential = value[scheme.end():] if scheme else value
+            if not _looks_like_credential(credential):
+                return text
+    return prefix + "REDACTED"
 
 
 _BARE_COLON_PATTERNS = (_bare_colon("key", 20), _bare_colon("auth|sig", 8))
@@ -176,8 +206,12 @@ def _redact(text, limit=_TRACE_TEXT_LIMIT) -> str:
     """
     out = str(text)
     for secret in _known_secrets():
-        out = out.replace(secret, "REDACTED")
-    out = _SECRET_PAIR.sub(r"\1REDACTED", out)
+        if len(secret) < _WHOLE_WORD_BELOW:
+            out = re.sub(r"(?<![A-Za-z0-9])" + re.escape(secret) + r"(?![A-Za-z0-9])",
+                         "REDACTED", out)
+        else:
+            out = out.replace(secret, "REDACTED")
+    out = _SECRET_PAIR.sub(_mask_pair, out)
     for pattern in _BARE_COLON_PATTERNS:
         out = pattern.sub(r"\1REDACTED", out)
     out = _BEARER.sub("Bearer REDACTED", out)
@@ -187,18 +221,18 @@ def _redact(text, limit=_TRACE_TEXT_LIMIT) -> str:
 def _trace_records(run: dict, ts_text: str, forecast_method: str, provenance: list) -> list:
     """
     One trace record per city the step rated, built from the raw
-    `run_city_pipeline` results zipped with their summary rows. `provenance` is
+    `run_city_pipeline` results matched to their summary rows by city. `provenance` is
     the slice of the composed fetcher's provenance this step added; the record of
     the rated station (the last one, if several) names the aligned observation
     hour and the provider of each input.
     """
-    if len(run["results"]) != len(run["summary"]):
-        # zip would drop the surplus silently and the missing steps would then read as
-        # `no_trace`; a pipeline that desynchronises its two lists is a bug to surface
-        raise ValueError(f"run has {len(run['results'])} results but {len(run['summary'])} "
-                         "summary rows; cannot pair them into trace records")
+    # Paired by city, not by position: a run whose two lists disagree must still leave a
+    # trace for every city it rated (a raise here comes after the archive row is
+    # written, and a resumed run would then skip the step and lose its trace for good).
+    summary_by_city = {row["city"]: row for row in run["summary"]}
     records = []
-    for result, row in zip(run["results"], run["summary"]):
+    for result in run["results"]:
+        row = summary_by_city.get(result["city"], {})
         obs = result.get("observation")
         stid = result.get("station_id")
         match = None
@@ -214,12 +248,12 @@ def _trace_records(run: dict, ts_text: str, forecast_method: str, provenance: li
             "error": None,
             "station_id": stid,
             "rating_a": result["rating"],
-            "static_rating_a": row["static_rating_a"],
+            "static_rating_a": row.get("static_rating_a"),
             "status": result["status"],
             "fallback": result["fallback"],
             "exhausted": result["exhausted"],
             "archived": result["archived"],
-            "fallback_gates": row["fallback_gates"],
+            "fallback_gates": row.get("fallback_gates", []),
             "alerts": [_redact(a) for a in result["alerts"]],
             "observation": None if obs is None else {k: float(obs[k]) for k in _OBSERVATION_KEYS},
             "observation_hour": None if match is None else match.get("hour"),
@@ -254,10 +288,10 @@ def backfill(start, end, step_hours=1.0, archive_path=DEFAULT_ARCHIVE, log_path=
     os.makedirs(os.path.dirname(log_path) or ".", exist_ok=True)
     _retire_stale_log(log_path)
     _terminate_last_line(log_path)  # a killed run's torn last row must not take the next one with it
-    write_header = not os.path.exists(log_path)
+    write_header = not os.path.exists(log_path) or os.path.getsize(log_path) == 0
     totals = {"runs": 0, "skipped": 0, "archived": Counter(), "not_archived": Counter(),
               "fallback": Counter(), "exhausted": Counter(), "gates": Counter(), "errors": Counter(),
-              "interrupted": False}
+              "interrupted": False, "trace_errors": 0}
     t0 = time.time()
     n = len(times)
 
@@ -272,6 +306,7 @@ def backfill(start, end, step_hours=1.0, archive_path=DEFAULT_ARCHIVE, log_path=
         log_fh = files.enter_context(open(log_path, "a", encoding="utf-8"))
         if write_header:
             log_fh.write(_LOG_HEADER + "\n")
+        pending_interrupt = False
         try:
             for i, ts in enumerate(times, 1):
                 todo = [c for c in cities if ts not in done.get(c, set())]
@@ -289,15 +324,29 @@ def backfill(start, end, step_hours=1.0, archive_path=DEFAULT_ARCHIVE, log_path=
                 totals["gates"].update(gates)
                 totals["runs"] += 1
                 # The trace goes first: `run_dlr_pipeline` has already appended the archive
-                # row, and on resume a step in the archive is skipped, so an interrupt
-                # between the archive write and the trace write would lose this step's
-                # trace for good. Writing it before the log/summary lines keeps that
-                # window as small as it can be.
+                # row, and on resume a step in the archive is skipped, so a step whose trace
+                # is lost here stays untraced for good (it reads as `no_trace`). The lines
+                # are built first and written in one call; an interrupt that lands while
+                # they are written is retried once and then re-raised after the log row.
                 if trace_fh is not None:
-                    for record in _trace_records(run, ts.strftime(_TS_FMT), forecast_method,
-                                                 fetcher.provenance[prov_start:]):
-                        trace_fh.write(json.dumps(record, default=str, sort_keys=True) + "\n")
-                    trace_fh.flush()
+                    try:
+                        lines = "".join(
+                            json.dumps(record, default=str, sort_keys=True) + "\n"
+                            for record in _trace_records(run, ts.strftime(_TS_FMT), forecast_method,
+                                                         fetcher.provenance[prov_start:]))
+                    except Exception as exc:  # one malformed step must not abort the backfill
+                        lines = ""
+                        totals["trace_errors"] += 1
+                        out(f"trace not written for {ts.strftime(_TS_FMT)}: {_redact(repr(exc))}")
+                    for attempt in (1, 2):
+                        try:
+                            trace_fh.write(lines)
+                            trace_fh.flush()
+                            break
+                        except KeyboardInterrupt:
+                            pending_interrupt = True
+                            if attempt == 2:
+                                raise
                 parts = []
                 for row in run["summary"]:
                     c = row["city"]
@@ -324,6 +373,8 @@ def backfill(start, end, step_hours=1.0, archive_path=DEFAULT_ARCHIVE, log_path=
                 elapsed = time.time() - t0
                 eta = elapsed / max(totals["runs"], 1) * (n - i)
                 out(f"[{i}/{n}] {ts.strftime(_TS_FMT)}  " + " | ".join(parts) + f"   (eta {eta/60:.0f} min)")
+                if pending_interrupt:
+                    raise KeyboardInterrupt
         except KeyboardInterrupt:
             totals["interrupted"] = True  # callers that cannot resume (replay) must stop
             out("\nInterrupted -- progress is saved; rerun the same command to continue.")

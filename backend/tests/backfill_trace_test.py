@@ -253,11 +253,96 @@ def test_trace_file_is_closed_when_the_log_cannot_be_opened(tmp_path, monkeypatc
     assert opened and all(fh.closed for fh in opened)
 
 
-def test_trace_records_refuses_results_and_summary_of_different_lengths():
-    run = {"results": [{"city": _CITY}], "summary": [], "errors": {}}
+def test_trace_records_pair_by_city_when_results_and_summary_disagree():
+    run = _fake_run(f"{_DAY}T10:00:00Z")
+    run["summary"] = []  # desynchronised: the rated city still gets a record
 
-    with pytest.raises(ValueError, match="1 results but 0 summary rows"):
-        backfill_archive._trace_records(run, f"{_DAY}T10:00:00Z", "naive", [])
+    (record,) = backfill_archive._trace_records(run, f"{_DAY}T10:00:00Z", "naive", [])
+
+    assert record["city"] == _CITY and record["static_rating_a"] is None
+    assert record["fallback_gates"] == []
+
+
+def test_a_step_whose_trace_cannot_be_built_does_not_abort_the_backfill(tmp_path, monkeypatch):
+    run = _fake_run(f"{_DAY}T10:00:00Z")
+    del run["results"][0]["rating"]  # a malformed step
+    monkeypatch.setattr(backfill_archive, "run_dlr_pipeline", lambda **kwargs: run)
+    messages = []
+
+    totals = backfill_archive.backfill(
+        f"{_DAY}T10:00:00Z", f"{_DAY}T11:00:00Z", archive_path=str(tmp_path / "a.csv"),
+        log_path=str(tmp_path / "log.csv"), cities=[_CITY], stations=_station_at(_CITY),
+        fetcher=_StubFetcher(), out=messages.append, trace_path=tmp_path / "t.jsonl")
+
+    assert totals["runs"] == 2 and totals["trace_errors"] == 2  # the second step still ran
+    assert any("trace not written" in m for m in messages)
+
+
+def test_an_interrupt_while_the_trace_is_written_still_writes_it(tmp_path, monkeypatch):
+    monkeypatch.setattr(backfill_archive, "run_dlr_pipeline",
+                        lambda **kwargs: _fake_run(kwargs["end"]))
+    trace_path = tmp_path / "trace.jsonl"
+    real_open = open
+    state = {"raised": False}
+
+    class _Interrupting:
+        def __init__(self, fh):
+            self._fh = fh
+
+        def write(self, text):
+            if not state["raised"] and text.startswith("{"):
+                state["raised"] = True
+                raise KeyboardInterrupt
+            return self._fh.write(text)
+
+        def __getattr__(self, name):
+            return getattr(self._fh, name)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return self._fh.__exit__(*exc)
+
+    def fake_open(path, *args, **kwargs):
+        fh = real_open(path, *args, **kwargs)
+        return _Interrupting(fh) if str(path) == str(trace_path) else fh
+
+    monkeypatch.setattr("builtins.open", fake_open)
+
+    totals = _backfill_one_step(tmp_path, trace_path, _StubFetcher())
+
+    monkeypatch.undo()
+    assert totals["interrupted"] is True
+    (record,) = _read_trace(trace_path)
+    assert record["city"] == _CITY
+
+
+def test_an_empty_log_file_gets_its_header(tmp_path, monkeypatch):
+    log_path = tmp_path / "log.csv"
+    log_path.write_text("", encoding="utf-8")  # created, then killed before the header
+    monkeypatch.setattr(backfill_archive, "run_dlr_pipeline",
+                        lambda **kwargs: _fake_run(kwargs["end"]))
+
+    _backfill_one_step(tmp_path, tmp_path / "trace.jsonl", _StubFetcher())
+
+    assert log_path.read_text(encoding="utf-8").splitlines()[0] == backfill_archive._LOG_HEADER
+
+
+@pytest.mark.parametrize("text", [
+    "invalid token: expired",
+    "Error sending email: connection refused",
+    "password: required",
+    "Authorization: Basic authentication failed",
+    "Token expired",
+])
+def test_redact_leaves_prose_after_a_credential_word_alone(text):
+    assert backfill_archive._redact(text) == text
+
+
+def test_a_short_configured_secret_only_replaces_whole_words(monkeypatch):
+    monkeypatch.setenv("SYNOPTIC_TOKEN", "test")
+    assert backfill_archive._redact("testing a test run, retest") == "testing a REDACTED run, retest"
 
 
 def test_error_text_is_redacted_in_the_backfill_log_too(tmp_path, monkeypatch):
