@@ -151,7 +151,7 @@ rows are labelled provisional until Phase 7's go.
 **Re-plan note (2026-10-21, done)**: plans revised the same day: 04-01 no longer requires a Phase 3
 GO, and DB-06 (`config_fingerprint`, `forecast_model_sha256`, `anomaly_model_sha256`) is covered
 across 04-01..04-06. Plan checker: passed, info advisories only.
-**Plans**: 11/12 plans executed (04-07..04-12: gap closure G-04-2, all 12 code review findings)
+**Plans**: 12/12 plans executed (04-07..04-12: gap closure G-04-2, all 12 code review findings)
 
 Plans:
 **Wave 1**
@@ -184,7 +184,7 @@ Plans:
 - [x] 04-11-PLAN.md — WR-04 computed-first backfill de-duplication; WR-05 fingerprint child decoupled via `rating_identity.py` (gap wave 3)
 
 **Gap Wave 4** *(blocked on all gap plans)*
-- [ ] 04-12-PLAN.md — Owner: [BLOCKING] schema push of the new migration, local smoke, push and Actions smoke; executor records evidence and the 12/12 ledger (gap wave 4)
+- [x] 04-12-PLAN.md — Owner: [BLOCKING] schema push of the new migration, local smoke, push and Actions smoke; executor records evidence and the 12/12 ledger (gap wave 4)
 
 ### Phase 5: Scheduled Live Runs
 
@@ -295,7 +295,7 @@ ml-modeling workstream's evaluation; record it in that workstream's STATE.md as 
 | 1. Land PR #7 | 5/5 | Complete    | 2026-10-19 |
 | 2. Data Cleaning | 4/4 | Complete    | 2026-10-20 |
 | 3. Real-Data Validation | 5/5 | Complete    | 2026-10-21 |
-| 4. Supabase Store & Writer | 11/12 | In Progress | - |
+| 4. Supabase Store & Writer | 12/12 | In Progress | - |
 | 5. Scheduled Live Runs | 0/8 | Planned | - |
 | 6. Exposure & E2E Verification | 0/7 | Planned | - |
 | 7. Per-City Conductors, Shadow Refit and Early Model Selection | 0/0 | Not planned | - |
