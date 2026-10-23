@@ -151,7 +151,7 @@ rows are labelled provisional until Phase 7's go.
 **Re-plan note (2026-10-21, done)**: plans revised the same day: 04-01 no longer requires a Phase 3
 GO, and DB-06 (`config_fingerprint`, `forecast_model_sha256`, `anomaly_model_sha256`) is covered
 across 04-01..04-06. Plan checker: passed, info advisories only.
-**Plans**: 6/6 plans executed
+**Plans**: 6/12 plans executed (04-07..04-12: gap closure G-04-2, all 12 code review findings)
 
 Plans:
 **Wave 1**
@@ -169,6 +169,22 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 - [x] 04-06-PLAN.md — Owner: GitHub secret, approved push, Actions smoke, backfill load; executor verifies and commits the evidence (wave 5)
+
+**Gap closure G-04-2** (owner, 2026-10-23: fix all 04-REVIEW.md findings in Phase 4)
+
+**Gap Wave 1**
+- [ ] 04-07-PLAN.md — Store connection: CR-01 tracer (log the server role, not the pooler user, end to end from `main`), IN-02 stripped URL, WR-03 reconnect once (gap wave 1)
+- [ ] 04-08-PLAN.md — Run health: WR-01 postgres-store exit 1 on any failed city, WR-02 cleaning failure reported as failed forecast and degraded city (gap wave 1)
+- [ ] 04-09-PLAN.md — Additive migration 20261023000000 (IN-06 UTC hour CHECK, IN-03 run-log comments), smoke zone checks, IN-05 workflow hardening (gap wave 1)
+
+**Gap Wave 2** *(blocked on 04-07 and 04-08)*
+- [ ] 04-10-PLAN.md — IN-01 1000-character run errors and count-preserving key redaction; IN-04 loader on the store's public helpers (gap wave 2)
+
+**Gap Wave 3** *(blocked on 04-10)*
+- [ ] 04-11-PLAN.md — WR-04 computed-first backfill de-duplication; WR-05 fingerprint child decoupled via `rating_identity.py` (gap wave 3)
+
+**Gap Wave 4** *(blocked on all gap plans)*
+- [ ] 04-12-PLAN.md — Owner: [BLOCKING] schema push of the new migration, local smoke, push and Actions smoke; executor records evidence and the 12/12 ledger (gap wave 4)
 
 ### Phase 5: Scheduled Live Runs
 
