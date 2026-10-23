@@ -478,6 +478,28 @@ def test_run_log_failure_is_logged_redacted_and_main_returns_one(monkeypatch, ca
     assert orch.main([]) == 0
 
 
+@pytest.mark.parametrize("argv, errors, expected", [
+    (["--store", "postgres"], {"EL_PASO": "down"}, 1),
+    (["--store", "postgres", "--no-run-row"], {"EL_PASO": "down"}, 1),
+    (["--store", "postgres"], {}, 0),
+    (["--store", "postgres", "--no-run-row"], {}, 0),
+    ([], {"EL_PASO": "down"}, 0),
+    (["--store", "csv"], {"EL_PASO": "down"}, 0),
+])
+def test_main_with_postgres_exits_one_when_any_city_failed(
+        monkeypatch, capsys, argv, errors, expected):
+    # WR-01: a missing city row is a data gap in the production table, so a
+    # partial postgres run must not leave a scheduled job green. The CSV path
+    # keeps Phase 1's rule (1 only when every city failed).
+    _fake_run_dlr_pipeline(monkeypatch, _canned_run(errors=errors))
+
+    assert orch.main(argv) == expected
+
+    printed = capsys.readouterr().out
+    for city in errors:
+        assert f"ERROR {city}: down" in printed
+
+
 def test_main_store_flags_extend_the_pinned_arguments_only_for_postgres(tmp_path, monkeypatch):
     seen = _fake_run_dlr_pipeline(monkeypatch, _canned_run())
     archive_path = str(tmp_path / "archive.csv")
