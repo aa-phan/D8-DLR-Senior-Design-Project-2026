@@ -192,6 +192,11 @@ def _trace_records(run: dict, ts_text: str, forecast_method: str, provenance: li
     the rated station (the last one, if several) names the aligned observation
     hour and the provider of each input.
     """
+    if len(run["results"]) != len(run["summary"]):
+        # zip would drop the surplus silently and the missing steps would then read as
+        # `no_trace`; a pipeline that desynchronises its two lists is a bug to surface
+        raise ValueError(f"run has {len(run['results'])} results but {len(run['summary'])} "
+                         "summary rows; cannot pair them into trace records")
     records = []
     for result, row in zip(run["results"], run["summary"]):
         obs = result.get("observation")

@@ -227,6 +227,13 @@ def test_trace_records_errors_with_credentials_redacted(tmp_path, monkeypatch):
     ) == "GET https://x/?token=REDACTED&email=REDACTED failed"
 
 
+def test_trace_records_refuses_results_and_summary_of_different_lengths():
+    run = {"results": [{"city": _CITY}], "summary": [], "errors": {}}
+
+    with pytest.raises(ValueError, match="1 results but 0 summary rows"):
+        backfill_archive._trace_records(run, f"{_DAY}T10:00:00Z", "naive", [])
+
+
 def test_error_text_is_redacted_in_the_backfill_log_too(tmp_path, monkeypatch):
     message = "GET https://api.example.org/v1?token=abc123&email=me@x.org failed"
 
