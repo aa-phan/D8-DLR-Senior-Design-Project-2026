@@ -674,6 +674,59 @@ def test_replay_fidelity_flags_a_changed_observation(tmp_path, monkeypatch, caps
     assert json.loads(clean_outs["fidelity"].read_text(encoding="utf-8"))["mismatches"] == 0
 
 
+def test_an_interrupted_replay_stops_instead_of_continuing_with_the_next_city(
+        tmp_path, monkeypatch, capsys):
+    orig = _original_run(tmp_path, monkeypatch)
+    outs = _out_paths(tmp_path)
+    calls = []
+
+    def interrupted_backfill(start, end, step_hours, **kwargs):
+        calls.append(kwargs["cities"])
+        for key in ("archive_path", "log_path", "trace_path"):  # partial outputs of the city
+            open(kwargs[key], "w", encoding="utf-8").close()
+        return {"runs": 1, "interrupted": True}
+
+    monkeypatch.setattr(rdv.backfill_archive, "backfill", interrupted_backfill)
+
+    with pytest.raises(rdv.ReplayInterrupted) as excinfo:
+        rdv.replay(str(orig["trace"]), _R_START, _R_END, 1.0, [_CITY, "MIDLAND"], "naive",
+                   str(outs["archive"]), str(outs["trace"]), str(outs["log"]),
+                   require_models=False, out=lambda *_: None)
+
+    assert calls == [[_CITY]]  # the second city was never started
+    assert excinfo.value.city == _CITY and "incomplete" in str(excinfo.value)
+    assert not any(outs[key].exists() for key in ("archive", "trace", "log"))  # nothing stale
+
+    # The CLI reports it and exits non-zero without writing a fidelity table.
+    _model_dir(tmp_path, monkeypatch, with_models=True)
+    calls.clear()
+    assert rdv.main(_cli(orig, outs)) == 130
+    assert "replay interrupted" in capsys.readouterr().err
+    assert not outs["fidelity"].exists()
+
+
+def test_duplicate_output_paths_are_refused_even_when_only_the_case_differs(tmp_path, monkeypatch):
+    monkeypatch.setattr(rdv.sys, "platform", "darwin")
+    with pytest.raises(rdv.ReplayRefused):
+        rdv._refuse_duplicate_paths([tmp_path / "A.csv", tmp_path / "a.csv"])
+    monkeypatch.setattr(rdv.sys, "platform", "linux")  # case-sensitive: two distinct files
+    rdv._refuse_duplicate_paths([tmp_path / "A.csv", tmp_path / "a.csv"])
+
+
+def test_a_torn_line_in_the_original_trace_is_reported_and_fails_the_replay(
+        tmp_path, monkeypatch, capsys):
+    orig = _original_run(tmp_path, monkeypatch)
+    _model_dir(tmp_path, monkeypatch, with_models=True)
+    with open(orig["trace"], "a", encoding="utf-8") as fh:
+        fh.write('{"schema": "backfill_trace/1", "city": "AUS')  # torn last line
+    outs = _out_paths(tmp_path)
+
+    code = rdv.main(_cli(orig, outs))
+
+    assert code == 1
+    assert "unreadable line(s) in the original trace" in capsys.readouterr().err
+
+
 def test_replay_refuses_without_anomaly_models_or_over_existing_outputs(tmp_path, monkeypatch, capsys):
     orig = _original_run(tmp_path, monkeypatch)
     model_dir = _model_dir(tmp_path, monkeypatch, with_models=False)
@@ -701,6 +754,48 @@ def test_replay_refuses_without_anomaly_models_or_over_existing_outputs(tmp_path
     missing = dict(orig, trace=tmp_path / "nope.jsonl")
     assert rdv.main(_cli(missing, _out_paths(tmp_path, "other"))) == 2
     assert str(tmp_path / "nope.jsonl") in capsys.readouterr().err
+
+
+def test_replay_refuses_two_outputs_naming_the_same_file(tmp_path, monkeypatch, capsys):
+    orig = _original_run(tmp_path, monkeypatch)
+    outs = _out_paths(tmp_path)
+    outs["log"] = outs["trace"]  # a trace and a log interleaved in one file
+
+    with pytest.raises(rdv.ReplayRefused, match="distinct"):
+        _replay(orig, outs)
+    assert rdv.main(_cli(orig, outs)) == 2
+    assert "distinct" in capsys.readouterr().err
+    assert not any(path.exists() for path in outs.values())
+
+    outs = _out_paths(tmp_path, "fid")
+    outs["fidelity"] = outs["archive"]  # the report would overwrite the replayed archive
+    assert rdv.main(_cli(orig, outs)) == 2
+    assert not outs["archive"].exists()
+
+
+def test_a_torn_replay_trace_fails_the_report_and_the_replay_command(tmp_path, monkeypatch, capsys):
+    orig = _original_run(tmp_path, monkeypatch)
+    _model_dir(tmp_path, monkeypatch, with_models=True)
+    outs = _out_paths(tmp_path)
+    real_replay = rdv.replay
+
+    def replay_then_tear(*args, **kwargs):
+        totals = real_replay(*args, **kwargs)
+        with open(outs["trace"], "a", encoding="utf-8") as fh:
+            fh.write('{"schema": "backfill_trace/1", "city": "AUS')  # killed mid-write
+        return totals
+
+    monkeypatch.setattr(rdv, "replay", replay_then_tear)
+    assert rdv.main(_cli(orig, outs)) == 1  # the fidelity itself is clean; the torn line fails it
+    err = capsys.readouterr().err
+    assert "1 unreadable line(s) in the replay trace" in err
+    assert json.loads(outs["fidelity"].read_text(encoding="utf-8"))["mismatches"] == 0
+
+    assert _report_with_replay(orig, outs, tmp_path / "report_torn") == 1
+    meta = json.loads((tmp_path / "report_torn" / "report_meta.json").read_text(encoding="utf-8"))
+    assert meta["replay_trace_unparseable_line_mismatches"] == 1
+    assert meta["trace_unparseable_line_mismatches"] == 0
+    assert "replay_trace_unparseable_line_mismatches=1" in capsys.readouterr().err
 
 
 def test_replay_never_touches_the_network(tmp_path, monkeypatch):

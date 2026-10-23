@@ -40,10 +40,12 @@ Subcommands (run from the repository root with PYTHONPATH=backend):
 """
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from collections import Counter
@@ -61,21 +63,34 @@ import historical_archive
 import thermal_model
 from DLRSafetyMonitor import DLRSafetyMonitor
 
-TRACE_SCHEMA = "backfill_trace/1"
+TRACE_SCHEMA = backfill_archive.TRACE_SCHEMA  # one definition: the writer's
 MANIFEST_SCHEMA = "real_data_validation_manifest/1"
 _TS_FMT = "%Y-%m-%dT%H:%M:%SZ"
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# The command the owner runs for the real backfill. The .env file uses
-# `KEY = value` spacing a shell cannot source, so it goes through python-dotenv
-# inside the child interpreter. This is only text: this module never imports
-# python-dotenv and never reads the env file.
-OWNER_COMMAND_TEMPLATE = (
-    "cd /Users/aphan/Senior_Design && PYTHONPATH=backend "
-    "/Users/aphan/Senior_Design/.venv/bin/python -c "
-    "\"from dotenv import load_dotenv; load_dotenv('/Users/aphan/Senior_Design/.env'); "
-    "import sys, backfill_archive; sys.exit(backfill_archive.main({argv}))\""
+# The command the owner runs for the real backfill (see `owner_command`). The .env
+# file uses `KEY = value` spacing a shell cannot source, so it goes through
+# python-dotenv inside the child interpreter. This is only text: this module never
+# imports python-dotenv and never reads the env file.
+OWNER_COMMAND_PROGRAM_TEMPLATE = (
+    "from dotenv import load_dotenv; load_dotenv({env_file}); "
+    "import sys, backfill_archive; sys.exit(backfill_archive.main({argv}))"
 )
+
+
+def owner_command(argv) -> str:
+    """
+    The shell command that reruns the backfill with `argv`, to be run from the
+    repository root. The whole `-c` program goes through `shlex.quote`, so an
+    argument holding a quote, `$` or a backtick cannot break or expand when the
+    command is pasted. Every path is repo-relative (`.venv/bin/python`, `.env`), so
+    the text is the same in every checkout and worktree.
+    """
+    program = OWNER_COMMAND_PROGRAM_TEMPLATE.format(
+        env_file=repr(".env"), argv=repr(list(argv)))
+    python = os.path.join(".venv", "bin", "python")
+    return (f"PYTHONPATH=backend {shlex.quote(python)} -c {shlex.quote(program)}")
+
 
 COMPLETENESS_COLUMNS = [
     "city", "expected_steps", "trace_records", "archive_rows", "log_rows",
@@ -148,15 +163,29 @@ def load_trace(path) -> pd.DataFrame:
     `run_end_utc` parsed to UTC Timestamps. A resumed backfill re-rates steps
     that errored or were exhausted, so the same (city, step) can appear more
     than once; the LAST record in file order wins. `DataFrame.attrs` carries
-    `{"duplicates": n, "records": n}` (records read, records dropped as
-    superseded).
+    `{"duplicates": n, "records": n, "unparseable": n}` (records read, records
+    dropped as superseded, non-empty lines that were not a JSON object carrying
+    this module's `TRACE_SCHEMA`, so a trace written under another schema version
+    is counted rather than read with the wrong column meanings). A killed
+    backfill can leave a torn final line; such a line is skipped and counted, never
+    fatal, and `build_report` turns a non-zero count into a failing self-check.
     """
     records = []
+    unparseable = 0
     with open(path, encoding="utf-8") as fh:
         for line in fh:
             line = line.strip()
-            if line:
-                records.append(_flatten_record(json.loads(line)))
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                unparseable += 1
+                continue
+            if not isinstance(record, dict) or record.get("schema") != TRACE_SCHEMA:
+                unparseable += 1  # not a record, or one this reader does not understand
+                continue
+            records.append(_flatten_record(record))
     frame = pd.DataFrame(records)
     if "run_end_utc" not in frame.columns:
         frame["run_end_utc"] = pd.Series(dtype="datetime64[ns, UTC]")
@@ -165,7 +194,8 @@ def load_trace(path) -> pd.DataFrame:
     frame["run_end_utc"] = pd.to_datetime(frame["run_end_utc"], utc=True)
     before = len(frame)
     frame = frame.drop_duplicates(subset=["city", "run_end_utc"], keep="last").reset_index(drop=True)
-    frame.attrs = {"duplicates": before - len(frame), "records": before}
+    frame.attrs = {"duplicates": before - len(frame), "records": before,
+                   "unparseable": unparseable}
     return frame
 
 
@@ -243,7 +273,7 @@ _QUANTILES = (("min", 0.0), ("p05", 0.05), ("p25", 0.25), ("p50", 0.5), ("p75", 
               ("p95", 0.95), ("max", 1.0))
 _PASS_THROUGH_PREFIXES = ("fc_", "detector_", "pipeline_")
 _PASS_THROUGH_NAMES = ("history_rows", "usable_history_rows", "forecast_used_by_g6")
-_OBS_COLUMNS = ("obs_temp", "obs_wind", "obs_wind_raw", "obs_wind_direction", "obs_solar")
+_OBS_COLUMNS = tuple(_OBSERVATION_COLUMNS.values())  # the flattened trace columns, same order
 _LABEL = ("PROVISIONAL (OD-5): static ratings, rating bounds and line bearings are unconfirmed "
           "assumptions; these tables measure, they do not decide.")
 
@@ -289,12 +319,6 @@ def _num(value) -> float:
         return float("nan") if value is None else float(value)
     except (TypeError, ValueError):
         return float("nan")
-
-
-def _truthy(value) -> bool:
-    if value is None or (isinstance(value, float) and np.isnan(value)):
-        return False
-    return bool(value)
 
 
 def _text(value):
@@ -378,9 +402,9 @@ def classify_steps(trace, archive, cities, steps, start, warmup_hours) -> pd.Dat
                     alerts, (list, tuple, np.ndarray)) else ""
                 if _text(rec.get("error")) is not None:
                     row["kind"] = "error"
-                elif _truthy(rec.get("exhausted")):
+                elif _flag(rec.get("exhausted")):
                     row["kind"] = "exhausted"
-                elif not _truthy(rec.get("fallback")):
+                elif not _flag(rec.get("fallback")):
                     row["kind"] = "ok"
                 else:
                     row["kind"] = "fallback"
@@ -1131,6 +1155,21 @@ class ReplayRefused(Exception):
     """The replay must not start: an output already exists, or an anomaly model file is absent."""
 
 
+class ReplayInterrupted(Exception):
+    """
+    The replay was interrupted (Ctrl-C) part-way, so its outputs are incomplete.
+    Unlike the backfill, a replay cannot be resumed, so `replay` removes the output
+    files it created before raising: run it again. `totals` holds what finished.
+    """
+
+    def __init__(self, city, totals):
+        super().__init__(
+            f"replay interrupted during {city}; the incomplete replay outputs were "
+            "removed -- run the replay again")
+        self.city = city
+        self.totals = totals
+
+
 def replay_stations(city) -> pd.DataFrame:
     """
     A one-row station frame, `stid = "REPLAY_" + city`, at the city's own
@@ -1218,6 +1257,19 @@ def _refuse_existing(paths) -> None:
                             + ", ".join(present))
 
 
+def _refuse_duplicate_paths(paths) -> None:
+    """Two outputs naming one file would interleave different formats in it."""
+    seen = {}
+    for path in paths:
+        key = os.path.realpath(path)
+        if sys.platform in ("darwin", "win32"):  # default filesystems ignore case
+            key = key.casefold()
+        if key in seen:
+            raise ReplayRefused(f"output paths must be distinct, but {seen[key]} and {path} "
+                                "name the same file")
+        seen[key] = str(path)
+
+
 def replay(trace_path, start, end, step_hours, cities, method, archive_out, trace_out, log_out,
            require_models=True, out=None) -> dict:
     """
@@ -1231,10 +1283,13 @@ def replay(trace_path, start, end, step_hours, cities, method, archive_out, trac
     already exists, so a replay can never be mixed into an earlier one, or, with
     `require_models`, when any requested city's anomaly model file is absent (and,
     for method "ml", its forecast model file), so a replay can never silently run
-    heuristics-only. Returns {city: backfill totals}. `out` receives at most one
+    heuristics-only. Raises `ReplayInterrupted` (the CLI maps it to exit 130) if a
+    city's backfill is interrupted, instead of carrying on with the next city.
+    Returns {city: backfill totals}. `out` receives at most one
     progress line per simulated UTC day (default: print).
     """
     cities = list(cities)
+    _refuse_duplicate_paths([archive_out, trace_out, log_out])
     _refuse_existing([archive_out, trace_out, log_out])
     if require_models:
         paths = [anomaly_detector._model_path_for(city) for city in cities]
@@ -1253,6 +1308,11 @@ def replay(trace_path, start, end, step_hours, cities, method, archive_out, trac
             start, end, step_hours, archive_path=archive_out, log_path=log_out, cities=[city],
             forecast_method=method, stations=replay_stations(city),
             fetcher=make_replay_fetcher(trace), out=progress, trace_path=trace_out)
+        if totals[city].get("interrupted"):
+            for path in (archive_out, trace_out, log_out):  # all three were new (checked above)
+                with contextlib.suppress(OSError):
+                    os.remove(path)
+            raise ReplayInterrupted(city, totals)
     return totals
 
 
@@ -1383,8 +1443,9 @@ def build_report(archive_path, trace_path, start, end, step_hours, warmup_hours,
     method_frames = [(label, frame)]
     fidelity = None
     if replay_archive is not None and replay_trace is not None:
+        replay_trace_frame = load_trace(replay_trace)
         replay_frame = classify_steps(
-            load_trace(replay_trace), historical_archive.read_history(path=replay_archive, validate=True),
+            replay_trace_frame, historical_archive.read_history(path=replay_archive, validate=True),
             cities, steps, start_ts, warmup_hours)
         fidelity = replay_fidelity(frame, replay_frame)
         method_frames.append((replay_label, replay_frame))
@@ -1406,6 +1467,7 @@ def build_report(archive_path, trace_path, start, end, step_hours, warmup_hours,
         "cities": list(cities),
         "trace_records": int(trace.attrs.get("records", len(trace))),
         "trace_duplicates": int(trace.attrs.get("duplicates", 0)),
+        "trace_unparseable_line_mismatches": int(trace.attrs.get("unparseable", 0)),
         "trace_records_out_of_window": count_out_of_window(trace, steps),
         "archive_rows_dropped_by_validation": int(raw_rows - len(archive)),
         "cleaning": cleaning_summary(archive_path, trace, cities),
@@ -1416,6 +1478,10 @@ def build_report(archive_path, trace_path, start, end, step_hours, warmup_hours,
         meta["replay"] = {"label": replay_label, "reference_only": True,
                           "compared": fidelity["compared"], "excluded": fidelity["excluded"]}
         meta["replay_fidelity_mismatches"] = fidelity["mismatches"]
+        # a torn replay trace silently shrinks the comparison; the key ends in
+        # `mismatches`, so the self-check below fails the report on it
+        meta["replay_trace_unparseable_line_mismatches"] = int(
+            replay_trace_frame.attrs.get("unparseable", 0))
 
     os.makedirs(out_dir, exist_ok=True)
     for name, table in {**tables, **val02}.items():
@@ -1449,18 +1515,39 @@ def build_report(archive_path, trace_path, start, end, step_hours, warmup_hours,
 # Run manifest
 # ──────────────────────────────────────────────────────────────────────────────
 
+def _manifest_path(path) -> str:
+    """
+    A path as the manifest records it: relative to the repository (forward slashes)
+    when inside it, else absolute and normalised, so the same file gives the same
+    text whatever directory the command ran from or however the path was typed.
+    """
+    absolute = os.path.abspath(path)
+    try:
+        inside = os.path.commonpath([absolute, _REPO_ROOT]) == _REPO_ROOT
+    except ValueError:  # different drives on Windows
+        inside = False
+    return (os.path.relpath(absolute, _REPO_ROOT) if inside else absolute).replace(os.sep, "/")
+
+
 def _file_record(path) -> dict:
-    """Path, byte size and sha256 (1 MiB chunks) of one input file."""
+    """Manifest path, byte size and sha256 (1 MiB chunks) of one input file."""
     digest = hashlib.sha256()
     with open(path, "rb") as fh:
         for chunk in iter(lambda: fh.read(1 << 20), b""):
             digest.update(chunk)
-    return {"path": str(path), "bytes": os.path.getsize(path), "sha256": digest.hexdigest()}
+    return {"path": _manifest_path(path), "bytes": os.path.getsize(path), "sha256": digest.hexdigest()}
 
 
 def _git(*args) -> str:
-    """One fixed-argv git query in the repository this module lives in."""
-    done = subprocess.run(["git", *args], cwd=_REPO_ROOT, capture_output=True, text=True, check=False)
+    """
+    One fixed-argv git query in the repository this module lives in. Returns ""
+    when git fails or is not installed, so the manifest is still written.
+    """
+    try:
+        done = subprocess.run(["git", *args], cwd=_REPO_ROOT, capture_output=True, text=True,
+                              check=False)
+    except (OSError, subprocess.SubprocessError):
+        return ""
     return done.stdout.strip() if done.returncode == 0 else ""
 
 
@@ -1480,7 +1567,10 @@ def build_manifest(archive, trace, log, start, end, step_hours=1.0, warmup_hours
     A deterministic record of what was validated: the window, the exact backfill
     argv and owner command, sha256 + size of the archive, trace and log, archive
     rows per city, sha256 of the per-city model files and the git HEAD. No
-    timestamp is written, so equal inputs give equal bytes. Phase 4 uses it to
+    timestamp or working directory is written and file paths are normalised
+    (repo-relative when inside the repository), so equal inputs give equal bytes
+    from any directory of any checkout or worktree: `command` is repo-relative too
+    (run it from the repository root). Phase 4 uses it to
     prove it loads the archive this phase validated.
     """
     cities = list(cities) if cities else list(config.LOCATIONS)
@@ -1503,8 +1593,7 @@ def build_manifest(archive, trace, log, start, end, step_hours=1.0, warmup_hours
         "cities": cities,
         "forecast_method": forecast_method,
         "backfill_argv": argv,
-        "command": OWNER_COMMAND_TEMPLATE.replace("{argv}", repr(argv)),
-        "working_directory": os.getcwd(),
+        "command": owner_command(argv),
         "files": files,
         "archive_rows_by_city": {c: int(counts.get(c, 0)) for c in cities},
         "models": _model_hashes(cities),
@@ -1598,26 +1687,40 @@ def _cmd_replay(args) -> int:
         print(str(exc), file=sys.stderr)
         return 2
     try:
+        _refuse_duplicate_paths([args.archive_out, args.trace_out, args.log_out, args.fidelity_out])
         _refuse_existing([args.fidelity_out])
         replay(args.trace, args.start, args.end, args.step_hours, cities, args.method,
                args.archive_out, args.trace_out, args.log_out)
     except ReplayRefused as exc:
         print(f"replay refused: {exc}", file=sys.stderr)
         return 2
+    except ReplayInterrupted as exc:
+        print(f"replay interrupted: {exc}", file=sys.stderr)
+        return 130
     steps = expected_steps(args.start, args.end, args.step_hours)
     start_ts = _utc(args.start)
+    original_trace = load_trace(args.trace)
+    original_torn = int(original_trace.attrs.get("unparseable", 0))
+    if original_torn:
+        print(f"warning: {original_torn} unreadable line(s) in the original trace {args.trace}; "
+              "the replay input is missing those steps", file=sys.stderr)
     original = classify_steps(
-        load_trace(args.trace), historical_archive.read_history(path=args.archive, validate=True),
+        original_trace, historical_archive.read_history(path=args.archive, validate=True),
         cities, steps, start_ts, args.warmup_hours)
+    replay_trace = load_trace(args.trace_out)
     replayed = classify_steps(
-        load_trace(args.trace_out), historical_archive.read_history(path=args.archive_out, validate=True),
+        replay_trace, historical_archive.read_history(path=args.archive_out, validate=True),
         cities, steps, start_ts, args.warmup_hours)
     fidelity = replay_fidelity(original, replayed)
+    torn = int(replay_trace.attrs.get("unparseable", 0))
+    if torn:
+        print(f"warning: {torn} unreadable line(s) in the replay trace {args.trace_out}; "
+              "the comparison is missing those steps", file=sys.stderr)
     _write_json(fidelity, args.fidelity_out)
     print("replay fidelity: " + ", ".join(
         f"{key}={fidelity[key]}" for key in ("compared", "excluded", "mismatches", "mismatch_outcome",
                                              "mismatch_computed", "mismatch_g6_reach")))
-    return 1 if fidelity["mismatches"] else 0
+    return 1 if fidelity["mismatches"] or torn or original_torn else 0
 
 
 def _build_parser() -> argparse.ArgumentParser:

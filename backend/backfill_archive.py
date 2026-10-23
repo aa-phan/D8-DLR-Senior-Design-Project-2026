@@ -27,6 +27,7 @@ opened or written.
 
 import argparse
 import contextlib
+import csv
 import io
 import json
 import logging
@@ -34,6 +35,7 @@ import os
 import re
 import sys
 import time
+import urllib.parse
 from collections import Counter
 
 import pandas as pd
@@ -52,10 +54,85 @@ _GATE_RE = re.compile(r"\b(G[1-6]) FAIL")
 TRACE_SCHEMA = "backfill_trace/1"
 _OBSERVATION_KEYS = ("temp", "wind", "wind_raw", "wind_direction", "solar")
 _TRACE_TEXT_LIMIT = 200
-# `name=value` where the name ends in a credential-shaped word (token, api_key,
-# NREL_API_KEY, access_token, email, ...). The value runs to the next separator.
+# Environment variables whose actual values are scrubbed wherever they appear
+# (plain or percent-encoded), whatever shape the surrounding text has.
+_SECRET_ENV_NAMES = ("SYNOPTIC_TOKEN", "NREL_API_KEY", "NREL_API_EMAIL")
+_MIN_SECRET_LENGTH = 4
+# A value shorter than this is only replaced as a whole word, so a short or
+# dictionary-like secret cannot rewrite the inside of unrelated words.
+_WHOLE_WORD_BELOW = 8
+# `name<sep>value` where the name ends in a credential-shaped word (token,
+# api_key, NREL_API_KEY, access_token, accessKey, secret_key, email, authorization, ...)
+# and the separator is `=`, `:` or a percent-encoded `=`, with a quote after the name
+# (JSON and dict forms, `"token":` or, inside a JSON string, `\"token\":`) and any
+# amount of whitespace around it. The value is, in order: an escaped-quote string
+# (`\"abc\"`), a quoted string (backslash escapes allowed), a `Bearer`-style scheme
+# plus its credential, or a bare run to the next `&`/whitespace/quote. A quoted value
+# with no closing quote (a message cut short) runs to the end of the text, and a comma
+# or an inner `)` cannot leave a tail. One trailing `)` is left outside a bare value so
+# "(api_key=X)" keeps its bracket.
+# The words that are also ordinary diagnostic vocabulary (`key`, `auth`, `sig`)
+# only count in query/assignment form (`key=abc`, `%3D`) or as a quoted JSON/dict
+# name (`"key": "abc"`), so "missing key: temp" and "hotkey: F5 failed" survive;
+# `_bare_colon` below still masks a `key:`/`auth:`/`sig:` followed by a value that looks
+# like a credential.
+_NAME_QUOTE = r"""(?:\\?["'])?"""
 _SECRET_PAIR = re.compile(
-    r"([\w-]*(?:token|api_key|apikey|key|email|password|secret))=([^&\s,;)\"']+)", re.IGNORECASE)
+    r"""(?<![\w-])("""
+    r"""(?:[\w-]*(?:token|api[_-]?key|[_-]key|"""
+    r"""(?:access|secret|private|signing|subscription|client|auth|encryption|master)key|"""
+    r"""email|password|passwd|pwd|secret|credential|"""
+    r"""authorization)""" + _NAME_QUOTE + r"""\s*(?:=|:|%3D)"""
+    r"""|(?:key|auth|sig)(?:""" + _NAME_QUOTE + r"""\s*(?:=|%3D)|\\?["']\s*:))"""
+    r"""\s*)"""
+    r"""(?:\\"(?:(?!\\")[\s\S])*(?:\\"|$)|\\'(?:(?!\\')[\s\S])*(?:\\'|$)|"""
+    r""""(?:[^"\\]|\\[\s\S]?)*(?:"|$)|'(?:[^'\\]|\\[\s\S]?)*(?:'|$)|"""
+    r"""(?:Bearer|Basic|Token|Digest|Negotiate)\s+[^&\s"']+|[^&\s"']*[^&\s"')])""",
+    re.IGNORECASE)
+
+
+def _bare_colon(names: str, min_length: int):
+    """
+    `<name>: <value>` for the words that are usually diagnostic vocabulary
+    ("missing key: temp", "auth: failed"): only a value of `min_length`+
+    credential-alphabet characters that contains a digit is a secret. The value may
+    sit in quotes; the quotes stay.
+    """
+    return re.compile(
+        r"(?<![\w-])((?:" + names + r")\s*:\s*[\"']?)"
+        r"(?=[\w.~+/=-]{" + str(min_length) + r",}(?![\w.~+/=-]))(?=[\w.~+/=-]*\d)[\w.~+/=-]+",
+        re.IGNORECASE)
+
+
+_SCHEME_VALUE = re.compile(r"(Bearer|Basic|Token|Digest|Negotiate)\s+", re.IGNORECASE)
+
+
+def _looks_like_credential(value: str) -> bool:
+    """A digit, a capital after the first letter or a base64 symbol: not plain prose."""
+    return any(ch.isdigit() or ch in "+/=" for ch in value) or any(ch.isupper() for ch in value[1:])
+
+
+def _mask_pair(match) -> str:
+    """
+    Mask `name<sep>value`, except where a `name: value` reads as prose rather than a
+    credential: "invalid token: expired", "Error sending email: connection refused",
+    "Basic authentication failed". After a `:` (not `=`, not a quoted value) the value
+    has to look like a credential; `Bearer` always counts.
+    """
+    text = match.group(0)
+    prefix = match.group(1)
+    value = text[len(prefix):]
+    if prefix.rstrip().endswith(":") and value and value[0] not in "\"'\\":
+        scheme = _SCHEME_VALUE.match(value)
+        if scheme is None or scheme.group(1).lower() != "bearer":
+            credential = value[scheme.end():] if scheme else value
+            if not _looks_like_credential(credential):
+                return text
+    return prefix + "REDACTED"
+
+
+_BARE_COLON_PATTERNS = (_bare_colon("key", 20), _bare_colon("auth|sig", 8))
+_BEARER = re.compile(r"\bBearer\s+[\w.~+/=-]+", re.IGNORECASE)
 _NULL_RECORD_KEYS = (
     "station_id", "rating_a", "static_rating_a", "status", "fallback", "exhausted", "archived",
     "fallback_gates", "alerts", "observation", "observation_hour", "sources", "pipeline")
@@ -88,27 +165,74 @@ def _already_archived(path: str) -> dict:
     return done
 
 
-def _redact(text) -> str:
+def _known_secrets() -> list:
     """
-    Replace the value of every credential-shaped `name=value` pair with
-    `REDACTED`, then cut to 200 characters. Redaction runs first so a cut can
-    never leave half of a secret behind. Applied to every alert and error
-    string written to the trace, because a requests error can echo a query
-    string.
+    The configured credential values (and their percent-encoded forms), longest
+    first so a secret that contains another is replaced whole. Read from the
+    environment on every call so a value set after import is still covered.
     """
-    return _SECRET_PAIR.sub(r"\1=REDACTED", str(text))[:_TRACE_TEXT_LIMIT]
+    values = set()
+    for name in _SECRET_ENV_NAMES:
+        value = os.environ.get(name, "")
+        if len(value) >= _MIN_SECRET_LENGTH:
+            values.update({value, urllib.parse.quote(value, safe=""),
+                           urllib.parse.quote_plus(value)})
+    return sorted(values, key=len, reverse=True)
+
+
+def _terminate_last_line(path) -> None:
+    """
+    If an existing file does not end in a newline (a run killed mid-write left a
+    torn last line), add one, so the next appended record starts on its own line
+    instead of being glued onto the fragment and lost with it.
+    """
+    if not os.path.exists(path) or os.path.getsize(path) == 0:
+        return
+    with open(path, "rb+") as fh:
+        fh.seek(-1, os.SEEK_END)
+        if fh.read(1) != b"\n":
+            fh.write(b"\n")
+
+
+def _redact(text, limit=_TRACE_TEXT_LIMIT) -> str:
+    """
+    Remove credentials from `text`, then cut it to `limit` characters (None for
+    no cut). Two passes: every configured secret value is replaced wherever it
+    appears, then every credential-shaped `name=value` / `name: value` pair and
+    `Bearer` token is masked by shape. Redaction runs first so a cut can never
+    leave half of a secret behind. Applied to every alert and error string written
+    to the trace and the log, because a requests error can echo a query string,
+    a kwargs dict or a header.
+    """
+    out = str(text)
+    for secret in _known_secrets():
+        if len(secret) < _WHOLE_WORD_BELOW:
+            out = re.sub(r"(?<![A-Za-z0-9])" + re.escape(secret) + r"(?![A-Za-z0-9])",
+                         "REDACTED", out)
+        else:
+            out = out.replace(secret, "REDACTED")
+    out = _SECRET_PAIR.sub(_mask_pair, out)
+    for pattern in _BARE_COLON_PATTERNS:
+        out = pattern.sub(r"\1REDACTED", out)
+    out = _BEARER.sub("Bearer REDACTED", out)
+    return out if limit is None else out[:limit]
 
 
 def _trace_records(run: dict, ts_text: str, forecast_method: str, provenance: list) -> list:
     """
     One trace record per city the step rated, built from the raw
-    `run_city_pipeline` results zipped with their summary rows. `provenance` is
+    `run_city_pipeline` results matched to their summary rows by city. `provenance` is
     the slice of the composed fetcher's provenance this step added; the record of
     the rated station (the last one, if several) names the aligned observation
     hour and the provider of each input.
     """
+    # Paired by city, not by position: a run whose two lists disagree must still leave a
+    # trace for every city it rated (a raise here comes after the archive row is
+    # written, and a resumed run would then skip the step and lose its trace for good).
+    summary_by_city = {row["city"]: row for row in run["summary"]}
     records = []
-    for result, row in zip(run["results"], run["summary"]):
+    for result in run["results"]:
+        row = summary_by_city.get(result["city"], {})
         obs = result.get("observation")
         stid = result.get("station_id")
         match = None
@@ -124,12 +248,12 @@ def _trace_records(run: dict, ts_text: str, forecast_method: str, provenance: li
             "error": None,
             "station_id": stid,
             "rating_a": result["rating"],
-            "static_rating_a": row["static_rating_a"],
+            "static_rating_a": row.get("static_rating_a"),
             "status": result["status"],
             "fallback": result["fallback"],
             "exhausted": result["exhausted"],
             "archived": result["archived"],
-            "fallback_gates": row["fallback_gates"],
+            "fallback_gates": row.get("fallback_gates", []),
             "alerts": [_redact(a) for a in result["alerts"]],
             "observation": None if obs is None else {k: float(obs[k]) for k in _OBSERVATION_KEYS},
             "observation_hour": None if match is None else match.get("hour"),
@@ -163,20 +287,26 @@ def backfill(start, end, step_hours=1.0, archive_path=DEFAULT_ARCHIVE, log_path=
     done = _already_archived(archive_path)
     os.makedirs(os.path.dirname(log_path) or ".", exist_ok=True)
     _retire_stale_log(log_path)
-    write_header = not os.path.exists(log_path)
+    _terminate_last_line(log_path)  # a killed run's torn last row must not take the next one with it
+    write_header = not os.path.exists(log_path) or os.path.getsize(log_path) == 0
     totals = {"runs": 0, "skipped": 0, "archived": Counter(), "not_archived": Counter(),
-              "fallback": Counter(), "exhausted": Counter(), "gates": Counter(), "errors": Counter()}
+              "fallback": Counter(), "exhausted": Counter(), "gates": Counter(), "errors": Counter(),
+              "interrupted": False, "trace_errors": 0}
     t0 = time.time()
     n = len(times)
 
-    trace_cm = contextlib.nullcontext()
-    if trace_path:
-        os.makedirs(os.path.dirname(str(trace_path)) or ".", exist_ok=True)
-        trace_cm = open(trace_path, "a", encoding="utf-8")
-
-    with open(log_path, "a", encoding="utf-8") as log_fh, trace_cm as trace_fh:
+    # An ExitStack closes whichever of the two files is already open if the second
+    # `open` raises; a bare `trace_cm = open(...)` before the `with` would leak it.
+    with contextlib.ExitStack() as files:
+        trace_fh = None
+        if trace_path:
+            os.makedirs(os.path.dirname(str(trace_path)) or ".", exist_ok=True)
+            _terminate_last_line(trace_path)
+            trace_fh = files.enter_context(open(trace_path, "a", encoding="utf-8"))
+        log_fh = files.enter_context(open(log_path, "a", encoding="utf-8"))
         if write_header:
             log_fh.write(_LOG_HEADER + "\n")
+        pending_interrupt = False
         try:
             for i, ts in enumerate(times, 1):
                 todo = [c for c in cities if ts not in done.get(c, set())]
@@ -193,6 +323,30 @@ def backfill(start, end, step_hours=1.0, archive_path=DEFAULT_ARCHIVE, log_path=
                 gates = Counter(_GATE_RE.findall(buf.getvalue()))
                 totals["gates"].update(gates)
                 totals["runs"] += 1
+                # The trace goes first: `run_dlr_pipeline` has already appended the archive
+                # row, and on resume a step in the archive is skipped, so a step whose trace
+                # is lost here stays untraced for good (it reads as `no_trace`). The lines
+                # are built first and written in one call; an interrupt that lands while
+                # they are written is retried once and then re-raised after the log row.
+                if trace_fh is not None:
+                    try:
+                        lines = "".join(
+                            json.dumps(record, default=str, sort_keys=True) + "\n"
+                            for record in _trace_records(run, ts.strftime(_TS_FMT), forecast_method,
+                                                         fetcher.provenance[prov_start:]))
+                    except Exception as exc:  # one malformed step must not abort the backfill
+                        lines = ""
+                        totals["trace_errors"] += 1
+                        out(f"trace not written for {ts.strftime(_TS_FMT)}: {_redact(repr(exc))}")
+                    for attempt in (1, 2):
+                        try:
+                            trace_fh.write(lines)
+                            trace_fh.flush()
+                            break
+                        except KeyboardInterrupt:
+                            pending_interrupt = True
+                            if attempt == 2:
+                                raise
                 parts = []
                 for row in run["summary"]:
                     c = row["city"]
@@ -204,18 +358,25 @@ def backfill(start, end, step_hours=1.0, archive_path=DEFAULT_ARCHIVE, log_path=
                     parts.append(f"{c[:6]} {row['rating_a']:.0f}A{'*' if row['fallback'] else ''}{'' if row['archived'] else ' (not archived)'}")
                 for c, msg in run["errors"].items():
                     totals["errors"][c] += 1
-                    log_fh.write(f"{ts.strftime(_TS_FMT)},{c},,,,,,{msg.replace(',', ';')[:120]}\n")
+                    # redact before the cut so no partial secret survives; collapse
+                    # whitespace so a multi-line message stays one CSV row
+                    printable = "".join(ch if ch.isprintable() else " "
+                                        for ch in _redact(msg, limit=None))  # NUL, control chars
+                    msg_safe = " ".join(printable.split())
+                    # csv.writer quotes the field (a leading `"`, a stray quote, a NUL), so
+                    # `_read_log` can parse whatever the message holds; commas still become
+                    # `;` so a naive `split(",")` reader sees the same columns
+                    csv.writer(log_fh, lineterminator="\n").writerow(
+                        [ts.strftime(_TS_FMT), c, "", "", "", "", "", msg_safe.replace(",", ";")[:120]])
                     parts.append(f"{c[:6]} ERROR")
-                if trace_fh is not None:
-                    for record in _trace_records(run, ts.strftime(_TS_FMT), forecast_method,
-                                                 fetcher.provenance[prov_start:]):
-                        trace_fh.write(json.dumps(record, default=str, sort_keys=True) + "\n")
-                    trace_fh.flush()
                 log_fh.flush()
                 elapsed = time.time() - t0
                 eta = elapsed / max(totals["runs"], 1) * (n - i)
                 out(f"[{i}/{n}] {ts.strftime(_TS_FMT)}  " + " | ".join(parts) + f"   (eta {eta/60:.0f} min)")
+                if pending_interrupt:
+                    raise KeyboardInterrupt
         except KeyboardInterrupt:
+            totals["interrupted"] = True  # callers that cannot resume (replay) must stop
             out("\nInterrupted -- progress is saved; rerun the same command to continue.")
 
     totals["provider_issues"] = dict(fetcher.errors)
