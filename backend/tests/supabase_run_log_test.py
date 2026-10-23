@@ -184,7 +184,7 @@ def test_run_row_error_text_keeps_up_to_1000_characters():
     # IN-01: the documented bound is 1000. The secret sits at character 600, past
     # the old 300 cut, so the test also proves redaction runs before the cut.
     secret = "tok" + "en=" + "Zq9Mk7Leak"
-    text = "x" * 600 + secret + "y" * 4400
+    text = "x" * 599 + " " + secret + " " + "y" * 4400
     assert len(text) > 5000 - 1
 
     row = _build([_record("EL_PASO", written=False, error="x" * 5000),

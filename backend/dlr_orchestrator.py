@@ -275,8 +275,10 @@ def _run_cities_with_store(out, cities, start, end, stations, rate_provider, fet
                 record["error"] = str(exc)
             city_records.append(record)
             if fetcher is not None:
+                # Keyed by the provider's own error text: build_run_row redacts and
+                # cuts every key and adds the counts of keys that become equal.
                 errors_by_city[name] = {
-                    supabase_store.redact(key): count - errors_before.get(key, 0)
+                    key: count - errors_before.get(key, 0)
                     for key, count in fetcher.errors.items()
                     if count - errors_before.get(key, 0) > 0
                 }

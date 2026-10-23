@@ -36,6 +36,7 @@ import hashlib
 import json
 import logging
 import math
+import numbers
 import os
 import re
 import subprocess
@@ -258,13 +259,14 @@ def _project_identifiers(url) -> list:
 _RESOLVED_ADDRESS_RE = re.compile(r"\((?:\d{1,3}\.){3}\d{1,3}\)|\((?:[0-9a-fA-F]{0,4}:){2,}[0-9a-fA-F:.]*\)")
 
 
-def redact(text, secrets=None) -> str:
+def redact(text, secrets=None, limit=_MAX_MESSAGE_CHARS) -> str:
     """
     Return `text` with every secret removed: postgres(ql):// URLs, key=value
     secrets (password, token, api_key, apikey, key, secret), and every non-empty
     string in `secrets` (default: the URLs in SUPABASE_DB_URL and
     SUPABASE_ADMIN_DB_URL and their password components, raw and
-    percent-decoded). Truncated to 300 characters.
+    percent-decoded). Truncated to `limit` characters (default 300). The cut is
+    made after redaction, so a longer `limit` never lets a secret through.
     """
     text = "" if text is None else str(text)
     if secrets is None:
@@ -276,7 +278,7 @@ def redact(text, secrets=None) -> str:
         text = text.replace(secret, "REDACTED")
     text = _URL_RE.sub("postgresql://REDACTED", text)
     text = _KEY_VALUE_RE.sub(lambda m: f"{m.group(1)}=REDACTED", text)
-    return text[:_MAX_MESSAGE_CHARS]
+    return text[:limit]
 
 
 def connect(url=None):
@@ -743,13 +745,25 @@ def _city_rank(city) -> int:
 
 
 def _redact_keys(by_city):
-    """A per-city dict of dicts with every key of the inner dicts redacted (error keys can echo secrets)."""
+    """
+    A per-city dict of dicts with every key of the inner dicts redacted (error
+    keys can echo secrets) and cut to `_RUN_ERROR_MAX_CHARS`. Values are counts:
+    keys that become equal after redaction keep the sum of their counts, so no
+    count is lost. A non-numeric value cannot be added; the last one seen wins.
+    """
     if by_city is None:
         return None
-    return {
-        str(city): {redact(key): value for key, value in (inner or {}).items()}
-        for city, inner in by_city.items()
-    }
+    out = {}
+    for city, inner in by_city.items():
+        merged = {}
+        for key, value in (inner or {}).items():
+            safe = redact(key, limit=_RUN_ERROR_MAX_CHARS)
+            if (safe in merged and isinstance(value, numbers.Number)
+                    and isinstance(merged[safe], numbers.Number)):
+                value = merged[safe] + value
+            merged[safe] = value
+        out[str(city)] = merged
+    return out
 
 
 def build_run_row(run_ctx: dict, *, window_end, provider, forecast_method, started_at,
@@ -764,9 +778,11 @@ def build_run_row(run_ctx: dict, *, window_end, provider, forecast_method, start
     `cities_ok`; one that was written otherwise is in `cities_failed` with
     outcome "degraded"; one that was not written is there with outcome "error"
     (OD-9: it has no rating row, so this row is its only record). Every error
-    string goes through `redact()` and is cut to 1000 characters. `cities_ok` and
-    `cities_failed` follow config.LOCATIONS order. `provider_errors` and `sources`
-    are dicts keyed by city (or None).
+    string goes through `redact()` and is cut to 1000 characters, after
+    redaction. `cities_ok` and `cities_failed` follow config.LOCATIONS order.
+    `provider_errors` and `sources` are dicts keyed by city (or None); the
+    provider-error keys are redacted and cut the same way, and keys that become
+    equal afterwards have their counts added.
     """
     ordered = sorted(city_records, key=lambda rec: _city_rank(rec["city"]))
     cities_ok = []
@@ -785,7 +801,7 @@ def build_run_row(run_ctx: dict, *, window_end, provider, forecast_method, start
             "written": written,
             "forecast_status": status,
             "detector_model_loaded": loaded,
-            "error": None if error is None else redact(error)[:_RUN_ERROR_MAX_CHARS],
+            "error": None if error is None else redact(error, limit=_RUN_ERROR_MAX_CHARS),
         }
     row = {
         "run_id": run_ctx.get("run_id"),
