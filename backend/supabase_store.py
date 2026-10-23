@@ -395,8 +395,12 @@ def run_context(env=None) -> dict:
 # Value hygiene
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _finite(x):
-    """A Python float, or None for None and for NaN / infinity."""
+def finite(x):
+    """
+    A Python float, or None for None, for anything that is not a number, and for
+    NaN / infinity. Public value hygiene: the store and the backfill loader use
+    the same rule for every numeric column they write.
+    """
     if x is None:
         return None
     if hasattr(x, "item") and not isinstance(x, (int, float, str, bool)):
@@ -421,7 +425,7 @@ def _json_safe(value):
     if isinstance(value, int):
         return int(value)
     if isinstance(value, float):
-        return _finite(value)
+        return finite(value)
     return str(value)
 
 
@@ -642,7 +646,7 @@ def build_rating_row(result: dict, end, run_ctx: dict, provenance=None) -> dict:
     pipeline = result.get("pipeline") or {}
     provenance = provenance or {}
 
-    rating = _finite(result.get("rating"))
+    rating = finite(result.get("rating"))
     if rating is None or rating <= 0:
         raise ValueError(f"refusing to store a non-positive or non-finite rating for {city}: {result.get('rating')!r}")
     static = float(city_point.city_point(city).static_rating)
@@ -683,20 +687,20 @@ def build_rating_row(result: dict, end, run_ctx: dict, provenance=None) -> dict:
         "station_id": _opt_str(result.get("station_id")),
         "candidates_probed": _opt_int(result.get("candidates_probed")),
         "probe_trail": json.dumps(trail, allow_nan=False),
-        "air_temp_c": _finite(obs.get("temp")),
-        "wind_perp_ms": _finite(obs.get("wind")),
-        "wind_speed_ms": _finite(obs.get("wind_raw")),
-        "wind_direction_deg": _finite(obs.get("wind_direction")),
-        "solar_radiation_wm2": _finite(obs.get("solar")),
+        "air_temp_c": finite(obs.get("temp")),
+        "wind_perp_ms": finite(obs.get("wind")),
+        "wind_speed_ms": finite(obs.get("wind_raw")),
+        "wind_direction_deg": finite(obs.get("wind_direction")),
+        "solar_radiation_wm2": finite(obs.get("solar")),
         "temp_source": _opt_str(provenance.get("air_temp")),
         "wind_source": _opt_str(provenance.get("wind_speed")),
         "solar_source": _opt_str(provenance.get("solar_radiation")),
         "forecast_method": _opt_str(pipeline.get("forecast_method")),
         "forecast_status": _opt_str(pipeline.get("forecast_status")),
-        "forecast_amps": _finite(fc.get("amps")),
-        "forecast_ci_lower_amps": _finite(fc.get("ci_lower_amps")),
-        "forecast_ci_upper_amps": _finite(fc.get("ci_upper_amps")),
-        "forecast_horizon_min": _finite(fc.get("horizon_min")),
+        "forecast_amps": finite(fc.get("amps")),
+        "forecast_ci_lower_amps": finite(fc.get("ci_lower_amps")),
+        "forecast_ci_upper_amps": finite(fc.get("ci_upper_amps")),
+        "forecast_horizon_min": finite(fc.get("horizon_min")),
         "forecast_n_observations": _opt_int(fc.get("n_observations")),
         "forecast_used_by_g6": _opt_bool(pipeline.get("forecast_used_by_g6")),
         "detector_signal": _opt_str(pipeline.get("detector_signal")),

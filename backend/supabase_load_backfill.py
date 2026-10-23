@@ -34,7 +34,6 @@ mismatch, 2 a manifest or archive file is missing.
 """
 
 import argparse
-import hashlib
 import json
 import os
 import re
@@ -101,15 +100,6 @@ COUNT_SQL = (
 
 _HEX64 = re.compile(r"[0-9a-f]{64}")
 _ARCHIVE_LABEL = "backfill"
-
-
-def sha256_file(path) -> str:
-    """Lowercase hex sha256 of a file's bytes, read in 1 MiB chunks."""
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _dig(mapping, dotted):
@@ -306,8 +296,8 @@ def prepare_rows(csv_path, manifest, identity):
 
     amps = pd.to_numeric(frame["dlr_amps"], errors="coerce")
     static = pd.to_numeric(frame["static_rating"], errors="coerce")
-    unusable = ~(amps.map(lambda v: supabase_store._finite(v) is not None and v > 0)
-                 & static.map(lambda v: supabase_store._finite(v) is not None and v > 0))
+    unusable = ~(amps.map(lambda v: supabase_store.finite(v) is not None and v > 0)
+                 & static.map(lambda v: supabase_store.finite(v) is not None and v > 0))
     if unusable.any():
         raise ValueError(f"{int(unusable.sum())} archive row(s) have no finite positive dlr_amps or static_rating")
 
@@ -321,7 +311,7 @@ def prepare_rows(csv_path, manifest, identity):
     voltage = float(config.LINE_VOLTAGE_KV)
     power_factor = float(config.POWER_FACTOR)
     basis = backfill_rating_basis(manifest)
-    sha = sha256_file(csv_path)
+    sha = supabase_store.file_sha256(csv_path)
     run_id = f"{_ARCHIVE_LABEL}-{sha[:12]}"
     version = manifest["git"]["head"][:7]
     method = manifest["forecast_method"]
@@ -346,10 +336,10 @@ def prepare_rows(csv_path, manifest, identity):
             "fallback_gates": [],
             "alerts": [],
             "exhausted": False,
-            "air_temp_c": supabase_store._finite(record["air_temp"]),
+            "air_temp_c": supabase_store.finite(record["air_temp"]),
             # The archive's wind_speed is the component projected across the line.
-            "wind_perp_ms": supabase_store._finite(record["wind_speed"]),
-            "solar_radiation_wm2": supabase_store._finite(record["solar_radiation"]),
+            "wind_perp_ms": supabase_store.finite(record["wind_speed"]),
+            "solar_radiation_wm2": supabase_store.finite(record["solar_radiation"]),
             "forecast_method": method,
             "rating_basis": basis,
             "config_version": PHASE3_CONFIG_VERSION,
@@ -474,7 +464,7 @@ def main(argv=None) -> int:
         return 2
 
     expected = manifest["files"]["archive"]
-    csv_sha = sha256_file(csv_path)
+    csv_sha = supabase_store.file_sha256(csv_path)
     if csv_sha != expected["sha256"]:
         print("archive does not match the Phase 3 manifest (sha256)")
         return 1
