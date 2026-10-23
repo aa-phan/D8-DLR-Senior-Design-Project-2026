@@ -1,0 +1,25 @@
+{
+  "all_passed": true,
+  "checked_at": "2026-10-23T19:14:09Z",
+  "checks": {
+    "connected": true,
+    "consumers_cannot_write": true,
+    "delete_denied": true,
+    "rating_upsert_idempotent": true,
+    "rls_enabled": true,
+    "role_is_dlr_writer": true,
+    "run_row_idempotent": true,
+    "server_version_ge_15": true,
+    "ssl_in_use": true,
+    "tables_exist": true,
+    "writer_policies_exist": true,
+    "writer_privileges_exact": true
+  },
+  "info": {
+    "anon_can_select": false,
+    "city_rows": {},
+    "role": "dlr_writer",
+    "server_version_num": 170011
+  },
+  "schema": "supabase_smoke/1"
+}

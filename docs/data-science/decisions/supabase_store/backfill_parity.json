@@ -1,0 +1,84 @@
+{
+  "all_match": true,
+  "archive": {
+    "bytes": 212702,
+    "path": "data/historical/real_data_validation_2026-09-08_2026-09-28.csv",
+    "sha256": "18f999aac44540138cfb2a2d1c7f624688e66d261e391a01b036970b8bfa25cf"
+  },
+  "identity": {
+    "config_commit": "175b32bc443b4128195dcac70b3d96a60c653a1a",
+    "config_version": "v1-provisional-2026-10-13",
+    "forecast_method": "ml",
+    "per_city": {
+      "AUSTIN": {
+        "anomaly_model_sha256": "2ecaead8d2be2fb7bcc179bef82958b536f73f34b6959b9b63a22f0faa83f6a4",
+        "config_fingerprint": "a47b92e4a1f405fd2f8bd752539c371c0d7a1f3cc8cbed2cfd3c4843bb5b9c26",
+        "forecast_model_sha256": "dd6d540d0ccd8403f6b857001919ffa1505e0dc25a0c4f9e3789a3699804cc7c"
+      },
+      "CORPUS_CHRISTI": {
+        "anomaly_model_sha256": "9fbc26ab8907a033e013b4e67881b4bc0d399de74f912ba7ee9423fa920c8cc0",
+        "config_fingerprint": "33de6fc4270e45df4248eeec936f0f0f5509ee86759f31cad167c8455f975267",
+        "forecast_model_sha256": "d4527fefb591301e54d5cf536bfd86ff44cc70f434e62402a45fd9d8b10e535e"
+      },
+      "EL_PASO": {
+        "anomaly_model_sha256": "d4431d56fabd8514df228b585ccc5c156a2c12b7653f57363236c9c79a7aaf37",
+        "config_fingerprint": "9a064f9cc0b96e5f6cfb1d98ffbe8567a0fcad4fd3b5cfc8918b6700e9750d02",
+        "forecast_model_sha256": "3cd066e0c3fd31f5a786323282a75ec9ca806d10b190ac83fb1ff1fa285731c3"
+      },
+      "MIDLAND": {
+        "anomaly_model_sha256": "d1b2ac321a79ec77a6d16314c3a2b8cfc6cd370e38a526b4370cc758b03c4f9b",
+        "config_fingerprint": "deaf07335fabf7456607b004f0222c26d1eb6d5d9a561a3c12fde95f70091c7e",
+        "forecast_model_sha256": "0a62d94ed4402bfa294619969aedd4f4ab51b64c9736f89c4241abe776e81606"
+      }
+    }
+  },
+  "per_city": {
+    "AUSTIN": {
+      "csv_rows": 504,
+      "db_rows_at_csv_slots": 504,
+      "duplicates_dropped": 0,
+      "inserted": 504,
+      "manifest_rows": 504,
+      "match": true,
+      "skipped_existing": 0
+    },
+    "CORPUS_CHRISTI": {
+      "csv_rows": 504,
+      "db_rows_at_csv_slots": 504,
+      "duplicates_dropped": 0,
+      "inserted": 504,
+      "manifest_rows": 504,
+      "match": true,
+      "skipped_existing": 0
+    },
+    "EL_PASO": {
+      "csv_rows": 504,
+      "db_rows_at_csv_slots": 504,
+      "duplicates_dropped": 0,
+      "inserted": 504,
+      "manifest_rows": 504,
+      "match": true,
+      "skipped_existing": 0
+    },
+    "MIDLAND": {
+      "csv_rows": 504,
+      "db_rows_at_csv_slots": 504,
+      "duplicates_dropped": 0,
+      "inserted": 504,
+      "manifest_rows": 504,
+      "match": true,
+      "skipped_existing": 0
+    }
+  },
+  "rows_dropped_by_validation": 0,
+  "rows_read": 2016,
+  "schema": "supabase_backfill_parity/1",
+  "window": {
+    "end": "2026-09-28T23:00:00Z",
+    "scored_start": "2026-09-15T00:00:00Z",
+    "start": "2026-09-08T00:00:00Z",
+    "step_hours": 1.0,
+    "steps_per_city": 504,
+    "warmup_hours": 168.0
+  }
+}
