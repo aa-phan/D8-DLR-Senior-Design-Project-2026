@@ -394,3 +394,33 @@ def test_smoke_workflow_is_dispatch_only_and_passes_the_secret_by_env():
     with open(_GITIGNORE, encoding="utf-8") as handle:
         ignored = handle.read().splitlines()
     assert "/supabase/.temp/" in ignored and "/supabase/.branches/" in ignored
+
+
+def test_smoke_workflow_pins_actions_by_sha_and_runs_only_on_main():
+    with open(_WORKFLOW, encoding="utf-8") as handle:
+        lines = handle.read().splitlines()
+
+    uses = [(index, line.strip()) for index, line in enumerate(lines) if re.match(r"\s*(-\s+)?uses:", line)]
+    assert len(uses) == 2
+    for _, line in uses:
+        assert re.fullmatch(r"-?\s*uses: [\w.-]+/[\w.-]+@[0-9a-f]{40} +# v\d+(\.\d+)*", line), line
+
+    # The checkout step keeps no git credential after checkout.
+    index = next(i for i, line in uses if "actions/checkout@" in line)
+    step = []
+    for follow in lines[index + 1:]:
+        if re.match(r"\s*-\s", follow):
+            break
+        step.append(follow.strip())
+    assert "with:" in step and "persist-credentials: false" in step
+
+    # The job holding the production writer secret runs only on main.
+    jobs = _top_level_block(lines, "jobs")
+    smoke_start = next(i for i, line in enumerate(jobs) if line.rstrip() == "  smoke:")
+    job_keys = []
+    for line in jobs[smoke_start + 1:]:
+        if line.strip() and not line.startswith("    "):
+            break
+        if line.startswith("    ") and not line.startswith("     "):
+            job_keys.append(line.strip())
+    assert "if: github.ref == 'refs/heads/main'" in job_keys
