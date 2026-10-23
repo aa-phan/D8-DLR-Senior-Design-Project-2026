@@ -227,6 +227,16 @@ def backfill(start, end, step_hours=1.0, archive_path=DEFAULT_ARCHIVE, log_path=
                 gates = Counter(_GATE_RE.findall(buf.getvalue()))
                 totals["gates"].update(gates)
                 totals["runs"] += 1
+                # The trace goes first: `run_dlr_pipeline` has already appended the archive
+                # row, and on resume a step in the archive is skipped, so an interrupt
+                # between the archive write and the trace write would lose this step's
+                # trace for good. Writing it before the log/summary lines keeps that
+                # window as small as it can be.
+                if trace_fh is not None:
+                    for record in _trace_records(run, ts.strftime(_TS_FMT), forecast_method,
+                                                 fetcher.provenance[prov_start:]):
+                        trace_fh.write(json.dumps(record, default=str, sort_keys=True) + "\n")
+                    trace_fh.flush()
                 parts = []
                 for row in run["summary"]:
                     c = row["city"]
@@ -241,11 +251,6 @@ def backfill(start, end, step_hours=1.0, archive_path=DEFAULT_ARCHIVE, log_path=
                     msg_safe = _redact(msg, limit=None)  # redact before the cut so no partial secret survives
                     log_fh.write(f"{ts.strftime(_TS_FMT)},{c},,,,,,{msg_safe.replace(',', ';')[:120]}\n")
                     parts.append(f"{c[:6]} ERROR")
-                if trace_fh is not None:
-                    for record in _trace_records(run, ts.strftime(_TS_FMT), forecast_method,
-                                                 fetcher.provenance[prov_start:]):
-                        trace_fh.write(json.dumps(record, default=str, sort_keys=True) + "\n")
-                    trace_fh.flush()
                 log_fh.flush()
                 elapsed = time.time() - t0
                 eta = elapsed / max(totals["runs"], 1) * (n - i)

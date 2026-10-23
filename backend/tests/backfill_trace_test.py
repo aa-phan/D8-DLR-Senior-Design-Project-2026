@@ -256,6 +256,19 @@ def test_alert_text_is_redacted_before_it_reaches_the_trace(tmp_path, monkeypatc
     assert record["alerts"] == ["G1 FAIL (provider said api_key=REDACTED) - fallback"]
 
 
+def test_trace_is_written_before_the_log_row_so_an_interrupt_cannot_lose_it(tmp_path, monkeypatch):
+    run = _fake_run(f"{_DAY}T10:00:00Z")
+    run["summary"][0]["rating_a"] = None  # the log row's `:.1f` format fails after the trace write
+    monkeypatch.setattr(backfill_archive, "run_dlr_pipeline", lambda **kwargs: run)
+    trace_path = tmp_path / "trace.jsonl"
+
+    with pytest.raises(TypeError):
+        _backfill_one_step(tmp_path, trace_path, _StubFetcher())
+
+    (record,) = _read_trace(trace_path)
+    assert record["city"] == _CITY
+
+
 @pytest.mark.parametrize("text, secret", [
     ("params={'token': 'abc123', 'a':1}", "abc123"),        # dict / repr form
     ('url?token="abc123"', "abc123"),                       # quoted value
