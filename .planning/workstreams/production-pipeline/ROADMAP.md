@@ -151,7 +151,7 @@ rows are labelled provisional until Phase 7's go.
 **Re-plan note (2026-10-21, done)**: plans revised the same day: 04-01 no longer requires a Phase 3
 GO, and DB-06 (`config_fingerprint`, `forecast_model_sha256`, `anomaly_model_sha256`) is covered
 across 04-01..04-06. Plan checker: passed, info advisories only.
-**Plans**: 7/12 plans executed (04-07..04-12: gap closure G-04-2, all 12 code review findings)
+**Plans**: 8/12 plans executed (04-07..04-12: gap closure G-04-2, all 12 code review findings)
 
 Plans:
 **Wave 1**
@@ -174,7 +174,7 @@ Plans:
 
 **Gap Wave 1**
 - [x] 04-07-PLAN.md — Store connection: CR-01 tracer (log the server role, not the pooler user, end to end from `main`), IN-02 stripped URL, WR-03 reconnect once (gap wave 1)
-- [ ] 04-08-PLAN.md — Run health: WR-01 postgres-store exit 1 on any failed city, WR-02 cleaning failure reported as failed forecast and degraded city (gap wave 1)
+- [x] 04-08-PLAN.md — Run health: WR-01 postgres-store exit 1 on any failed city, WR-02 cleaning failure reported as failed forecast and degraded city (gap wave 1)
 - [ ] 04-09-PLAN.md — Additive migration 20261023000000 (IN-06 UTC hour CHECK, IN-03 run-log comments), smoke zone checks, IN-05 workflow hardening (gap wave 1)
 
 **Gap Wave 2** *(blocked on 04-07 and 04-08)*
@@ -295,7 +295,7 @@ ml-modeling workstream's evaluation; record it in that workstream's STATE.md as 
 | 1. Land PR #7 | 5/5 | Complete    | 2026-10-19 |
 | 2. Data Cleaning | 4/4 | Complete    | 2026-10-20 |
 | 3. Real-Data Validation | 5/5 | Complete    | 2026-10-21 |
-| 4. Supabase Store & Writer | 7/12 | In Progress | - |
+| 4. Supabase Store & Writer | 8/12 | In Progress | - |
 | 5. Scheduled Live Runs | 0/8 | Planned | - |
 | 6. Exposure & E2E Verification | 0/7 | Planned | - |
 | 7. Per-City Conductors, Shadow Refit and Early Model Selection | 0/0 | Not planned | - |
