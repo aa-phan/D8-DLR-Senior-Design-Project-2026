@@ -5,7 +5,7 @@ titles: json
 findings:
   - id: WR-01
     severity: warning
-    disposition: open
+    disposition: fixed
     title: "Dropping bare `key` from the name list leaks camelCase and concatenated key names (regression from pass 1)"
   - id: WR-02
     severity: warning
@@ -13,7 +13,7 @@ findings:
     title: "Quoted, escaped, unterminated and `auth:`/`sig:` colon-form credentials still pass through"
   - id: WR-03
     severity: warning
-    disposition: open
+    disposition: fixed
     title: "The backfill log row is built by string formatting, so an error message that starts with an unbalanced `\"` makes `_read_log` (and `completeness`) fail"
   - id: IN-01
     severity: info
@@ -68,9 +68,9 @@ recorded: 2026-10-23T19:08:30.024Z
 
 | Finding | Severity | Disposition | Source |
 |---------|----------|-------------|--------|
-| WR-01 | warning | open | - |
+| WR-01 | warning | fixed | 03-REVIEW-FIX.md (pass 3, 17c436b; hand-set, id reused across passes) |
 | WR-02 | warning | fixed | 03-REVIEW-FIX.md |
-| WR-03 | warning | open | - |
+| WR-03 | warning | fixed | 03-REVIEW-FIX.md (pass 3, 8a9ab91; hand-set, id reused across passes) |
 | IN-01 | info | open | - |
 | IN-02 | info | open | - |
 | IN-03 | info | open | - |
