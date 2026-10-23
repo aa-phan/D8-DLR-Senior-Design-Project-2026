@@ -3,7 +3,7 @@
 **Schema version:** v1
 **Date:** 2026-10-23
 **Status:** decided contract (DS decision authority, REQUIREMENTS.md); values are PROVISIONAL (see "Provisional label (OD-5)")
-**Scope:** `public.city_rating` in the production Supabase Postgres, written hourly by the production pipeline. Migration: `supabase/migrations/20261019000000_create_city_rating.sql`. This document also describes `public.pipeline_run`, the operational run log, which consumers do not read.
+**Scope:** `public.city_rating` in the production Supabase Postgres, written hourly by the production pipeline. Migrations: `supabase/migrations/20261019000000_create_city_rating.sql` (tables, writer role, policies) and `supabase/migrations/20261023000000_city_rating_utc_hour_check_and_run_log_comments.sql` (hour check evaluated in UTC in every session, run-log comments). This document also describes `public.pipeline_run`, the operational run log, which consumers do not read.
 
 **Read this first.** Every value in this table is a provisional estimate, not a verified line limit. The ratings come from the IEEE 738 thermal model at one rating point per city, with owner-supplied static ratings divided by an assumed subconductor count and assumed line bearings. Show the label (`rating_basis`) wherever a value is shown. Phase 3's go/no-go on real data was a NO-GO; the owner decided on 2026-10-21 to publish provisional rows anyway. No row, backfill included, has passed a go/no-go.
 
@@ -185,4 +185,4 @@ A city written while its history could not be cleaned is `degraded`, with the re
 - v1 is additive-only: columns may be added; none is renamed or removed, and none changes meaning.
 - A rename, removal or change of meaning needs a new migration and a v2 document.
 - A configuration, model or forecast-method change is not a schema change; it shows up in the identity columns (see "What produced each row (DB-06)").
-- Evidence of the live checks (migration applied, writer smoke test, backfill parity) lives in `docs/data-science/decisions/supabase_store/`, written by plan 04-06.
+- Evidence of the live checks (migration applied, writer smoke test, backfill parity) lives in `docs/data-science/decisions/supabase_store/`, written by plan 04-06 and, after the review-fix migration, plan 04-12 (`smoke_review_fixes.json`, `smoke_actions_review_fixes.json`).

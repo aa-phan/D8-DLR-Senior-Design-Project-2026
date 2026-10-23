@@ -1,0 +1,11 @@
+{
+  "conclusion": "success",
+  "created_at": "2026-10-23T22:41:53Z",
+  "event": "workflow_dispatch",
+  "head_sha": "fb28232ebe1984a8a5eddbbce4a39cfd81cdbc59",
+  "no_connection_details_in_log": true,
+  "run_id": 40035268724,
+  "schema": "supabase_smoke_actions/1",
+  "smoke_ok": true,
+  "zone_checks_ok": true
+}
