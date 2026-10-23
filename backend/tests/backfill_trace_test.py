@@ -244,6 +244,27 @@ def test_error_text_is_redacted_in_the_backfill_log_too(tmp_path, monkeypatch):
     assert "token=REDACTED" in log_text
 
 
+def test_multi_line_error_stays_one_log_row_that_completeness_can_read(tmp_path, monkeypatch):
+    message = "boom\nline two; with comma\r\nline three, token=abc123\n"
+
+    def failing_run(**kwargs):
+        return {"start": kwargs["end"], "end": kwargs["end"], "provider": "composed",
+                "forecast_method": "naive", "results": [], "summary": [],
+                "errors": {_CITY: message}}
+
+    monkeypatch.setattr(backfill_archive, "run_dlr_pipeline", failing_run)
+
+    _backfill_one_step(tmp_path, tmp_path / "trace.jsonl", _StubFetcher())
+
+    log_path = tmp_path / "log.csv"
+    assert len(log_path.read_text(encoding="utf-8").splitlines()) == 2  # header + one row
+    log = real_data_validation._read_log(log_path)
+    (row,) = log.to_dict("records")
+    assert row["city"] == _CITY
+    assert row["error"].startswith("boom line two; with comma line three;")
+    assert "abc123" not in row["error"]
+
+
 def test_alert_text_is_redacted_before_it_reaches_the_trace(tmp_path, monkeypatch):
     run = _fake_run(f"{_DAY}T10:00:00Z")
     run["results"][0]["alerts"] = ["G1 FAIL (provider said api_key=SECRET42) - fallback"]
