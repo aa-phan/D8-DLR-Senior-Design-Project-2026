@@ -461,6 +461,19 @@ def test_torn_trace_line_is_skipped_counted_and_fails_the_report(tmp_path):
     assert meta["trace_records"] == 7
 
 
+def test_trace_record_with_another_schema_is_counted_not_read(tmp_path):
+    records = [_record("AUSTIN", h) for h in range(3)]
+    _, trace, _ = _write_run(tmp_path, records)
+    with open(trace, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps({**_record("AUSTIN", 3), "schema": "backfill_trace/2"}) + "\n")
+        fh.write(json.dumps({k: v for k, v in _record("AUSTIN", 4).items() if k != "schema"}) + "\n")
+
+    frame = real_data_validation.load_trace(trace)
+
+    assert frame.attrs["unparseable"] == 2
+    assert len(frame) == 3
+
+
 def test_duplicate_archive_slot_counts_as_a_mismatch(tmp_path):
     records = [_record("AUSTIN", h) for h in range(7)]
     archive, trace, _ = _write_run(tmp_path, records)

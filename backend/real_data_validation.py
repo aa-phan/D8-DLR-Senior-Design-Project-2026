@@ -62,7 +62,7 @@ import historical_archive
 import thermal_model
 from DLRSafetyMonitor import DLRSafetyMonitor
 
-TRACE_SCHEMA = "backfill_trace/1"
+TRACE_SCHEMA = backfill_archive.TRACE_SCHEMA  # one definition: the writer's
 MANIFEST_SCHEMA = "real_data_validation_manifest/1"
 _TS_FMT = "%Y-%m-%dT%H:%M:%SZ"
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -163,7 +163,9 @@ def load_trace(path) -> pd.DataFrame:
     that errored or were exhausted, so the same (city, step) can appear more
     than once; the LAST record in file order wins. `DataFrame.attrs` carries
     `{"duplicates": n, "records": n, "unparseable": n}` (records read, records
-    dropped as superseded, non-empty lines that were not a JSON object). A killed
+    dropped as superseded, non-empty lines that were not a JSON object carrying
+    this module's `TRACE_SCHEMA`, so a trace written under another schema version
+    is counted rather than read with the wrong column meanings). A killed
     backfill can leave a torn final line; such a line is skipped and counted, never
     fatal, and `build_report` turns a non-zero count into a failing self-check.
     """
@@ -179,8 +181,8 @@ def load_trace(path) -> pd.DataFrame:
             except json.JSONDecodeError:
                 unparseable += 1
                 continue
-            if not isinstance(record, dict):
-                unparseable += 1
+            if not isinstance(record, dict) or record.get("schema") != TRACE_SCHEMA:
+                unparseable += 1  # not a record, or one this reader does not understand
                 continue
             records.append(_flatten_record(record))
     frame = pd.DataFrame(records)
