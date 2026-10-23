@@ -70,7 +70,9 @@ _MIN_SECRET_LENGTH = 4
 # `_BARE_KEY_COLON` below still masks a `key: <credential-looking value>`.
 _SECRET_PAIR = re.compile(
     r"""(?<![\w-])("""
-    r"""(?:[\w-]*(?:token|api[_-]?key|[_-]key|email|password|passwd|pwd|secret|credential|"""
+    r"""(?:[\w-]*(?:token|api[_-]?key|[_-]key|"""
+    r"""(?:access|secret|private|signing|subscription|client|auth|encryption|master)key|"""
+    r"""email|password|passwd|pwd|secret|credential|"""
     r"""authorization)["']?\s{0,4}(?:=|:|%3D)"""
     r"""|(?:key|auth|sig)(?:["']?\s{0,4}(?:=|%3D)|["']\s{0,4}:))"""
     r"""\s*)"""

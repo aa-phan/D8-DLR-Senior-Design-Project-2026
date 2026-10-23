@@ -314,6 +314,12 @@ def test_trace_is_written_before_the_log_row_so_an_interrupt_cannot_lose_it(tmp_
     ('{"key": "abc123"}', "abc123"),                        # bare `key` as a quoted name
     ("secret_key: abc123", "abc123"),                       # compound names, any separator
     ("access-key=abc123", "abc123"),
+    ("accessKey=AKIA123", "AKIA123"),                       # camelCase / concatenated key names
+    ("SecretKey: abc123", "abc123"),
+    ("privatekey=abc123", "abc123"),
+    ("accesskey=abcdefg", "abcdefg"),
+    ('{"signingKey": "abc123"}', "abc123"),
+    ("subscriptionKey=abc123&x=1", "abc123"),
     ("key: AIzaSyA1b2C3d4E5f6G7h8I9j0", "AIzaSyA1b2C3d4E5f6G7h8I9j0"),  # credential-looking value
 ])
 def test_redact_masks_every_credential_shape(text, secret):
@@ -328,6 +334,8 @@ def test_redact_masks_every_credential_shape(text, secret):
     "hotkey: F5 failed",
     "auth: failed",
     "author: bob",
+    "monkey: see; turkey=dinner; hotkey F5 failed",         # `key` only as a credential suffix
+    "keyboard=us",
 ])
 def test_redact_leaves_diagnostic_text_that_only_mentions_a_key(text):
     assert backfill_archive._redact(text) == text
