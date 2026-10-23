@@ -1437,8 +1437,9 @@ def build_report(archive_path, trace_path, start, end, step_hours, warmup_hours,
     method_frames = [(label, frame)]
     fidelity = None
     if replay_archive is not None and replay_trace is not None:
+        replay_trace_frame = load_trace(replay_trace)
         replay_frame = classify_steps(
-            load_trace(replay_trace), historical_archive.read_history(path=replay_archive, validate=True),
+            replay_trace_frame, historical_archive.read_history(path=replay_archive, validate=True),
             cities, steps, start_ts, warmup_hours)
         fidelity = replay_fidelity(frame, replay_frame)
         method_frames.append((replay_label, replay_frame))
@@ -1471,6 +1472,10 @@ def build_report(archive_path, trace_path, start, end, step_hours, warmup_hours,
         meta["replay"] = {"label": replay_label, "reference_only": True,
                           "compared": fidelity["compared"], "excluded": fidelity["excluded"]}
         meta["replay_fidelity_mismatches"] = fidelity["mismatches"]
+        # a torn replay trace silently shrinks the comparison; the key ends in
+        # `mismatches`, so the self-check below fails the report on it
+        meta["replay_trace_unparseable_line_mismatches"] = int(
+            replay_trace_frame.attrs.get("unparseable", 0))
 
     os.makedirs(out_dir, exist_ok=True)
     for name, table in {**tables, **val02}.items():
@@ -1694,15 +1699,20 @@ def _cmd_replay(args) -> int:
     original = classify_steps(
         load_trace(args.trace), historical_archive.read_history(path=args.archive, validate=True),
         cities, steps, start_ts, args.warmup_hours)
+    replay_trace = load_trace(args.trace_out)
     replayed = classify_steps(
-        load_trace(args.trace_out), historical_archive.read_history(path=args.archive_out, validate=True),
+        replay_trace, historical_archive.read_history(path=args.archive_out, validate=True),
         cities, steps, start_ts, args.warmup_hours)
     fidelity = replay_fidelity(original, replayed)
+    torn = int(replay_trace.attrs.get("unparseable", 0))
+    if torn:
+        print(f"warning: {torn} unreadable line(s) in the replay trace {args.trace_out}; "
+              "the comparison is missing those steps", file=sys.stderr)
     _write_json(fidelity, args.fidelity_out)
     print("replay fidelity: " + ", ".join(
         f"{key}={fidelity[key]}" for key in ("compared", "excluded", "mismatches", "mismatch_outcome",
                                              "mismatch_computed", "mismatch_g6_reach")))
-    return 1 if fidelity["mismatches"] else 0
+    return 1 if fidelity["mismatches"] or torn else 0
 
 
 def _build_parser() -> argparse.ArgumentParser:

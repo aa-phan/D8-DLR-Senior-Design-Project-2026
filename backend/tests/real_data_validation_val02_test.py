@@ -748,6 +748,31 @@ def test_replay_refuses_two_outputs_naming_the_same_file(tmp_path, monkeypatch, 
     assert not outs["archive"].exists()
 
 
+def test_a_torn_replay_trace_fails_the_report_and_the_replay_command(tmp_path, monkeypatch, capsys):
+    orig = _original_run(tmp_path, monkeypatch)
+    _model_dir(tmp_path, monkeypatch, with_models=True)
+    outs = _out_paths(tmp_path)
+    real_replay = rdv.replay
+
+    def replay_then_tear(*args, **kwargs):
+        totals = real_replay(*args, **kwargs)
+        with open(outs["trace"], "a", encoding="utf-8") as fh:
+            fh.write('{"schema": "backfill_trace/1", "city": "AUS')  # killed mid-write
+        return totals
+
+    monkeypatch.setattr(rdv, "replay", replay_then_tear)
+    assert rdv.main(_cli(orig, outs)) == 1  # the fidelity itself is clean; the torn line fails it
+    err = capsys.readouterr().err
+    assert "1 unreadable line(s) in the replay trace" in err
+    assert json.loads(outs["fidelity"].read_text(encoding="utf-8"))["mismatches"] == 0
+
+    assert _report_with_replay(orig, outs, tmp_path / "report_torn") == 1
+    meta = json.loads((tmp_path / "report_torn" / "report_meta.json").read_text(encoding="utf-8"))
+    assert meta["replay_trace_unparseable_line_mismatches"] == 1
+    assert meta["trace_unparseable_line_mismatches"] == 0
+    assert "replay_trace_unparseable_line_mismatches=1" in capsys.readouterr().err
+
+
 def test_replay_never_touches_the_network(tmp_path, monkeypatch):
     orig = _original_run(tmp_path, monkeypatch)
     outs = _out_paths(tmp_path)
