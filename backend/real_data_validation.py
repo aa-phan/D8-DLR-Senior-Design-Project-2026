@@ -44,6 +44,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from collections import Counter
@@ -66,16 +67,29 @@ MANIFEST_SCHEMA = "real_data_validation_manifest/1"
 _TS_FMT = "%Y-%m-%dT%H:%M:%SZ"
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# The command the owner runs for the real backfill. The .env file uses
-# `KEY = value` spacing a shell cannot source, so it goes through python-dotenv
-# inside the child interpreter. This is only text: this module never imports
-# python-dotenv and never reads the env file.
-OWNER_COMMAND_TEMPLATE = (
-    "cd /Users/aphan/Senior_Design && PYTHONPATH=backend "
-    "/Users/aphan/Senior_Design/.venv/bin/python -c "
-    "\"from dotenv import load_dotenv; load_dotenv('/Users/aphan/Senior_Design/.env'); "
-    "import sys, backfill_archive; sys.exit(backfill_archive.main({argv}))\""
+# The command the owner runs for the real backfill (see `owner_command`). The .env
+# file uses `KEY = value` spacing a shell cannot source, so it goes through
+# python-dotenv inside the child interpreter. This is only text: this module never
+# imports python-dotenv and never reads the env file.
+OWNER_COMMAND_PROGRAM_TEMPLATE = (
+    "from dotenv import load_dotenv; load_dotenv({env_file}); "
+    "import sys, backfill_archive; sys.exit(backfill_archive.main({argv}))"
 )
+
+
+def owner_command(argv) -> str:
+    """
+    The shell command that reruns the backfill with `argv`. The whole `-c` program
+    goes through `shlex.quote`, so an argument holding a quote, `$` or a backtick
+    cannot break or expand when the command is pasted; every path derives from the
+    repository this module lives in (`_REPO_ROOT`).
+    """
+    program = OWNER_COMMAND_PROGRAM_TEMPLATE.format(
+        env_file=repr(os.path.join(_REPO_ROOT, ".env")), argv=repr(list(argv)))
+    python = os.path.join(_REPO_ROOT, ".venv", "bin", "python")
+    return (f"cd {shlex.quote(_REPO_ROOT)} && PYTHONPATH=backend "
+            f"{shlex.quote(python)} -c {shlex.quote(program)}")
+
 
 COMPLETENESS_COLUMNS = [
     "city", "expected_steps", "trace_records", "archive_rows", "log_rows",
@@ -1482,13 +1496,27 @@ def build_report(archive_path, trace_path, start, end, step_hours, warmup_hours,
 # Run manifest
 # ──────────────────────────────────────────────────────────────────────────────
 
+def _manifest_path(path) -> str:
+    """
+    A path as the manifest records it: relative to the repository (forward slashes)
+    when inside it, else absolute and normalised, so the same file gives the same
+    text whatever directory the command ran from or however the path was typed.
+    """
+    absolute = os.path.abspath(path)
+    try:
+        inside = os.path.commonpath([absolute, _REPO_ROOT]) == _REPO_ROOT
+    except ValueError:  # different drives on Windows
+        inside = False
+    return (os.path.relpath(absolute, _REPO_ROOT) if inside else absolute).replace(os.sep, "/")
+
+
 def _file_record(path) -> dict:
-    """Path, byte size and sha256 (1 MiB chunks) of one input file."""
+    """Manifest path, byte size and sha256 (1 MiB chunks) of one input file."""
     digest = hashlib.sha256()
     with open(path, "rb") as fh:
         for chunk in iter(lambda: fh.read(1 << 20), b""):
             digest.update(chunk)
-    return {"path": str(path), "bytes": os.path.getsize(path), "sha256": digest.hexdigest()}
+    return {"path": _manifest_path(path), "bytes": os.path.getsize(path), "sha256": digest.hexdigest()}
 
 
 def _git(*args) -> str:
@@ -1520,7 +1548,9 @@ def build_manifest(archive, trace, log, start, end, step_hours=1.0, warmup_hours
     A deterministic record of what was validated: the window, the exact backfill
     argv and owner command, sha256 + size of the archive, trace and log, archive
     rows per city, sha256 of the per-city model files and the git HEAD. No
-    timestamp is written, so equal inputs give equal bytes. Phase 4 uses it to
+    timestamp or working directory is written and file paths are normalised
+    (repo-relative when inside the repository), so equal inputs give equal bytes
+    from any directory. Phase 4 uses it to
     prove it loads the archive this phase validated.
     """
     cities = list(cities) if cities else list(config.LOCATIONS)
@@ -1543,8 +1573,7 @@ def build_manifest(archive, trace, log, start, end, step_hours=1.0, warmup_hours
         "cities": cities,
         "forecast_method": forecast_method,
         "backfill_argv": argv,
-        "command": OWNER_COMMAND_TEMPLATE.replace("{argv}", repr(argv)),
-        "working_directory": os.getcwd(),
+        "command": owner_command(argv),
         "files": files,
         "archive_rows_by_city": {c: int(counts.get(c, 0)) for c in cities},
         "models": _model_hashes(cities),

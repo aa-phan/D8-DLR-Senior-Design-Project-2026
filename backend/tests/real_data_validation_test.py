@@ -8,8 +8,10 @@ Follows backend/tests/backfill_archive_test.py's conventions (module-level
 imports, plain asserts, no test classes).
 """
 
+import ast
 import json
 import os
+import shlex
 
 import numpy as np
 import pandas as pd
@@ -105,9 +107,8 @@ def test_manifest_is_deterministic_and_flags_missing_models(tmp_path, monkeypatc
         "warmup_hours": 168.0, "scored_start": "2025-06-08T10:00:00Z"}
     assert manifest["cities"] == ["AUSTIN", "MIDLAND"]
     assert manifest["backfill_argv"] == argv
-    assert repr(argv) in manifest["command"]
-    assert manifest["command"] == real_data_validation.OWNER_COMMAND_TEMPLATE.replace(
-        "{argv}", repr(argv))
+    assert manifest["command"] == real_data_validation.owner_command(argv)
+    assert "working_directory" not in manifest
     assert manifest["archive_rows_by_city"] == {"AUSTIN": 2, "MIDLAND": 0}
     assert set(manifest["files"]) == {"archive", "trace", "log"}
     assert manifest["files"]["archive"]["bytes"] == archive.stat().st_size
@@ -119,6 +120,54 @@ def test_manifest_is_deterministic_and_flags_missing_models(tmp_path, monkeypatc
     assert len(manifest["git"]["head"]) == 40 and isinstance(manifest["git"]["backend_dirty"], bool)
     assert "PROVISIONAL" in manifest["label"]
     assert "model file missing" in capsys.readouterr().err
+
+
+def test_manifest_bytes_do_not_depend_on_the_directory_or_how_paths_are_typed(
+        tmp_path, monkeypatch):
+    archive, trace, log = tmp_path / "a.csv", tmp_path / "t.jsonl", tmp_path / "l.csv"
+    _write_archive(archive, "AUSTIN", [10, 11])
+    trace.write_text(_trace_line("AUSTIN", 10) + "\n" + _trace_line("AUSTIN", 11) + "\n",
+                     encoding="utf-8")
+    _write_log(log, "AUSTIN", [10, 11])
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+
+    def manifest_from(directory, archive_arg, trace_arg, log_arg):
+        monkeypatch.chdir(directory)
+        return json.dumps(real_data_validation.build_manifest(
+            archive_arg, trace_arg, log_arg, _step(10), _step(11), cities=["AUSTIN"]),
+            sort_keys=True)
+
+    absolute = manifest_from(tmp_path, str(archive), str(trace), str(log))
+    relative = manifest_from(tmp_path, "a.csv", "t.jsonl", "./l.csv")
+    elsewhere = manifest_from(other, str(archive), str(trace), str(log))
+    elsewhere_relative = manifest_from(other, "../a.csv", "../t.jsonl", "../l.csv")
+
+    assert absolute == relative == elsewhere == elsewhere_relative
+    files = json.loads(absolute)["files"]
+    assert {name: record["path"] for name, record in files.items()} == {
+        "archive": str(archive).replace("\\", "/"), "trace": str(trace).replace("\\", "/"),
+        "log": str(log).replace("\\", "/")}
+
+
+def test_manifest_path_is_repo_relative_inside_the_repository():
+    root = real_data_validation._REPO_ROOT
+    inside = os.path.join(root, "outputs", "run", "trace.jsonl")
+    assert real_data_validation._manifest_path(inside) == "outputs/run/trace.jsonl"
+
+
+def test_owner_command_survives_shell_metacharacters_in_the_argv():
+    argv = ["--cities", "AUSTIN", "--note", "it's \"quoted\" $(touch pwned) `id` $HOME"]
+
+    command = real_data_validation.owner_command(argv)
+
+    words = shlex.split(command)  # what a POSIX shell would hand to the program
+    assert words[:2] == ["cd", real_data_validation._REPO_ROOT] and words[2] == "&&"
+    assert words[3] == "PYTHONPATH=backend" and words[5] == "-c" and len(words) == 7
+    assert words[4] == os.path.join(real_data_validation._REPO_ROOT, ".venv", "bin", "python")
+    program = words[6]
+    assert program.startswith("from dotenv import load_dotenv; ")
+    assert ast.literal_eval(program.split("backfill_archive.main(", 1)[1][:-2]) == argv
 
 
 def test_git_query_returns_empty_when_git_is_not_installed(monkeypatch):
