@@ -13,6 +13,7 @@ Follows backend/tests/city_rating_test.py's conventions (module-level imports,
 plain asserts, no test classes, no network).
 """
 
+import logging
 import math
 import os
 import shutil
@@ -505,3 +506,16 @@ def test_timestamps_are_whole_seconds_and_text_round_trips(tmp_path, _pg_admin_u
             assert row["first_written_at"].microsecond == 0
             assert row["computed_at"].microsecond == 0
             assert math.isfinite(row["rating_mw"])
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# G-04-2 / CR-01: the success log names the role the server reports
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_connect_logs_the_role_the_server_reports(caplog, _pg_admin_url):
+    _apply_migration(_pg_admin_url)
+    with caplog.at_level(logging.INFO, logger="supabase_store"):
+        conn = supabase_store.connect(_writer_url(_pg_admin_url))
+    conn.close()
+    messages = [r.getMessage() for r in caplog.records if r.name == "supabase_store"]
+    assert "connected to Postgres as dlr_writer" in messages

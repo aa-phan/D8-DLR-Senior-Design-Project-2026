@@ -27,7 +27,9 @@ values written, never the schema.
 `psycopg` is imported only inside `connect()`, so importing this module never
 needs a database driver. Nothing secret is ever printed or logged: the URL, its
 host, the project reference and the password are redacted from every message
-(`redact`), and only redacted text reaches an exception or a log record.
+(`redact`), and only redacted text reaches an exception or a log record. The
+success log names only the role the server reports (`select current_user`),
+never the pooler user the client supplied, which carries the project reference.
 """
 
 import hashlib
@@ -228,6 +230,30 @@ def _connection_identifiers(url) -> list:
     return [item for item in found if len(item) >= 3]
 
 
+def _project_identifiers(url) -> list:
+    """
+    The project reference (the part of a pooler user after the dot) and the host of a
+    connection URL, without the user itself: the success log redacts the server-reported
+    role against these, so a bare role such as `dlr_writer` stays readable while a server
+    echoing a dotted user still could not print the reference.
+    """
+    if not url or not isinstance(url, str):
+        return []
+    try:
+        parts = urlsplit(url)
+        host, user = parts.hostname, parts.username
+    except ValueError:
+        return []
+    found = []
+    if user:
+        user = unquote(user)
+        if "." in user:
+            found.append(user.split(".", 1)[1])
+    if host:
+        found.append(host)
+    return [item for item in found if len(item) >= 3]
+
+
 # libpq's failure text names the server it tried, with its resolved address in parentheses.
 _RESOLVED_ADDRESS_RE = re.compile(r"\((?:\d{1,3}\.){3}\d{1,3}\)|\((?:[0-9a-fA-F]{0,4}:){2,}[0-9a-fA-F:.]*\)")
 
@@ -281,6 +307,8 @@ def connect(url=None):
         # The valid_time CHECK truncates in the session time zone; pin it to UTC so a
         # session default can never make an hour-aligned UTC slot look off-hour.
         conn.execute("set timezone = 'UTC'")
+        # The role the server reports; the client-supplied user carries the project reference.
+        role = conn.execute("select current_user").fetchone()[0]
     except Exception as exc:  # noqa: BLE001 - re-raised below as a redacted StoreError
         failure = _RESOLVED_ADDRESS_RE.sub(
             "(REDACTED)", redact(str(exc), secrets + _connection_identifiers(url))
@@ -294,7 +322,7 @@ def connect(url=None):
     # the original message) is attached to the StoreError.
     if failure is not None:
         raise StoreError(f"database connection failed: {failure}")
-    log.info("connected to Postgres as %s", conn.info.user)
+    log.info("connected to Postgres as %s", redact(role, secrets + _project_identifiers(url)))
     return conn
 
 

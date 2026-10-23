@@ -577,3 +577,132 @@ def test_run_context_reads_github_env_and_falls_back_locally():
     assert local["run_attempt"] == 1
     assert isinstance(local["pipeline_version"], str) and local["pipeline_version"]
     assert supabase_store.run_context({})["run_id"] != local["run_id"]
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# G-04-2 / CR-01: the success log names the server role, never the project reference
+# ──────────────────────────────────────────────────────────────────────────────
+
+_PROJECT_REF = "qxprojrefqx"
+_POOLER_HOST = "aws-0-us-east-1.pooler.example.invalid:5432/postgres"
+_HISTORY_NAMES = ("datetime_utc", "city", "air_temp", "wind_speed", "solar_radiation",
+                  "dlr_amps", "static_rating", "status", "fallback")
+
+
+class _PoolerCursor:
+    def __init__(self, rows, names=()):
+        self._rows = rows
+        self.description = [_Column(name) for name in names]
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+    def fetchall(self):
+        return list(self._rows)
+
+
+class _PoolerConn:
+    """
+    A pooler connection whose client-supplied user carries the project reference and whose
+    server reports the bare role. Records every statement; `fail_after` makes the connection
+    raise from the Nth non-probe execute on (a lost connection), `raise_on` makes the
+    statements containing a fragment raise.
+    """
+
+    def __init__(self, client_user=None, role="dlr_writer", history_rows=None, errors=None):
+        self.info = type("Info", (), {"user": client_user})()
+        self.role = role
+        self.closed = False
+        self.broken = False
+        self.close_calls = 0
+        self.calls = []
+        self._history_rows = history_rows or []
+        self._errors = list(errors or [])  # exceptions raised by successive non-session executes
+        self._depth = 0
+
+    def execute(self, sql, params=None):
+        text = " ".join(sql.split())
+        self.calls.append((text, params))
+        lowered = text.lower()
+        if lowered.startswith("set ") or lowered == "select current_user":
+            if lowered == "select current_user":
+                return _PoolerCursor([(self.role,)])
+            return _PoolerCursor([])
+        if lowered == "select 1":
+            if self.closed or self.broken:
+                raise RuntimeError("the connection is closed")
+            return _PoolerCursor([(1,)])
+        if self.closed or self.broken:
+            raise RuntimeError("the connection is closed")
+        if self._errors:
+            raise self._errors.pop(0)
+        if lowered.startswith("select to_char"):
+            return _PoolerCursor(self._history_rows, _HISTORY_NAMES)
+        return _PoolerCursor([])
+
+    @contextlib.contextmanager
+    def transaction(self):
+        self._depth += 1
+        try:
+            yield
+        finally:
+            self._depth -= 1
+
+    def close(self):
+        self.close_calls += 1
+        self.closed = True
+
+    def writes_to(self, table):
+        return [c for c in self.calls if c[0].lower().startswith(f"insert into {table}")]
+
+
+def _orchestrator_fake_city(history_seen):
+    def fake_run_city_pipeline(name, start, end, stations, history_reader=None, **kwargs):
+        history_seen.append(history_reader(name, end))
+        return _result(
+            city=name, rating=1000.0, status="ok", fallback=False, alerts=[], observation={},
+            exhausted=False, station_id=None, candidates_probed=0, probe_trail=[], archived=False,
+            pipeline={
+                "forecast_method": "naive", "forecast_status": "cold_start", "forecast": None,
+                "forecast_used_by_g6": False, "detector_signal": "cold_start",
+                "detector_model": None, "history_rows": 0, "usable_history_rows": 0,
+            },
+        )
+    return fake_run_city_pipeline
+
+
+def test_tracer_postgres_run_logs_the_server_role_not_the_project_reference(
+        monkeypatch, caplog, capsys):
+    import psycopg
+    import dlr_orchestrator
+
+    url = _url(f"dlr_writer.{_PROJECT_REF}", _MARKER, _POOLER_HOST) + "?sslmode=require"
+    monkeypatch.setenv("SUPABASE_DB_URL", url)
+    monkeypatch.delenv("SUPABASE_ADMIN_DB_URL", raising=False)
+    pooler = _PoolerConn(client_user=f"dlr_writer.{_PROJECT_REF}")
+    monkeypatch.setattr(psycopg, "connect", lambda *args, **kwargs: pooler)
+    history_seen = []
+    monkeypatch.setattr(dlr_orchestrator, "run_city_pipeline", _orchestrator_fake_city(history_seen))
+
+    caplog.set_level(logging.INFO)
+    code = dlr_orchestrator.main([
+        "--store", "postgres", "--provider", "open_meteo", "--cities", "AUSTIN",
+        "--end", "2025-06-01T14:07:00Z"])
+
+    assert code == 0
+    # The whole path ran: one history read, one rating upsert, one run row, connection closed.
+    assert len(history_seen) == 1
+    assert len(pooler.writes_to("public.city_rating")) == 1
+    assert len(pooler.writes_to("public.pipeline_run")) == 1
+    assert pooler.closed
+
+    connected = [r for r in caplog.records
+                 if r.name == "supabase_store" and r.levelno == logging.INFO
+                 and r.getMessage().startswith("connected to Postgres")]
+    assert [r.getMessage() for r in connected] == ["connected to Postgres as dlr_writer"]
+
+    captured = capsys.readouterr()
+    for stream in (caplog.text, captured.out, captured.err):
+        assert _PROJECT_REF not in stream
+        assert _MARKER not in stream
+        assert "pooler.example.invalid" not in stream
