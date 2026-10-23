@@ -1256,6 +1256,17 @@ def _refuse_existing(paths) -> None:
                             + ", ".join(present))
 
 
+def _refuse_duplicate_paths(paths) -> None:
+    """Two outputs naming one file would interleave different formats in it."""
+    seen = {}
+    for path in paths:
+        key = os.path.realpath(path)
+        if key in seen:
+            raise ReplayRefused(f"output paths must be distinct, but {seen[key]} and {path} "
+                                "name the same file")
+        seen[key] = str(path)
+
+
 def replay(trace_path, start, end, step_hours, cities, method, archive_out, trace_out, log_out,
            require_models=True, out=None) -> dict:
     """
@@ -1275,6 +1286,7 @@ def replay(trace_path, start, end, step_hours, cities, method, archive_out, trac
     progress line per simulated UTC day (default: print).
     """
     cities = list(cities)
+    _refuse_duplicate_paths([archive_out, trace_out, log_out])
     _refuse_existing([archive_out, trace_out, log_out])
     if require_models:
         paths = [anomaly_detector._model_path_for(city) for city in cities]
@@ -1663,6 +1675,7 @@ def _cmd_replay(args) -> int:
         print(str(exc), file=sys.stderr)
         return 2
     try:
+        _refuse_duplicate_paths([args.archive_out, args.trace_out, args.log_out, args.fidelity_out])
         _refuse_existing([args.fidelity_out])
         replay(args.trace, args.start, args.end, args.step_hours, cities, args.method,
                args.archive_out, args.trace_out, args.log_out)

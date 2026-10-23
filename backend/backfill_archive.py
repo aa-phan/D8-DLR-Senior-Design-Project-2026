@@ -260,13 +260,15 @@ def backfill(start, end, step_hours=1.0, archive_path=DEFAULT_ARCHIVE, log_path=
     t0 = time.time()
     n = len(times)
 
-    trace_cm = contextlib.nullcontext()
-    if trace_path:
-        os.makedirs(os.path.dirname(str(trace_path)) or ".", exist_ok=True)
-        _terminate_last_line(trace_path)
-        trace_cm = open(trace_path, "a", encoding="utf-8")
-
-    with open(log_path, "a", encoding="utf-8") as log_fh, trace_cm as trace_fh:
+    # An ExitStack closes whichever of the two files is already open if the second
+    # `open` raises; a bare `trace_cm = open(...)` before the `with` would leak it.
+    with contextlib.ExitStack() as files:
+        trace_fh = None
+        if trace_path:
+            os.makedirs(os.path.dirname(str(trace_path)) or ".", exist_ok=True)
+            _terminate_last_line(trace_path)
+            trace_fh = files.enter_context(open(trace_path, "a", encoding="utf-8"))
+        log_fh = files.enter_context(open(log_path, "a", encoding="utf-8"))
         if write_header:
             log_fh.write(_LOG_HEADER + "\n")
         try:

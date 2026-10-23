@@ -227,6 +227,32 @@ def test_trace_records_errors_with_credentials_redacted(tmp_path, monkeypatch):
     ) == "GET https://x/?token=REDACTED&email=REDACTED failed"
 
 
+def test_trace_file_is_closed_when_the_log_cannot_be_opened(tmp_path, monkeypatch):
+    opened = []
+    real_open = open
+
+    log_path = tmp_path / "log.csv"
+
+    def tracking_open(path, *args, **kwargs):
+        if str(path) == str(log_path) and "a" in args[:1]:
+            raise PermissionError("log is not writable")  # after the trace is already open
+        fh = real_open(path, *args, **kwargs)
+        opened.append(fh)
+        return fh
+
+    monkeypatch.setattr(backfill_archive, "open", tracking_open, raising=False)
+    trace_path = tmp_path / "trace.jsonl"
+
+    with pytest.raises(PermissionError):
+        backfill_archive.backfill(
+            f"{_DAY}T10:00:00Z", f"{_DAY}T10:00:00Z",
+            archive_path=str(tmp_path / "archive.csv"), log_path=str(log_path),
+            cities=[_CITY], stations=_station_at(_CITY), fetcher=_StubFetcher(),
+            out=lambda *_: None, trace_path=trace_path)
+
+    assert opened and all(fh.closed for fh in opened)
+
+
 def test_trace_records_refuses_results_and_summary_of_different_lengths():
     run = {"results": [{"city": _CITY}], "summary": [], "errors": {}}
 

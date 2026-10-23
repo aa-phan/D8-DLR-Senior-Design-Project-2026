@@ -731,6 +731,23 @@ def test_replay_refuses_without_anomaly_models_or_over_existing_outputs(tmp_path
     assert str(tmp_path / "nope.jsonl") in capsys.readouterr().err
 
 
+def test_replay_refuses_two_outputs_naming_the_same_file(tmp_path, monkeypatch, capsys):
+    orig = _original_run(tmp_path, monkeypatch)
+    outs = _out_paths(tmp_path)
+    outs["log"] = outs["trace"]  # a trace and a log interleaved in one file
+
+    with pytest.raises(rdv.ReplayRefused, match="distinct"):
+        _replay(orig, outs)
+    assert rdv.main(_cli(orig, outs)) == 2
+    assert "distinct" in capsys.readouterr().err
+    assert not any(path.exists() for path in outs.values())
+
+    outs = _out_paths(tmp_path, "fid")
+    outs["fidelity"] = outs["archive"]  # the report would overwrite the replayed archive
+    assert rdv.main(_cli(orig, outs)) == 2
+    assert not outs["archive"].exists()
+
+
 def test_replay_never_touches_the_network(tmp_path, monkeypatch):
     orig = _original_run(tmp_path, monkeypatch)
     outs = _out_paths(tmp_path)
