@@ -519,3 +519,16 @@ def test_connect_logs_the_role_the_server_reports(caplog, _pg_admin_url):
     conn.close()
     messages = [r.getMessage() for r in caplog.records if r.name == "supabase_store"]
     assert "connected to Postgres as dlr_writer" in messages
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# G-04-2 / IN-02: a pasted secret with a trailing newline still connects
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_a_url_with_a_trailing_newline_connects(_pg_admin_url):
+    _apply_migration(_pg_admin_url)
+    conn = supabase_store.connect(_writer_url(_pg_admin_url) + "\n")
+    try:
+        assert conn.execute("select current_user").fetchone()[0] == "dlr_writer"
+    finally:
+        conn.close()

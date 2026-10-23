@@ -706,3 +706,28 @@ def test_tracer_postgres_run_logs_the_server_role_not_the_project_reference(
         assert _PROJECT_REF not in stream
         assert _MARKER not in stream
         assert "pooler.example.invalid" not in stream
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# G-04-2 / IN-02: connect with the stripped URL
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_connect_strips_whitespace_around_the_url_before_connecting(monkeypatch):
+    import psycopg
+
+    seen = []
+
+    def record(conninfo, *args, **kwargs):
+        seen.append(conninfo)
+        return _PoolerConn()
+
+    monkeypatch.setattr(psycopg, "connect", record)
+    monkeypatch.delenv("SUPABASE_ADMIN_DB_URL", raising=False)
+    url = _url("dlr_writer", _MARKER, "127.0.0.1:5432/postgres")
+
+    monkeypatch.delenv("SUPABASE_DB_URL", raising=False)
+    supabase_store.connect(url + "\n")
+    monkeypatch.setenv("SUPABASE_DB_URL", "  " + url + "\r\n")
+    supabase_store.connect()
+
+    assert seen == [url, url]
