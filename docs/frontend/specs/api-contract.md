@@ -20,7 +20,7 @@ None exists. The repo contains no auth middleware, no API keys for consumers, an
 
 ## Data sources overview
 
-These are the four artifact families an API could serve. Paths are relative to the repo root, and a fresh clone contains only the files marked "tracked".
+These are the artifact families an API could serve. Paths are relative to the repo root, and a fresh clone contains only the files marked "tracked".
 
 | Source | Producer | Contract | Tracked in git | Stability |
 |--------|----------|----------|----------------|-----------|
@@ -29,6 +29,7 @@ These are the four artifact families an API could serve. Paths are relative to t
 | `data/historical/ampacity_history.csv` | `historical_archive.append_observation` | `historical_archive.ARCHIVE_COLUMNS`, 10 columns | No | Column list locked in code |
 | `data/shadow/predictions/{CITY}.jsonl` | `forecast_shadow_pipeline.log_cycle_predictions` | `schema_version: 3` (per city; field list in section 3). Legacy corridor files hold v1 flat and v2 rows | No on `main`; live copy on the `shadow-collection-data` branch | Experimental, may change |
 | `rate_city(...)` return dict | `city_rating.rate_city` (per-city contract) | Section 4 | n/a (in-process only) | No file or HTTP form |
+| `public.city_rating` (Supabase Postgres) | `dlr_orchestrator --store postgres` (scheduled, Phase 5) | [`city_rating_v1.md`](../../data-science/schema/city_rating_v1.md) | n/a (database) | Versioned contract (v1, additive-only) |
 
 City identifiers are the keys of `config.LOCATIONS`: `AUSTIN`, `CORPUS_CHRISTI`, `MIDLAND`, `EL_PASO`. There are no corridor identifiers any more. The names `AUSTIN_CORPUS_CHRISTI` and `MIDLAND_EL_PASO` survive only as legacy shadow-log file names and in `config.LEGACY_CORRIDOR_ENDPOINTS`, which is reserved for a frozen historical experiment and is not for API use.
 
@@ -98,6 +99,8 @@ Caveats:
 ### 3. Historical archive CSV
 
 Appended by `historical_archive.append_observation` when a rating is archived (at most one row per `rate_city` call; `archive=True` is the default). The file is gitignored and absent from a fresh clone.
+
+The CSV archive is the offline store (tests, backfill source). The production store, and its decided contract, is `public.city_rating`; see [`city_rating_v1.md`](../../data-science/schema/city_rating_v1.md).
 
 The scope contract says `rate_city` may archive one row but does not list the columns. In the code read on 2026-10-12, `historical_archive.ARCHIVE_COLUMNS` (10 columns, `ARCHIVE_SCHEMA_VERSION = 1`) is below. Treat it as current code, not a decided contract.
 
@@ -248,7 +251,7 @@ Everything in this section is **PROPOSED** and **not decided**. It exists only s
 | GET | `/api/stations/{stid}/series` | Station rows as JSON, filterable by time range | `outputs/station_data/*.csv` | A pipeline run having produced the file |
 | GET | `/api/cities` | The four city keys, each with its static rating (labelled provisional) | `config.LOCATIONS`, `config.STATIC_RATINGS` | none |
 | GET | `/api/cities/{city}/rating` | Latest rating, fallback state, alerts, resolved station for one city | `rate_city` dict | A DS exporter or in-process call; see decision 2 |
-| GET | `/api/cities/{city}/history` | Archived ratings for one city over time | `data/historical/ampacity_history.csv` | Archive populated by a scheduled run; per-city archive columns are open |
+| GET | `/api/cities/{city}/history` | Archived ratings for one city over time | `data/historical/ampacity_history.csv` | Rows of `public.city_rating` (contract: [`city_rating_v1.md`](../../data-science/schema/city_rating_v1.md)); read access arrives through Supabase REST in Phase 6 |
 | GET | `/api/cities/{city}/shadow` | Shadow predictions and candidates for one city | `shadow-collection-data` branch `{CITY}.jsonl` | Decision 3 on how the JSONL reaches the API host; v3 field list not final |
 | GET | `/api/grid/hourly/{stid}` | Merged DLR and ERCOT load | merged CSV | Someone running the merger |
 
@@ -261,7 +264,7 @@ If adopted, two conventions would simplify the frontend (also proposed): return 
 None of these is resolved in the repo. Each needs an owner and a decision before `api/` code is written, and the answer should be recorded in the Software team's PRD (see `docs/frontend/README.md`).
 
 1. **Role of `api/`.** A thin file-serving layer, a live-polling service, or one that also proxies PSS/E outputs. This is the question `api/README.md` leaves open. The PSS/E handoff format is itself unspecified (`docs/data-science/decisions/pss_e_handoff.md`).
-2. **How per-city results reach the API.** Either call `rate_city` in-process (couples the API to the Python backend and provider credentials), or ask DS to add an exporter that writes each city's dict to a file (adds a new contract that does not exist today). Today these results are returned only to the caller, apart from an optional archive row.
+2. **Resolved (production-pipeline Phase 4):** each run writes every city's result to `public.city_rating`, contract [`city_rating_v1.md`](../../data-science/schema/city_rating_v1.md); consumers read it through Supabase REST from Phase 6, so no in-process call and no file exporter is needed. Original question: **How per-city results reach the API.** Either call `rate_city` in-process (couples the API to the Python backend and provider credentials), or ask DS to add an exporter that writes each city's dict to a file (adds a new contract that does not exist today). Today these results are returned only to the caller, apart from an optional archive row.
 3. **How shadow data reaches the API.** Read from the `shadow-collection-data` branch (git fetch, or raw GitHub fetch), have the workflow also publish somewhere else, or have the API host check out that branch. Repository visibility for unauthenticated raw fetches is unknown. <!-- VERIFY: repository visibility and whether raw.githubusercontent.com access to the shadow-collection-data branch is permitted -->
 4. **Who runs the station and per-city rating pipelines on a schedule.** Only the shadow collector is scheduled. "Live" station or city data needs a scheduler owner.
 5. **Which ampacity basis the UI shows:** per-conductor, bundle-level, or both, and where the `rating_basis` caveat is displayed.
@@ -269,7 +272,7 @@ None of these is resolved in the repo. Each needs an owner and a decision before
 7. **Schema versioning for station CSVs.** The export has no version marker. The open question is tracked in the C3 spec; if the CSV column list changes, `pipeline_output_v1.md` is meant to be superseded by a v2 document.
 8. **Consumer authentication and hosting.** Not decided. <!-- VERIFY: hosting platform and consumer auth for api/ and frontend/ -->
 9. **Station-to-city mapping.** The station CSV carries only `stid`, and a city's source station can change between runs. A per-city series from station files needs a mapping that does not exist yet (PRD OD-1, G1).
-10. **Per-city archive and shadow v3 shapes.** The archive columns for per-city rows are implemented (`corridor` renamed `city`; the always-null `bottleneck_index` dropped on 2026-10-13) and the v3 shadow record is implemented (section 3), but neither is covered by the scope contract's own text. Confirm with DS before treating them as stable.
+10. **Per-city archive and shadow v3 shapes.** **Resolved (production-pipeline Phase 4) for the per-city archive part:** the production store is `public.city_rating`, contract [`city_rating_v1.md`](../../data-science/schema/city_rating_v1.md). Earlier text, still current for the shadow v3 part: The archive columns for per-city rows are implemented (`corridor` renamed `city`; the always-null `bottleneck_index` dropped on 2026-10-13) and the v3 shadow record is implemented (section 3), but neither is covered by the scope contract's own text. Confirm with DS before treating them as stable.
 11. **Missing outputs.** The Project Definition lists a "trusted-duration window" and a forecast panel. No backend code computes the former, and the forecast is not in any feed. Confirm with DS before designing UI that depends on them.
 
 ## Compatibility rules for consumers

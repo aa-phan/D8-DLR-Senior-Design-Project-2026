@@ -187,3 +187,63 @@ def test_doc_explains_row_identity_and_keeps_rows_provisional():
     for sentence in re.split(r"(?<=[.;])\s+", _squash(doc)):
         if re.search(r"passed (?:a|the) go/no-go", sentence, re.IGNORECASE):
             assert re.search(r"\bNo row\b|\bNever\b|\bnot\b", sentence), f"claims a go/no-go was passed: {sentence}"
+
+
+def test_consumer_docs_point_to_the_schema_doc():
+    api = _read(API_CONTRACT_PATH)
+    pss_e = _read(PSS_E_PATH)
+    assert os.path.isfile(DOC_PATH)
+    link = re.compile(r"\]\((\.\./)+[a-z\-/]*city_rating_v1\.md\)")
+    for text, path in ((api, API_CONTRACT_PATH), (pss_e, PSS_E_PATH)):
+        targets = re.findall(r"\]\(([^)]*city_rating_v1\.md)\)", text)
+        assert targets, f"{path} has no link to city_rating_v1.md"
+        for target in targets:
+            assert os.path.isfile(os.path.normpath(os.path.join(os.path.dirname(path), target))), (
+                f"{path}: link {target} does not resolve"
+            )
+        assert link.search(text)
+    assert len(re.findall(r"city_rating_v1\.md", api)) >= 3
+
+    # The data-sources table has a row for the production store.
+    rows = [line for line in api.splitlines() if line.startswith("| `public.city_rating`")]
+    assert len(rows) == 1 and "city_rating_v1.md" in rows[0]
+
+    # Open decisions 2 and 10 (per-city archive part) are marked resolved with the link.
+    items = {m.group(1): m.group(0) for m in re.finditer(r"^(\d+)\. .*$", api, re.MULTILINE)}
+    for number in ("2", "10"):
+        assert "Resolved" in items[number] and "city_rating_v1.md" in items[number], f"open decision {number}"
+    assert "shadow v3" in items["10"]
+
+    # The history row of the proposed HTTP surface points at the table.
+    history = [line for line in api.splitlines() if line.startswith("| GET | `/api/cities/{city}/history`")]
+    assert len(history) == 1 and "public.city_rating" in history[0] and "Phase 6" in history[0]
+    assert "per-city archive columns are open" not in api
+
+    # The CSV archive section names the production store.
+    archive = api.split("### 3. Historical archive CSV", 1)[1].split("\n### ", 1)[0]
+    assert "offline store" in archive and "public.city_rating" in archive
+
+
+def test_pss_e_note_lists_what_the_store_fixes_and_what_stays_open():
+    text = _read(PSS_E_PATH)
+    assert "## What's still undefined" not in text
+    fixes = _section(text, "## What the production store fixes (2026-10)")
+    for needle in (
+        "public.city_rating",
+        "Supabase REST",
+        "hourly",
+        "rating_amps",
+        "rating_mw",
+        "forecast_ci_lower_amps",
+        "forecast_ci_upper_amps",
+        "forecast_horizon_min",
+        "config_fingerprint",
+        "forecast_model_sha256",
+        "anomaly_model_sha256",
+        "city_rating_v1.md",
+    ):
+        assert needle in fixes, f"the fixes section does not mention {needle!r}"
+    still_open = _section(text, "## Still open with Power Systems")
+    assert "PSS/E consumes" in still_open and "injection" in still_open
+    assert "COND-01" in still_open and "REVAL-01" in still_open
+    assert text.rstrip().endswith("recorded as a standalone note per the user's request.*")

@@ -3,7 +3,9 @@
 **Status:** Informal working understanding — not yet confirmed with the Power Systems
 sub-team, and not a ratified interface contract. Captured here so the understanding survives
 between sessions rather than living only in conversation. A formal interface contract
-(file format, cadence, exact fields) is explicitly deferred — see "What's still undefined" below.
+(file format, cadence, exact fields) is explicitly deferred — see "Still open with Power Systems" below.
+
+The storage and handoff format are now fixed by the production pipeline; see [`../schema/city_rating_v1.md`](../schema/city_rating_v1.md).
 
 **Purpose:** Record what the DS subsystem believes it hands off to Power Systems and why, based
 on the two places this project's own documents describe the connection
@@ -51,23 +53,25 @@ equivalent" PRD.md's consumer table mentions (`P = √3 × V × I × PF`, using
 `config.LINE_VOLTAGE_KV` = 345 kV and `config.POWER_FACTOR` = 0.95) — this conversion exists as
 its own step, separate from the forecast itself.
 
-## What's still undefined
+## What the production store fixes (2026-10)
 
-No document in this repo — searched across `docs/`, `.planning/`, and `backend/` — specifies
-*how* this injection actually happens. Specifically undefined:
+The production pipeline (production-pipeline Phase 4) stores every city's hourly result in one place. The contract is [`city_rating_v1.md`](../schema/city_rating_v1.md). What it settles for the points this note used to list as undefined:
 
-- File format / transport (CSV hand-off? PSS/E's Python API pulling from a shared archive?
-  something else?) — PSS/E's Python API is cited in the System Design Report as the reason PSS/E
-  was chosen over PowerWorld, which makes it the most likely intended mechanism, but this is not
-  written down as a decision anywhere.
-- Cadence (per pipeline run? per hour? on-demand?).
-- Whether Power Systems wants Amps, MW, or both, and whether they want the confidence band or
-  just the point forecast.
-- Granularity (per-station or per-city; the project now rates each of its four cities as an independent point, so per-city is the natural unit, but this is not agreed with Power Systems; corridor granularity was retired 2026-10-12, see `point_scope.md`).
+- **Format and transport:** a Postgres table, `public.city_rating`, read through Supabase REST from Phase 6 (a Python stdlib example is planned there). Until Phase 6 delivers the read grant, no consumer has access.
+- **Cadence:** hourly (OD-1), once Phase 5's scheduled runner is live; the latest row of a city is expected to be no older than 90 minutes.
+- **Amps, MW and the forecast band:** all stored on every row: `rating_amps`, `rating_mw`, `forecast_amps`, `forecast_ci_lower_amps`, `forecast_ci_upper_amps`, `forecast_horizon_min`. The forecast fields are empty while the forecast is in cold start.
+- **Granularity:** one independent row per city per hour. Rows of different cities are never combined.
+- **Provenance:** `config_version`, `config_fingerprint`, `forecast_model_sha256` and `anomaly_model_sha256` on every row (DB-06). Within one city, a change in these between rows marks a configuration or model change, such as Phase 7's per-city conductors; PSS/E studies should not splice values across it without noting it.
 
-**This is deliberately not resolved here.** Defining the actual contract requires a conversation
-with the Power Systems sub-team, not a unilateral DS-side decision — flag it again when Track 1
-(Pipeline Integration) or an actual cross-team sync on this happens.
+All values are provisional (OD-5) until Phase 7's re-validation go (REVAL-01).
+
+## Still open with Power Systems
+
+This is deliberately not resolved here; it needs a conversation with the Power Systems sub-team, not a unilateral DS-side decision.
+
+- Which of the stored fields PSS/E consumes (point forecast only, or also the band, MW or Amps), and how the injection runs inside PSS/E.
+- The per-city conductor values Power Systems is to confirm (Phase 7, COND-01). Today one Drake conductor configuration is used for every city, with assumed subconductor counts and line bearings.
+- The provisional caveat: every row stays provisional (OD-5) until Phase 7's go (REVAL-01) lifts the label.
 
 ---
 *Captured: 2026-09-24, during Track 2 (ML Model Development) Phase 1 discussion — not itself part
