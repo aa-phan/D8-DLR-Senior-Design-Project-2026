@@ -27,10 +27,7 @@ import config
 import supabase_smoke
 import supabase_store
 
-_MIGRATION = os.path.join(
-    os.path.dirname(__file__), "..", "..", "supabase", "migrations",
-    "20261019000000_create_city_rating.sql",
-)
+_MIGRATIONS_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "supabase", "migrations")
 _LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
 
 # Markers assembled from pieces so no literal credential URL is in this file.
@@ -132,16 +129,18 @@ $$;
 
 def _apply_migration(admin_url):
     """
-    Create the Supabase roles a plain cluster lacks, then apply the committed
-    migration in one transaction.
+    Create the Supabase roles a plain cluster lacks, then apply every committed
+    migration in name order (the production chain), each in one transaction.
     """
     import psycopg
 
-    with open(_MIGRATION, encoding="utf-8") as handle:
-        sql = handle.read()
+    names = sorted(name for name in os.listdir(_MIGRATIONS_DIR) if name.endswith(".sql"))
+    assert names, "no migration files found"
     with psycopg.connect(admin_url) as conn:
         conn.execute(_ROLE_SQL)
-        conn.execute(sql)
+        for name in names:
+            with open(os.path.join(_MIGRATIONS_DIR, name), encoding="utf-8") as handle:
+                conn.execute(handle.read())
 
 
 def _writer_url(admin_url):
@@ -236,7 +235,8 @@ def test_smoke_passes_on_a_fresh_migration_and_leaves_no_rows(tmp_path, monkeypa
     assert report["checks"]["ssl_in_use"] == "skipped"
     expected = ["connected", "role_is_dlr_writer", "server_version_ge_15", "tables_exist", "rls_enabled",
                 "writer_policies_exist", "writer_privileges_exact", "consumers_cannot_write",
-                "rating_upsert_idempotent", "run_row_idempotent", "delete_denied"]
+                "rating_upsert_idempotent", "run_row_idempotent", "delete_denied",
+                "session_timezone_utc", "utc_hour_check_zone_independent"]
     assert all(report["checks"][name] is True for name in expected)
     assert report["info"]["role"] == "dlr_writer" and report["info"]["anon_can_select"] is False
     assert report["checked_at"].endswith("Z")
@@ -262,6 +262,55 @@ def test_smoke_fails_when_the_writer_policy_is_missing(tmp_path, monkeypatch, ca
         assert _count_rows(_pg_admin_url) == {"ratings": 0, "runs": 0}
     finally:
         _apply_migration(_pg_admin_url)  # re-applying restores the policy
+    assert supabase_smoke.main(["--allow-no-ssl"]) == 0
+    capsys.readouterr()
+
+
+def test_hour_check_accepts_utc_hours_in_a_half_hour_offset_session(monkeypatch, _pg_admin_url):
+    import psycopg
+
+    _reset(_pg_admin_url)
+    monkeypatch.setenv("SUPABASE_DB_URL", _writer_url(_pg_admin_url))
+    row = supabase_smoke._sentinel_row()
+    at = lambda stamp: dict(row, valid_time=stamp)  # noqa: E731
+    conn = supabase_store.connect()
+    try:
+        with conn.transaction(force_rollback=True):
+            conn.execute("set local timezone = 'Asia/Kolkata'")  # UTC+05:30
+            supabase_store.upsert_rating(conn, at("2000-01-01T01:00:00Z"))  # whole UTC hour, 06:30 local
+            with pytest.raises(psycopg.errors.CheckViolation) as refused:
+                with conn.transaction():
+                    # Raw upsert: upsert_rating re-raises as a redacted StoreError.
+                    conn.execute(supabase_store.UPSERT_RATING_SQL, at("2000-01-01T01:30:00Z"))  # whole hour in Kolkata only
+            assert refused.value.diag.constraint_name == "city_rating_valid_time_hour_ck"
+    finally:
+        conn.close()
+    assert _count_rows(_pg_admin_url) == {"ratings": 0, "runs": 0}
+
+
+def test_zone_check_fails_against_the_original_constraint(tmp_path, monkeypatch, capsys, _pg_admin_url):
+    import psycopg
+
+    _reset(_pg_admin_url)
+    monkeypatch.setenv("SUPABASE_DB_URL", _writer_url(_pg_admin_url))
+    report_path = tmp_path / "smoke.json"
+    try:
+        with psycopg.connect(_pg_admin_url, autocommit=True) as admin:
+            admin.execute("alter table public.city_rating drop constraint city_rating_valid_time_hour_ck")
+            admin.execute("alter table public.city_rating add constraint city_rating_valid_time_hour_ck "
+                          "check (valid_time = date_trunc('hour', valid_time))")
+        assert supabase_smoke.main(["--allow-no-ssl", "--report", str(report_path)]) == 1
+        out = capsys.readouterr().out
+        failed_line = [line for line in out.splitlines() if line.startswith("SMOKE FAILED")][0]
+        assert failed_line == "SMOKE FAILED: utc_hour_check_zone_independent"
+        checks = json.loads(report_path.read_text(encoding="utf-8"))["checks"]
+        assert checks["utc_hour_check_zone_independent"] is False
+        assert checks["session_timezone_utc"] is True
+        assert all(value is True for name, value in checks.items()
+                   if name not in ("utc_hour_check_zone_independent", "ssl_in_use"))
+        assert _count_rows(_pg_admin_url) == {"ratings": 0, "runs": 0}
+    finally:
+        _apply_migration(_pg_admin_url)  # the chain restores the UTC expression
     assert supabase_smoke.main(["--allow-no-ssl"]) == 0
     capsys.readouterr()
 

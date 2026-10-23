@@ -9,6 +9,7 @@ supabase_live_test.py). Follows backend/tests/city_rating_test.py's conventions
 (module-level imports, plain asserts, no test classes, no network).
 """
 
+import hashlib
 import os
 import re
 
@@ -19,6 +20,13 @@ _MIGRATION = os.path.join(
     os.path.dirname(__file__), "..", "..", "supabase", "migrations",
     "20261019000000_create_city_rating.sql",
 )
+# The additive follow-up of the Phase 4 code review (IN-06 hour CHECK, IN-03 run-log comments).
+_FIX_MIGRATION = os.path.join(
+    os.path.dirname(__file__), "..", "..", "supabase", "migrations",
+    "20261023000000_city_rating_utc_hour_check_and_run_log_comments.sql",
+)
+# sha256 of the original migration as applied to the live project (plan 04-05). It is never edited.
+_ORIGINAL_MIGRATION_SHA256 = "7fbf1423e0b8ccf0eee6f79e502036e11c8f3c4c9d54f6badddda0473f76129d"
 
 _CITY_RATING_COLUMNS = [
     ("city", "text"),
@@ -97,20 +105,20 @@ _NOT_NULL = {
 _COMMENT_RE = re.compile(r"(comment\s+on\s+(?:table|column)\s+[\w.]+\s+is\s+)'(?:[^']|'')*'", re.IGNORECASE)
 
 
-def _raw():
-    with open(_MIGRATION, encoding="utf-8") as handle:
+def _raw(path=_MIGRATION):
+    with open(path, encoding="utf-8") as handle:
         return handle.read()
 
 
-def _code():
+def _code(path=_MIGRATION):
     """The migration with comment bodies blanked and `--` comments removed."""
-    text = _COMMENT_RE.sub(r"\1''", _raw())
+    text = _COMMENT_RE.sub(r"\1''", _raw(path))
     return "\n".join(line.split("--", 1)[0] for line in text.splitlines())
 
 
-def _statements():
+def _statements(path=_MIGRATION):
     """Statements of `_code()` (keyword checks), splitting only on `;` outside `$$ ... $$`."""
-    code = _code()
+    code = _code(path)
     out, buffer, in_dollar, i = [], [], False, 0
     while i < len(code):
         if code.startswith("$$", i):
@@ -158,11 +166,11 @@ def _columns(table):
     return columns
 
 
-def _comments():
+def _comments(path=_MIGRATION):
     pattern = re.compile(
         r"comment on (table|column) ([\w.]+) is '((?:[^']|'')*)'", re.IGNORECASE
     )
-    return {m.group(2): m.group(3) for m in pattern.finditer(_raw())}
+    return {m.group(2): m.group(3) for m in pattern.finditer(_raw(path))}
 
 
 def test_city_rating_has_every_db01_column_with_its_type():
@@ -339,3 +347,37 @@ def test_identity_columns_have_hex_checks_and_the_fingerprint_is_required():
     assert "rating_config_snapshot" in comments["public.city_rating.config_fingerprint"]
     assert "NULL" in comments["public.city_rating.forecast_model_sha256"]
     assert "NULL" in comments["public.city_rating.anomaly_model_sha256"]
+
+
+def test_original_migration_is_unchanged():
+    # The original file is applied to the live project; fixes go in a new additive migration.
+    with open(_MIGRATION, "rb") as handle:
+        assert hashlib.sha256(handle.read()).hexdigest() == _ORIGINAL_MIGRATION_SHA256
+
+
+def test_review_fix_migration_makes_the_hour_check_zone_independent():
+    statements = _statements(_FIX_MIGRATION)
+    assert os.path.basename(_FIX_MIGRATION) > os.path.basename(_MIGRATION)  # applies after the original
+    assert statements[0] == "alter table public.city_rating drop constraint if exists city_rating_valid_time_hour_ck"
+    assert statements[1] == (
+        "alter table public.city_rating add constraint city_rating_valid_time_hour_ck check "
+        "((valid_time at time zone 'UTC') = date_trunc('hour', valid_time at time zone 'UTC'))"
+    )
+    # The session-zone form must not come back.
+    assert "check (valid_time = date_trunc('hour', valid_time))" not in " ".join(statements)
+
+
+def test_review_fix_migration_is_reapply_safe_and_grants_nothing():
+    statements = _statements(_FIX_MIGRATION)
+    raw = _raw(_FIX_MIGRATION).lower()
+    for statement in statements:
+        assert statement.startswith(("alter table public.city_rating ", "comment on column public.pipeline_run.")), statement
+        for forbidden in ("create ", "grant ", "revoke ", "policy", "role", "drop table", "add column",
+                          "password", "truncate", "delete"):
+            assert forbidden not in statement.lower(), (forbidden, statement)
+    for statement in statements:
+        if " add constraint " in statement:
+            index = statements.index(statement)
+            assert statements[index - 1] == statement.replace(" add constraint ", " drop constraint if exists ", 1).split(" check ")[0]
+    assert "password" not in raw
+    assert not re.search(r"postgres(ql)?://", raw)
