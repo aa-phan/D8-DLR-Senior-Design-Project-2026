@@ -26,6 +26,8 @@ _FIX_MIGRATION = os.path.join(
     "20261023000000_city_rating_utc_hour_check_and_run_log_comments.sql",
 )
 # sha256 of the original migration as applied to the live project (plan 04-05). It is never edited.
+_MIGRATIONS_DIR = os.path.dirname(_MIGRATION)
+_SCHEMA_DOC = os.path.join(os.path.dirname(__file__), "..", "..", "docs", "data-science", "schema", "city_rating_v1.md")
 _ORIGINAL_MIGRATION_SHA256 = "7fbf1423e0b8ccf0eee6f79e502036e11c8f3c4c9d54f6badddda0473f76129d"
 
 _CITY_RATING_COLUMNS = [
@@ -171,6 +173,15 @@ def _comments(path=_MIGRATION):
         r"comment on (table|column) ([\w.]+) is '((?:[^']|'')*)'", re.IGNORECASE
     )
     return {m.group(2): m.group(3) for m in pattern.finditer(_raw(path))}
+
+
+def _effective_comments():
+    """Comments as the live database holds them: every migration in name order, a later one wins."""
+    effective = {}
+    for name in sorted(os.listdir(_MIGRATIONS_DIR)):
+        if name.endswith(".sql"):
+            effective.update(_comments(os.path.join(_MIGRATIONS_DIR, name)))
+    return effective
 
 
 def test_city_rating_has_every_db01_column_with_its_type():
@@ -381,3 +392,25 @@ def test_review_fix_migration_is_reapply_safe_and_grants_nothing():
             assert statements[index - 1] == statement.replace(" add constraint ", " drop constraint if exists ", 1).split(" check ")[0]
     assert "password" not in raw
     assert not re.search(r"postgres(ql)?://", raw)
+
+
+def test_run_log_comments_match_the_schema_doc():
+    comments = {name: text.replace("''", "'") for name, text in _effective_comments().items()}
+    ok = comments["public.pipeline_run.cities_ok"]
+    failed = comments["public.pipeline_run.cities_failed"]
+    assert ok.startswith("none (labels)") and failed.startswith("none (json)")
+    assert "healthily" in ok and "cities_failed" in ok and "degraded" in ok
+    for word in ("outcome", "error", "degraded", "written", "forecast_status",
+                 "detector_model_loaded", "redacted", "error text"):
+        assert word in failed, word
+
+    doc = {}
+    with open(_SCHEMA_DOC, encoding="utf-8") as handle:
+        for line in handle:
+            match = re.match(r"^\| `(cities_ok|cities_failed)` \| `[^`]+` \| (.*) \|$", line.rstrip("\n"))
+            if match:
+                doc[match.group(1)] = match.group(2)
+    assert set(doc) == {"cities_ok", "cities_failed"}
+    assert "healthily" in doc["cities_ok"] and "healthily" in ok
+    assert "outcome" in doc["cities_failed"] and "outcome" in failed
+    assert "`error` or `degraded`" in doc["cities_failed"]
