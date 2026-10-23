@@ -19,6 +19,7 @@ import os
 import shutil
 import socket
 import subprocess
+import time
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
@@ -532,3 +533,48 @@ def test_a_url_with_a_trailing_newline_connects(_pg_admin_url):
         assert conn.execute("select current_user").fetchone()[0] == "dlr_writer"
     finally:
         conn.close()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# G-04-2 / WR-03: a dropped session costs one reconnect, not the rest of the run
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _terminate_writer_backends(admin_url):
+    """Kill every session of the writer role and wait until the server has dropped them."""
+    _admin_rows(
+        admin_url,
+        "select pg_terminate_backend(pid) from pg_stat_activity "
+        "where usename = 'dlr_writer' and datname = current_database()",
+    )
+    for _ in range(100):
+        left = _admin_rows(
+            admin_url,
+            "select count(*) as n from pg_stat_activity "
+            "where usename = 'dlr_writer' and datname = current_database()",
+        )[0]["n"]
+        if left == 0:
+            return
+        time.sleep(0.05)
+    pytest.fail("the writer's backend did not exit after pg_terminate_backend")
+
+
+def test_store_recovers_from_a_terminated_backend(tmp_path, _pg_admin_url):
+    _reset(_pg_admin_url)
+
+    with supabase_store.SupabaseStore.from_env(_writer_url(_pg_admin_url)) as store:
+        end = "2025-06-01T14:07:00Z"
+        assert store.write_rating(_run_austin(tmp_path, end, 25.0), end=end, provenance=_PROVENANCE) is True
+
+        _terminate_writer_backends(_pg_admin_url)
+
+        next_end = "2025-06-01T15:07:00Z"
+        frame = store.read_history("AUSTIN", next_end)
+        assert len(frame) == 1
+        assert store.write_rating(
+            _run_austin(tmp_path, next_end, 26.0), end=next_end, provenance=_PROVENANCE) is True
+        store.record_run({"run_id": store.run_ctx["run_id"]})
+
+    rows = _admin_rows(_pg_admin_url, "select run_id from public.city_rating order by valid_time")
+    assert [r["run_id"] for r in rows] == [store.run_ctx["run_id"]] * 2
+    runs = _admin_rows(_pg_admin_url, "select run_id from public.pipeline_run")
+    assert [r["run_id"] for r in runs] == [store.run_ctx["run_id"]]

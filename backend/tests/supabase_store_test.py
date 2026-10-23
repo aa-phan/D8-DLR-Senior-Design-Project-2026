@@ -609,11 +609,14 @@ class _PoolerConn:
     statements containing a fragment raise.
     """
 
-    def __init__(self, client_user=None, role="dlr_writer", history_rows=None, errors=None):
+    def __init__(self, client_user=None, role="dlr_writer", history_rows=None, errors=None,
+                 lose_on_op=None, probe_fails=False):
         self.info = type("Info", (), {"user": client_user})()
         self.role = role
         self.closed = False
         self.broken = False
+        self.lose_on_op = lose_on_op  # "closed" or "broken": the first real statement drops the session
+        self.probe_fails = probe_fails
         self.close_calls = 0
         self.calls = []
         self._history_rows = history_rows or []
@@ -629,11 +632,14 @@ class _PoolerConn:
                 return _PoolerCursor([(self.role,)])
             return _PoolerCursor([])
         if lowered == "select 1":
-            if self.closed or self.broken:
+            if self.closed or self.broken or self.probe_fails:
                 raise RuntimeError("the connection is closed")
             return _PoolerCursor([(1,)])
         if self.closed or self.broken:
             raise RuntimeError("the connection is closed")
+        if self.lose_on_op is not None:
+            setattr(self, self.lose_on_op, True)
+            raise RuntimeError("server closed the connection unexpectedly")
         if self._errors:
             raise self._errors.pop(0)
         if lowered.startswith("select to_char"):
@@ -731,3 +737,159 @@ def test_connect_strips_whitespace_around_the_url_before_connecting(monkeypatch)
     supabase_store.connect()
 
     assert seen == [url, url]
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# G-04-2 / WR-03: the store reconnects once when its connection was lost
+# ──────────────────────────────────────────────────────────────────────────────
+
+_RUN_ROW = {"run_id": "123"}
+
+
+class _Factory:
+    """A reconnect factory that counts its calls and hands out the given connections in order."""
+
+    def __init__(self, *conns):
+        self.conns = list(conns)
+        self.calls = 0
+
+    def __call__(self):
+        self.calls += 1
+        item = self.conns.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+
+def _run_operation(store, operation):
+    if operation == "read_history":
+        return store.read_history("AUSTIN", _END)
+    if operation == "write_rating":
+        return store.write_rating(_result(), end=_END, provenance=_PROVENANCE)
+    return store.record_run(dict(_RUN_ROW))
+
+
+def _operation_statements(conn, operation):
+    if operation == "read_history":
+        return [c for c in conn.calls if c[0].lower().startswith("select to_char")]
+    table = "public.city_rating" if operation == "write_rating" else "public.pipeline_run"
+    return conn.writes_to(table)
+
+
+@pytest.mark.parametrize("flag", ["closed", "broken"])
+@pytest.mark.parametrize("operation", ["read_history", "write_rating", "record_run"])
+def test_store_reconnects_once_when_the_connection_was_lost(operation, flag, caplog):
+    old = _PoolerConn(lose_on_op=flag)
+    new = _PoolerConn()
+    factory = _Factory(new)
+    store = supabase_store.SupabaseStore(old, run_ctx=_RUN_CTX, reconnect=factory)
+
+    with caplog.at_level(logging.WARNING, logger="supabase_store"):
+        result = _run_operation(store, operation)
+
+    if operation == "read_history":
+        assert list(result.columns) == historical_archive.ARCHIVE_COLUMNS
+    assert factory.calls == 1
+    assert len(_operation_statements(old, operation)) == 1  # the failed first attempt
+    assert len(_operation_statements(new, operation)) == 1  # the one retry
+    assert old.close_calls >= 1
+    assert store.conn is new
+    assert store.run_ctx is _RUN_CTX
+    if operation == "write_rating":
+        assert _operation_statements(new, operation)[0][1]["run_id"] == _RUN_CTX["run_id"]
+
+    warnings = [r for r in caplog.records if r.name == "supabase_store" and r.levelno == logging.WARNING
+                and "reconnecting" in r.getMessage()]
+    assert len(warnings) == 1
+    assert operation in warnings[0].getMessage()
+
+
+def test_store_reconnects_before_using_a_connection_already_closed():
+    old = _PoolerConn()
+    old.closed = True
+    new = _PoolerConn()
+    factory = _Factory(new)
+    store = supabase_store.SupabaseStore(old, run_ctx=_RUN_CTX, reconnect=factory)
+
+    store.record_run(dict(_RUN_ROW))
+
+    assert factory.calls == 1
+    assert old.writes_to("public.pipeline_run") == []
+    assert len(new.writes_to("public.pipeline_run")) == 1
+    assert store.conn is new
+
+
+def test_store_does_not_retry_a_failure_on_a_healthy_connection():
+    healthy = _PoolerConn(errors=[RuntimeError("new row violates check constraint")])
+    factory = _Factory()
+    store = supabase_store.SupabaseStore(healthy, run_ctx=_RUN_CTX, reconnect=factory)
+
+    with pytest.raises(supabase_store.StoreError, match="check constraint"):
+        store.write_rating(_result(), end=_END, provenance=_PROVENANCE)
+
+    assert factory.calls == 0
+    assert store.conn is healthy
+    assert healthy.close_calls == 0
+    assert len(healthy.writes_to("public.city_rating")) == 1
+
+
+def test_a_lost_connection_is_detected_by_a_failing_probe():
+    # Neither closed nor broken is set, but the session no longer answers `select 1`.
+    old = _PoolerConn(errors=[RuntimeError("SSL SYSCALL error: EOF detected")], probe_fails=True)
+    new = _PoolerConn()
+    factory = _Factory(new)
+    store = supabase_store.SupabaseStore(old, run_ctx=_RUN_CTX, reconnect=factory)
+
+    store.record_run(dict(_RUN_ROW))
+
+    assert factory.calls == 1
+    assert len(new.writes_to("public.pipeline_run")) == 1
+    assert store.conn is new
+
+
+def test_a_failed_reconnect_raises_a_redacted_store_error_and_the_next_call_tries_again(monkeypatch):
+    import psycopg
+
+    url = _url(f"dlr_writer.{_PROJECT_REF}", _MARKER, _POOLER_HOST)
+    monkeypatch.delenv("SUPABASE_DB_URL", raising=False)
+    monkeypatch.delenv("SUPABASE_ADMIN_DB_URL", raising=False)
+    first = _PoolerConn()
+    second = _PoolerConn()
+    attempts = []
+
+    def flaky_connect(conninfo, *args, **kwargs):
+        attempts.append(conninfo)
+        if len(attempts) == 1:
+            return first
+        if len(attempts) == 2:
+            raise RuntimeError(f"connection to server failed for {conninfo}")
+        return second
+
+    monkeypatch.setattr(psycopg, "connect", flaky_connect)
+    store = supabase_store.SupabaseStore.from_env(url)
+    first.closed = True  # the pooler dropped the session
+
+    with pytest.raises(supabase_store.StoreError) as raised:
+        store.record_run(dict(_RUN_ROW))
+    for forbidden in (_MARKER, _PROJECT_REF, "pooler.example.invalid"):
+        assert forbidden not in str(raised.value)
+    assert len(attempts) == 2
+
+    store.record_run(dict(_RUN_ROW))  # the next call reconnects again
+    assert len(attempts) == 3
+    assert store.conn is second
+    assert len(second.writes_to("public.pipeline_run")) == 1
+    # The reconnect went through connect(): the session settings were applied again.
+    assert any(c[0].startswith("set statement_timeout") for c in second.calls)
+    assert any(c[0] == "set timezone = 'UTC'" for c in second.calls)
+
+
+def test_a_store_without_a_reconnect_factory_raises_as_before():
+    old = _PoolerConn(lose_on_op="closed")
+    store = supabase_store.SupabaseStore(old, run_ctx=_RUN_CTX)
+
+    with pytest.raises(supabase_store.StoreError, match="could not write the pipeline_run row"):
+        store.record_run(dict(_RUN_ROW))
+
+    assert store.conn is old
+    assert len(old.writes_to("public.pipeline_run")) == 1
