@@ -673,9 +673,12 @@ def build_run_row(run_ctx: dict, *, window_end, provider, forecast_method, start
 
     `city_records` holds one dict per city the run reached (city, written, error,
     forecast_status, detector_model_loaded). A city that was written with a
-    forecast_status of "ok" or "cold_start" and an anomaly model loaded is in
-    `cities_ok`; one that was written otherwise is in `cities_failed` with
-    outcome "degraded"; one that was not written is there with outcome "error"
+    forecast_status of "ok" or "cold_start", an anomaly model loaded and no
+    error is in `cities_ok`; one that was written otherwise is in
+    `cities_failed` with outcome "degraded" (an error on a written city, such as
+    a cleaning failure on an empty history that left the status "cold_start",
+    makes it degraded rather than being dropped); one that was not written is
+    there with outcome "error"
     (OD-9: it has no rating row, so this row is its only record). Every error
     string goes through `redact()` and is cut to 1000 characters, after
     redaction. `cities_ok` and `cities_failed` follow config.LOCATIONS order.
@@ -691,10 +694,10 @@ def build_run_row(run_ctx: dict, *, window_end, provider, forecast_method, start
         written = bool(rec.get("written"))
         status = rec.get("forecast_status")
         loaded = bool(rec.get("detector_model_loaded"))
-        if written and status in _HEALTHY_FORECAST_STATUSES and loaded:
+        error = rec.get("error")
+        if written and status in _HEALTHY_FORECAST_STATUSES and loaded and error is None:
             cities_ok.append(city)
             continue
-        error = rec.get("error")
         cities_failed[city] = {
             "outcome": "degraded" if written else "error",
             "written": written,

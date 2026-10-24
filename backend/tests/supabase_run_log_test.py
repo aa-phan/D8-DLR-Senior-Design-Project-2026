@@ -118,6 +118,19 @@ def test_run_row_columns_are_the_migrations_columns_in_order():
     assert tuple(row) == supabase_store.PIPELINE_RUN_COLUMNS
 
 
+def test_a_written_city_with_an_error_is_degraded_even_with_a_healthy_status():
+    # IN-08: an error on a written city (a cleaning failure on an empty history keeps
+    # forecast_status "cold_start") is never hidden in cities_ok.
+    row = _build([_record("AUSTIN", forecast_status="cold_start", error="data cleaning failed: x"),
+                  _record("MIDLAND", forecast_status="cold_start")])
+
+    assert row["cities_ok"] == ["MIDLAND"]
+    assert row["cities_failed"] == {"AUSTIN": {
+        "outcome": "degraded", "written": True, "forecast_status": "cold_start",
+        "detector_model_loaded": True, "error": "data cleaning failed: x",
+    }}
+
+
 def test_run_row_carries_the_run_identity_window_and_timestamps():
     row = _build([_record("AUSTIN")])
 

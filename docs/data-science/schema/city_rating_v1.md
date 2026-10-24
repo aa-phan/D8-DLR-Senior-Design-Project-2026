@@ -178,7 +178,7 @@ One row per run, written by the scheduled runner (Phase 5) or by a direct `--sto
 | `provider_errors` | `jsonb` | Provider error summary of the run. |
 | `sources` | `jsonb` | Count of weather sources used per field. |
 
-A city written while its history could not be cleaned, or while its forecast raised, is `degraded`, with the redacted reason (`data cleaning failed: ...` or `forecast failed: ...`) in `cities_failed`; it is not in `cities_ok`. When both failed, the cleaning reason is the one stored.
+A city written while its history could not be cleaned, or while its forecast raised, is `degraded`, with the redacted reason (`data cleaning failed: ...` or `forecast failed: ...`) in `cities_failed`; it is not in `cities_ok`. When both failed, the cleaning reason is the one stored. A cleaning failure on a city with no history rows keeps `forecast_status` at `cold_start`, but the city is still `degraded` and carries the reason: any reason stored for a written city makes it degraded.
 
 ## Versioning
 

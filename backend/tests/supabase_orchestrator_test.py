@@ -498,6 +498,26 @@ def test_a_cleaning_failure_is_a_degraded_city_with_its_error_in_the_run_row(mon
     assert "s3cr3tv" not in repr(row)
 
 
+def test_a_cleaning_failure_on_empty_history_is_degraded_with_its_error(monkeypatch):
+    # IN-08: the pipeline keeps forecast_status 'cold_start' for an empty history, but
+    # the cleaning error must still reach the run row, not vanish into cities_ok.
+    _fake_city_pipeline(monkeypatch, {"MIDLAND": {
+        "forecast_status": "cold_start",
+        "cleaning_error": "data cleaning failed: empty frame"}})
+    store = FakeStore()
+
+    run = _run(store)
+
+    assert run["errors"] == {}
+    row, = store.run_rows
+    assert "MIDLAND" not in row["cities_ok"]
+    assert row["cities_failed"] == {"MIDLAND": {
+        "outcome": "degraded", "written": True, "forecast_status": "cold_start",
+        "detector_model_loaded": True,
+        "error": "data cleaning failed: empty frame",
+    }}
+
+
 def test_a_forecast_failure_is_a_degraded_city_with_its_error_in_the_run_row(monkeypatch):
     # IN-07: a failed ML forecast leaves a reason in the run row, redacted.
     _fake_city_pipeline(monkeypatch, {"MIDLAND": {
