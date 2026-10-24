@@ -1,18 +1,18 @@
 ---
 gsd_state_version: "1.0"
 current_phase: 05
-current_plan: 3
+current_plan: 4
 status: executing
-stopped_at: Completed 05-02-PLAN.md
-last_updated: "2026-10-24T08:29:41.849Z"
+stopped_at: Completed 05-03-PLAN.md
+last_updated: "2026-10-24T08:43:57.283Z"
 last_activity: 2026-10-24
 last_activity_desc: Phase 05 execution started
-state_head: f197e504cbf999368d1cc3879d44d0ff38a6f6ef
+state_head: e36c84949b750b6256beb493265567cbb5a8d256
 progress:
   total_phases: 7
   completed_phases: 4
   total_plans: 41
-  completed_plans: 28
+  completed_plans: 29
   percent: 57
 milestone_name: Production Pipeline (Supabase + live ratings)
 workstream: production-pipeline
@@ -37,7 +37,7 @@ whoever owns that analysis; they are not work items here.
 
 **Status:** Ready to execute
 **Current Phase:** 05
-**Current Plan:** 3
+**Current Plan:** 4
 **Total Plans in Phase:** 8
 **Last Activity:** 2026-10-24 — Phase 05 execution started
 **Last Activity Description:** Phase 05 execution started
@@ -159,6 +159,9 @@ These block or affect stringing the system together and belong to the phases nam
 - [Phase 05]: 05-02: pipeline forecast_error keeps Phase 4's 'forecast failed: <message>' form and gains only a 300-character cap; summarize() appends forecast_status, forecast_error and detector_model_loaded (a boolean, never a path) — The Phase 4 text is documented in the city_rating_v1 schema doc and pinned by Phase 4 tests; the runner (05-01) reads the three names from each summary row
 - [Phase 05]: 05-02: the composer skips NSRDB for any window ending in the current UTC year (NSRDB_SKIP_YEARS_BEFORE_CURRENT = 0, relative to now) by returning None from _call, so no request, no error entry and no breaker count; past-year windows are unchanged — NSRDB publishes a year only after it ends (live run got HTTP 400 three times per run); a fixed ceiling year would be wrong per nsrdb_provider
 - [Phase 05]: 05-02: fetch_timeseries diagnostics are DEBUG logs and the default DLRSafetyMonitor logger is log.warning; backfill's _capture_gate_messages captures stdout and the DLRSafetyMonitor logger into the step buffer at any root level and restores the logger; load_dotenv() runs only under __main__ — A scheduled run's stdout must carry no stray lines, backfill must keep counting gate failures, and tests that call main() must not read the owner's .env
+- [Phase 05]: 05-03: upsert_run_row delegates to Phase 4's supabase_store.upsert_run; row timestamps are aware UTC datetimes — One SQL builder, one conflict rule and column allow-list; exact timestamptz binding
+- [Phase 05]: 05-03: an ok child with a missing forecast_status or no anomaly model is 'degraded' in pipeline_run.cities_failed; timeout is a new outcome value — cities_ok needs positive evidence of health, so no written city is dropped from both lists; schema doc lists only error/degraded (runbook/Phase 6 to update)
+- [Phase 05]: 05-03: the runner is the only pipeline_run writer; children keep Phase 4's --no-run-row, orchestrator files untouched — The no-run-row flag already existed and is in STORE_ARGS from 05-01
 
 ## Open Decisions
 
@@ -179,9 +182,9 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 
 ## Session Continuity
 
-**Last session:** 2026-10-24T08:29:41.708Z
+**Last session:** 2026-10-24T08:43:51.771Z
 
-**Stopped At:** Completed 05-02-PLAN.md
+**Stopped At:** Completed 05-03-PLAN.md
 **Resume File:** None
 
 ## Performance Metrics
@@ -213,6 +216,7 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 | Phase 04 P12 | 15min | 3 tasks | 4 files |
 | Phase 05 P01 | 9 min | 2 tasks | 4 files |
 | Phase 05 P02 | 10 min | 3 tasks | 11 files |
+| Phase 05 P03 | 8 min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
