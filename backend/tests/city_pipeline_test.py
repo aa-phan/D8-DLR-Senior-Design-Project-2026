@@ -300,9 +300,10 @@ def test_pipeline_key_reports_history_forecast_and_detector(tmp_path, monkeypatc
     assert set(pipeline) == {
         "history_rows", "usable_history_rows", "forecast_method", "forecast_status",
         "forecast_used_by_g6", "forecast", "detector_signal", "detector_model",
-        "cleaning_error",
+        "cleaning_error", "forecast_error",
     }
     assert pipeline["cleaning_error"] is None
+    assert pipeline["forecast_error"] is None
     assert set(pipeline["forecast"]) == {
         "amps", "ci_lower_amps", "ci_upper_amps", "n_observations", "horizon_min",
     }
@@ -419,6 +420,18 @@ def test_forecast_status_reports_ok_cold_start_and_failed(
     assert result["pipeline"]["forecast_status"] == expected
     assert "rating" in result
     assert result["exhausted"] is False
+
+
+def test_a_forecast_failure_reports_its_reason(tmp_path, monkeypatch):
+    # IN-07: a failed forecast needs a stored reason, as a failed cleaning has one.
+    _spy_detector(monkeypatch)
+    _spy_forecast(monkeypatch, raises=RuntimeError("no trained artifact"))
+
+    pipeline = _run(tmp_path)["pipeline"]
+
+    assert pipeline["forecast_status"] == "failed"
+    assert pipeline["forecast_error"] == "forecast failed: no trained artifact"
+    assert pipeline["cleaning_error"] is None
 
 
 def test_a_forecast_withheld_by_the_gap_guard_is_still_status_ok(tmp_path, monkeypatch):

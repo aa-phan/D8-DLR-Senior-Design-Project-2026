@@ -85,10 +85,12 @@ def run_city_pipeline(
     # A forecast failure (e.g. method="ml" with no trained artifact) must not
     # take the rating down: G6 degrades to the rolling baseline / cold start.
     forecast_status = "cold_start"
+    forecast_error = None
     try:
         forecast = ampacity_forecast.forecast_ampacity(history, method=forecast_method)
         forecast_status = "ok" if forecast is not None else "cold_start"
     except Exception as exc:
+        forecast_error = f"forecast failed: {exc}"
         log.warning(
             "forecast_ampacity(method=%r) failed for %s (%s) -- continuing without a forecast",
             forecast_method, city, exc,
@@ -145,6 +147,8 @@ def run_city_pipeline(
         # Set when clean_history raised. It reaches the run log only:
         # build_rating_row maps explicit columns, so it never lands in city_rating.
         "cleaning_error": cleaning_error,
+        # Set when the forecast call raised (IN-07); same route to the run log.
+        "forecast_error": forecast_error,
         "forecast_used_by_g6": forecast_for_detector is not None,
         "forecast": (
             None if forecast is None else {

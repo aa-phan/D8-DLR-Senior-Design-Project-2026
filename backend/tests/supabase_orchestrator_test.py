@@ -273,8 +273,9 @@ def _fake_city_pipeline(monkeypatch, behaviors=None):
     Replace `run_city_pipeline` in the orchestrator's namespace. `behaviors` maps
     a city to: `error` (raise RuntimeError with this text), `forecast_status`,
     `detector_model`, `station_id`, `provenance` (records the fetcher gains),
-    `provider_errors` (counts the fetcher gains) and `cleaning_error` (text the
-    pipeline reports for a cleaning failure). Returns the recorded calls.
+    `provider_errors` (counts the fetcher gains), `cleaning_error` and
+    `forecast_error` (text the pipeline reports for a cleaning or forecast
+    failure). Returns the recorded calls.
     """
     behaviors = behaviors or {}
     calls = []
@@ -295,6 +296,8 @@ def _fake_city_pipeline(monkeypatch, behaviors=None):
             detector_model=spec.get("detector_model", "anomaly.joblib"))
         if "cleaning_error" in spec:
             result["pipeline"]["cleaning_error"] = spec["cleaning_error"]
+        if "forecast_error" in spec:
+            result["pipeline"]["forecast_error"] = spec["forecast_error"]
         return result
 
     monkeypatch.setattr(orch, "run_city_pipeline", fake)
@@ -493,6 +496,39 @@ def test_a_cleaning_failure_is_a_degraded_city_with_its_error_in_the_run_row(mon
         "error": "data cleaning failed: bad frame token=REDACTED",
     }}
     assert "s3cr3tv" not in repr(row)
+
+
+def test_a_forecast_failure_is_a_degraded_city_with_its_error_in_the_run_row(monkeypatch):
+    # IN-07: a failed ML forecast leaves a reason in the run row, redacted.
+    _fake_city_pipeline(monkeypatch, {"MIDLAND": {
+        "forecast_status": "failed",
+        "forecast_error": "forecast failed: model load token=s3cr3tv"}})
+    store = FakeStore()
+
+    run = _run(store)
+
+    assert run["errors"] == {}
+    row, = store.run_rows
+    assert "MIDLAND" not in row["cities_ok"]
+    assert row["cities_failed"] == {"MIDLAND": {
+        "outcome": "degraded", "written": True, "forecast_status": "failed",
+        "detector_model_loaded": True,
+        "error": "forecast failed: model load token=REDACTED",
+    }}
+    assert "s3cr3tv" not in repr(row)
+
+
+def test_a_cleaning_error_wins_over_a_forecast_error_in_the_run_row(monkeypatch):
+    _fake_city_pipeline(monkeypatch, {"MIDLAND": {
+        "forecast_status": "failed",
+        "cleaning_error": "data cleaning failed: bad frame",
+        "forecast_error": "forecast failed: no history"}})
+    store = FakeStore()
+
+    _run(store)
+
+    row, = store.run_rows
+    assert row["cities_failed"]["MIDLAND"]["error"] == "data cleaning failed: bad frame"
 
 
 def test_run_log_failure_is_logged_redacted_and_main_returns_one(monkeypatch, caplog, capsys):
