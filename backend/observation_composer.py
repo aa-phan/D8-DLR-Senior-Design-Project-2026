@@ -11,7 +11,10 @@ hour:
 
 Open-Meteo is the historical-archive source: last resort for temperature and
 wind (so a past window with no station data still rates), and the fallback for
-solar once NSRDB has no data (NSRDB stops at a past month). It also runs as its
+solar once NSRDB has no data (NSRDB stops at a past month). NSRDB is not called
+at all for a window ending in the current UTC year: it publishes a calendar
+year only after it ends, so solar for a live run comes from Open-Meteo (see
+NSRDB_SKIP_YEARS_BEFORE_CURRENT). Open-Meteo also runs as its
 own provider mode for bulk history. For solar, Synoptic's station reading stays
 last, so a run newer than Open-Meteo's archive still gets solar.
 
@@ -78,6 +81,16 @@ LOOKBACK_HOURS: float = 3.0
 CIRCUIT_BREAKER_FAILURES: int = 3
 _BREAKER_PROVIDERS = ("nsrdb", "open_meteo")
 
+# NSRDB publishes a calendar year only after it ends, so a window ending in the
+# current UTC year has no data there: the 2026-10-19 live run got HTTP 400 three
+# times per run before the circuit breaker opened. A window whose end year is
+# within this many years of the current one is not requested at all, and its
+# solar comes from the next provider in FIELD_PRIORITY. 0 skips only the
+# current year; raise it to 1 early in a year if the previous year is not yet
+# published. The rule is relative to now on purpose: nsrdb_provider documents
+# why a fixed ceiling year would be wrong (the product's last year advances).
+NSRDB_SKIP_YEARS_BEFORE_CURRENT: int = 0
+
 # For runs whose end is older than this many days, grid/TCEQ requests are
 # widened to whole UTC days so hourly runs on the same day share one cached
 # request per point instead of making a new one each hour (a long backfill
@@ -104,6 +117,11 @@ _TS_FMT = "%Y-%m-%dT%H:%M:%SZ"
 def _utc(value) -> pd.Timestamp:
     ts = pd.Timestamp(value)
     return ts.tz_localize("UTC") if ts.tzinfo is None else ts.tz_convert("UTC")
+
+
+def _nsrdb_unpublished(end_ts: pd.Timestamp, now_ts: pd.Timestamp) -> bool:
+    """True when a window ending at `end_ts` is too recent for NSRDB to have published."""
+    return _utc(end_ts).year >= _utc(now_ts).year - NSRDB_SKIP_YEARS_BEFORE_CURRENT
 
 
 def _normalize(frame: pd.DataFrame) -> pd.DataFrame:
@@ -210,6 +228,11 @@ def make_composed_fetcher(stations: pd.DataFrame, field_priority=None, tceq_max_
             if isinstance(grid_cache[key], Exception):
                 raise grid_cache[key]
             return grid_cache[key]
+        if name == "nsrdb" and _nsrdb_unpublished(_utc(end), pd.Timestamp.now(tz="UTC")):
+            # None is "not applicable" (as for TCEQ): no request, no error entry,
+            # and the circuit breaker is not touched.
+            log.debug("composer: nsrdb skipped, window ending %s is not published yet", end)
+            return None
         if name in ("nsrdb", "open_meteo"):
             w_start, w_end = _window(start, end)
             key = (name, round(lat, 2), round(lon, 2), w_start, w_end)

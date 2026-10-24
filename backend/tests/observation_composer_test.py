@@ -493,7 +493,7 @@ def test_tceq_needs_a_nearby_city_and_grid_providers_need_coordinates(monkeypatc
     ("2026-01-01T00:00:00Z", "2026-10-24T08:00:00Z", True),    # first instant of the current year
     ("2025-12-31T23:00:00Z", "2026-10-24T08:00:00Z", False),   # last hour of the previous year
     ("2025-06-01T11:00:00Z", "2026-10-24T08:00:00Z", False),   # an ordinary backfill window
-    ("2026-06-01T11:00:00+05:00", "2026-01-02T00:00:00Z", True),  # offsets compare as UTC
+    ("2025-12-31T23:00:00-05:00", "2026-10-24T08:00:00Z", True),  # 04:00Z on 1 Jan: UTC decides
 ], ids=["now", "new_year_start", "previous_year_last_hour", "past_backfill", "utc_conversion"])
 def test_nsrdb_unpublished_year_boundaries(end, now, expected):
     assert oc._nsrdb_unpublished(pd.Timestamp(end), pd.Timestamp(now)) is expected
