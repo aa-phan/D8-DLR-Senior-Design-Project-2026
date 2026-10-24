@@ -50,7 +50,7 @@ _CITIES = tuple(config.LOCATIONS)
 _HOURS = 3
 _START = "2026-09-08T00:00:00Z"
 _END = "2026-09-08T23:00:00Z"
-_HEAD = "abcdef1234567"
+_HEAD = "abcdef1234567890abcdef1234567890abcdef12"
 
 
 @pytest.fixture(autouse=True)
@@ -351,6 +351,27 @@ def _no_connection(monkeypatch):
 # ──────────────────────────────────────────────────────────────────────────────
 # Offline tests
 # ──────────────────────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("head", [
+    "--output=/tmp/x", "-1", "abcdef1", "", "ABCDEF1234567890ABCDEF1234567890ABCDEF12",
+    "abcdef1234567890abcdef1234567890abcdef12\n", "HEAD", 1234, None,
+], ids=["option", "dash", "short", "empty", "uppercase", "newline", "ref-name", "int", "null"])
+def test_load_manifest_refuses_a_git_head_that_is_not_a_full_commit_id(tmp_path, archive, head):
+    # IN-09: git.head goes into `git show <head>:<path>`; a value that starts with
+    # "-" would be read as an option, so only a 40-character lowercase hex id passes.
+    csv_path, manifest, _ = archive
+    path = _write_manifest(tmp_path, dict(manifest, git={"head": head, "backend_dirty": False}),
+                           name="bad_head.json")
+
+    with pytest.raises(ValueError, match="git.head"):
+        loader.load_manifest(path)
+
+
+def test_load_manifest_accepts_a_full_commit_id(archive):
+    _, manifest, path = archive
+
+    assert loader.load_manifest(path)["git"]["head"] == _HEAD
+
 
 def test_loader_refuses_an_archive_that_does_not_match_the_manifest(tmp_path, archive, monkeypatch, capsys):
     csv_path, manifest, manifest_path = archive

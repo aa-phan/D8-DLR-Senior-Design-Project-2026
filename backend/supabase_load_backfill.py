@@ -131,6 +131,12 @@ def load_manifest(path) -> dict:
         "files.archive.sha256", "archive_rows_by_city", "git.head", "forecast_method", "models",
     ):
         _dig(manifest, key)
+    # IN-09: git.head is passed to `git show <head>:<path>`. A value starting with
+    # "-" would be read as an option, and a revision cannot follow a `--`, so only a
+    # full lowercase commit id is accepted.
+    head = manifest["git"]["head"]
+    if not isinstance(head, str) or not re.fullmatch(r"[0-9a-f]{40}", head):
+        raise ValueError("manifest git.head is not a 40-character lowercase commit id")
     return manifest
 
 
