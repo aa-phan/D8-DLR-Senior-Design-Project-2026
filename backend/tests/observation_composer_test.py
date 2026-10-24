@@ -482,3 +482,74 @@ def test_tceq_needs_a_nearby_city_and_grid_providers_need_coordinates(monkeypatc
     row = frame.iloc[0]
     assert (row["temp_source"], row["wind_source"], row["solar_source"]) == (
         "synoptic", "synoptic", "synoptic")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# NSRDB publishes whole years after they end: no request for the current year
+# ──────────────────────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("end, now, expected", [
+    ("2026-10-24T08:00:00Z", "2026-10-24T08:00:00Z", True),    # window ends now
+    ("2026-01-01T00:00:00Z", "2026-10-24T08:00:00Z", True),    # first instant of the current year
+    ("2025-12-31T23:00:00Z", "2026-10-24T08:00:00Z", False),   # last hour of the previous year
+    ("2025-06-01T11:00:00Z", "2026-10-24T08:00:00Z", False),   # an ordinary backfill window
+    ("2026-06-01T11:00:00+05:00", "2026-01-02T00:00:00Z", True),  # offsets compare as UTC
+], ids=["now", "new_year_start", "previous_year_last_hour", "past_backfill", "utc_conversion"])
+def test_nsrdb_unpublished_year_boundaries(end, now, expected):
+    assert oc._nsrdb_unpublished(pd.Timestamp(end), pd.Timestamp(now)) is expected
+
+
+def test_nsrdb_skip_constant_skips_only_the_current_year():
+    # 0 = current year only; raising it to 1 also skips the previous year early in a year.
+    assert oc.NSRDB_SKIP_YEARS_BEFORE_CURRENT == 0
+
+
+def _now_hour():
+    return pd.Timestamp.now(tz="UTC").floor("h")
+
+
+def test_current_year_window_never_calls_nsrdb_and_records_no_error(monkeypatch):
+    now_hour = _now_hour()
+    calls = []
+    live = pd.DataFrame([{"datetime_utc": now_hour, "air_temp": 30.0, "wind_speed": 5.0,
+                          "wind_direction": 20.0, "solar_radiation": 520.0}])
+    # Both stubs carry a current-year row and a 2025 row; each call only sees what is <= its end.
+    synoptic = pd.concat([live, _synoptic_all()], ignore_index=True)
+    open_meteo = pd.concat([
+        pd.DataFrame([{"datetime_utc": now_hour, "air_temp": 32.0, "wind_speed": 4.0,
+                       "wind_direction": 30.0, "solar_radiation": 510.0}]),
+        _open_meteo_all()], ignore_index=True)
+    _install(monkeypatch, calls, synoptic=synoptic, nsrdb=_nsrdb_all(), open_meteo=open_meteo)
+    fetcher = oc.make_composed_fetcher(_station_at("AUSTIN"))
+
+    end = now_hour.strftime("%Y-%m-%dT%H:%M:%SZ")
+    frames = [fetcher(["T1"], end, end, provider="synoptic")
+              for _ in range(4)]  # more than the breaker threshold: still nothing to count
+
+    assert "nsrdb" not in calls
+    assert not any(key.startswith("nsrdb") for key in fetcher.errors)
+    assert fetcher.errors == Counter()  # no "skipped" entry either: the breaker never saw it
+    for frame in frames:
+        assert len(frame) == 1
+        assert frame.iloc[0]["datetime_utc"] == now_hour
+        assert frame.iloc[0]["solar_source"] == "open_meteo"
+
+    # The same fetcher still reaches NSRDB for a past-year window afterwards.
+    frame, _ = _fetch(None, fetcher=fetcher)
+    assert calls.count("nsrdb") == 1
+    assert frame.iloc[0]["solar_source"] == "nsrdb"
+
+
+def test_past_year_window_still_calls_nsrdb_and_breaker_still_opens(monkeypatch):
+    calls = []
+    _install(monkeypatch, calls, synoptic=_synoptic_all(), tceq=_tceq_all(),
+             nsrdb=ValueError("down"), open_meteo=_rows(["11:00"], solar_radiation=510.0))
+    fetcher = oc.make_composed_fetcher(_station_at("AUSTIN"))
+
+    for _ in range(5):
+        frame, _ = _fetch(None, fetcher=fetcher)  # a 2025 window
+        assert frame.iloc[0]["solar_source"] == "open_meteo"
+
+    assert calls.count("nsrdb") == oc.CIRCUIT_BREAKER_FAILURES
+    assert fetcher.errors["nsrdb: ValueError: down"] == 3
+    assert fetcher.errors["nsrdb: skipped after 3 consecutive failures"] == 2
