@@ -1,18 +1,18 @@
 ---
 gsd_state_version: "1.0"
 current_phase: 05
-current_plan: 2
+current_plan: 3
 status: executing
-stopped_at: Completed 05-01-PLAN.md
-last_updated: "2026-10-24T08:17:11.541Z"
+stopped_at: Completed 05-02-PLAN.md
+last_updated: "2026-10-24T08:29:41.849Z"
 last_activity: 2026-10-24
 last_activity_desc: Phase 05 execution started
-state_head: e36002c0726d642ca3587fdc269cda34086c501b
+state_head: f197e504cbf999368d1cc3879d44d0ff38a6f6ef
 progress:
   total_phases: 7
   completed_phases: 4
   total_plans: 41
-  completed_plans: 27
+  completed_plans: 28
   percent: 57
 milestone_name: Production Pipeline (Supabase + live ratings)
 workstream: production-pipeline
@@ -37,7 +37,7 @@ whoever owns that analysis; they are not work items here.
 
 **Status:** Ready to execute
 **Current Phase:** 05
-**Current Plan:** 2
+**Current Plan:** 3
 **Total Plans in Phase:** 8
 **Last Activity:** 2026-10-24 — Phase 05 execution started
 **Last Activity Description:** Phase 05 execution started
@@ -156,6 +156,9 @@ These block or affect stringing the system together and belong to the phases nam
 - [Phase 04]: 04-11: backfill de-duplication keeps the first computed row of a slot, the first fallback row only when every row is fallback — Matches historical_archive.append_observation and data_cleaning's duplicate flag
 - [Phase 05]: 05-01: live runner exits 0 only when every city is ok with forecast_status ok or cold_start and a loaded anomaly model; a missing or unknown status is also red — Never exit green without the ML forecast or anomaly model (SCHED-01); a row with no forecast_status cannot prove an ML forecast. Until 05-02 adds the keys to summary rows, a real run exits 1 by design
 - [Phase 05]: 05-01: each city runs in its own dlr_orchestrator child (--store postgres --no-run-row, 300 s kill, one shared 5-minute-floored end); children never share a process, the runner writes no rating and no substitute row (OD-9) — A hung HTTP call cannot be interrupted in-process; a failed or hung city must be recorded without stopping the others; 4 x 300 s + 10 min fits the 30-minute job timeout and the 60-minute cadence
+- [Phase 05]: 05-02: pipeline forecast_error keeps Phase 4's 'forecast failed: <message>' form and gains only a 300-character cap; summarize() appends forecast_status, forecast_error and detector_model_loaded (a boolean, never a path) — The Phase 4 text is documented in the city_rating_v1 schema doc and pinned by Phase 4 tests; the runner (05-01) reads the three names from each summary row
+- [Phase 05]: 05-02: the composer skips NSRDB for any window ending in the current UTC year (NSRDB_SKIP_YEARS_BEFORE_CURRENT = 0, relative to now) by returning None from _call, so no request, no error entry and no breaker count; past-year windows are unchanged — NSRDB publishes a year only after it ends (live run got HTTP 400 three times per run); a fixed ceiling year would be wrong per nsrdb_provider
+- [Phase 05]: 05-02: fetch_timeseries diagnostics are DEBUG logs and the default DLRSafetyMonitor logger is log.warning; backfill's _capture_gate_messages captures stdout and the DLRSafetyMonitor logger into the step buffer at any root level and restores the logger; load_dotenv() runs only under __main__ — A scheduled run's stdout must carry no stray lines, backfill must keep counting gate failures, and tests that call main() must not read the owner's .env
 
 ## Open Decisions
 
@@ -176,9 +179,9 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 
 ## Session Continuity
 
-**Last session:** 2026-10-24T08:17:11.436Z
+**Last session:** 2026-10-24T08:29:41.708Z
 
-**Stopped At:** Completed 05-01-PLAN.md
+**Stopped At:** Completed 05-02-PLAN.md
 **Resume File:** None
 
 ## Performance Metrics
@@ -209,6 +212,7 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 | Phase 04 P11 | 8min | 2 tasks | 5 files |
 | Phase 04 P12 | 15min | 3 tasks | 4 files |
 | Phase 05 P01 | 9 min | 2 tasks | 4 files |
+| Phase 05 P02 | 10 min | 3 tasks | 11 files |
 
 ## Accumulated Context
 
