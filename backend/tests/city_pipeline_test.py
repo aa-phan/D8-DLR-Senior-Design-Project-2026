@@ -216,6 +216,9 @@ def test_forecast_exception_leaves_no_forecast_and_the_city_still_rates(
     assert detector_seen["forecast"] is None
     assert result["exhausted"] is False
     assert "rating" in result
+    # OD-3: the run output must say the ML forecast failed, and why.
+    assert pipeline["forecast_status"] == "failed"
+    assert pipeline["forecast_error"] == "forecast failed: no trained artifact"
     warnings = [r for r in caplog.records
                 if r.name == "city_pipeline" and r.levelno == logging.WARNING]
     assert len(warnings) == 1
@@ -238,6 +241,8 @@ def test_cold_start_with_no_archive_rates_without_a_forecast(tmp_path):
     assert pipeline["forecast_used_by_g6"] is False
     assert pipeline["detector_signal"] == "cold_start"
     assert pipeline["detector_model"] is None
+    assert pipeline["forecast_status"] == "cold_start"
+    assert pipeline["forecast_error"] is None
     assert result["exhausted"] is False
 
 
@@ -495,3 +500,27 @@ def test_cleaning_failure_on_empty_history_stays_cold_start(tmp_path, monkeypatc
     assert pipeline["forecast_status"] == "cold_start"
     assert pipeline["cleaning_error"].startswith("data cleaning failed:")
     assert "boom" in pipeline["cleaning_error"]
+
+
+def test_forecast_error_is_truncated_to_300_characters(tmp_path, monkeypatch):
+    # The text reaches the --output JSON and the run log, so its size is bounded.
+    _spy_detector(monkeypatch)
+    _spy_forecast(monkeypatch, raises=RuntimeError("x" * 1000))
+
+    pipeline = _run(tmp_path)["pipeline"]
+
+    assert pipeline["forecast_status"] == "failed"
+    assert len(pipeline["forecast_error"]) == 300
+    assert pipeline["forecast_error"].startswith("forecast failed: xxxx")
+
+
+def test_forecast_error_of_exactly_300_characters_is_kept_whole(tmp_path, monkeypatch):
+    # Adjacency edge of the cap: 300 passes through, 301 is cut.
+    _spy_detector(monkeypatch)
+    prefix = "forecast failed: "
+    _spy_forecast(monkeypatch, raises=RuntimeError("y" * (300 - len(prefix))))
+
+    error = _run(tmp_path)["pipeline"]["forecast_error"]
+
+    assert len(error) == 300
+    assert error.endswith("y")

@@ -12,6 +12,7 @@ the network. Follows backend/tests/city_rating_test.py's conventions
 (module-level imports, plain asserts, no test classes, no network).
 """
 
+import inspect
 import json
 from collections import Counter
 
@@ -80,6 +81,8 @@ def _city_result(city, rating=1000.0, fallback=False, alerts=(), forecast=None):
             "history_rows": 0,
             "usable_history_rows": 0,
             "forecast_method": "naive",
+            "forecast_status": "ok",
+            "forecast_error": None,
             "forecast_used_by_g6": False,
             "forecast": forecast,
             "detector_signal": "cold_start",
@@ -291,7 +294,11 @@ def test_summarize_row_shape_and_gate_names():
 
     assert list(row) == ["city", "rating_a", "static_rating_a", "fallback", "exhausted",
                          "station_id", "fallback_gates", "archived", "history_rows",
-                         "forecast_amps", "detector_signal"]
+                         "forecast_amps", "detector_signal",
+                         "forecast_status", "forecast_error", "detector_model_loaded"]
+    assert row["forecast_status"] == "ok"
+    assert row["forecast_error"] is None
+    assert row["detector_model_loaded"] is False
     assert row["fallback_gates"] == ["EXHAUSTED", "G4", "G6"]
     assert row["static_rating_a"] == city_point.city_point("AUSTIN").static_rating
     assert row["rating_a"] == result["rating"]
@@ -310,6 +317,27 @@ def test_summarize_tolerates_a_result_without_pipeline_details():
     assert row["forecast_amps"] is None
     assert row["detector_signal"] is None
     assert row["fallback_gates"] == []
+    assert row["forecast_status"] is None
+    assert row["forecast_error"] is None
+    assert row["detector_model_loaded"] is False
+
+
+def test_summarize_reports_a_failed_forecast_and_whether_an_anomaly_model_loaded():
+    failed = _city_result("MIDLAND")
+    failed["pipeline"].update(forecast_status="failed",
+                              forecast_error="forecast failed: no trained artifact",
+                              detector_model="/some/path/anomaly_MIDLAND.joblib")
+
+    row = orch.summarize(failed)
+
+    assert row["forecast_status"] == "failed"
+    assert row["forecast_error"] == "forecast failed: no trained artifact"
+    # a boolean, never the filesystem path
+    assert row["detector_model_loaded"] is True
+
+    absent = _city_result("MIDLAND")
+    absent["pipeline"]["detector_model"] = ""
+    assert orch.summarize(absent)["detector_model_loaded"] is False
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -397,3 +425,16 @@ def test_main_output_writes_the_run_summary_json(tmp_path, monkeypatch, capsys):
                          "sources", "provider_errors"}
     assert data["summary"][0]["city"] == "AUSTIN"
     assert data["sources"] == {"air_temp": {"synoptic": 1}}
+
+
+def test_dotenv_is_loaded_only_when_run_as_a_script():
+    # T-05-06: tests call main() without credentials and must not pick up the
+    # owner's .env; python-dotenv never overrides a variable already set, which
+    # the live runner's fault drill relies on.
+    module_source = inspect.getsource(orch)
+    main_source = inspect.getsource(orch.main)
+    script_block = module_source.split('if __name__ == "__main__":', 1)[1]
+
+    assert "load_dotenv()" in script_block
+    assert "load_dotenv" not in main_source
+    assert module_source.count("load_dotenv()") == 1
