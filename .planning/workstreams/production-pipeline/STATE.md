@@ -1,18 +1,18 @@
 ---
 gsd_state_version: "1.0"
 current_phase: 05
-current_plan: 6
+current_plan: 7
 status: executing
-stopped_at: Completed 05-05-PLAN.md
-last_updated: "2026-10-24T09:14:51.422Z"
+stopped_at: Completed 05-06-PLAN.md
+last_updated: "2026-10-24T23:14:22.908Z"
 last_activity: 2026-10-24
 last_activity_desc: Phase 05 execution started
-state_head: 1ec01b238c3825337912739c14f5b42171117ce8
+state_head: ba9d554597b8d2ab23b8f932ad67ec193123479d
 progress:
   total_phases: 7
   completed_phases: 4
   total_plans: 41
-  completed_plans: 31
+  completed_plans: 32
   percent: 57
 milestone_name: Production Pipeline (Supabase + live ratings)
 workstream: production-pipeline
@@ -37,7 +37,7 @@ whoever owns that analysis; they are not work items here.
 
 **Status:** Ready to execute
 **Current Phase:** 05
-**Current Plan:** 6
+**Current Plan:** 7
 **Total Plans in Phase:** 8
 **Last Activity:** 2026-10-24 — Phase 05 execution started
 **Last Activity Description:** Phase 05 execution started
@@ -167,6 +167,7 @@ These block or affect stringing the system together and belong to the phases nam
 - [Phase 05]: 05-05: a slot's rating rows count when their run_id belongs to any run placed in that slot, so a same-hour drill or re-run overwrite (OD-7) does not fail an earlier good run — Window check keeps SC 2 honest without punishing the documented overwrite rule
 - [Phase 05]: 05-05: a run that is unfinished or has a conclusion other than success/failure/timed_out/cancelled is not evidence a slot was attempted; the slot is missing and the window fails — Fail closed; startup_failure can be added to RED_CONCLUSIONS if the owner wants it visible
 - [Phase 05]: 05-05: runbook records the shadow job's observed 05/11/17/23 UTC hours as an observation only; live runs at minute 05 so it never shares a minute with shadow runs — Runbook must not instruct changes to the shadow job; discrepancy surfaced for the owner
+- [Phase 05]: 05-06: owner chose go-live after making the repository public (free Actions minutes); anon-refusal check T-05-29 recorded as skipped
 
 ## Open Decisions
 
@@ -187,9 +188,9 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 
 ## Session Continuity
 
-**Last session:** 2026-10-24T09:14:51.267Z
+**Last session:** 2026-10-24T23:14:22.758Z
 
-**Stopped At:** Completed 05-05-PLAN.md
+**Stopped At:** Completed 05-06-PLAN.md
 **Resume File:** None
 
 ## Performance Metrics
@@ -224,6 +225,7 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 | Phase 05 P03 | 8 min | 2 tasks | 4 files |
 | Phase 05 P04 | 10 min | 3 tasks | 14 files |
 | Phase 05 P05 | 14 min | 2 tasks | 4 files |
+| Phase 05 P06 | 40 min | 3 tasks | 1 files |
 
 ## Accumulated Context
 
