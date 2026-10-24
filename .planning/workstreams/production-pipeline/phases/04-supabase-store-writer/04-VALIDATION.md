@@ -6,14 +6,15 @@ status: validated
 nyquist_compliant: true
 wave_0_complete: true
 created: "2026-10-23"
-validated: "2026-10-23"
+validated: "2026-10-24"
 ---
 
 # Phase 04 — Validation Strategy
 
 > Per-phase validation contract for feedback sampling during execution.
 > Reconstructed retroactively (State B) from 04-01..04-12 PLAN/SUMMARY, 04-RESEARCH.md
-> "Validation Architecture" and 04-VERIFICATION.md.
+> "Validation Architecture" and 04-VERIFICATION.md. Re-audited 2026-10-24 (State A) after the
+> code-review fixes in 04-REVIEW-FIX.md (WR-06, IN-07..IN-10).
 
 ---
 
@@ -23,16 +24,18 @@ validated: "2026-10-23"
 |----------|-------|
 | **Framework** | pytest 9.0.3 |
 | **Config file** | `pytest.ini` (`pythonpath = backend`, `testpaths = backend/tests`) |
-| **Quick run command** | `.venv/bin/python -m pytest -q -p no:cacheprovider backend/tests/supabase_store_test.py backend/tests/supabase_migration_test.py backend/tests/secret_scan_test.py backend/tests/supabase_schema_doc_test.py backend/tests/rating_identity_test.py backend/tests/supabase_load_backfill_test.py backend/tests/supabase_smoke_test.py backend/tests/supabase_run_log_test.py backend/tests/supabase_orchestrator_test.py backend/tests/supabase_live_test.py backend/tests/city_pipeline_test.py` |
+| **Quick run command** | `.venv/bin/python -m pytest -q -p no:cacheprovider backend/tests/supabase_store_test.py backend/tests/supabase_migration_test.py backend/tests/secret_scan_test.py backend/tests/supabase_schema_doc_test.py backend/tests/rating_identity_test.py backend/tests/supabase_load_backfill_test.py backend/tests/supabase_smoke_test.py backend/tests/supabase_run_log_test.py backend/tests/supabase_orchestrator_test.py backend/tests/supabase_live_test.py backend/tests/city_pipeline_test.py backend/tests/dlr_orchestrator_test.py` |
 | **Live-local command** | `DLR_TEST_PG_AUTOSTART=1` prefixed to the quick command (fixture runs `initdb`/`pg_ctl` on 127.0.0.1; any non-local host fails the test; never Supabase) |
 | **Full suite command** | `.venv/bin/python -m pytest -q -p no:cacheprovider` (add `DLR_TEST_PG_AUTOSTART=1` for the gated live tests) |
 | **Estimated runtime** | quick ~3 s offline, ~6 s live-local; full suite ~150 s |
 
-Audit run (2026-10-23, SUPABASE_DB_URL unset):
+Audit run (2026-10-24, HEAD 9bc314f, SUPABASE_DB_URL unset):
 
-- Quick command offline: 158 passed, 48 skipped (the live-gated tests).
-- Quick command with `DLR_TEST_PG_AUTOSTART=1`: 206 passed, 0 skipped (live, orchestrator, migration, smoke and loader subset: 103 passed).
-- Full suite with `DLR_TEST_PG_AUTOSTART=1`: **1686 passed, 0 skipped, 0 failed** (default, gate off: 1638 passed, 48 skipped).
+- Quick command offline: 193 passed, 48 skipped (the live-gated tests).
+- Quick command with `DLR_TEST_PG_AUTOSTART=1`: 241 passed, 0 skipped.
+- Full suite with `DLR_TEST_PG_AUTOSTART=1`: **1703 passed, 0 skipped, 0 failed** (default, gate off: 1655 passed, 48 skipped).
+
+Earlier audit (2026-10-23, before the review fixes): quick 158 passed / 48 skipped offline, full suite 1686 passed live-local.
 
 ---
 
@@ -83,6 +86,11 @@ Commands are relative to `backend/tests/`; prefix with `.venv/bin/python -m pyte
 | 04-12-01 | 12 | 4 (gap) | DB-01, DB-04 | T-04-47, T-04-48 | Review-fix migration pushed to real project; owner smoke green | manual (owner, live) | evidence `smoke_review_fixes.json` | n/a | Manual-Only |
 | 04-12-02 | 12 | 4 (gap) | DB-04 | T-04-49 | Hardened smoke workflow green on main | manual (owner, CI) | evidence `smoke_actions_review_fixes.json` | n/a | Manual-Only |
 | 04-12-03 | 12 | 4 (gap) | DB-05 | T-04-50 | Contract names both migrations; evidence files clean | unit | `supabase_schema_doc_test.py secret_scan_test.py` | ✅ | ✅ green |
+| 04-RF-WR-06 | review-fix (b532c00) | — | DB-02, DB-04 | — | WR-06: per-city exception text redacted in `errors` (printed by the report, written by `--output`) and in the log, on both the store and CSV paths | unit | `supabase_orchestrator_test.py::test_a_failing_city_error_is_redacted_in_the_run_summary_and_the_printed_report` `dlr_orchestrator_test.py::test_a_failing_city_error_is_redacted_on_the_csv_path` | ✅ | ✅ green |
+| 04-RF-IN-07 | review-fix (9c5b6f3) | — | DB-02, DB-05 | — | IN-07: pipeline reports `forecast_error`; a failed forecast is a degraded city with its redacted reason in the run row; a cleaning error wins over a forecast error | unit | `city_pipeline_test.py::test_a_forecast_failure_reports_its_reason ::test_pipeline_key_reports_history_forecast_and_detector` `supabase_orchestrator_test.py::test_a_forecast_failure_is_a_degraded_city_with_its_error_in_the_run_row ::test_a_cleaning_error_wins_over_a_forecast_error_in_the_run_row` | ✅ | ✅ green |
+| 04-RF-IN-08 | review-fix (1ef738d) | — | DB-02 | — | IN-08: a written city with any error is degraded, never in `cities_ok`, even with status `cold_start` | unit | `supabase_run_log_test.py::test_a_written_city_with_an_error_is_degraded_even_with_a_healthy_status` `supabase_orchestrator_test.py::test_a_cleaning_failure_on_empty_history_is_degraded_with_its_error` | ✅ | ✅ green |
+| 04-RF-IN-09 | review-fix (d3d59dc) | — | DB-03, DB-06 | — | IN-09: `load_manifest` accepts only a 40-char lowercase hex `git.head` (option-looking, short, uppercase, newline, ref-name, non-string refused) before it reaches `git show` | unit | `supabase_load_backfill_test.py::test_load_manifest_refuses_a_git_head_that_is_not_a_full_commit_id ::test_load_manifest_accepts_a_full_commit_id` | ✅ | ✅ green |
+| 04-RF-IN-10 | review-fix (c9b13f5) | — | DB-05 | — | IN-10: schema doc states the CSV archive's computed-over-fallback rule (doc-only); the rule itself is pinned by Phase 2 tests | unit | `historical_archive_test.py::test_a_computed_row_may_follow_a_fallback_row_for_its_instant` `supabase_schema_doc_test.py` | ✅ | ✅ green |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -91,7 +99,7 @@ Commands are relative to `backend/tests/`; prefix with `.venv/bin/python -m pyte
 | Requirement | Status | Automated evidence |
 |-------------|--------|--------------------|
 | DB-01 | COVERED | `supabase_migration_test.py`, `supabase_live_test.py` (CHECKs, privileges, RLS), `supabase_smoke_test.py` |
-| DB-02 | COVERED | `supabase_store_test.py`, `supabase_orchestrator_test.py` (incl. live rerun / history / window), `supabase_run_log_test.py`, `city_pipeline_test.py` |
+| DB-02 | COVERED | `supabase_store_test.py`, `supabase_orchestrator_test.py` (incl. live rerun / history / window), `supabase_run_log_test.py`, `city_pipeline_test.py`, `dlr_orchestrator_test.py` (WR-06 CSV path) |
 | DB-03 | COVERED | `supabase_load_backfill_test.py` (incl. live parity, DO NOTHING, no overwrite) |
 | DB-04 | COVERED | `secret_scan_test.py`, `supabase_smoke_test.py`, `supabase_store_test.py` (no password/project-ref leak), `supabase_live_test.py` |
 | DB-05 | COVERED | `supabase_schema_doc_test.py`, `supabase_migration_test.py::test_run_log_comments_match_the_schema_doc` |
@@ -127,7 +135,7 @@ Existing infrastructure covers all phase requirements (all Wave 0 files listed i
 - [x] Feedback latency < 10s
 - [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** approved 2026-10-23
+**Approval:** approved 2026-10-23; re-audited 2026-10-24 after the review fixes (0 gaps). Each fix's tests were checked by reverting only that fix's implementation hunk in a scratch worktree: every revert turns its tests red (WR-06 2, IN-07 pipeline 2 + orchestrator 1, IN-08 2, IN-09 9 failures).
 
 ---
 
