@@ -10,7 +10,7 @@ requires:
 provides:
   - "backend/dlr_live_run.py: live runner, one dlr_orchestrator child per city with a per-city timeout, outcome records, exit policy, redaction, step summary and fault drill"
   - ".github/workflows/dlr_live.yml: workflow_dispatch-only live workflow (concurrency dlr-live, timeout-minutes 30, contents: read)"
-  - "21 offline tests (12 runner, 3 workflow text, plus the parametrized cases) driven by a fake orchestrator child"
+  - "21 offline test cases (12 runner test functions, 3 workflow text checks, parametrized cases included) driven by a fake orchestrator child"
 affects: [05-02, 05-03, 05-04, 05-05, 05-06, 05-07, 05-08, phase-06]
 
 actuals:
@@ -164,7 +164,7 @@ commits: 3
 
 ## TDD Gate Compliance (Task 2, `tdd="true"`)
 
-- **RED:** 13 of 21 tests failed against the Task 1 code (8 passed: Task 1's seven plus the workflow tests). `gsd-tools check tdd-red-evidence` on the pytest JUnit XML for the target `test_a_hung_city_is_killed_at_the_timeout_and_the_rest_still_run` returned `RED_EVIDENCE_OK` (`target_test_failed`, format `junit`). Semantic assessment: the target failed because `subprocess.TimeoutExpired` escaped `run_city` (no timeout handling), not because of a collection, import or fixture fault. The other 12 failures were each the planned assertion (`'no output' in 'child output is unusable'`, `0 == 1` exit codes for failed forecast and missing model, missing `redact`, `--fault-city` not accepted, no `SystemExit` for an unknown city, no step-summary support). The evidence record is at `.planning/tmp/05-01-red-evidence.json` (untracked, like the rest of `.planning/tmp`).
+- **RED:** 13 of 21 test cases failed against the Task 1 code (the 8 that passed were Task 1's seven plus the `cold_start` case, which already exited 0). `gsd-tools check tdd-red-evidence` on the pytest JUnit XML for the target `test_a_hung_city_is_killed_at_the_timeout_and_the_rest_still_run` returned `RED_EVIDENCE_OK` (`target_test_failed`, format `junit`). Semantic assessment: the target failed because `subprocess.TimeoutExpired` escaped `run_city` (no timeout handling), not because of a collection, import or fixture fault. The other 12 failures were each the planned assertion (`'no output' in 'child output is unusable'`, `0 == 1` exit codes for failed forecast and missing model, missing `redact`, `--fault-city` not accepted, no `SystemExit` for an unknown city, no step-summary support). The evidence record is at `.planning/tmp/05-01-red-evidence.json` (untracked, like the rest of `.planning/tmp`).
 - **GREEN:** all 21 tests pass; the full suite is 1676 passed, 48 skipped (baseline before this plan: 1655 passed, 48 skipped).
 - **REFACTOR:** none needed.
 - **Mutation spot-check:** removing the detector check from the exit policy, the DB-password redaction, the fault blanking, the "row not written" branch, the pipe escape, the timeout branch and the URL redaction each made at least one test fail.
