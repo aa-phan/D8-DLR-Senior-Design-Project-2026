@@ -219,7 +219,7 @@ def test_child_argv_is_accepted_by_the_real_orchestrator_cli(tmp_path, monkeypat
 
     monkeypatch.setattr(orch, "run_dlr_pipeline", fake)
     argv = dlr_live_run.child_argv("MIDLAND", _END, str(tmp_path / "out.json"))
-    assert argv[0] == sys.executable and argv[1] == dlr_live_run.ORCHESTRATOR
+    assert argv[0] == os.path.abspath(sys.executable) and argv[1] == dlr_live_run.ORCHESTRATOR
 
     assert orch.main(argv[2:]) == 0
 
