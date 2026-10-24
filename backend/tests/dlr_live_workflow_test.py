@@ -81,3 +81,28 @@ def test_every_required_secret_is_mapped_and_inputs_never_reach_a_run_script():
 
     assert re.search(r"^\s*run:\s*PYTHONPATH=backend python backend/dlr_live_run\.py\s*$", text, flags=re.M)
     assert re.search(r"python-version:\s*'3\.12'", text)
+
+
+def test_models_are_verified_before_the_run():
+    text = _workflow()
+
+    # Match the steps' command lines, not comments: the file's header comment also names the runner.
+    install = re.search(r"^\s*python -m pip install -r requirements\.txt\s*$", text, flags=re.M)
+    preflight = re.search(
+        r"^\s*run:\s*PYTHONPATH=backend python backend/dlr_live_check_models\.py\s*$", text, flags=re.M
+    )
+    run = re.search(r"^\s*run:\s*PYTHONPATH=backend python backend/dlr_live_run\.py\s*$", text, flags=re.M)
+
+    assert install and preflight and run
+    assert install.start() < preflight.start() < run.start()
+
+    # Exactly one pre-flight step, and it is handed no secrets: it unpickles model files.
+    assert len(re.findall(r"dlr_live_check_models\.py", text)) == 1
+    step = re.search(
+        r"^      - name: Pre-flight - live model artifacts present and verified\n(.*?)(?=^      - name:)",
+        text,
+        flags=re.M | re.S,
+    )
+    assert step
+    assert "${{" not in step.group(1)
+    assert not re.search(r"^\s*env:", step.group(1), flags=re.M)

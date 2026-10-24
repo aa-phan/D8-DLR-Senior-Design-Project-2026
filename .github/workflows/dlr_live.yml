@@ -53,7 +53,15 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
-      # Plan 05-04 inserts the model pre-flight step here.
+      - name: Pre-flight - live model artifacts present and verified
+        # The runner gets the per-city ML forecast and anomaly models only from this
+        # checkout (the eight files are deliberately git-tracked, OD-10) and cannot
+        # retrain. Fails fast, before any city is rated, listing every missing, altered
+        # (SHA-256 against data/models/LIVE_ARTIFACT_HASHES.sha256) or unloadable
+        # artifact. The hashes are checked before any joblib file is unpickled, and this
+        # step is given no secrets. Without it a missing model would silently leave a
+        # city without its ML forecast or anomaly model (OD-3).
+        run: PYTHONPATH=backend python backend/dlr_live_check_models.py
 
       - name: Run live pipeline
         env:
