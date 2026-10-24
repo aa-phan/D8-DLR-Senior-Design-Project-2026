@@ -1,0 +1,70 @@
+name: DLR Live Ratings
+
+# Hourly live ratings (production-pipeline Phase 5, PIPE-02 / SCHED-01). Runs
+# backend/dlr_live_run.py, which rates every city in config.LOCATIONS in its own
+# dlr_orchestrator.py child process (composed providers, ML forecast, Supabase
+# Postgres store) and exits non-zero when any city failed, timed out, or ran
+# without its ML forecast or anomaly model.
+#
+# Triggered externally by cron-job.org (POST .../actions/workflows/dlr_live.yml/dispatches)
+# once an hour, the same way Shadow Collection is triggered. There is deliberately no
+# GitHub scheduler trigger: it started runs hours late (see shadow_collect.yml).
+#
+# This workflow is separate from shadow_collect.yml and never touches it, the shadow
+# modules or data/shadow/predictions (frozen until the 2026-11-24 confirmation run).
+# Operational reference: docs/data-science/decisions/dlr_live_runbook.md.
+
+on:
+  workflow_dispatch: # cron-job.org (hourly) and manual runs from the Actions tab
+    inputs:
+      fault_city:
+        description: "Drill only: run this city with its provider credentials blanked so it fails. Leave empty for normal runs."
+        required: false
+        default: ''
+
+permissions:
+  contents: read # the job pushes nothing; the database is reached with SUPABASE_DB_URL
+
+concurrency:
+  group: dlr-live
+  cancel-in-progress: false # never cancel a run in flight; the next slot queues behind it
+
+jobs:
+  rate:
+    runs-on: ubuntu-latest
+    # 30 minutes. At the cap: 4 cities x CITY_TIMEOUT_S (300 s) = 1200 s (20 min) of
+    # child processes, plus at most 10 min for checkout, install, the model pre-flight
+    # and the run-log writes. That is shorter than the 60-minute cadence (OD-1), so a
+    # run cut off at its timeout never overlaps the next slot. A healthy run takes a
+    # few minutes.
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code (main)
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip' # cuts billed minutes at an hourly cadence (shadow_collect.yml has no cache)
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      # Plan 05-04 inserts the model pre-flight step here.
+
+      - name: Run live pipeline
+        env:
+          SYNOPTIC_TOKEN: ${{ secrets.SYNOPTIC_TOKEN }}
+          NREL_API_KEY: ${{ secrets.NREL_API_KEY }}
+          NREL_API_EMAIL: ${{ secrets.NREL_API_EMAIL }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          DLR_LIVE_FAULT_CITY: ${{ inputs.fault_city }}
+        run: PYTHONPATH=backend python backend/dlr_live_run.py
+        # Exit 0: every city ok with its ML forecast ('ok' or 'cold_start') and an anomaly model.
+        # Exit 1: a city errored or timed out, or ran without its forecast or model -- the run
+        #         turns red and GitHub's workflow-failure email doubles as alerting. The other
+        #         cities still ran and wrote their rows; a failed city gets no row (OD-9).
+        # Exit 2: a usage error.
