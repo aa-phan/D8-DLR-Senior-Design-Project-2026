@@ -46,7 +46,7 @@ infrastructure was replaced on 2026-10-21; see "Re-sequencing" above.)
 - [x] **Phase 1: Land PR #7** — relocate, fix tests, add tests, merge (completed 2026-10-19)
 - [x] **Phase 2: Data Cleaning** — cross-row outlier, gap and duplicate handling on city history (completed 2026-10-20)
 - [x] **Phase 3: Real-Data Validation** — ratings and calibration on backfilled data; production go/no-go (completed 2026-10-21)
-- [ ] **Phase 4: Supabase Store & Writer** — schema migration, Postgres read/write, backfill load, secrets
+- [x] **Phase 4: Supabase Store & Writer** — schema migration, Postgres read/write, backfill load, secrets (completed 2026-10-24)
 - [ ] **Phase 5: Scheduled Live Runs** — new workflow, cron-job.org trigger, failure isolation, runbook
 - [ ] **Phase 6: Exposure & E2E Verification** — REST via RLS, `latest_rating` view, soak test
 - [ ] **Phase 7: Per-City Conductors, Shadow Refit and Early Model Selection** — protocol v4, per-city conductor configs, cooling/reference refit, selection by 2026-11-01, re-validation and go/no-go (parallel with 4-6)
@@ -151,7 +151,7 @@ rows are labelled provisional until Phase 7's go.
 **Re-plan note (2026-10-21, done)**: plans revised the same day: 04-01 no longer requires a Phase 3
 GO, and DB-06 (`config_fingerprint`, `forecast_model_sha256`, `anomaly_model_sha256`) is covered
 across 04-01..04-06. Plan checker: passed, info advisories only.
-**Plans**: 12/12 plans executed (04-07..04-12: gap closure G-04-2, all 12 code review findings)
+**Plans**: 12/12 plans complete (04-07..04-12: gap closure G-04-2, all 12 code review findings)
 
 Plans:
 **Wave 1**
@@ -295,7 +295,7 @@ ml-modeling workstream's evaluation; record it in that workstream's STATE.md as 
 | 1. Land PR #7 | 5/5 | Complete    | 2026-10-19 |
 | 2. Data Cleaning | 4/4 | Complete    | 2026-10-20 |
 | 3. Real-Data Validation | 5/5 | Complete    | 2026-10-21 |
-| 4. Supabase Store & Writer | 12/12 | In Progress | - |
+| 4. Supabase Store & Writer | 12/12 | Complete    | 2026-10-24 |
 | 5. Scheduled Live Runs | 0/8 | Planned | - |
 | 6. Exposure & E2E Verification | 0/7 | Planned | - |
 | 7. Per-City Conductors, Shadow Refit and Early Model Selection | 0/0 | Not planned | - |
