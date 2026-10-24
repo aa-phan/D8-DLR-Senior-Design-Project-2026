@@ -123,6 +123,21 @@ def _called_cities(calls):
 # run_dlr_pipeline: isolation, order, validation, wiring, window
 # ──────────────────────────────────────────────────────────────────────────────
 
+def test_a_failing_city_error_is_redacted_on_the_csv_path(monkeypatch, caplog):
+    # WR-06: the same redaction contract as the store path; a provider exception can
+    # echo a URL or a token (observation_composer._record_error), and `errors` is
+    # printed and written to --output.
+    def fake(name, start, end, stations, **kwargs):
+        raise RuntimeError(f"{name}: GET /x?token=s3cr3tv failed")
+
+    monkeypatch.setattr(orch, "run_city_pipeline", fake)
+
+    run = orch.run_dlr_pipeline(stations=_stations(), end=_END, archive=False, cities=["MIDLAND"])
+
+    assert run["errors"] == {"MIDLAND": "MIDLAND: GET /x?token=REDACTED failed"}
+    assert "s3cr3tv" not in caplog.text
+
+
 def test_one_failing_city_is_recorded_and_the_others_still_rate(monkeypatch):
     calls = _fake_city_pipeline(monkeypatch, fail=("MIDLAND",))
 

@@ -49,6 +49,18 @@ PROVIDERS = ("composed", "synoptic", "open_meteo", "nsrdb")
 _TS_FMT = "%Y-%m-%dT%H:%M:%SZ"
 
 
+def _redacted(exc) -> str:
+    """
+    The text of a per-city exception with secrets removed (WR-06). It is what the
+    log, `out["errors"]` (printed and written by --output) and the run row hold:
+    a provider exception can echo a URL or a token. Imported here so the CSV path
+    loads the store module only when a city fails.
+    """
+    import supabase_store
+
+    return supabase_store.redact(exc)
+
+
 def _default_window(window_hours: float, end: str = None, start: str = None):
     """Resolve (start, end) ISO strings; end defaults to now (UTC, 5-min floor)."""
     if end is None:
@@ -191,8 +203,9 @@ def run_dlr_pipeline(
                 log.info("%s: rating=%.0f A fallback=%s archived=%s",
                          name, result["rating"], result["fallback"], result["archived"])
             except Exception as exc:
-                log.error("city %s failed: %s", name, exc)
-                out["errors"][name] = str(exc)
+                text = _redacted(exc)
+                log.error("city %s failed: %s", name, text)
+                out["errors"][name] = text
     else:
         _run_cities_with_store(
             out, cities, start, end, stations, rate_provider, fetcher, forecast_method,
@@ -269,9 +282,12 @@ def _run_cities_with_store(out, cities, start, end, stations, rate_provider, fet
                 log.info("%s: rating=%.0f A fallback=%s archived=%s",
                          name, result["rating"], result["fallback"], result["archived"])
             except Exception as exc:
-                log.error("city %s failed: %s", name, supabase_store.redact(exc))
-                out["errors"][name] = str(exc)
+                text = supabase_store.redact(exc)
+                log.error("city %s failed: %s", name, text)
+                out["errors"][name] = text
                 record["written"] = False
+                # build_run_row redacts this too and keeps up to 1000 characters,
+                # more than the 300 the log line and the summary carry.
                 record["error"] = str(exc)
             city_records.append(record)
             if fetcher is not None:

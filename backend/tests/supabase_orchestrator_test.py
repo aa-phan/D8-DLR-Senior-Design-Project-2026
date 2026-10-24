@@ -518,6 +518,23 @@ def test_run_log_failure_is_logged_redacted_and_main_returns_one(monkeypatch, ca
     assert orch.main([]) == 0
 
 
+def test_a_failing_city_error_is_redacted_in_the_run_summary_and_the_printed_report(
+        monkeypatch, capsys):
+    # WR-06: the per-city exception text reaches `run["errors"]`, which `_print_report`
+    # prints and `--output` writes; a token in a provider exception must not.
+    _fake_city_pipeline(monkeypatch, {"AUSTIN": {"error": "GET /x?token=s3cr3tv failed"}})
+    store = FakeStore()
+
+    run = _run(store)
+
+    assert run["errors"] == {"AUSTIN": "GET /x?token=REDACTED failed"}
+    orch._print_report(run)
+    printed = capsys.readouterr().out
+    assert "ERROR AUSTIN: GET /x?token=REDACTED failed" in printed
+    assert "s3cr3tv" not in printed
+    assert "s3cr3tv" not in repr(run)
+
+
 @pytest.mark.parametrize("argv, errors, expected", [
     (["--store", "postgres"], {"EL_PASO": "down"}, 1),
     (["--store", "postgres", "--no-run-row"], {"EL_PASO": "down"}, 1),
