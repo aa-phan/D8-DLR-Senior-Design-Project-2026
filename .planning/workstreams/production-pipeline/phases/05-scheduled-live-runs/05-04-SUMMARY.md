@@ -169,7 +169,7 @@ Artifact commit: `c7c9e44` (`git show --stat` lists only `.gitignore`, the manif
 ## TDD Gate Compliance (Task 1, `tdd="true"`)
 
 - **RED:** `c8e71e3` carries the six tests plus a behavior-less stub of the module (`check()` returns `['not implemented']`, `required_artifacts()` returns `[]`, `write_manifest()` writes nothing, `main()` returns 1), so the tests import and fail on their assertions instead of on a missing module. 6 of 6 failed. `gsd-tools check tdd-red-evidence` on the pytest JUnit XML for the target `test_tampered_artifact_fails_before_any_load` returned `RED_EVIDENCE_OK` (`target_test_failed`, format `junit`). Semantic assessment: the target failed on `assert 'hash mismatch' in 'not implemented'`, the planned assertion for the planned behavior, not on an import, collection or fixture fault. The other five failed on their own assertions (the writer test on the manifest file not existing after `write_manifest`). Evidence record: `.planning/tmp/05-04-t1-red-evidence.json` (untracked, like the rest of `.planning/tmp`).
-- **GREEN:** `fdda342`; 6 of 6 pass. Full `backend/tests`: 1712 passed, 48 skipped (baseline after 05-03: 1699 plus this plan's 6 + 1 new tests and 05-03's own additions; 0 failed).
+- **GREEN:** `fdda342`; 6 of 6 pass. Full `backend/tests` after Task 3: 1712 passed, 48 skipped, 0 failed (a first full run, before the Task 3 test regex was fixed, showed 1711 passed and that one test failing).
 - **REFACTOR:** none needed.
 
 ## Files Created/Modified

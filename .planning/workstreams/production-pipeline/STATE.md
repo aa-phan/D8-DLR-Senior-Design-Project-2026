@@ -1,18 +1,18 @@
 ---
 gsd_state_version: "1.0"
 current_phase: 05
-current_plan: 4
+current_plan: 5
 status: executing
-stopped_at: Completed 05-03-PLAN.md
-last_updated: "2026-10-24T08:43:57.283Z"
+stopped_at: Completed 05-04-PLAN.md
+last_updated: "2026-10-24T08:55:36.749Z"
 last_activity: 2026-10-24
 last_activity_desc: Phase 05 execution started
-state_head: e36c84949b750b6256beb493265567cbb5a8d256
+state_head: 11fe741bcda41d930e7e312c281271b927697d98
 progress:
   total_phases: 7
   completed_phases: 4
   total_plans: 41
-  completed_plans: 29
+  completed_plans: 30
   percent: 57
 milestone_name: Production Pipeline (Supabase + live ratings)
 workstream: production-pipeline
@@ -37,7 +37,7 @@ whoever owns that analysis; they are not work items here.
 
 **Status:** Ready to execute
 **Current Phase:** 05
-**Current Plan:** 4
+**Current Plan:** 5
 **Total Plans in Phase:** 8
 **Last Activity:** 2026-10-24 — Phase 05 execution started
 **Last Activity Description:** Phase 05 execution started
@@ -162,6 +162,8 @@ These block or affect stringing the system together and belong to the phases nam
 - [Phase 05]: 05-03: upsert_run_row delegates to Phase 4's supabase_store.upsert_run; row timestamps are aware UTC datetimes — One SQL builder, one conflict rule and column allow-list; exact timestamptz binding
 - [Phase 05]: 05-03: an ok child with a missing forecast_status or no anomaly model is 'degraded' in pipeline_run.cities_failed; timeout is a new outcome value — cities_ok needs positive evidence of health, so no written city is dropped from both lists; schema doc lists only error/degraded (runbook/Phase 6 to update)
 - [Phase 05]: 05-03: the runner is the only pipeline_run writer; children keep Phase 4's --no-run-row, orchestrator files untouched — The no-run-row flag already existed and is in STORE_ARGS from 05-01
+- [Phase 05]: 05-04: the eight live models (forecast_/anomaly_ for AUSTIN, CORPUS_CHRISTI, MIDLAND, EL_PASO) and data/models/LIVE_ARTIFACT_HASHES.sha256 are tracked through /data/models/* plus nine explicit ! lines (OD-10); corridor-era joblibs, training frames, CSVs and reports stay ignored — Git cannot re-include a file inside an excluded directory; explicit names keep anomaly_AUSTIN_CORPUS_CHRISTI.joblib out; the runner has no other way to obtain the models
+- [Phase 05]: 05-04: dlr_live_check_models.py verifies presence and every SHA-256 against the manifest before any joblib.load, runs the production strict loaders only when no problem is open, parses the manifest strictly, and the workflow step has no env or secrets; promoting a retrain means regenerating the manifest with --write-manifest and committing it with the artifacts — A joblib file is a pickle: unpickling runs code in a process holding the database URL and provider secrets; an unpromoted retrain changes the hash and fails the job before rating (T-05-16, T-05-17)
 
 ## Open Decisions
 
@@ -182,9 +184,9 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 
 ## Session Continuity
 
-**Last session:** 2026-10-24T08:43:51.771Z
+**Last session:** 2026-10-24T08:55:36.592Z
 
-**Stopped At:** Completed 05-03-PLAN.md
+**Stopped At:** Completed 05-04-PLAN.md
 **Resume File:** None
 
 ## Performance Metrics
@@ -217,6 +219,7 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 | Phase 05 P01 | 9 min | 2 tasks | 4 files |
 | Phase 05 P02 | 10 min | 3 tasks | 11 files |
 | Phase 05 P03 | 8 min | 2 tasks | 4 files |
+| Phase 05 P04 | 10 min | 3 tasks | 14 files |
 
 ## Accumulated Context
 
