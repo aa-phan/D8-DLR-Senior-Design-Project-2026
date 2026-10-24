@@ -1,112 +1,83 @@
 ---
 phase: 04-supabase-store-writer
-reviewed: 2026-10-23T23:30:00Z
+reviewed: 2026-10-24T12:00:00Z
 depth: standard
-files_reviewed: 20
+files_reviewed: 10
 files_reviewed_list:
-  - .github/workflows/supabase_smoke.yml
   - backend/city_pipeline.py
   - backend/dlr_orchestrator.py
-  - backend/rating_identity.py
   - backend/supabase_load_backfill.py
-  - backend/supabase_smoke.py
   - backend/supabase_store.py
   - backend/tests/city_pipeline_test.py
-  - backend/tests/rating_identity_test.py
-  - backend/tests/supabase_live_test.py
+  - backend/tests/dlr_orchestrator_test.py
   - backend/tests/supabase_load_backfill_test.py
-  - backend/tests/supabase_migration_test.py
   - backend/tests/supabase_orchestrator_test.py
   - backend/tests/supabase_run_log_test.py
-  - backend/tests/supabase_smoke_test.py
-  - backend/tests/supabase_store_test.py
-  - docs/data-science/decisions/supabase_store/smoke_actions_review_fixes.json
-  - docs/data-science/decisions/supabase_store/smoke_review_fixes.json
   - docs/data-science/schema/city_rating_v1.md
-  - supabase/migrations/20261023000000_city_rating_utc_hour_check_and_run_log_comments.sql
 findings:
   critical: 0
-  warning: 1
-  info: 4
-  total: 5
+  warning: 0
+  info: 2
+  total: 2
 status: issues_found
 ---
 
-# Phase 4: Code Review Report (re-review after gap-closure plans 04-07..04-11)
+# Phase 4: Code Review Report (re-review after fix commits b532c00, 9c5b6f3, 1ef738d, d3d59dc, c9b13f5)
 
-**Reviewed:** 2026-10-23
+**Reviewed:** 2026-10-24
 **Depth:** standard
-**Files Reviewed:** 20
+**Files Reviewed:** 10
 **Status:** issues_found
 
 ## Summary
 
-Re-review of the Supabase store, backfill loader, smoke test, workflow, migration and the orchestrator / pipeline changes after the twelve prior findings were fixed. All twelve are resolved in the current source (see the table below). The related test set passes locally (148 passed, 48 skipped; the skips are the live-Postgres tests that need `DLR_TEST_PG_AUTOSTART=1`). The two workflow action pins resolve to the commits their comments name (`git ls-remote`: `actions/checkout` v4.4.0 -> `11d5960a...`, `actions/setup-python` v5.6.0 -> `a26af69b...`). The committed evidence JSON holds no host, URL, project reference or credential.
+Re-review of the five fix commits since `defa76d` (`git diff defa76d HEAD` over the ten listed files). All five prior findings (WR-06, IN-07, IN-08, IN-09, IN-10) are resolved in the current source. The five fixes introduced no regression I could demonstrate.
 
-No new critical issue. The reconnect logic (`_with_reconnect`), the child-process fingerprint isolation, the UTC hour CHECK and its smoke probe, and the backfill de-duplication rank all trace correctly, including the failure and retry edges. One new warning: the per-city exception text is redacted for the log line and the run row but printed and written to `--output` raw. Four info items concern run-log completeness and hardening.
+Checks beyond reading the diff:
+
+- The related test files (`city_pipeline_test`, `dlr_orchestrator_test`, `supabase_load_backfill_test`, `supabase_orchestrator_test`, `supabase_run_log_test`, `supabase_schema_doc_test`) pass with the Supabase URL variables unset. The live-Postgres tests skipped, as expected. No database or `.env` was touched.
+- IN-08 would have made every cold start degraded if `clean_history` raised on an empty history. It does not. `store.read_history` returns `pd.DataFrame(columns=ARCHIVE_COLUMNS)` for no rows (`supabase_store.py:806`), and `data_cleaning.clean_history` on that frame returns 0 usable rows without raising. A healthy cold start therefore stays in `cities_ok`.
+- The committed manifest `docs/data-science/decisions/real_data_validation/manifest.json` holds a 40-character lowercase `git.head`, so IN-09 does not reject the real input. `real_data_validation.py:1600` writes `git rev-parse HEAD`, which is the same shape.
+- `redact` cannot raise on a malformed `SUPABASE_DB_URL` (`_url_secrets` catches the `urlsplit` `ValueError`). Calling it from an `except` handler is therefore safe.
+- `write_rating` returns True or raises (`supabase_store.py:891-895`), so a city that was not written always has an entry in `errors`. The postgres exit-1 rule cannot miss an unwritten city.
+
+No critical issue and no warning. Two info items remain: one stale database column comment that the IN-08 semantic change made incomplete, and one message-quality gap on the lines the WR-06 fix touched.
 
 ## Prior Findings Verification
 
-| ID | Status | Evidence |
-|----|--------|----------|
-| CR-01 | resolved | `backend/supabase_store.py:328` reads the role from `select current_user`; `:342` logs it after `redact(role, secrets + _project_identifiers(url))`. `conn.info.user` is no longer referenced. Failing-first test `supabase_store_test.py` (`test_tracer_postgres_run_logs_the_server_role_not_the_project_reference`) asserts the project reference is absent from caplog, stdout and stderr. |
-| WR-01 | resolved | `backend/dlr_orchestrator.py:372-373` returns 1 for any failed city when `--store postgres`; `:374` keeps the CSV rule. Parametrized test `supabase_orchestrator_test.py` `test_main_with_postgres_exits_one_when_any_city_failed` covers postgres, `--no-run-row`, csv and default. |
-| WR-02 | resolved | `backend/city_pipeline.py:62-83` records `cleaning_error`; `:101-102` sets `forecast_status = "failed"` when cleaning failed and `total_rows > 0`; `backend/dlr_orchestrator.py:259` carries it to the run record; `backend/supabase_store.py:694-704` classifies the city `degraded` with the redacted error. Residual case (empty history) is IN-08 below. |
-| WR-03 | resolved | `backend/supabase_store.py:813-896`: `from_env` supplies a reconnect factory that goes back through `connect()` (settings re-applied); `_with_reconnect` replaces a flagged-lost connection before the call and retries once after a `StoreError` only when `_lost()` confirms the session is gone; a CHECK failure on a healthy connection is not retried; the run context is kept. |
-| WR-04 | resolved | `backend/supabase_load_backfill.py:353-357` ranks computed rows ahead of fallback rows with a stable sort, marks `duplicated(keep="first")` over that ranking and maps the mark back by index (the frame index is unique after `read_history`'s `reset_index`). Four-way parametrized test plus `test_backfill_keeps_the_row_the_cleaning_step_keeps_usable` agree with `data_cleaning.clean_history`. |
-| WR-05 | resolved | `backend/supabase_load_backfill.py:189-210`: the child imports only `config, city_point, thermal_model, rating_identity`, proves the first three came from the materialized copies and that no other live backend module loaded; `:275-281` surfaces the whole redacted stderr (head and tail past 4000 characters). `backend/rating_identity.py:19-23` imports only `hashlib`, `json`, `city_point`, `config`. Tests cover a config lacking names live modules read at import. |
-| IN-01 | resolved | `backend/supabase_store.py:274` gives `redact` a `limit` parameter (default 300); `:659` and `:703` pass `_RUN_ERROR_MAX_CHARS`; `_redact_keys` (`:646-665`) sums counts of keys equal after redaction. |
-| IN-02 | resolved | `backend/supabase_store.py:310` assigns the stripped URL before it is used for redaction and for `psycopg.connect`. |
-| IN-03 | resolved | `supabase/migrations/20261023000000_...sql:26-27` replace both comments (additive; the original migration is hash-pinned by `test_original_migration_is_unchanged`). Text matches `docs/data-science/schema/city_rating_v1.md:176-177`. |
-| IN-04 | resolved | `backend/supabase_load_backfill.py:341,362,387,515` use `supabase_store.finite` and `supabase_store.file_sha256`; `sha256_file` and `_finite` are gone; an AST test forbids private `supabase_store` access from any backend module. |
-| IN-05 | resolved | `.github/workflows/supabase_smoke.yml:41,44` pin by 40-character SHA with the version comment (verified against the upstream tags), `:42-43` sets `persist-credentials: false`, `:37` guards the job with `github.ref == 'refs/heads/main'`. The protected-environment control is documented as not configured (owner decision), which is acceptable. |
-| IN-06 | resolved | `supabase/migrations/20261023000000_...sql:19-20` rebuilds the CHECK in UTC; `backend/supabase_store.py:326` pins the session zone; `backend/supabase_smoke.py:160-180` probes a +05:30 session in a nested rolled-back savepoint; `smoke_review_fixes.json` shows `session_timezone_utc` and `utc_hour_check_zone_independent` true on the live project. |
-
-## Warnings
-
-### WR-06: Per-city exception text is redacted for the log and run row but printed and written to `--output` raw
-
-**File:** `backend/dlr_orchestrator.py:273` (consumers at `:318-319` and `:364-366`)
-**Issue:** In `_run_cities_with_store` the handler logs `supabase_store.redact(exc)` (line 272) and the run row redacts `record["error"]` in `build_run_row`, but `out["errors"][name] = str(exc)` stores the raw text. `_print_report` prints it (`ERROR {name}: {msg}`, printed into the Actions log of the scheduled runner) and `--output` writes `errors` into the JSON summary. `observation_composer._record_error` states in its own comment that a requests error string "can echo a URL, and Synoptic's carries the token"; an exception of that kind escaping `run_city_pipeline` is therefore redacted in two of the three sinks and raw in the other two. The DB-04 redaction contract for this module is "only redacted text reaches a log, message or stored row", and the same inconsistency exists on the CSV path (`:195`). Database errors are already redacted at the source (`StoreError`), so the exposure is the provider token and any URL embedded in a third-party exception.
-**Fix:**
-```python
-except Exception as exc:
-    text = supabase_store.redact(exc)
-    log.error("city %s failed: %s", name, text)
-    out["errors"][name] = text
-    record["written"] = False
-    record["error"] = text
-```
-Apply the same `redact` in the CSV branch at line 194-195 (import `supabase_store` lazily or move `redact` to a small shared module), and add a test that an exception whose text holds `token=abc123` reaches neither stdout nor the `--output` file.
+| Prior ID | Verdict | Evidence file:line |
+|----------|---------|--------------------|
+| WR-06 | resolved | `backend/dlr_orchestrator.py:206-208` (CSV path: `_redacted(exc)` feeds the log line and `out["errors"][name]`), `:287-289` (store path: `supabase_store.redact(exc)` feeds the log line and `out["errors"][name]`), `:52-61` (`_redacted` helper, lazy import). `_print_report` (`:336-337`) and the `--output` JSON (`:382-384`) now read only redacted text. `record["error"] = str(exc)` at `:293` stays raw by design. It never reaches stdout or `--output`, and `build_run_row` redacts it at `supabase_store.py:706`. Tests: `dlr_orchestrator_test.py` `test_a_failing_city_error_is_redacted_on_the_csv_path`, `supabase_orchestrator_test.py` `test_a_failing_city_error_is_redacted_in_the_run_summary_and_the_printed_report`. |
+| IN-07 | resolved | `backend/city_pipeline.py:88,93` set `forecast_error = "forecast failed: <exc>"`, `:151` exposes it in the `pipeline` block. `backend/dlr_orchestrator.py:274` stores `cleaning_error or forecast_error` in the city record. `supabase_store.py:698-706` redacts it into `cities_failed`. Tests: `city_pipeline_test.py` `test_a_forecast_failure_reports_its_reason`, `supabase_orchestrator_test.py` `test_a_forecast_failure_is_a_degraded_city_with_its_error_in_the_run_row` and `test_a_cleaning_error_wins_over_a_forecast_error_in_the_run_row`. |
+| IN-08 | resolved | `backend/supabase_store.py:697-698` take `error` before the healthy test and require `error is None` for `cities_ok`, so an error on a written city is `degraded` even with `forecast_status == "cold_start"`. The `build_run_row` docstring (`:673-684`) and `docs/data-science/schema/city_rating_v1.md:181` state the rule. Tests: `supabase_run_log_test.py` `test_a_written_city_with_an_error_is_degraded_even_with_a_healthy_status`, `supabase_orchestrator_test.py` `test_a_cleaning_failure_on_empty_history_is_degraded_with_its_error`. The stale database comment is IN-11 below. |
+| IN-09 | resolved | `backend/supabase_load_backfill.py:137-139` raise `ValueError` unless `git.head` is a string that `re.fullmatch`es `[0-9a-f]{40}`. This runs inside `load_manifest`, before `phase3_config_fingerprints` reads `manifest["git"]["head"]` (`:259`) and `_git_show` builds `f"{commit}:{path}"` (`:222-229`). `fullmatch` rejects the trailing-newline case. The one non-test caller of `load_manifest` is `:511` in `main`. Test: `supabase_load_backfill_test.py` `test_load_manifest_refuses_a_git_head_that_is_not_a_full_commit_id` (9 cases) and `test_load_manifest_accepts_a_full_commit_id`. |
+| IN-10 | resolved | `docs/data-science/schema/city_rating_v1.md:35` now reads "keeps the first computed write for an exact instant (a computed row may follow fallback rows and then owns the slot; otherwise the first write wins)". That matches `historical_archive._slot_archived` (`backend/historical_archive.py:178-203`): a computed row is blocked only by an existing computed row, and a fallback row is blocked by any row. |
 
 ## Info
 
-### IN-07: A failed forecast is recorded as a degraded city with no reason
+### IN-11: The live `pipeline_run.cities_ok` column comment omits the "no error" criterion that IN-08 added
 
-**File:** `backend/city_pipeline.py:88-97`, `backend/supabase_store.py:698-704`
-**Issue:** WR-02 added a reason (`cleaning_error`) for a cleaning failure, but a forecast failure (for example `--forecast-method ml` with a missing or corrupt model artifact) still produces `forecast_status = "failed"` with no error text. `build_run_row` then stores `{"outcome": "degraded", "written": true, "forecast_status": "failed", "error": null}` (reproduced with a direct call). The run log exists to explain why a city is unhealthy, and the only trace is a WARNING line in the log. The job also exits 0 (the row was written), so a run where every city has a failed ML forecast stays green with no stored explanation.
-**Fix:** Add a `forecast_error` entry to `pipeline` (the exception text from line 91) and set `record["error"]` from `cleaning_error or forecast_error` in the orchestrator; consider exiting non-zero when every written city is degraded.
+**File:** `supabase/migrations/20261023000000_city_rating_utc_hour_check_and_run_log_comments.sql:26` (code at `backend/supabase_store.py:698`)
+**Issue:** The applied column comment defines `cities_ok` as "cities whose rating row was written healthily (forecast ok or cold_start and an anomaly model loaded)". After the IN-08 commit a written city is also excluded from `cities_ok` whenever it carries an error. Someone reading the column comment in the Supabase dashboard (or a Phase 5 consumer trusting it) would expect a cold-start city with a cleaning failure to be in `cities_ok`, but it is in `cities_failed` as `degraded`. The schema doc and the `build_run_row` docstring were updated; the comment stored in the database was not. Editing the 20261023 migration in place is not safe if it has been applied (IN-03's fix used an additive migration for the same reason, and the original is hash-pinned).
+**Fix:** Add a later additive migration that re-issues the comment, for example:
+```sql
+comment on column public.pipeline_run.cities_ok is
+  'none (labels): cities whose rating row was written healthily (forecast ok or cold_start, an anomaly model loaded and no cleaning or forecast error); a city that was written but degraded is in cities_failed, not here.';
+```
+Then align `docs/data-science/schema/city_rating_v1.md:176` and any test that pins the comment text with it.
 
-### IN-08: A cleaning failure on an empty history is dropped from the run row
+### IN-12: A per-city exception with an empty message is recorded and printed as an empty string
 
-**File:** `backend/dlr_orchestrator.py:259`, `backend/supabase_store.py:694-697`
-**Issue:** When `clean_history` raises on an empty history (`total_rows == 0`), `forecast_status` stays `cold_start` by design (`city_pipeline.py:101`), so the city lands in `cities_ok` (provided a detector model loaded) and the `error` text is never stored: `build_run_row` records `error` only for cities in `cities_failed`. A deterministic cleaning bug that also fires on empty frames would be invisible on every cold start and would first surface as `failed` once history exists. The test `test_cleaning_failure_on_empty_history_stays_cold_start` pins the status but nothing pins that the error is kept. (Today `clean_history` accepts an empty `ARCHIVE_COLUMNS` frame, so this is latent.)
-**Fix:** Either classify any city with a non-empty `cleaning_error` as degraded, or log the error at WARNING from the orchestrator regardless of classification and state the choice in the `build_run_row` docstring.
-
-### IN-09: The manifest commit is passed to `git show` without validation
-
-**File:** `backend/supabase_load_backfill.py:217-225` (and `load_manifest`, `:129-134`)
-**Issue:** `_git_show` runs `git show f"{commit}:{path}"` where `commit` is `manifest["git"]["head"]` taken verbatim from the manifest. The archive hash is checked against the manifest, but the manifest itself is not authenticated, and a value beginning with `-` (for example `--output=/some/path`) would be read by git as an option. The argv is fixed-form (no shell), the file is a committed owner-run input, so exposure is low; it is a one-line hardening on a tool that runs with the owner's credentials in the environment.
-**Fix:** In `load_manifest`, require `re.fullmatch(r"[0-9a-f]{40}", head)` and raise `ValueError` otherwise (a `--` separator cannot precede a revision argument, so validation is the control).
-
-### IN-10: Schema doc states the CSV archive keeps "the first write for an exact instant"
-
-**File:** `docs/data-science/schema/city_rating_v1.md:35`
-**Issue:** The archive rule is first write per slot except that a computed row may follow fallback rows and then owns the slot (`historical_archive._slot_archived`, lines 178-203; the WR-04 fix and the loader docstring rely on it). The consumer-facing sentence omits the exception, so a reader comparing the CSV and Postgres rules draws a wrong conclusion for the fallback-then-computed case.
-**Fix:** "The offline CSV archive keeps the first computed write for an instant (a computed row may follow fallback rows and then owns the slot; otherwise the first write wins)."
+**File:** `backend/dlr_orchestrator.py:206-208` and `:287-289` (printed at `:337`; run row at `:293`)
+**Issue:** The handlers store `redact(exc)`, which is `str(exc)` after redaction. For an exception raised without a message (`AssertionError()`, `RuntimeError()`, a bare `raise KeyError`-style failure that stringifies to an empty or near-empty text), `out["errors"][name]` is `""`. `_print_report` then prints `ERROR AUSTIN: ` with no cause. On the store path `record["error"]` is `""`, so the run row stores `"error": ""`, which still says "outcome error" but gives no reason. The WR-06 change rewrote exactly these lines, so this is the natural place to fix it. The behavior predates the fix (it was `str(exc)` before).
+**Fix:** Build the stored text from the type name as well:
+```python
+text = supabase_store.redact(f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__)
+```
+(and the same in `_redacted`, which would keep the redaction in one place). Update the two redaction tests only if they assert the exact string; the expected `"MIDLAND: GET /x?token=REDACTED failed"` would gain a `RuntimeError: ` prefix.
 
 ---
 
-_Reviewed: 2026-10-23_
+_Reviewed: 2026-10-24_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_
