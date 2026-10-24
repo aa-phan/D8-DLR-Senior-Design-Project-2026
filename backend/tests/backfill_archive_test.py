@@ -10,6 +10,7 @@ backend/tests/city_rating_test.py's conventions (module-level imports, plain
 asserts, no test classes, stub providers, no network).
 """
 
+import logging
 import os
 from collections import Counter
 
@@ -22,6 +23,7 @@ import backfill_archive
 import config
 import historical_archive
 import observation_composer as oc
+from DLRSafetyMonitor import DLRSafetyMonitor
 
 _CITY = "AUSTIN"
 # A day far in the past: the composer then asks the grid/TCEQ providers for whole
@@ -319,3 +321,83 @@ def test_no_synoptic_backfill_never_calls_the_station_provider(tmp_path, monkeyp
     assert "synoptic" not in calls
     assert totals["sources"]["air_temp"] == {"tceq": 1}
     assert totals["archived"][_CITY] == 1
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Gate counting when the safety monitor logs instead of printing
+# ──────────────────────────────────────────────────────────────────────────────
+
+_VALID_READING = {"sensor_status": "ok", "link_status": "ok",
+                  "wind": 5.0, "temp": 25.0, "solar": 500.0}
+
+
+def _install_pipeline_with_real_monitor(monkeypatch, steps_failing=None):
+    """
+    A fake `run_dlr_pipeline` that builds the real DLRSafetyMonitor with no logger
+    and runs one check per step, as `city_rating.rate_city` does. Bounds no
+    ampacity can meet make every check fail G4. Returns the list of call kwargs.
+    """
+    seen = []
+
+    def fake(**kwargs):
+        seen.append(kwargs)
+        monitor = DLRSafetyMonitor(static_rating=1690.0, rating_bounds=(1, 2))
+        monitor.run_check(_VALID_READING)
+        return {"summary": [_summary_row(_CITY, fallback=True, gates=("G4",))], "errors": {}}
+
+    monkeypatch.setattr(backfill_archive, "run_dlr_pipeline", fake)
+    return seen
+
+
+@pytest.mark.parametrize("root_level", [logging.WARNING, logging.ERROR],
+                         ids=["root_warning", "root_error"])
+def test_backfill_counts_gate_failures_the_monitor_logs(
+        tmp_path, monkeypatch, capsys, caplog, root_level):
+    # backfill_archive.main() sets the root level to ERROR, which would hide a
+    # WARNING from the monitor; the capture must not depend on the root level.
+    caplog.set_level(root_level)
+    _install_pipeline_with_real_monitor(monkeypatch)
+
+    totals = backfill_archive.backfill(
+        f"{_DAY}T10:00:00Z", f"{_DAY}T10:00:00Z", archive_path=str(tmp_path / "archive.csv"),
+        log_path=str(tmp_path / "log.csv"), cities=[_CITY], stations=_station_at(_CITY),
+        out=lambda _line: None)
+
+    assert totals["gates"] == Counter({"G4": 1})
+    captured = capsys.readouterr()
+    assert "G4 FAIL" not in captured.out
+    assert "G4 FAIL" not in captured.err
+    assert not [r for r in caplog.records if "G4 FAIL" in r.getMessage()]
+
+
+def test_backfill_counts_one_gate_failure_per_step_over_several_steps(tmp_path, monkeypatch, capsys):
+    seen = _install_pipeline_with_real_monitor(monkeypatch)
+
+    totals = backfill_archive.backfill(
+        f"{_DAY}T10:00:00Z", f"{_DAY}T12:00:00Z", archive_path=str(tmp_path / "archive.csv"),
+        log_path=str(tmp_path / "log.csv"), cities=[_CITY], stations=_station_at(_CITY),
+        out=lambda _line: None)
+
+    assert len(seen) == 3
+    assert totals["gates"] == Counter({"G4": 3})
+    assert "G4 FAIL" not in capsys.readouterr().out
+
+
+def test_backfill_leaves_the_monitor_logger_as_it_found_it(tmp_path, monkeypatch):
+    monitor_log = logging.getLogger("DLRSafetyMonitor")
+    before = (monitor_log.level, monitor_log.propagate, list(monitor_log.handlers))
+    _install_pipeline_with_real_monitor(monkeypatch)
+    kwargs = dict(archive_path=str(tmp_path / "archive.csv"), log_path=str(tmp_path / "log.csv"),
+                  cities=[_CITY], stations=_station_at(_CITY), out=lambda _line: None)
+
+    backfill_archive.backfill(f"{_DAY}T10:00:00Z", f"{_DAY}T10:00:00Z", **kwargs)
+    assert (monitor_log.level, monitor_log.propagate, list(monitor_log.handlers)) == before
+
+    # also when the step itself raises
+    def boom(**_kw):
+        raise RuntimeError("step failed")
+
+    monkeypatch.setattr(backfill_archive, "run_dlr_pipeline", boom)
+    with pytest.raises(RuntimeError):
+        backfill_archive.backfill(f"{_DAY}T11:00:00Z", f"{_DAY}T11:00:00Z", **kwargs)
+    assert (monitor_log.level, monitor_log.propagate, list(monitor_log.handlers)) == before
