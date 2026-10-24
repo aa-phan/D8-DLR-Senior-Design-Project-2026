@@ -5,23 +5,23 @@ titles: json
 findings:
   - id: WR-06
     severity: warning
-    disposition: open
+    disposition: fixed
     title: "Per-city exception text is redacted for the log and run row but printed and written to `--output` raw"
   - id: IN-07
     severity: info
-    disposition: open
+    disposition: fixed
     title: "A failed forecast is recorded as a degraded city with no reason"
   - id: IN-08
     severity: info
-    disposition: open
+    disposition: fixed
     title: "A cleaning failure on an empty history is dropped from the run row"
   - id: IN-09
     severity: info
-    disposition: open
+    disposition: fixed
     title: "The manifest commit is passed to `git show` without validation"
   - id: IN-10
     severity: info
-    disposition: open
+    disposition: fixed
     title: "Schema doc states the CSV archive keeps \"the first write for an exact instant\""
   - id: CR-01
     severity: critical
@@ -71,20 +71,20 @@ findings:
     severity: info
     disposition: fixed
     title: "`valid_time` CHECK depends on the session time zone"
-open: 5
+open: 0
 total: 17
-recorded: 2026-10-23T22:54:10.280Z
+recorded: 2026-10-24T07:35:51.751Z
 ---
 
 # Phase 04: Code Review Disposition
 
 | Finding | Severity | Disposition | Source |
 |---------|----------|-------------|--------|
-| WR-06 | warning | open | - |
-| IN-07 | info | open | - |
-| IN-08 | info | open | - |
-| IN-09 | info | open | - |
-| IN-10 | info | open | - |
+| WR-06 | warning | fixed | 04-REVIEW-FIX.md |
+| IN-07 | info | fixed | 04-REVIEW-FIX.md |
+| IN-08 | info | fixed | 04-REVIEW-FIX.md |
+| IN-09 | info | fixed | 04-REVIEW-FIX.md |
+| IN-10 | info | fixed | 04-REVIEW-FIX.md |
 | CR-01 | critical | fixed | Owner decision G-04-2 (04-UAT.md). 04-07 Task 1. `20b6010`. Failing first: `test_tracer_postgres_run_logs_the_server_role_not_the_project_reference`; live-local `test_connect_logs_the_role_the_server_reports`. (not in the current review) |
 | WR-01 | warning | fixed | Owner decision G-04-2 (04-UAT.md). 04-08 Task 1. `b63b564` (RED `2148f98`). Failing first: `test_main_with_postgres_exits_one_when_any_city_failed`. (not in the current review) |
 | WR-02 | warning | fixed | Owner decision G-04-2 (04-UAT.md). 04-08 Task 2. `200710f` (RED `c2d78f7`). Failing first: `test_cleaning_failure_on_existing_history_reports_forecast_failed`, `test_a_cleaning_failure_is_a_degraded_city_with_its_error_in_the_run_row`. (not in the current review) |
