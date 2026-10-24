@@ -322,7 +322,7 @@ GitHub bills each job rounded up to whole minutes; a run's billed minutes are ap
 | Workflow | Runs per day | Billed minutes per run | Minutes per month | Basis |
 |---|---|---|---|---|
 | Shadow Collection | 4 | median 5 | about 600 to 660 | Measured: `gh run list --workflow shadow_collect.yml`, 2026-10-16 to 2026-10-19 (median 5 billed minutes per run) |
-| DLR Live Ratings | 24 | 4 to 6 | about 2,900 to 4,300 | Estimate until 05-08: setup and install about 1.5 to 2 minutes, pre-flight seconds, four cities about 0.5 to 1 minute each |
+| DLR Live Ratings | 24 | 4 to 6 | about 2,900 to 4,300 | Estimate until 05-08: setup and install about 1.5 to 2 minutes, pre-flight seconds, four cities about 0.5 to 1 minute each. First run: 4 billed min (run 40141557468, 2026-10-24; job 3 min 6 s, EL_PASO 126 s of it); one sample, replaced by the 05-08 window measurement |
 | Total | 28 | | about 3,500 to 5,000 | Sum of the two rows above |
 
 Owner's Billing figures, read from GitHub Settings, Billing and plans (account aa-phan) and recorded
