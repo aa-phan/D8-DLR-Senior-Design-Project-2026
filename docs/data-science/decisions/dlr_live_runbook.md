@@ -1,0 +1,344 @@
+# DLR Live Ratings Runbook
+
+**Status: production path (production-pipeline Phase 5). Operating this workflow writes hourly ratings
+for the four cities into Supabase. It never touches Shadow Collection.**
+
+This is the operating reference for `.github/workflows/dlr_live.yml` and the cron-job.org job that
+starts it: how it is triggered, what one run does, where the results go, how to pause, change,
+drill and check it, and what it costs in GitHub Actions minutes. It is deliberately commands and
+settings, not rationale; the rationale is in the Phase 5 plans and `REQUIREMENTS.md`. Nothing here
+holds a secret value: tokens and keys live in cron-job.org and in GitHub's Actions secrets, never in
+this repository.
+
+Last updated 2026-10-24 (plan 05-05). Figures marked "estimate" are replaced by measured ones in
+plans 05-06 and 05-08.
+
+## 1. Purpose and scope
+
+Every hour the workflow rates the four cities in `config.LOCATIONS` (`AUSTIN`, `CORPUS_CHRISTI`,
+`MIDLAND`, `EL_PASO`) and writes the results to Supabase: one row per city in `public.city_rating`
+and one row per run in `public.pipeline_run`.
+
+It is a separate workflow from Shadow Collection (`shadow_collect.yml`). It has its own concurrency
+group, its own trigger job and its own token. It does not read or write `data/shadow/`, the shadow
+modules or the shadow runbook, which stay frozen until the 2026-11-24 confirmation run.
+
+Owner decisions this runbook relies on, by number (`REQUIREMENTS.md`, "Owner decisions"):
+
+| Decision | What it fixes here |
+|---|---|
+| OD-1 | Hourly cadence |
+| OD-2 | Composed weather providers (`SYNOPTIC_TOKEN`, `NREL_API_KEY`, `NREL_API_EMAIL`) |
+| OD-3 | ML forecast on the live path; a run without the ML forecast or an anomaly model is red |
+| OD-7 | `valid_time` is the hour-truncated UTC slot of the run's window end; a second run in the same hour overwrites that hour's rows |
+| OD-9 | A city that fails outright writes no rating row; the failure is recorded in `pipeline_run` only |
+| OD-10 | The eight per-city model files are committed to git; there is no model storage elsewhere |
+
+## 2. Trigger (cron-job.org)
+
+The workflow has no GitHub `schedule:` trigger. GitHub's own scheduler started shadow runs 3 to 8
+hours late, so the hourly start comes from a cron-job.org job that calls the workflow's `dispatches`
+endpoint, the same mechanism Shadow Collection has used since 2026-10-15. Manual runs from the Actions
+tab still work because `workflow_dispatch` is the only trigger.
+
+Job settings in cron-job.org:
+
+| Setting | Value |
+|---|---|
+| URL | `https://api.github.com/repos/aa-phan/D8-DLR-Senior-Design-Project-2026/actions/workflows/dlr_live.yml/dispatches` |
+| Method | POST |
+| Header `Accept` | `application/vnd.github+json` |
+| Header `Authorization` | `Bearer <the fine-grained token, entered in cron-job.org only>` |
+| Header `X-GitHub-Api-Version` | `2022-11-28` |
+| Body | `{"ref":"main"}` |
+| Expected result | HTTP 204 with an empty body (GitHub accepted the dispatch) |
+| Schedule | `5 * * * *`, time zone set to UTC |
+| Notifications | failure notifications on |
+
+The scheduled body never carries `inputs`. `"inputs":{"fault_city":"MIDLAND"}` is added only for a
+drill (section 8).
+
+**Why minute 05.** The shadow job fires at minute 00 of its hours, so the live job never starts in the
+same minute as a shadow run. The runner floors its window end to 5 minutes, so a run dispatched at
+hh:05 has end hh:05 and slot hh:00. The two workflows use different concurrency groups (`dlr-live`
+and `shadow-collection`), so they may overlap in time without blocking each other. Observation, not
+a change request: the shadow runbook lists its times as 00/06/12/18 UTC, while `gh run list` shows
+its recent runs created at 05, 11, 17 and 23 UTC (minute 00); that does not affect minute 05.
+
+**The token.** A fine-grained personal access token owned by the repository owner:
+
+- Resource owner: the repository owner; "Only select repositories": this repository only.
+- Repository permission "Actions": read and write. Nothing else.
+- An expiry date, with a calendar reminder set before it. An expired token makes every dispatch fail
+  and nothing in the repository reports it (section 11).
+- Separate from the shadow job's token, so either can be revoked alone.
+- Stored only in cron-job.org. It is never written in this repository, in a workflow, in a `.env`
+  or in a message.
+
+**What is recorded here and what is not.** Recorded: the URL, method, headers by name, body, expected
+status, schedule and token scope above. Not recorded, by design: the token, its value, its expiry
+date and the cron-job.org account details.
+
+## 3. Secrets
+
+Four repository secrets are required, added under Settings, Secrets and variables, Actions. The
+runner stops before starting any city if one is unset or empty, and logs the names only.
+
+| Secret | What it is for |
+|---|---|
+| `SYNOPTIC_TOKEN` | Synoptic station observations (OD-2). The same secret Shadow Collection uses |
+| `NREL_API_KEY` | NSRDB solar data (OD-2) |
+| `NREL_API_EMAIL` | The email NSRDB requires with the key |
+| `SUPABASE_DB_URL` | Phase 4's writer connection: the session pooler URL (port 5432) for the `dlr_writer` role, which has SELECT, INSERT and UPDATE on the two tables and nothing else |
+
+`gh secret list` shows secret names only, never values. To check that all four exist without reading
+anything sensitive, run it and look for the four names.
+
+## 4. What one run does
+
+Steps, in order (`.github/workflows/dlr_live.yml`, job `rate`, runner `ubuntu-latest`):
+
+1. Checkout `main`.
+2. Python 3.12 with the pip cache (it cuts billed minutes at an hourly cadence).
+3. Install `requirements.txt`.
+4. Model pre-flight (`backend/dlr_live_check_models.py`, no secrets): fails the run before any city is
+   rated if one of the eight model files is missing, differs from its recorded SHA-256 or will not load.
+5. Run `backend/dlr_live_run.py`: one `dlr_orchestrator.py` child process per city, one after another in
+   `config.LOCATIONS` order, all sharing one window end. Each child rates its city with the composed
+   providers and the ML forecast and writes its own rating row. Each child has a hard budget of
+   `CITY_TIMEOUT_S` = 300 s and is killed at that point.
+
+**Timeout.** `timeout-minutes: 30`. At the cap, 4 cities x 300 s = 1200 s (20 minutes) of children plus
+at most 10 minutes for checkout, install, the pre-flight and the run-log writes. That is shorter than
+the 60-minute cadence, so a run cut off at its timeout never overlaps the next slot. A healthy run
+takes a few minutes.
+
+**Concurrency.** Group `dlr-live`, `cancel-in-progress: false`. At most one run executes and one
+waits. A newer waiting run replaces an older waiting one, and GitHub shows the replaced run as
+cancelled. A run in flight is never cancelled.
+
+**City outcomes** (the runner's record per city):
+
+| Outcome | Meaning | Rating row |
+|---|---|---|
+| ok | The child exited 0, left an output file with a summary row for the city, and that row says the rating row was written | written |
+| error | The child failed, or produced no usable result | none (OD-9) |
+| timeout | The child outlived 300 s and was killed | none (OD-9) |
+| degraded | An ok child whose ML forecast failed, or that ran with no anomaly model | written |
+
+`degraded` is decided by health: `forecast_status` must be `ok` or `cold_start` and an anomaly model
+must have loaded. A missing `forecast_status` counts as degraded.
+
+**Exit codes of `dlr_live_run.py`:** 0 when every city is ok and healthy; 1 for anything else (a city
+errored, timed out or was degraded, or a `pipeline_run` write failed), which turns the Actions run
+red; 2 for a usage error such as an unknown `--fault-city`. The other cities always still run.
+
+The step summary of each run lists every city (outcome, rating, fallback, written, forecast status,
+anomaly model, fault, redacted error) and a `pipeline_run: N writes, M failed` line.
+
+## 5. Where results go
+
+**`public.city_rating`.** One row per city and slot. `valid_time` is the hour-truncated UTC slot of the
+run's window end (OD-7). A second run in the same hour (a manual run, a drill, a re-run) overwrites that
+hour's rows for the cities it rates; `first_written_at` never changes. `run_id` is the workflow run id
+(`GITHUB_RUN_ID`) and `run_attempt` its attempt number. A failed city writes no rating row (OD-9), so
+the previous hour's row stays the latest one for that city.
+
+**`public.pipeline_run`.** One row per run, keyed by `run_id` alone (the attempt is not part of the key).
+Only the runner writes it; the children run with `--no-run-row`. It is inserted before the first city
+starts, updated after each city and finished at the end:
+
+- `finished_at` null means the run did not finish, for example the job timeout killed it.
+- `cities_ok`: the cities whose row was written with a healthy ML path, in `config.LOCATIONS` order.
+- `cities_failed`: an object per other city with `outcome` (`error`, `timeout` or `degraded`),
+  `written`, `exit_code`, `duration_s`, `forecast_status`, `forecast_error`, `detector_model_loaded`,
+  the redacted `error` and `fault_injected`. The schema document and the column comment list only
+  `error` and `degraded`; `timeout` and the extra keys are also stored (the column is jsonb).
+- `provider_errors` and `sources`, keyed by city.
+- The table is not readable with the public key; read it with the owner's database connection or the
+  Supabase SQL editor.
+
+Limitation: a city whose history cleaning failed but whose forecast was fine reads as healthy in this
+log, because the orchestrator's summary does not export the cleaning error.
+
+Two read-only example queries:
+
+```sql
+-- latest runs
+select run_id, run_attempt, window_end, finished_at, cities_ok, cities_failed
+from public.pipeline_run
+order by window_end desc
+limit 24;
+
+-- failed cities in the last 24 hours
+select p.window_end, f.key as city, f.value ->> 'outcome' as outcome, f.value ->> 'error' as error
+from public.pipeline_run p, jsonb_each(p.cities_failed) as f
+where p.window_end > now() - interval '24 hours'
+order by p.window_end desc, f.key;
+```
+
+## 6. Pause and resume
+
+**Pause.** Disable the cron-job.org job. That stops new runs at the source. A run already in flight
+finishes. To also block manual dispatches, open the Actions tab, DLR Live Ratings, the "..." menu, and
+choose Disable workflow. If the workflow is disabled while the cron-job.org job is still enabled,
+cron-job.org receives errors and may disable its own job after repeated failures; check its state
+after resuming.
+
+**Resume.** Re-enable the cron-job.org job (and the workflow, if it was disabled). Nothing needs to be
+reset: there is no state outside the database. Missed slots are not back-filled. The gap stays in
+`city_rating` until it is filled by hand with a local run for that slot (section 8), and Phase 6's
+freshness check will show the gap while it exists.
+
+## 7. Change cadence
+
+Edit the cron-job.org schedule only; the workflow does not contain a schedule. Cadence is OD-1, and
+OD-4's freshness limit is one cadence plus 30 minutes (90 minutes at hourly), so a change revisits OD-1
+and OD-4 with the owner, and the minutes table in section 12 is recomputed. A cadence faster than hourly
+overwrites the same hour's rows (OD-7), so it adds cost without adding rows.
+
+Returning to GitHub's own scheduler is not recommended (it started shadow runs 3 to 8 hours late). It
+would mean adding a `schedule` trigger to `dlr_live.yml`, updating
+`backend/tests/dlr_live_workflow_test.py` (which pins the workflow as dispatch-only) and disabling the
+cron-job.org job so runs are not doubled.
+
+## 8. Manual runs and drills
+
+**Manual run.** Actions tab, "Run workflow", or
+
+```bash
+gh workflow run dlr_live.yml --ref main
+```
+
+**Fault drill.** Proves the failure path end to end: one city runs with blank provider credentials, so
+it fails, the run turns red, and the other three cities still write.
+
+```bash
+gh workflow run dlr_live.yml --ref main -f fault_city=MIDLAND
+```
+
+Dispatch a drill at least 15 minutes before the next hh:05, so it finishes before the scheduled run
+starts. The drilled city has no rating row for that run (OD-9) and appears in `cities_failed` with
+`fault_injected` true. The input is checked against `config.LOCATIONS` and reaches the runner only
+through an environment variable, never a shell script.
+
+**Re-run jobs.** "Re-run jobs" in the Actions tab keeps the run id and increments `run_attempt`. The
+re-run uses the current time for its window end, so a re-run in a later hour writes the later slot. It
+replaces that run's `pipeline_run` row (same `run_id`, new `run_attempt` and `started_at`).
+
+**Local run (owner only).**
+
+```bash
+PYTHONPATH=backend .venv/bin/python backend/dlr_live_run.py
+```
+
+It loads `.env` and, when `SUPABASE_DB_URL` is set there, writes production rows. `--end
+2026-10-24T14:05:00Z` rates a chosen past window end and so writes that slot (how a missed slot is
+filled by hand); `--cities MIDLAND` limits the cities; `--no-run-log` skips the `pipeline_run` row (the
+scheduled workflow never passes it) but still writes rating rows.
+
+## 9. Models (OD-10)
+
+The live ML forecast and anomaly models are eight files under `data/models/`
+(`forecast_{CITY}.joblib` and `anomaly_{CITY}.joblib` for the four cities), committed to git through a
+`.gitignore` carve-out. `data/models/LIVE_ARTIFACT_HASHES.sha256` holds their SHA-256 hashes. Every other
+file under `data/models/` stays ignored.
+
+**Promoting a retrained model.** Retrain offline, validate as in Phase 3, then:
+
+```bash
+PYTHONPATH=backend .venv/bin/python backend/dlr_live_check_models.py --write-manifest
+```
+
+Commit the changed `.joblib` files and the regenerated manifest together, and push with the owner's
+approval. A binary committed to git stays in its history. The pre-flight fails the run when the files and
+the manifest disagree, so an unpromoted retrain (files changed, manifest not) turns every run red before
+any city is rated. Running `backend/dlr_live_check_models.py` with no argument performs the same check
+locally.
+
+## 10. NSRDB
+
+NSRDB is skipped for windows in the current UTC year: `NSRDB_SKIP_YEARS_BEFORE_CURRENT = 0` in
+`backend/observation_composer.py`. NSRDB publishes a year only after it ends, so a current-year window
+would always fail; skipping it makes no request, records no error and does not count towards the circuit
+breaker, and solar comes from Open-Meteo. Early in a year, if NSRDB has not yet published the previous
+year, set the constant to 1 so the previous year is skipped too, and set it back to 0 once it has.
+
+## 11. Failure modes and alerting
+
+| What happens | What you see | Backstop |
+|---|---|---|
+| A run is red (a city errored, timed out or was degraded, a `pipeline_run` write failed) | The Actions run is red and GitHub's failure notification goes to the account that owns the dispatch token, per its notification settings. The step summary and `cities_failed` name the city | Section 13 counts red runs as visible |
+| A dispatch fails, for example an expired token | Nothing starts and nothing in the repository reports it | cron-job.org failure notifications |
+| The cron-job.org job is disabled, misconfigured or its token has expired | No run starts and nothing in the repository reports it | cron-job.org failure notifications and Phase 6's freshness check (a city whose latest `valid_time` is older than 90 minutes) |
+| Supabase free-tier pause | Every child fails to connect; red runs | Unpause the project in Supabase, then confirm with the next run |
+| A model file is missing or altered | The pre-flight fails and the run is red before any city is rated | Section 9 |
+| GitHub Actions minutes exhausted | No workflow in the account starts | Section 12 |
+
+The runner records a failed city and carries on; no rating row is ever invented for it (OD-9).
+
+## 12. GitHub Actions minutes (SCHED-02)
+
+Hourly runs cost many more minutes than Shadow Collection. Billed minutes per month:
+
+    runs per day x billed minutes per run x 30
+
+GitHub bills each job rounded up to whole minutes; a run's billed minutes are approximated from
+`gh run list` as `ceil((updatedAt - startedAt) / 60 s)`, at least 1, which is what
+`backend/dlr_live_window_check.py` prints.
+
+| Workflow | Runs per day | Billed minutes per run | Minutes per month | Basis |
+|---|---|---|---|---|
+| Shadow Collection | 4 | median 5 | about 600 to 660 | Measured: `gh run list --workflow shadow_collect.yml`, 2026-10-16 to 2026-10-19 (median 5 billed minutes per run) |
+| DLR Live Ratings | 24 | 4 to 6 | about 2,900 to 4,300 | Estimate until 05-08: setup and install about 1.5 to 2 minutes, pre-flight seconds, four cities about 0.5 to 1 minute each |
+| Total | 28 | | about 3,500 to 5,000 | Sum of the two rows above |
+
+| Quota figure | Value |
+|---|---|
+| Included minutes, usage this cycle, reset date, spending limit | Not yet measured. To be filled in at 05-06 from Settings, Billing |
+
+Context only, not the owner's quota: GitHub's published included minutes for private repositories on
+personal plans are 2,000 (Free) and 3,000 (Pro) per month. The real quota, usage and spending limit
+are read from the billing page by the owner.
+
+Hourly very likely exceeds the included minutes of a personal private-repository plan. When the
+included minutes run out and no spending allowance is set, GitHub stops all workflows in the account,
+including Shadow Collection before its 2026-11-24 confirmation run. Levers, none chosen here:
+
+1. Allow paid overage up to a set budget (the rate is on the billing page).
+2. Lower the billed minutes per run (a shorter install, fewer retries, a smaller timeout).
+3. Lower the cadence, which revisits OD-1 and OD-4 (section 7).
+4. Change repository visibility, which is a separate owner decision.
+
+**How to measure.** For the live side, `backend/dlr_live_window_check.py --start <hour> --hours 24`
+prints the count, median and maximum billed minutes and the projected 30-day minutes for a window. For
+the shadow side, `gh run list --workflow shadow_collect.yml --json databaseId,createdAt,startedAt,updatedAt,event,conclusion`
+and count every run: before 2026-10-17 21:00 UTC `schedule` events also ran, so count the actual runs, not
+4 a day, when measuring a past month.
+
+## 13. Checking a window
+
+`backend/dlr_live_window_check.py` turns "over 24 hours, every scheduled slot has either a successful run
+or a visible failed run, and each successful run wrote one row per city" into one command. It is
+read-only and runs from the owner's main checkout, because it needs `gh` authenticated and
+`SUPABASE_DB_URL` in `.env`:
+
+```bash
+PYTHONPATH=backend .venv/bin/python backend/dlr_live_window_check.py --start 2026-10-25T00:00:00Z --hours 24
+```
+
+`--start` is the first slot, an exact UTC hour. `--json PATH` also writes the full result. It prints a
+table (slot, verdict, runs, note), the billed-minutes line and the window verdict, and exits 0 when the
+window passed, 1 otherwise.
+
+| Verdict | Meaning |
+|---|---|
+| ok | A run succeeded, its `pipeline_run` row lists all four cities in `cities_ok`, and `city_rating` has four rows at that slot written by the slot's runs |
+| incomplete | A successful run exists but one of those conditions fails. Fails the window |
+| failed-visible | No successful run, but at least one run is red (failure, timed_out or cancelled). Passes: the failure is visible |
+| missing | No run, or only unfinished or inconclusive runs. Fails the window |
+
+A run belongs to the slot of its `pipeline_run` `window_end` truncated to the hour; a run with no
+`pipeline_run` row is placed by its start time and counts only if it is red. Rows from any run of the
+slot count, so a later drill or re-run that overwrote some cities' rows in the same hour does not turn an
+earlier good run into a failure.
