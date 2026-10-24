@@ -186,6 +186,10 @@ def _arg(argv, flag):
     return argv[argv.index(flag) + 1]
 
 
+def _no_record(row):
+    """A run-log writer that records nothing, for tests of everything but the run log."""
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Tracer: one child per city, in order, through the real argument contract
 # ──────────────────────────────────────────────────────────────────────────────
@@ -194,7 +198,7 @@ def test_tracer_every_city_runs_in_its_own_child_and_the_run_exits_zero(tmp_path
     script, calls_log = _fake_orchestrator(tmp_path)
     monkeypatch.setattr(dlr_live_run, "ORCHESTRATOR", script)
 
-    run = dlr_live_run.run_live(env=_live_env(), now=_NOW)
+    run = dlr_live_run.run_live(env=_live_env(), now=_NOW, record_fn=_no_record)
 
     assert run["exit_code"] == 0
     assert [r["city"] for r in run["cities"]] == list(config.LOCATIONS)
@@ -248,7 +252,8 @@ def test_a_crashing_city_is_recorded_and_the_rest_still_run(tmp_path, monkeypatc
     script, calls_log = _fake_orchestrator(tmp_path)
     monkeypatch.setattr(dlr_live_run, "ORCHESTRATOR", script)
 
-    run = dlr_live_run.run_live(env=_live_env(FAKE_BEHAVIOR_MIDLAND="crash"), now=_NOW)
+    run = dlr_live_run.run_live(
+        env=_live_env(FAKE_BEHAVIOR_MIDLAND="crash"), now=_NOW, record_fn=_no_record)
 
     by_city = {r["city"]: r for r in run["cities"]}
     assert by_city["MIDLAND"]["outcome"] == "error"
@@ -292,7 +297,8 @@ def _run_one(tmp_path, monkeypatch, behavior, city="MIDLAND", **kwargs):
     script, _ = _fake_orchestrator(tmp_path)
     monkeypatch.setattr(dlr_live_run, "ORCHESTRATOR", script)
     run = dlr_live_run.run_live(
-        cities=[city], env=_live_env(**{f"FAKE_BEHAVIOR_{city}": behavior}), now=_NOW, **kwargs)
+        cities=[city], env=_live_env(**{f"FAKE_BEHAVIOR_{city}": behavior}), now=_NOW,
+        record_fn=_no_record, **kwargs)
     return run, run["cities"][0]
 
 
@@ -307,7 +313,7 @@ def test_a_hung_city_is_killed_at_the_timeout_and_the_rest_still_run(tmp_path, m
     began = time.monotonic()
 
     run = dlr_live_run.run_live(
-        env=_live_env(FAKE_BEHAVIOR_MIDLAND="hang"), now=_NOW, timeout_s=2)
+        env=_live_env(FAKE_BEHAVIOR_MIDLAND="hang"), now=_NOW, timeout_s=2, record_fn=_no_record)
 
     assert time.monotonic() - began < 25  # the hung child slept for 30 s
     by_city = {r["city"]: r for r in run["cities"]}
@@ -371,7 +377,7 @@ def test_fault_city_blanks_provider_credentials_for_that_child_only(tmp_path, mo
     monkeypatch.setattr(dlr_live_run, "ORCHESTRATOR", script)
     env = _live_env()
 
-    run = dlr_live_run.run_live(fault_city="MIDLAND", env=env, now=_NOW)
+    run = dlr_live_run.run_live(fault_city="MIDLAND", env=env, now=_NOW, record_fn=_no_record)
 
     calls = {c["city"]: c for c in _calls(calls_log)}
     for city, call in calls.items():
@@ -387,7 +393,7 @@ def test_fault_city_blanks_provider_credentials_for_that_child_only(tmp_path, mo
     calls_log.unlink()
     _set_required_env(monkeypatch)
     monkeypatch.setenv("DLR_LIVE_FAULT_CITY", "EL_PASO")
-    assert dlr_live_run.main(["--cities", "EL_PASO", "AUSTIN"]) == 0
+    assert dlr_live_run.main(["--cities", "EL_PASO", "AUSTIN", "--no-run-log"]) == 0
     assert {c["city"]: c["synoptic_token_empty"] for c in _calls(calls_log)} == {
         "EL_PASO": True, "AUSTIN": False}
 
@@ -474,7 +480,8 @@ def test_step_summary_lists_cities_in_order_with_redacted_errors(tmp_path, monke
     monkeypatch.setenv("FAKE_BEHAVIOR_MIDLAND", "crash")
     out_json = tmp_path / "run.json"
 
-    assert dlr_live_run.main(["--end", "2025-06-01T10:55:00Z", "--summary-json", str(out_json)]) == 1
+    assert dlr_live_run.main(
+        ["--end", "2025-06-01T10:55:00Z", "--summary-json", str(out_json), "--no-run-log"]) == 1
 
     text = summary.read_text()
     assert text.startswith("earlier step output\n")  # appended, never overwritten

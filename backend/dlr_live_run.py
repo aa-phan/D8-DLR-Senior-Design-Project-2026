@@ -34,6 +34,13 @@ the workflow maps from its `fault_city` input, runs that one city with its
 provider credentials blanked so it fails, proving the failure path end to end.
 The value is checked against `config.LOCATIONS`; it never reaches a shell.
 
+Run log (SCHED-01, OD-9): the runner alone keeps the run's `public.pipeline_run`
+row (`live_run_log.py`). `run_live` records it before the first child starts, after
+every city and at the end with `finished_at` set, so a run killed by the job timeout
+leaves a row with `finished_at` null. The children run with `--no-run-row` and never
+write it. A write that fails is logged (redacted), counted, and makes the exit code 1;
+it never stops the remaining cities. `--no-run-log` skips recording (local dry runs).
+
 Secrets: every error text that enters a record or the Actions step summary goes
 through `redact()` first.
 
@@ -55,6 +62,7 @@ from datetime import datetime, timezone
 from urllib.parse import unquote, urlsplit
 
 import config
+import live_run_log
 
 log = logging.getLogger(__name__)
 
@@ -77,7 +85,7 @@ DB_ENV = ("SUPABASE_DB_URL",)
 REQUIRED_ENV = PROVIDER_ENV + DB_ENV
 
 # forecast_status values (Phase 4) that count as a healthy ML forecast.
-HEALTHY_FORECAST_STATUSES = ("ok", "cold_start")
+HEALTHY_FORECAST_STATUSES = live_run_log.HEALTHY_FORECAST_STATUSES
 
 _TS_FMT = "%Y-%m-%dT%H:%M:%SZ"
 _STDERR_TAIL_LINES = 20
@@ -175,6 +183,20 @@ def redact(text, env=None) -> str:
     return text[-_MAX_TEXT_CHARS:]
 
 
+def _redact_counts(counts, env=None) -> dict:
+    """
+    A `{text: count}` dict with every key redacted (provider error text can echo a
+    credential). Keys that become equal after redaction keep the sum of their counts.
+    """
+    out = {}
+    for key, value in (counts or {}).items():
+        safe = redact(key, env)
+        if safe in out and isinstance(value, (int, float)) and isinstance(out[safe], (int, float)):
+            value = out[safe] + value
+        out[safe] = value
+    return out
+
+
 def _tail(text, lines=_STDERR_TAIL_LINES) -> str:
     return "\n".join((text or "").strip().splitlines()[-lines:])
 
@@ -196,8 +218,8 @@ def classify(city, returncode, output, stderr_text, fault_injected=False, timed_
         "city": city, "outcome": "error", "exit_code": returncode,
         "rating_a": None, "fallback": None, "exhausted": None, "fallback_gates": [],
         "written": False, "forecast_status": "not_run", "forecast_error": None,
-        "detector_model_loaded": False, "provider_errors": {}, "error": None,
-        "fault_injected": fault_injected,
+        "detector_model_loaded": False, "provider_errors": {}, "sources": {},
+        "error": None, "fault_injected": fault_injected,
     }
     child_error = ((output or {}).get("errors") or {}).get(city)
 
@@ -224,7 +246,8 @@ def classify(city, returncode, output, stderr_text, fault_injected=False, timed_
         written=True, forecast_status=row.get("forecast_status"),
         forecast_error=None if row.get("forecast_error") is None else redact(row["forecast_error"], env),
         detector_model_loaded=bool(row.get("detector_model_loaded")),
-        provider_errors=output.get("provider_errors") or {},
+        provider_errors=_redact_counts(output.get("provider_errors"), env),
+        sources=output.get("sources") or {},
     )
     return record
 
@@ -294,11 +317,32 @@ def run_city(city, end, workdir, timeout_s, env, fault_injected=False) -> dict:
     return record
 
 
-def run_live(cities=None, end=None, fault_city="", timeout_s=CITY_TIMEOUT_S, env=None, now=None) -> dict:
+def write_run_row(row) -> None:
+    """
+    The default `record_fn`: upsert `row` into pipeline_run over a fresh connection,
+    closed afterwards. A new connection per write means an idle session dropped
+    while a child ran (up to 300 s) can never fail the next write.
+    """
+    conn = live_run_log.open_connection()
+    try:
+        live_run_log.upsert_run_row(conn, row)
+    finally:
+        conn.close()
+
+
+def run_live(cities=None, end=None, fault_city="", timeout_s=CITY_TIMEOUT_S, env=None, now=None,
+             record_fn=None, record_run=True) -> dict:
     """
     Run every city (default: all of config.LOCATIONS) strictly one after another, in
     that order, each in its own child sharing one window end. Returns the run
-    record: ids, end, slot, times, one record per city and the exit code.
+    record: ids, end, slot, times, one record per city, the exit code and `run_log`
+    (`{"writes": N, "failed": M}`, None when recording is off).
+
+    The run's pipeline_run row goes to `record_fn(row)` (default: `write_run_row`)
+    before the first child, after each city and after the last with `finished_at`
+    set. A `record_fn` that raises is logged (type and redacted message) and counted,
+    the remaining cities still run, and the exit code is 1. `record_run=False`
+    (the CLI's `--no-run-log`) records nothing.
 
     `fault_city` ('' or a key of config.LOCATIONS) runs that city's child with its
     provider credentials set to empty strings, so it fails (the drill); every other
@@ -320,8 +364,33 @@ def run_live(cities=None, end=None, fault_city="", timeout_s=CITY_TIMEOUT_S, env
     if fault_city and fault_city not in cities:
         log.warning("fault city %s is not among the cities being run; no drill happens", fault_city)
 
-    started_at = _stamp(datetime.now(timezone.utc))
-    records = []
+    record_fn = write_run_row if record_fn is None else record_fn
+    run_log = {"writes": 0, "failed": 0}
+    state = {
+        "run_id": run_id, "run_attempt": run_attempt, "end": end, "slot": slot_of(end),
+        "started_at": _stamp(datetime.now(timezone.utc)), "finished_at": None,
+        "cities": [], "exit_code": None,
+    }
+    records = state["cities"]
+
+    def save_run_row():
+        if not record_run:
+            return
+        run_log["writes"] += 1
+        try:
+            record_fn(live_run_log.build_run_row(state, env=env))
+        except Exception as exc:  # noqa: BLE001 - a run-log fault must never stop the cities
+            run_log["failed"] += 1
+            # No traceback: its message text would bypass redact().
+            log.error("pipeline_run write failed (%s): %s", type(exc).__name__, redact(exc, env))
+
+    if record_run:
+        try:
+            state["pipeline_version"] = live_run_log.pipeline_version(env)
+        except Exception as exc:  # noqa: BLE001 - the version is a label, never a reason to fail a run
+            log.error("pipeline version lookup failed (%s): %s", type(exc).__name__, redact(exc, env))
+            state["pipeline_version"] = "unknown"
+    save_run_row()
     with tempfile.TemporaryDirectory() as workdir:
         for city in cities:
             faulted = city == fault_city
@@ -333,13 +402,13 @@ def run_live(cities=None, end=None, fault_city="", timeout_s=CITY_TIMEOUT_S, env
             record = run_city(city, end, workdir, timeout_s, city_env, fault_injected=faulted)
             log.info("%s: %s in %.1fs", city, record["outcome"], record["duration_s"])
             records.append(record)
-    exit_code = 0 if all(_healthy(r) for r in records) else 1
-    log.info("live run %s attempt %s finished, exit code %d", run_id, run_attempt, exit_code)
-    return {
-        "run_id": run_id, "run_attempt": run_attempt, "end": end, "slot": slot_of(end),
-        "started_at": started_at, "finished_at": _stamp(datetime.now(timezone.utc)),
-        "cities": records, "exit_code": exit_code,
-    }
+            save_run_row()
+    state["finished_at"] = _stamp(datetime.now(timezone.utc))
+    save_run_row()
+    state["exit_code"] = 0 if all(_healthy(r) for r in records) and run_log["failed"] == 0 else 1
+    state["run_log"] = run_log if record_run else None
+    log.info("live run %s attempt %s finished, exit code %d", run_id, run_attempt, state["exit_code"])
+    return state
 
 
 def _cell(text, limit=_SUMMARY_ERROR_CHARS) -> str:
@@ -350,9 +419,9 @@ def _cell(text, limit=_SUMMARY_ERROR_CHARS) -> str:
 
 def write_step_summary(run, path, env=None) -> None:
     """
-    Append the run to the Actions step summary: a heading and one table row per
-    city, in run order. The error column is redacted, cut to 120 characters and
-    has its pipes escaped.
+    Append the run to the Actions step summary: a heading, one table row per
+    city, in run order, and a `pipeline_run: N writes, M failed` line. The error
+    column is redacted, cut to 120 characters and has its pipes escaped.
     """
     lines = [
         f"## DLR live run {run['run_id']} attempt {run['run_attempt']} (slot {run['slot']})",
@@ -372,6 +441,10 @@ def write_step_summary(run, path, env=None) -> None:
             _cell(redact(r.get("error") or "", env)),
         ]
         lines.append("| " + " | ".join(cells) + " |")
+    if "run_log" in run:
+        counts = run["run_log"]
+        lines += ["", "pipeline_run: skipped (--no-run-log)" if counts is None
+                  else f"pipeline_run: {counts['writes']} writes, {counts['failed']} failed"]
     with open(path, "a") as fh:
         fh.write("\n".join(lines) + "\n\n")
 
@@ -396,6 +469,9 @@ def main(argv=None) -> int:
                         help="drill only: run this city with its provider credentials blanked "
                              "(default: $DLR_LIVE_FAULT_CITY)")
     parser.add_argument("--summary-json", help="write the whole run record as JSON to this path")
+    parser.add_argument("--no-run-log", action="store_true",
+                        help="local dry runs only: do not write the pipeline_run row "
+                             "(the scheduled workflow never passes this)")
     args = parser.parse_args(argv)
     if args.fault_city and args.fault_city not in config.LOCATIONS:
         parser.error(f"--fault-city must be empty or one of {list(config.LOCATIONS)}, got {args.fault_city!r}")
@@ -408,7 +484,7 @@ def main(argv=None) -> int:
         return 1
 
     run = run_live(cities=args.cities, end=args.end, fault_city=args.fault_city,
-                   timeout_s=args.timeout_s)
+                   timeout_s=args.timeout_s, record_run=not args.no_run_log)
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary_path:
         write_step_summary(run, summary_path)
