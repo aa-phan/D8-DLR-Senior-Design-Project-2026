@@ -32,7 +32,7 @@ Rules:
 - The slot is the hour floor of the run end, never a rounding: a run at 14:07Z and a retry at 14:12Z both write 14:00Z; a run at 14:59Z also writes 14:00Z.
 - A live retry within the same hour overwrites the row for that slot: values and `computed_at` change, `first_written_at` does not.
 - A backfill never overwrites an existing row.
-- The offline CSV archive from Phase 2 keeps the first write for an exact instant. The production store keeps the last write for the hour. This is a deliberate difference; the CSV is the offline store (tests, backfill source), not the production store.
+- The offline CSV archive from Phase 2 keeps the first computed write for an exact instant (a computed row may follow fallback rows and then owns the slot; otherwise the first write wins). The production store keeps the last write for the hour. This is a deliberate difference; the CSV is the offline store (tests, backfill source), not the production store.
 - Rows of different cities at the same `valid_time` are independent. Never combine, minimise or otherwise reduce across cities: there is no corridor minimum and no bottleneck value.
 
 ## Columns: public.city_rating
