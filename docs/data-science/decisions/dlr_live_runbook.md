@@ -10,7 +10,8 @@ settings, not rationale; the rationale is in the Phase 5 plans and `REQUIREMENTS
 holds a secret value: tokens and keys live in cron-job.org and in GitHub's Actions secrets, never in
 this repository.
 
-Last updated 2026-10-24 (plan 05-06: owner's Actions quota recorded in section 12). Figures marked
+Last updated 2026-10-24 (plan 05-06: owner's Actions quota recorded in section 12; the repository was made
+public the same day, so Actions minutes are free going forward). Figures marked
 "estimate" are replaced by measured ones in plans 05-06 and 05-08.
 
 ## 1. Purpose and scope
@@ -273,13 +274,44 @@ year, set the constant to 1 so the previous year is skipped too, and set it back
 | The cron-job.org job is disabled, misconfigured or its token has expired | No run starts and nothing in the repository reports it | cron-job.org failure notifications and Phase 6's freshness check (a city whose latest `valid_time` is older than 90 minutes) |
 | Supabase free-tier pause | Every child fails to connect; red runs | Unpause the project in Supabase, then confirm with the next run |
 | A model file is missing or altered | The pre-flight fails and the run is red before any city is rated | Section 9 |
-| GitHub Actions minutes exhausted | No workflow in the account starts | Section 12 |
+| GitHub Actions minutes exhausted | No workflow in the account starts. Not expected while the repository is public (hosted-runner minutes are free); it applies again if the repository is made private | Section 12 |
 
 The runner records a failed city and carries on; no rating row is ever invented for it (OD-9).
 
 ## 12. GitHub Actions minutes (SCHED-02)
 
-Hourly runs cost many more minutes than Shadow Collection. Billed minutes per month:
+**Update 2026-10-24: the repository is now public, so the overage projection below no longer applies
+going forward.** On 2026-10-24 the owner made the repository public
+(https://github.com/aa-phan/D8-DLR-Senior-Design-Project-2026) to remove the Actions-minutes cost.
+Actions minutes on GitHub-hosted runners are free for public repositories, so hourly live runs and
+Shadow Collection no longer draw on the 2,000 included minutes or incur overage from that point. The
+figures and projections in the rest of this section are kept as history: they are what the owner
+measured and what the decision to go public was based on. They describe a private repository and do not
+describe the account's billing once the change is in effect. Minutes already billed this cycle (about
+1,028 overage minutes, $6.17) are not refunded by the change. Re-read the Billing page after the first
+full day of live runs to confirm that Actions usage stopped growing; that confirmation is not recorded
+yet.
+
+**Security posture of a public repository.** The things that matter now:
+
+- `dlr_live.yml` is `workflow_dispatch`-only. Only users with write access to the repository can
+  dispatch it, from the Actions tab, the CLI or the cron-job.org token (scoped to Actions read and write
+  on this repository only, section 2). It has no `pull_request`, `push` or `schedule` trigger, so a
+  pull request or a push from outside cannot start it.
+- Repository secrets (`SYNOPTIC_TOKEN`, `NREL_API_KEY`, `NREL_API_EMAIL`, `SUPABASE_DB_URL`) are not
+  passed to workflows triggered by pull requests from forks, and this workflow does not run on pull
+  requests at all.
+- Everything committed is now public and stays public in history: the eight per-city model files under
+  `data/models/` (section 9), the data, the planning documents and the code. A scan of all 904 commits
+  of history for credential patterns (database URLs with passwords, Supabase and JWT keys, GitHub
+  tokens, cloud-provider and AI-provider keys, NREL and Synoptic token assignments) and for committed
+  `.env` files found nothing before the change. Never commit a secret; rotating it is the only remedy
+  once it has been pushed to a public repository.
+- Workflow logs of a public repository are public. The runner redacts errors and logs secret names
+  only; do not add steps that print environment values.
+
+Hourly runs cost many more minutes than Shadow Collection when the repository is private. Billed
+minutes per month (private-repository basis, kept as history):
 
     runs per day x billed minutes per run x 30
 
@@ -349,7 +381,8 @@ above. Levers, none chosen here:
 1. Allow paid overage up to a set budget (the rate is on the billing page).
 2. Lower the billed minutes per run (a shorter install, fewer retries, a smaller timeout).
 3. Lower the cadence, which revisits OD-1 and OD-4 (section 7).
-4. Change repository visibility, which is a separate owner decision.
+4. Change repository visibility. Chosen by the owner on 2026-10-24: the repository is public, which
+   makes GitHub-hosted runner minutes free (see the update at the top of this section).
 
 **How to measure.** For the live side, `backend/dlr_live_window_check.py --start <hour> --hours 24`
 prints the count, median and maximum billed minutes and the projected 30-day minutes for a window. For
