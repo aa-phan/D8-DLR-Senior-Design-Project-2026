@@ -10,8 +10,8 @@ settings, not rationale; the rationale is in the Phase 5 plans and `REQUIREMENTS
 holds a secret value: tokens and keys live in cron-job.org and in GitHub's Actions secrets, never in
 this repository.
 
-Last updated 2026-10-24 (plan 05-05). Figures marked "estimate" are replaced by measured ones in
-plans 05-06 and 05-08.
+Last updated 2026-10-24 (plan 05-06: owner's Actions quota recorded in section 12). Figures marked
+"estimate" are replaced by measured ones in plans 05-06 and 05-08.
 
 ## 1. Purpose and scope
 
@@ -293,17 +293,58 @@ GitHub bills each job rounded up to whole minutes; a run's billed minutes are ap
 | DLR Live Ratings | 24 | 4 to 6 | about 2,900 to 4,300 | Estimate until 05-08: setup and install about 1.5 to 2 minutes, pre-flight seconds, four cities about 0.5 to 1 minute each |
 | Total | 28 | | about 3,500 to 5,000 | Sum of the two rows above |
 
+Owner's Billing figures, read from GitHub Settings, Billing and plans (account aa-phan) and recorded
+2026-10-24 (plan 05-06):
+
 | Quota figure | Value |
 |---|---|
-| Included minutes, usage this cycle, reset date, spending limit | Not yet measured. To be filled in at 05-06 from Settings, Billing |
+| Billing page read on | 2026-10-24 |
+| Plan | Free (inferred from the 2,000 included minutes; the owner did not state the plan name) |
+| Actions included minutes | 2,000 per month |
+| Usage this cycle (cycle Oct 1 to Oct 31, 2026) | About 3,028 minutes, derived from the dollar figures: the included-minutes line shows about $12.00 off (2,000 minutes at $0.006 per Linux minute) and $6.17 billed beyond it (about 1,028 further minutes at $0.006). So about 2,000 included plus about 1,028 billed overage minutes |
+| Cycle reset date | 2026-11-01 ("Monthly quota resets in 8 day(s)" on 2026-10-24) |
+| Spending limit or budget | Not stated by the owner. Overage is being billed ($6.17 this cycle), so spending is not capped at $0 |
+| Other usage lines | Storage, LFS and Packages included usage all $0. The $11.60 "Free usage" line (100% off) is not Actions-minute overage. Total current account usage shown: $17.78 |
 
-Context only, not the owner's quota: GitHub's published included minutes for private repositories on
-personal plans are 2,000 (Free) and 3,000 (Pro) per month. The real quota, usage and spending limit
-are read from the billing page by the owner.
+The usage and overage minutes above are derived from the page's dollar figures, not read as a minute
+count.
 
-Hourly very likely exceeds the included minutes of a personal private-repository plan. When the
-included minutes run out and no spending allowance is set, GitHub stops all workflows in the account,
-including Shadow Collection before its 2026-11-24 confirmation run. Levers, none chosen here:
+**The included minutes are already used up this cycle.** Every billed minute from now to the reset is
+overage at $0.006 per minute.
+
+Projection for the rest of this cycle, using the 05-06 formula "used + days left x (4 shadow + 24 live
+runs per day) x 5 billed minutes per run":
+
+    3,028 + 8 days x 28 runs x 5 minutes = 3,028 + 1,120 = about 4,148 minutes
+
+That is above the 2,000 included minutes (about 2,148 over). The 1,120 minutes this plan would add are
+all billed: about $6.72 at $0.006 per minute, of which the live runs are 960 minutes (about $5.76) and
+the shadow runs 160 minutes (about $0.96, which Shadow Collection would spend anyway).
+
+Projection for a full month, using the table above:
+
+| Item | Minutes per month |
+|---|---|
+| Shadow Collection | about 600 to 660 |
+| DLR Live Ratings | about 2,900 to 4,300 |
+| Total | about 3,500 to 5,000 |
+| Included | 2,000 |
+| Estimated overage | about 1,500 to 3,000 |
+| Estimated overage cost at $0.006 per minute | about $9 to $18 per month |
+
+Shadow Collection alone (about 600 to 660 minutes) fits inside the 2,000 included minutes. A full month
+of hourly live runs does not, in any month, so going live commits the account to paid overage of
+roughly $9 to $18 per month at the estimated per-run minutes, unless a lever below is used. Dollar
+estimates assume the Linux rate of $0.006 per minute that the owner's figures imply.
+
+Context only: GitHub's published included minutes for private repositories on personal plans are 2,000
+(Free) and 3,000 (Pro) per month.
+
+Hourly exceeds the included minutes of this plan. When the included minutes run out and no spending
+allowance is set, GitHub stops all workflows in the account, including Shadow Collection before its
+2026-11-24 confirmation run. Here overage is already being billed, so workflows are not stopped today,
+but that depends on the owner's budget staying above zero and being large enough for the projection
+above. Levers, none chosen here:
 
 1. Allow paid overage up to a set budget (the rate is on the billing page).
 2. Lower the billed minutes per run (a shorter install, fewer retries, a smaller timeout).
