@@ -14,6 +14,7 @@ created: "2026-10-23"
 
 > Per-phase security contract: threat register, accepted risks, and audit trail.
 > Register built from the `<threat_model>` blocks of 04-01..04-12 PLAN.md and the `## Threat Flags` sections of every SUMMARY.md (all report no new surface). Verified at ASVS L1 (grep-level evidence in code, tests, migrations, workflow and committed evidence files). Short-circuit applied: threats_open 0, register authored at plan time, ASVS 1, so no auditor subagent was spawned.
+> Re-audited 2026-10-24 after review-fix commits b532c00 (WR-06), 9c5b6f3 (IN-07), 1ef738d (IN-08), d3d59dc (IN-09), c9b13f5 (IN-10, doc only): every mitigation anchor re-grepped against current code (shifted line numbers corrected), 171 offline security-relevant tests pass (11 live-DB skips). WR-06 and IN-09 recorded as strengthened mitigations on T-04-06 and T-04-13; IN-08 on T-04-10; IN-07 noted on T-04-34. No new threat surface.
 
 ---
 
@@ -43,15 +44,15 @@ created: "2026-10-23"
 | T-04-03 | Information disclosure | `city_rating` columns | high | mitigate | `detector_model_loaded` boolean; explicit column mapping; `test_detector_path_is_stored_only_as_a_boolean` (`supabase_store_test.py:289`) | closed |
 | T-04-04 | Tampering | NaN/Inf/off-hour rows | medium | mitigate | `math.isfinite` -> NULL (`supabase_store.py:426`); 12 CHECK constraints in migration | closed |
 | T-04-05 | Tampering | live tests' DDL target | high | mitigate | `_LOCAL_HOSTS = ("127.0.0.1","localhost","::1")`, any other host fails (`supabase_live_test.py:7-8,43`) | closed |
-| T-04-06 | Information disclosure | connection errors and logs | high | mitigate | `redact()` (`supabase_store.py:274`); StoreError raised outside the except block (no chain, `:338-341`); `test_connection_failure_does_not_leak_the_password`, `test_redact_removes_urls_key_values_and_env_secrets` | closed |
+| T-04-06 | Information disclosure | connection errors and logs | high | mitigate | `redact()` (`supabase_store.py:274`); StoreError raised outside the except block (no chain, `:338-341`); `test_connection_failure_does_not_leak_the_password`, `test_redact_removes_urls_key_values_and_env_secrets`. **Strengthened (WR-06, b532c00):** per-city exception text is redacted before it reaches the log line, `out["errors"]` (printed by `_print_report`, written by `--output`) on both the CSV and store paths (`dlr_orchestrator.py:52,206-208,287-289`); `test_a_failing_city_error_is_redacted_on_the_csv_path`, `test_a_failing_city_error_is_redacted_in_the_run_summary_and_the_printed_report` | closed |
 | T-04-26 | Repudiation | row traceability (DB-06) | high | mitigate | `config_fingerprint text not null ... check (~ '^[0-9a-f]{64}$')` (migration:65); `rating_identity_test.py` stability/sensitivity/drift/forecast-method/model-hash tests (lines 112-292) | closed |
-| T-04-07 | Tampering | Postgres history frame reaching G6 | high | mitigate | `historical_archive.validate_history_frame` applied to Postgres reads (`supabase_store.py:800`), then `clean_history` | closed |
-| T-04-08 | Information disclosure | `pipeline_run` error text / provider keys | high | mitigate | `build_run_row` redacts every error and key (`supabase_store.py:659,703`); `token=abc123` test (`supabase_run_log_test.py:164`); no anon grant | closed |
-| T-04-09 | Tampering / Repudiation | same-window re-runs | medium | mitigate | `on conflict (city, valid_time) do update` and `on conflict (run_id)` (`supabase_store.py:169,746`); `test_orchestrator_rerun_against_postgres_keeps_one_row_per_city_and_one_run_row` | closed |
-| T-04-10 | Repudiation | failed city disguised by a row | medium | mitigate | Not-written city -> outcome `error` (`supabase_store.py:699`); `test_a_failing_city_writes_no_rating_row_and_is_recorded_in_the_run_row` | closed |
-| T-04-11 | Denial of service | RLS hiding rows (silent cold start) | medium | mitigate | Per-city WARNING on empty history (`supabase_store.py:805`); smoke `writer_policies_exist`, `test_smoke_fails_when_the_writer_policy_is_missing` | closed |
+| T-04-07 | Tampering | Postgres history frame reaching G6 | high | mitigate | `historical_archive.validate_history_frame` applied to Postgres reads (`supabase_store.py:803`), then `clean_history` | closed |
+| T-04-08 | Information disclosure | `pipeline_run` error text / provider keys | high | mitigate | `build_run_row` redacts every error and key (`supabase_store.py:659,706`); `token=abc123` test (`supabase_run_log_test.py:164`); no anon grant | closed |
+| T-04-09 | Tampering / Repudiation | same-window re-runs | medium | mitigate | `on conflict (city, valid_time) do update` and `on conflict (run_id)` (`supabase_store.py:169,749`); `test_orchestrator_rerun_against_postgres_keeps_one_row_per_city_and_one_run_row` | closed |
+| T-04-10 | Repudiation | failed city disguised by a row | medium | mitigate | Not-written city -> outcome `error` (`supabase_store.py:702`); `test_a_failing_city_writes_no_rating_row_and_is_recorded_in_the_run_row`. **Strengthened (IN-08, 1ef738d):** a written city carrying any error is `degraded`, never `cities_ok` (`supabase_store.py:697-698`) | closed |
+| T-04-11 | Denial of service | RLS hiding rows (silent cold start) | medium | mitigate | Per-city WARNING on empty history (`supabase_store.py:808`); smoke `writer_policies_exist`, `test_smoke_fails_when_the_writer_policy_is_missing` | closed |
 | T-04-12 | Tampering | backfill over live rows | high | mitigate | `on conflict (city, valid_time) do nothing`, no UPDATE/DELETE (`supabase_load_backfill.py:98`); `test_backfill_never_overwrites_a_live_row` | closed |
-| T-04-13 | Tampering | edited / foreign archive | medium | mitigate | sha256 + byte size vs Phase 3 manifest before connect; `test_loader_refuses_an_archive_that_does_not_match_the_manifest`, `test_off_hour_or_out_of_window_rows_stop_the_load` | closed |
+| T-04-13 | Tampering | edited / foreign archive | medium | mitigate | sha256 + byte size vs Phase 3 manifest before connect; `test_loader_refuses_an_archive_that_does_not_match_the_manifest`, `test_off_hour_or_out_of_window_rows_stop_the_load`. **Strengthened (IN-09, d3d59dc):** `load_manifest` accepts `git.head` only as a 40-char lowercase commit id, so a manifest value starting with `-` can never reach `git show` as an option (`supabase_load_backfill.py:134-139,227`); `test_load_manifest_refuses_a_git_head_that_is_not_a_full_commit_id` | closed |
 | T-04-27 | Repudiation | backfill labelled with live config/models | medium | mitigate | `PHASE3_CONFIG_VERSION`, PROVISIONAL/REVAL-01 basis, `python -I` child (`supabase_load_backfill.py:62,144-150,267`); `test_phase3_fingerprints_come_from_the_manifest_commit`, `test_backfill_rows_carry_provisional_labels_and_phase3_model_hashes` | closed |
 | T-04-14 | Information disclosure | smoke/loader output, reports, Actions log | high | mitigate | `test_connection_failure_prints_no_part_of_the_url`, `test_missing_url_exits_two_and_prints_no_value` (`supabase_smoke_test.py`); evidence files contain no connection strings (grep of `docs/data-science/decisions/supabase_store/`: 0 hits) | closed |
 | T-04-15 | Information disclosure | committed credential | high | mitigate | `secret_scan_test.py`: `git ls-files` scan, planted positive control, `test_env_file_is_ignored_and_untracked` | closed |
@@ -67,11 +68,11 @@ created: "2026-10-23"
 | T-04-24 | Denial of service | push changing Shadow Collection install set | medium | mitigate | Runner-wheel precondition passed (04-06-SUMMARY:44); `shadow_collect.yml` unchanged; prior shadow runs green. Follow-up: owner confirms next scheduled shadow run | closed |
 | T-04-25 | Repudiation | parity/identity claimed without proof | medium | mitigate | `backfill_parity.json` `all_match: true`, `config_commit` 175b32b, per-city `match: true`; `EVIDENCE_OK` | closed |
 | T-04-29 | Information disclosure | `connect()` success log | high | mitigate | Logs server `current_user` redacted against `_project_identifiers(url)` (`supabase_store.py:246,342`); `test_tracer_postgres_run_logs_the_server_role_not_the_project_reference` | closed |
-| T-04-30 | Information disclosure | reconnect path | medium | mitigate | Reconnect via `connect()`; `test_a_failed_reconnect_raises_a_redacted_store_error_and_the_next_call_tries_again`; WARNING names only the operation (`supabase_store.py:856`) | closed |
+| T-04-30 | Information disclosure | reconnect path | medium | mitigate | Reconnect via `connect()`; `test_a_failed_reconnect_raises_a_redacted_store_error_and_the_next_call_tries_again`; WARNING names only the operation (`supabase_store.py:859`) | closed |
 | T-04-31 | Denial of service | dropped long-lived connection | medium | mitigate | `test_store_reconnects_once_when_the_connection_was_lost`, `test_store_does_not_retry_a_failure_on_a_healthy_connection`, probe test | closed |
 | T-04-32 | Tampering | retry duplicating writes | low | accept | Retried writes are idempotent upserts (OD-7 key, run_id key) — see Accepted Risks | closed |
-| T-04-33 | Repudiation | partial postgres run reported green | medium | mitigate | `if args.store == "postgres" and run["errors"]: return 1` (`dlr_orchestrator.py:372-373`); `test_main_with_postgres_exits_one_when_any_city_failed` | closed |
-| T-04-34 | Information disclosure | cleaning error text | medium | mitigate | Text only in pipeline dict and redacted run row (`supabase_store.py:703`); `build_rating_row` maps explicit columns | closed |
+| T-04-33 | Repudiation | partial postgres run reported green | medium | mitigate | `if args.store == "postgres" and run["errors"]: return 1` (`dlr_orchestrator.py:390-391`); `test_main_with_postgres_exits_one_when_any_city_failed` | closed |
+| T-04-34 | Information disclosure | cleaning error text | medium | mitigate | Text only in pipeline dict and redacted run row (`supabase_store.py:706`); `build_rating_row` maps explicit columns. IN-07 (9c5b6f3) adds `forecast_error` on the same route (pipeline dict -> redacted run row only; not in `summarize`, `--output` or `city_rating`) | closed |
 | T-04-35 | Tampering | unvetted history after cleaning failure | medium | mitigate | History emptied on cleaning failure (`city_pipeline.py:75-82`) | closed |
 | T-04-36 | Tampering | hour CHECK in non-UTC session | low | mitigate | `check ((valid_time at time zone 'UTC') = date_trunc('hour', ...))` (`20261023000000_...sql:20`); `test_hour_check_accepts_utc_hours_in_a_half_hour_offset_session`; live smoke `utc_hour_check_zone_independent: ok` | closed |
 | T-04-37 | Tampering | editing the applied migration | medium | mitigate | New additive migration; `_ORIGINAL_MIGRATION_SHA256` pin (`supabase_migration_test.py:32`) | closed |
@@ -121,6 +122,7 @@ created: "2026-10-23"
 | Audit Date | Threats Total | Closed | Open | Run By |
 |------------|---------------|--------|------|--------|
 | 2026-10-23 | 54 | 54 | 0 | gsd-secure-phase (orchestrator, ASVS L1 grep-level, auditor short-circuited) |
+| 2026-10-24 | 54 | 54 | 0 | gsd-secure-phase re-audit after review fixes WR-06/IN-07/IN-08/IN-09/IN-10 (ASVS L1 grep-level, anchors re-verified, auditor short-circuited) |
 
 ---
 
@@ -131,4 +133,12 @@ created: "2026-10-23"
 - [x] `threats_open: 0` confirmed
 - [x] `status: verified` set in frontmatter
 
-**Approval:** verified 2026-10-23
+**Approval:** verified 2026-10-23; re-verified 2026-10-24
+
+## Security Audit 2026-10-24
+
+| Metric | Count |
+|---|---|
+| Threats found | 54 |
+| Closed | 54 |
+| Open | 0 |
