@@ -1,5 +1,9 @@
+import logging
+
 import config
 import thermal_model
+
+log = logging.getLogger(__name__)
 
 
 class DLRSafetyMonitor:
@@ -24,7 +28,9 @@ class DLRSafetyMonitor:
         # (D-05). An injected detector is evaluated as G6, additive.
         self.anomaly_detector = anomaly_detector
         self.last_good_rating = static_rating
-        self.logger           = logger or print
+        # No injected logger: a gate failure is a WARNING on this module's logger
+        # (it used to be printed, which put it on a scheduled run's stdout).
+        self.logger           = logger or log.warning
 
     def run_check(self, raw_data: dict) -> dict:
         result = {"status": "unknown", "rating": None, "fallback": False, "alerts": []}

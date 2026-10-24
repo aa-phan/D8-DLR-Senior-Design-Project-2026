@@ -141,6 +141,36 @@ _NULL_RECORD_KEYS = (
 _LOG_HEADER = "run_end_utc,city,rating_a,fallback,exhausted,archived,gates,error"
 
 
+@contextlib.contextmanager
+def _capture_gate_messages(buf):
+    """
+    Capture, into `buf`, everything a step says about its safety gates, so the
+    step's `G<n> FAIL` lines are counted and none reaches the terminal. Two
+    routes carry them: stdout (a `G<n> FAIL` line printed by a caller, as the
+    safety monitor used to) and the `DLRSafetyMonitor` logger (what the monitor
+    does now when it has no injected logger). The logger is given a handler on
+    `buf`, a WARNING threshold if the process's effective level is higher (the
+    CLI sets ERROR), and `propagate = False` so the message is not also written
+    to the terminal. Level, propagate and handlers are restored on exit, also
+    when the step raises.
+    """
+    monitor_log = logging.getLogger("DLRSafetyMonitor")
+    handler = logging.StreamHandler(buf)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    saved_level, saved_propagate = monitor_log.level, monitor_log.propagate
+    monitor_log.addHandler(handler)
+    if monitor_log.getEffectiveLevel() > logging.WARNING:
+        monitor_log.setLevel(logging.WARNING)
+    monitor_log.propagate = False
+    try:
+        with contextlib.redirect_stdout(buf):
+            yield
+    finally:
+        monitor_log.removeHandler(handler)
+        monitor_log.setLevel(saved_level)
+        monitor_log.propagate = saved_propagate
+
+
 def _retire_stale_log(log_path: str) -> None:
     """
     If an existing log has a different header (e.g. the corridor-era format),
@@ -315,11 +345,14 @@ def backfill(start, end, step_hours=1.0, archive_path=DEFAULT_ARCHIVE, log_path=
                     continue
                 prov_start = len(fetcher.provenance) if trace_fh is not None else 0
                 buf = io.StringIO()
-                with contextlib.redirect_stdout(buf):  # the safety monitor prints each gate failure
+                with _capture_gate_messages(buf):  # the safety monitor logs each gate failure
                     run = run_dlr_pipeline(
                         cities=todo, end=ts.strftime(_TS_FMT), window_hours=1.0,
                         provider="composed", forecast_method=forecast_method, archive=True,
                         archive_path=archive_path, stations=stations, fetcher=fetcher)
+                # The monitor now logs each gate failure and `_capture_gate_messages`
+                # routes that log into `buf`; a `G<n> FAIL` line printed to stdout
+                # is still captured and counted the same way.
                 gates = Counter(_GATE_RE.findall(buf.getvalue()))
                 totals["gates"].update(gates)
                 totals["runs"] += 1

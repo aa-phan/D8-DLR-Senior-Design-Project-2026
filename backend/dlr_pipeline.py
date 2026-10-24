@@ -139,13 +139,15 @@ def fetch_timeseries(
     r.raise_for_status()
     data = r.json()
 
-    print("SUMMARY:", data.get("SUMMARY"))
-    print("Returned stations:", len(data.get("STATION", [])))
+    # Diagnostics for debugging a provider response; DEBUG so a scheduled run's
+    # stdout and log stay free of them (they were print calls).
+    log.debug("SUMMARY: %s", data.get("SUMMARY"))
+    log.debug("Returned stations: %s", len(data.get("STATION", [])))
 
     for station in data.get("STATION", []):
-        print("STID:", station.get("STID"))
-        print("OBS keys:", list(station.get("OBSERVATIONS", {}).keys()))
-        
+        log.debug("STID: %s", station.get("STID"))
+        log.debug("OBS keys: %s", list(station.get("OBSERVATIONS", {}).keys()))
+
     frames = []
     for station in data.get("STATION", []):
         stid = station["STID"]
