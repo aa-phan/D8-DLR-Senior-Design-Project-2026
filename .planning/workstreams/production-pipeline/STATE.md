@@ -169,11 +169,12 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 
 - VAL-03 NO-GO (2026-10-21) blockers B1 (fallback policy and rating basis: conductor type, max operating temperature, elevation, azimuth; with Power Systems), B2 (ml wind feature train/serve alignment), B4 (CORPUS_CHRISTI detector trip rate 11.01%) and B5 (fallback effect on forecast availability) now gate only lifting the provisional label (re-sequenced by the owner 2026-10-21; closed in Phase 7, REVAL-01). Phases 4-6 are no longer blocked. See docs/data-science/decisions/real_data_validation.md.
 - Phase 7 external gate: Power Systems' per-city conductor answers (provisional values with sources until then). Protocol v4 must be signed before any FRESH-basis outcome is read; until then v3 (2026-11-24) governs. Options and conductor analysis: docs/data-science/decisions/shadow_early_decision_options.md.
+- [Phase 4] Carried forward, none blocking: re-run the local smoke (`consumers_cannot_write`) after Supabase's 2026-10-30 default-grant change (T-04-22); confirm the next scheduled Shadow Collection run still succeeds (T-04-24); a protected environment limited to main for the writer secret is documented but not configured (T-04-38); review findings IN-11 (the stored `pipeline_run.cities_ok` column comment lacks the "no error" rule, needs an additive migration) and IN-12 (an empty exception message prints as an empty string) are open in 04-REVIEW-DISPOSITION.md; owner decision pending on exiting non-zero when every written city is degraded.
 - Superseded (2026-10-21): the earlier timing note that B1/B2 wait for 2026-11-24. Phase 7 decouples the production conductor from the frozen shadow path (COND-02) and moves the evaluation to about 2026-11-01 under v4.
 
 ## Session Continuity
 
-**Last session:** 2026-10-23T22:47:15.825Z
+**Last session:** 2026-10-24T07:58:34Z
 
 **Stopped At:** Phase 04 complete, ready to execute Phase 05
 **Resume File:** None

@@ -84,6 +84,7 @@ ethical commitment, not a nice-to-have).
 - ✓ WX-06: Synoptic retained as the automatic fallback behind TCEQ/NSRDB only (never an additional source, never triggered by a caller-shaped error or missing-credential `EnvironmentError`), confirmed end-to-end against the live Synoptic and NSRDB endpoints — v1.1 (Phase 10)
 - ✓ WX-07: `PIPELINE_SCHEMA` v3 extended with per-field provenance columns (`wind_source`, `temp_source`, `humidity_source`, `solar_source`) — v1.1 (Phase 6)
 - ✓ WX-08: `PRD.md` §7.1 and `data_provider.md` ratified to record the shipped per-variable composition, resolving the "Pending" status and the System Design Report's self-flagged discrepancy — v1.1 (Phase 10)
+- ✓ DB-01..DB-06: Postgres on Supabase is the production system of record for per-city ratings — two committed migrations (`city_rating`, `pipeline_run`, `dlr_writer` role, RLS; UTC-evaluated hour check), `--store postgres` pipeline path reading history from and upserting to Postgres, Phase 3 backfill loaded (504 rows per city, parity checked), writer secret only in `.env`/GitHub secrets with redaction on every log and report path, consumer contract `docs/data-science/schema/city_rating_v1.md`, per-row config/model identity — production-pipeline Phase 4 (all 19 code-review findings fixed; live smoke on the real project and GitHub Actions run 40035268724)
 
 ### Active
 
@@ -177,6 +178,8 @@ ethical commitment, not a nice-to-have).
 | Forecast confidence band: in-sample residual vs. true out-of-sample backtest | An in-sample band would understate real forecast error; only an expanding-window walk-forward backtest measures the model against data it hasn't seen | ✓ Resolved 2026-09-09 — Phase 4 (04-02) — replaced the tracer's in-sample band with a true walk-forward backtest; added EWM as a second Tier 1 method behind the same signature |
 | DS-F5 wiring scope: silently fall back to `DEFAULT_STATIC_RATING` on unknown/omitted city vs. validate-and-raise (as `corridor_discretization.py` does) | Phase 5 chose the conservative-silent path for the flat-pipeline consumers since `DEFAULT_STATIC_RATING` (900A) is strictly lower than every configured city rating, so an unrecognized city can't cause an optimistic overstatement — deliberately asymmetric with the corridor path, which validates and raises | ✓ Resolved 2026-09-10 — Phase 5 (05-01); flagged as tech debt for future consistency review, not a defect (see `.planning/milestones/v1.0-MILESTONE-AUDIT.md`) |
 | Production go/no-go on the per-city pipeline after a 21-day real-data backfill (production-pipeline VAL-03) | AUSTIN fell back to its static rating on 68% of scored hours (MIDLAND 21%), mostly to a value far above the computed rating; the conductor model (one 795 Drake ACSR at 75 C, 900 m) is the likely cause, and public filings point to larger or hotter-rated Austin-area 345 kV conductors | NO-GO, signed by Aaron Phan 2026-10-21 (production-pipeline Phase 3); blocking on B1 conductor/rating basis, B2 ml wind feature, B4 CORPUS_CHRISTI detector rate, B5 forecast availability after fallbacks; see `docs/data-science/decisions/real_data_validation.md` |
+| Run-health exit policy for `--store postgres`: a run that fails to write any city exits 1, and a written city that carries any error (cleaning or forecast failure) is `degraded`, never counted ok | A scheduled job must not stay green while a city has no row or a degraded one (OD-9: the run log is the only record of a failed city); Phase 5's runner reads the child exit status | ✓ Resolved 2026-10-24 — production-pipeline Phase 4 (04-08, review fixes IN-07/IN-08); exiting non-zero when every written city is degraded left as an open owner decision |
+| Applied migrations are never edited; schema fixes ship as additive migrations the owner pushes | The original migration's sha256 is pinned by a test so consumers and the live project always agree on what was applied | ✓ Resolved 2026-10-23 — production-pipeline Phase 4 (04-09/04-12, migration `20261023000000`) |
 
 ## Evolution
 
@@ -196,4 +199,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-10-21 after production-pipeline Phase 3*
+*Last updated: 2026-10-24 after production-pipeline Phase 4*
