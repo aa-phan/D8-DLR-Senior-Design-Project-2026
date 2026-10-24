@@ -11,6 +11,7 @@ backend/tests/dlr_orchestrator_test.py's conventions (no conftest.py, plain
 asserts, no test classes).
 """
 
+import contextlib
 import json
 import logging
 import os
@@ -25,6 +26,7 @@ import anomaly_detector
 import config
 import dlr_live_run
 import dlr_orchestrator as orch
+import live_run_log
 
 _END = "2025-06-01T12:00:00Z"
 _NOW = datetime(2025, 6, 1, 10, 59, 59, tzinfo=timezone.utc)
@@ -46,6 +48,15 @@ def _no_network(monkeypatch):
     monkeypatch.setattr(requests, "get", boom)
     yield
     assert attempts == []
+
+
+@pytest.fixture(autouse=True)
+def _no_database(monkeypatch):
+    """A test that reaches the default run-log writer fails loudly instead of connecting."""
+    def refuse():
+        raise AssertionError("a test opened a database connection")
+
+    monkeypatch.setattr(live_run_log, "open_connection", refuse)
 
 
 @pytest.fixture(autouse=True)
@@ -128,7 +139,7 @@ if behavior == "nosummary":
 with open(args.output, "w") as fh:
     json.dump({"start": args.end, "end": args.end, "provider": args.provider,
                "forecast_method": args.forecast_method, "summary": summary, "errors": errors,
-               "sources": {}, "provider_errors": {"synoptic: HTTP 429": 2}}, fh)
+               "sources": {"temp": {"synoptic": 1}}, "provider_errors": {"synoptic: HTTP 429": 2}}, fh)
 with open(CALLS_LOG, "a") as fh:
     fh.write(json.dumps({"city": city, "done": True, "finished": time.time()}) + "\\n")
 '''
@@ -486,3 +497,140 @@ def test_step_summary_lists_cities_in_order_with_redacted_errors(tmp_path, monke
     cell = row.rstrip().removesuffix(" |").split(" | ")[-1].strip()
     assert "a\\|b" in cell and "pw-secret-1" not in cell
     assert len(cell.replace("\\|", "|")) <= 120
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Plan 05-03: the runner keeps the run's pipeline_run row (SCHED-01, OD-9)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _reached(row):
+    """How many cities a pipeline_run row covers."""
+    return len(row["cities_ok"]) + len(row["cities_failed"])
+
+
+class _RunConn:
+    """A stand-in writer connection: records statements and whether it was closed."""
+
+    def __init__(self):
+        self.calls = []
+        self.closed = False
+
+    def execute(self, sql, params=None):
+        self.calls.append((sql, params))
+
+    @contextlib.contextmanager
+    def transaction(self):
+        yield
+
+    def close(self):
+        self.closed = True
+
+
+def test_run_row_is_written_at_start_after_each_city_and_at_the_end(tmp_path, monkeypatch):
+    script, calls_log = _fake_orchestrator(tmp_path)
+    monkeypatch.setattr(dlr_live_run, "ORCHESTRATOR", script)
+    events = []
+
+    def record(row):
+        events.append({"row": row, "at": time.time()})
+
+    run = dlr_live_run.run_live(
+        env=_live_env(FAKE_BEHAVIOR_CORPUS_CHRISTI="crash", FAKE_BEHAVIOR_MIDLAND="hang"),
+        now=_NOW, timeout_s=2, record_fn=record)
+
+    austin, corpus, midland, el_paso = config.LOCATIONS[:4]
+    rows = [e["row"] for e in events]
+    assert len(rows) == 6  # once at start, once per city, once at the end
+    # the first row exists before any child runs, with nothing in it and no finish time
+    assert rows[0]["cities_ok"] == [] and rows[0]["cities_failed"] == {} and rows[0]["finished_at"] is None
+    assert [_reached(r) for r in rows[:5]] == [0, 1, 2, 3, 4]
+    assert rows[1]["cities_ok"] == [austin]
+    assert rows[2]["cities_failed"][corpus]["outcome"] == "error"
+    assert rows[3]["cities_failed"][midland]["outcome"] == "timeout"
+    assert rows[3]["cities_failed"][midland]["written"] is False  # OD-9: no rating row
+    assert rows[4]["cities_ok"] == [austin, el_paso]
+    # finished only by the last write, which repeats the final cities
+    assert [r["finished_at"] is None for r in rows] == [True] * 5 + [False]
+    assert rows[5]["cities_ok"] == rows[4]["cities_ok"] and rows[5]["cities_failed"] == rows[4]["cities_failed"]
+    # every row names this run and its window
+    window_end = datetime.strptime(run["end"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    for row in rows:
+        assert (row["run_id"], row["run_attempt"], row["window_end"]) == (
+            run["run_id"], run["run_attempt"], window_end)
+    # each child's composer counts arrive keyed by city; a failed child has none
+    assert rows[5]["sources"] == {austin: {"temp": {"synoptic": 1}}, el_paso: {"temp": {"synoptic": 1}}}
+    assert rows[5]["provider_errors"][austin] == {"synoptic: HTTP 429": 2}
+    assert corpus not in rows[5]["provider_errors"]
+    # the crashed child echoed a secret on stderr; no row carries it
+    assert "dummy-synoptic_token" not in json.dumps(rows, default=str)
+    # ordering: the AUSTIN update arrives before the CORPUS_CHRISTI child starts, the first row before AUSTIN
+    started = {c["city"]: c["started"] for c in _calls(calls_log)}
+    assert events[0]["at"] <= started[austin]
+    assert events[1]["at"] <= started[corpus]
+    assert events[5]["at"] >= max(f["finished"] for f in _finishes(calls_log))
+    assert run["run_log"] == {"writes": 6, "failed": 0}
+    assert run["exit_code"] == 1  # a crashed and a timed-out city
+
+
+def test_a_run_log_failure_fails_the_run_but_not_the_other_cities(tmp_path, monkeypatch, caplog):
+    script, calls_log = _fake_orchestrator(tmp_path)
+    monkeypatch.setattr(dlr_live_run, "ORCHESTRATOR", script)
+    caplog.set_level(logging.INFO)
+    secret_url = _db_url()
+    recorded = []
+
+    def record(row):
+        if _reached(row) == 2:  # the update after the second city, CORPUS_CHRISTI
+            raise RuntimeError("connection to " + secret_url + " refused for dummy-synoptic_token")
+        recorded.append(row)
+
+    run = dlr_live_run.run_live(env=_live_env(SUPABASE_DB_URL=secret_url), now=_NOW, record_fn=record)
+
+    # every city still ran and was recorded; the run is red only because of the run log
+    assert [c["city"] for c in _calls(calls_log)] == list(config.LOCATIONS)
+    assert [r["outcome"] for r in run["cities"]] == ["ok"] * len(config.LOCATIONS)
+    assert len(recorded) == 5  # six writes, one of them raised
+    assert recorded[-1]["finished_at"] is not None and recorded[-1]["cities_ok"] == list(config.LOCATIONS)
+    assert run["run_log"] == {"writes": 6, "failed": 1}
+    assert run["exit_code"] == 1
+    # the logged message names the exception type and is redacted
+    assert "pipeline_run write failed" in caplog.text and "RuntimeError" in caplog.text
+    for secret in (secret_url, "pw-secret-1", "pooler.example.test", "dummy-synoptic_token"):
+        assert secret not in caplog.text, secret
+
+
+def test_no_run_log_flag_skips_recording(tmp_path, monkeypatch):
+    script, _ = _fake_orchestrator(tmp_path)
+    monkeypatch.setattr(dlr_live_run, "ORCHESTRATOR", script)
+    _set_required_env(monkeypatch)
+    summary = tmp_path / "step_summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    opened = []
+
+    def refuse():
+        opened.append(1)
+        raise AssertionError("--no-run-log must not open a connection")
+
+    monkeypatch.setattr(live_run_log, "open_connection", refuse)
+
+    assert dlr_live_run.main(["--cities", "AUSTIN", "--no-run-log"]) == 0
+
+    assert opened == []
+    assert "pipeline_run: skipped (--no-run-log)" in summary.read_text()
+
+    # without the flag: the default writer takes a fresh connection for every write and closes it
+    conns = []
+
+    def open_conn():
+        conns.append(_RunConn())
+        return conns[-1]
+
+    monkeypatch.setattr(live_run_log, "open_connection", open_conn)
+
+    assert dlr_live_run.main(["--cities", "AUSTIN"]) == 0
+
+    assert len(conns) == 3  # start, after AUSTIN, end
+    assert all(c.closed and len(c.calls) == 1 for c in conns)
+    assert [c.calls[0][1]["finished_at"] is None for c in conns] == [True, True, False]
+    assert all("insert into public.pipeline_run" in c.calls[0][0] for c in conns)
+    assert "pipeline_run: 3 writes, 0 failed" in summary.read_text()
