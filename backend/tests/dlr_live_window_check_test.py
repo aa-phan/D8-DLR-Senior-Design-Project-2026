@@ -90,6 +90,27 @@ def test_full_window_of_successful_runs_passes():
     again = wc.evaluate_window(runs, rows, ratings, "2026-10-25T00:00:00Z", hours=24)
     assert verdicts(again) == verdicts(result)
 
+    # adjacency edges: runs one slot before the first and at the slot after the last belong to
+    # neither window slot (they must not wrap onto slot 23 or change any count)
+    for offset, rid in ((-1, BASE_ID + 900), (24, BASE_ID + 901)):
+        end = slot(offset) + timedelta(minutes=5)
+        runs.append(gh_run(rid, end + timedelta(seconds=20)))
+        rows.append(run_row(rid, end))
+        ratings.extend(rating_rows(rid, slot(offset)))
+    edged = wc.evaluate_window(runs, rows, ratings, START)
+    assert verdicts(edged) == ["ok"] * 24
+    assert edged["slots"][23]["run_ids"] == [str(BASE_ID + 23)]
+    assert edged["slots"][0]["run_ids"] == [str(BASE_ID)]
+    assert edged["minutes"]["count"] == 24
+
+    # a second successful run in a slot (a manual dispatch that listed only some cities) does not
+    # undo the slot: one fully good run is enough
+    extra = BASE_ID + 910
+    end = slot(10) + timedelta(minutes=40)
+    runs.append(gh_run(extra, end + timedelta(seconds=20)))
+    rows.append(run_row(extra, end, cities_ok=CITIES[:2]))
+    assert wc.evaluate_window(runs, rows, ratings, START)["slots"][10]["verdict"] == "ok"
+
 
 @pytest.mark.parametrize("conclusion", ["failure", "timed_out", "cancelled"])
 def test_red_runs_count_as_visible_failures(conclusion):
