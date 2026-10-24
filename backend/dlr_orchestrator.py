@@ -35,6 +35,7 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd
+from dotenv import load_dotenv
 
 import ampacity_forecast
 import city_point
@@ -105,6 +106,12 @@ def summarize(result: dict) -> dict:
         "history_rows": pipe.get("history_rows"),
         "forecast_amps": None if fc is None else fc["amps"],
         "detector_signal": pipe.get("detector_signal"),
+        # OD-3: city_pipeline catches a forecast failure, so without these the
+        # --output JSON could not tell the live runner that the ML forecast
+        # failed or that no anomaly model was loaded. A boolean, never the path.
+        "forecast_status": pipe.get("forecast_status"),
+        "forecast_error": pipe.get("forecast_error"),
+        "detector_model_loaded": bool(pipe.get("detector_model")),
     }
 
 
@@ -393,4 +400,9 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
+    # Script runs only (T-05-06): tests call main() with no credentials and must
+    # not load the owner's .env. An existing variable, even an empty one, is not
+    # overridden (python-dotenv's default), which the live runner's fault drill
+    # relies on.
+    load_dotenv()
     sys.exit(main())

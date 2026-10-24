@@ -18,6 +18,9 @@ from anomaly_detector import AnomalyDetector
 
 log = logging.getLogger(__name__)
 
+# Longest `pipeline["forecast_error"]` kept; an exception message can be a page.
+FORECAST_ERROR_MAX_CHARS = 300
+
 
 def run_city_pipeline(
     city: str,
@@ -90,7 +93,9 @@ def run_city_pipeline(
         forecast = ampacity_forecast.forecast_ampacity(history, method=forecast_method)
         forecast_status = "ok" if forecast is not None else "cold_start"
     except Exception as exc:
-        forecast_error = f"forecast failed: {exc}"
+        # Capped: the text goes to the orchestrator's --output and the private
+        # pipeline_run log only, never to a city_rating column (OD-6).
+        forecast_error = f"forecast failed: {exc}"[:FORECAST_ERROR_MAX_CHARS]
         log.warning(
             "forecast_ampacity(method=%r) failed for %s (%s) -- continuing without a forecast",
             forecast_method, city, exc,
