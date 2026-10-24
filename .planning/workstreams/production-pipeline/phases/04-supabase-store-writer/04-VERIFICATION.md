@@ -1,8 +1,8 @@
 ---
 phase: 04-supabase-store-writer
-verified: 2026-10-23T21:00:00Z
+verified: 2026-10-23T23:59:00Z
 status: human_needed
-score: 5/6 must-haves verified
+score: 6/6 must-haves verified
 covered_files:
   - ".github/workflows/supabase_smoke.yml"
   - ".planning/workstreams/production-pipeline/phases/04-supabase-store-writer/04-01-PLAN.md"
@@ -17,13 +17,27 @@ covered_files:
   - ".planning/workstreams/production-pipeline/phases/04-supabase-store-writer/04-05-SUMMARY.md"
   - ".planning/workstreams/production-pipeline/phases/04-supabase-store-writer/04-06-PLAN.md"
   - ".planning/workstreams/production-pipeline/phases/04-supabase-store-writer/04-06-SUMMARY.md"
+  - ".planning/workstreams/production-pipeline/phases/04-supabase-store-writer/04-07-PLAN.md"
+  - ".planning/workstreams/production-pipeline/phases/04-supabase-store-writer/04-07-SUMMARY.md"
+  - ".planning/workstreams/production-pipeline/phases/04-supabase-store-writer/04-08-PLAN.md"
+  - ".planning/workstreams/production-pipeline/phases/04-supabase-store-writer/04-08-SUMMARY.md"
+  - ".planning/workstreams/production-pipeline/phases/04-supabase-store-writer/04-09-PLAN.md"
+  - ".planning/workstreams/production-pipeline/phases/04-supabase-store-writer/04-09-SUMMARY.md"
+  - ".planning/workstreams/production-pipeline/phases/04-supabase-store-writer/04-10-PLAN.md"
+  - ".planning/workstreams/production-pipeline/phases/04-supabase-store-writer/04-10-SUMMARY.md"
+  - ".planning/workstreams/production-pipeline/phases/04-supabase-store-writer/04-11-PLAN.md"
+  - ".planning/workstreams/production-pipeline/phases/04-supabase-store-writer/04-11-SUMMARY.md"
+  - ".planning/workstreams/production-pipeline/phases/04-supabase-store-writer/04-12-PLAN.md"
+  - ".planning/workstreams/production-pipeline/phases/04-supabase-store-writer/04-12-SUMMARY.md"
   - "backend/city_pipeline.py"
   - "backend/config.py"
   - "backend/dlr_orchestrator.py"
   - "backend/historical_archive.py"
+  - "backend/rating_identity.py"
   - "backend/supabase_load_backfill.py"
   - "backend/supabase_smoke.py"
   - "backend/supabase_store.py"
+  - "backend/tests/city_pipeline_test.py"
   - "backend/tests/rating_identity_test.py"
   - "backend/tests/secret_scan_test.py"
   - "backend/tests/supabase_live_test.py"
@@ -37,106 +51,125 @@ covered_files:
   - "docs/data-science/decisions/pss_e_handoff.md"
   - "docs/data-science/decisions/supabase_store/backfill_parity.json"
   - "docs/data-science/decisions/supabase_store/smoke_actions.json"
+  - "docs/data-science/decisions/supabase_store/smoke_actions_review_fixes.json"
   - "docs/data-science/decisions/supabase_store/smoke_after_backfill.json"
   - "docs/data-science/decisions/supabase_store/smoke_local.json"
+  - "docs/data-science/decisions/supabase_store/smoke_review_fixes.json"
   - "docs/data-science/schema/city_rating_v1.md"
   - "docs/frontend/specs/api-contract.md"
   - "requirements.txt"
   - "supabase/migrations/20261019000000_create_city_rating.sql"
-covered_digest: "v3:sha256:42affc67c51c7eaa2aec0d06d0dc31dacb8a39bbacca961f7115faf2aaf2e569"
-behavior_unverified: 1
+  - "supabase/migrations/20261023000000_city_rating_utc_hour_check_and_run_log_comments.sql"
+covered_digest: "v3:sha256:80a07bee52e6f96fb00957e0981c3a449525caae57511b1573489fb61e6f02d9"
+behavior_unverified: 0
 overrides_applied: 0
-behavior_unverified_items:
-  - truth: "SC2: a pipeline run pointed at Supabase reads history from Postgres and upserts one row per city; re-running the same window changes no row count"
-    test: "Run `DLR_TEST_PG_AUTOSTART=1 .venv/bin/python -m pytest backend/tests/supabase_live_test.py backend/tests/supabase_orchestrator_test.py -q` (throwaway local Postgres via initdb, never Supabase)"
-    expected: "All live tests pass, in particular test_orchestrator_rerun_against_postgres_keeps_one_row_per_city_and_one_run_row, test_orchestrator_reads_its_history_from_postgres and test_history_window_boundary_against_postgres"
-    why_human: "The orchestrator-level rerun and the 30-day history window run only in the 43 live-Postgres tests, which the full suite skips. The verifier's attempt to run them was refused by the permission classifier. The executor summaries record them passing (45 and 34 and 11 passed with the gate on), but that is narration, not verifier evidence. On the real project only the upsert path (sentinel upsert twice) and writer row visibility were exercised, never a whole orchestrator run."
+re_verification:
+  previous_status: human_needed
+  previous_score: 5/6
+  gaps_closed:
+    - "G-04-2: every finding in the first 04-REVIEW.md (CR-01, WR-01..WR-05, IN-01..IN-06) is fixed in Phase 4 before Phase 5"
+    - "SC2 behavior-unverified item: the live-Postgres tests were run (1686 passed, 0 skipped, DLR_TEST_PG_AUTOSTART=1)"
+  gaps_remaining: []
+  regressions: []
 human_verification:
-  - test: "Run the live-Postgres tests (see behavior_unverified_items)"
-    expected: "0 failures, 0 skips"
-    why_human: "Verifier could not execute them; they are the only runtime proof of SC2."
-  - test: "Owner decision on CR-01 (and WR-01..WR-05, IN-01..IN-06): fix, accept or defer each in 04-REVIEW-DISPOSITION.md"
-    expected: "CR-01 fixed before any `--store postgres` run executes in GitHub Actions (Phase 5), per the ledger note. Suggested path: /gsd-code-review-fix 4"
-    why_human: "All 12 review findings are open. I confirmed CR-01 at backend/supabase_store.py:297. It does not fail a Phase 4 must-have (see Anti-Patterns), so I did not mark the phase gaps_found, but it is a confirmed defect against the module's own DB-04 contract and the owner must dispose of it."
-  - test: "Confirm the owner reset the Supabase database (postgres) password after it appeared in chat during 04-05 debugging, and that .env and the password manager hold the new value"
-    expected: "Old password no longer valid"
-    why_human: "Cannot be observed from the repository, and verifier may not read .env or connect to the database."
-  - test: "Judgment-tier prohibitions: unverified-prohibition, human review recommended"
-    expected: "Owner acknowledges the non-authoritative verdicts listed under Prohibitions (all judged held)"
-    why_human: "All 23 must_haves prohibitions are verification: judgment. Verdicts below are an LLM judgment, not an authoritative check."
+  - test: "Acknowledge the judgment-tier prohibition verdicts added by gap plans 04-07..04-12 (16 items, table below, all judged held)"
+    expected: "Owner accepts the non-authoritative verdicts (the 23 from plans 04-01..04-06 were accepted in 04-UAT.md test 4)"
+    why_human: "Every must_haves prohibition is verification: judgment. Verdicts are an LLM judgment, not an authoritative check, so they are flagged unverified-prohibition, human review recommended. Nothing is silently passed."
 ---
 
 # Phase 4: Supabase Store & Writer Verification Report
 
 **Phase Goal:** Postgres on Supabase is the production system of record for per-city ratings.
-**Verified:** 2026-10-23T21:00:00Z
+**Verified:** 2026-10-23T23:59:00Z
 **Status:** human_needed
-**Re-verification:** No, initial verification
+**Re-verification:** Yes. After gap closure (plans 04-07..04-12, UAT gap G-04-2)
 
 ## Goal Achievement
 
-The store exists on a real Supabase project, is written to by the real code path, holds the Phase 3 backfill with per-city parity, is reachable from a GitHub-hosted runner with only a repository secret, and has a published consumer contract. What is not yet proven by this verifier is the orchestrator-level rerun on Postgres (SC2): its tests exist but are gated off in the suite and I was refused permission to run them. One confirmed critical review finding (CR-01) is open and needs an owner decision.
+All six ROADMAP success criteria hold against the current code. The one item the first pass could not prove (SC2, the orchestrator-level rerun on Postgres) is now proven: I ran the full suite with `DLR_TEST_PG_AUTOSTART=1` (throwaway local Postgres, never Supabase) and got `1686 passed, 0 skipped`, so the 43 previously skipped live tests actually ran. G-04-2 ("fix all 12 code-review findings") is closed: each of the 12 findings is fixed in source, has a named failing-first test that exists in the tree, and the two that change live infrastructure (IN-03/IN-06 migration, IN-05 workflow) are on the real project and on GitHub. The only remaining item is the mandatory acknowledgement of the new judgment-tier prohibition verdicts. A fresh code review found five new advisory findings (WR-06, IN-07..IN-10); none breaks a must-have (see Advisory Notes).
 
-Evidence classes used: (a) read by me from the repository, (b) re-computed by me (archive sha256, manifest cross-check, tracked-file secret greps, 43 offline contract tests), (c) read-only GitHub state (`gh`), (d) owner-run output committed as JSON (reported, not re-observable by me; I never connect to the database).
+Evidence classes: (a) read by me from the repository, (b) re-computed or re-run by me, (c) read-only GitHub state via `gh`, (d) owner-run output committed as JSON (reported, not re-observable by me; I did not read `.env` or connect to any real database).
 
 ### Observable Truths (ROADMAP Success Criteria, the contract)
 
 | # | Truth | Status | Evidence |
 |---|-------|--------|----------|
-| SC1 | Applying the committed migration to an empty Supabase project creates the schema; re-applying is a no-op or fails safely | VERIFIED | Migration (182 lines) creates `city_rating` (PK `city_rating_pk (city, valid_time)`) and `pipeline_run`, RLS on both, `revoke all` from anon/authenticated, `dlr_writer` with SELECT/INSERT/UPDATE only; every statement is idempotent (`if not exists`, drop-then-create policy, guarded role). Real project: 04-05 CLI output shows one migration applied, second push "Remote database is up to date" (owner-run output). `smoke_local.json`: `tables_exist`, `rls_enabled`, `writer_policies_exist`, `writer_privileges_exact`, `delete_denied`, `consumers_cannot_write` all true. `supabase_migration_test.py` passes (43 offline tests re-run by me: 43 passed). |
-| SC2 | A pipeline run pointed at Supabase reads history from Postgres and upserts one row per city; re-running the same window changes no row count | PRESENT_BEHAVIOR_UNVERIFIED | Wired: `dlr_orchestrator._run_cities_with_store` passes `history_reader=store.read_history`, `archive=False`, calls `store.write_rating` per city and `record_run` once; `UPSERT_RATING_SQL` is `ON CONFLICT (city, valid_time) DO UPDATE` with `first_written_at` in neither list; `read_history` is parameterised 30-day, `valid_time < slot`, `not exhausted`. On the real project the same `upsert_rating` path was exercised by the smoke test (`rating_upsert_idempotent`, `run_row_idempotent` true in `smoke_local.json`, `smoke_after_backfill.json`) and the writer sees rows (`rows_visible`). Not demonstrated: a whole orchestrator run, or `read_history` itself, against Supabase (the smoke's `rows_visible` is a direct select), and the local live tests were not re-run by me. Routed to human verification. The first real orchestrator run against Supabase is Phase 5 plan 05-06. |
-| SC3 | The Phase 3 backfill archive is loaded, labelled provisional, per-city row counts match the Phase 3 archive | VERIFIED | I recomputed the archive sha256: equals `backfill_parity.json` and `manifest.json files.archive.sha256` (`18f999aa...25cf`). Parity: AUSTIN, CORPUS_CHRISTI, MIDLAND, EL_PASO each manifest 504 = csv 504 = db 504, `all_match` true, 0 duplicates, 0 dropped. `smoke_after_backfill.json`: 504 rows per city, newest 2026-09-28T23:00:00Z (independent second owner-run observation). Loader: `config_version` `v1-provisional-2026-10-13`, `rating_basis` starts "PROVISIONAL (OD-5)", `origin` backfill, `on conflict ... do nothing`. DB contents are owner-reported (class d). |
-| SC4 | A GitHub-hosted runner connects using only repository secrets; a secret scan finds no keys | VERIFIED | `gh run view 40010766903`: workflow "Supabase Smoke", `conclusion: success`, `event: workflow_dispatch`, head `74946e6`, completed. `gh secret list`: NREL_API_EMAIL, NREL_API_KEY, SUPABASE_DB_URL, SYNOPTIC_TOKEN (no SUPABASE_ADMIN*). Workflow maps the secret into the run step's env only, `permissions: contents: read`, dispatch-only. My `git grep` over tracked files for credentialed Postgres URLs, `sb_secret_`, JWT-shaped tokens, `password '...'` literals: none outside descriptive plan text with placeholders; no `.env` tracked, `.env` is git-ignored. `secret_scan_test.py` passes. |
-| SC5 | Consumer schema doc under `docs/`; `api-contract.md` / `pss_e_handoff.md` point to it | VERIFIED | `docs/data-science/schema/city_rating_v1.md` (186 lines) with the required sections (key and time semantics, columns, fallback, provisional label, "What produced each row (DB-06)", freshness, backfill, reading rules, run log). `city_rating_v1.md` referenced 5 times in `api-contract.md`, 2 in `pss_e_handoff.md`. `supabase_schema_doc_test.py` (doc vs migration columns, config labels, no connection details, links) passes. |
-| SC6 | Every row names what produced it: config version that changes with any per-city conductor parameter, static ratings, bounds, bearings, plus forecast and anomaly model hashes; a conductor or model change alters values only, never schema | VERIFIED | Migration columns `config_version`, `config_fingerprint` (NOT NULL, 64-hex CHECK), `forecast_model_sha256`, `anomaly_model_sha256`, `rating_basis` NOT NULL. `build_rating_row` fills them from `rating_config_fingerprint(city)` (sha256 of canonical snapshot: every `vars(point.conductor)` attribute, coordinate, bearing, static rating, bounds, 19 fingerprinted config names reduced per city) and `file_sha256` of the loaded model files; keys asserted equal to `CITY_RATING_COLUMNS`. `rating_identity_test.py` (per-city sensitivity, hash-seed stability, AST drift guard, schema stability) passes. Backfill rows: `backfill_parity.json` identity block equals the manifest (git head `175b32b`, config_version, per-city forecast/anomaly hashes all re-checked equal to `manifest.json models`). |
+| SC1 | Applying the committed migration to an empty Supabase project creates the schema; re-applying is a no-op or fails safely | VERIFIED | (a) `supabase/migrations/` holds exactly two files. The original `20261019000000_create_city_rating.sql` sha256 is `7fbf1423...6129d`, equal to the value pinned by `test_original_migration_is_unchanged` (never edited). The additive `20261023000000_...sql` drops its CHECK `if exists` before re-adding it and only replaces two comments, so it re-applies cleanly; it adds no column, grant, policy, role or credential (read in full). (d) `smoke_review_fixes.json`: `tables_exist`, `rls_enabled`, `writer_policies_exist`, `writer_privileges_exact`, `delete_denied`, `consumers_cannot_write` all true on the real project; the executor's 04-12 summary records a second push reporting "Remote database is up to date". (b) Migration tests are part of the 1686-pass run. |
+| SC2 | A pipeline run pointed at Supabase reads history from Postgres and upserts one row per city; re-running the same window changes no row count | VERIFIED | (a) `dlr_orchestrator._run_cities_with_store` passes `history_reader=store.read_history`, calls `store.write_rating` per city and `record_run` once; upsert is `ON CONFLICT (city, valid_time) DO UPDATE`. (b) Behavioral proof, previously missing: `DLR_TEST_PG_AUTOSTART=1 pytest -q -p no:cacheprovider` over the whole suite, `1686 passed, 78 warnings in 147.31s`, no skips, which includes `supabase_live_test.py` and `supabase_orchestrator_test.py` (orchestrator rerun keeps one row per city and one run row; history read from Postgres; 30-day window boundary; reconnect after `pg_terminate_backend`). (d) On the real project the upsert path ran twice in the smoke (`rating_upsert_idempotent`, `run_row_idempotent` true). A whole orchestrator run against Supabase is not claimed here; it is Phase 5 plan 05-06. |
+| SC3 | The Phase 3 backfill archive is loaded, labelled provisional, per-city row counts match the Phase 3 archive | VERIFIED | (b) Recomputed archive sha256 `18f999aa...25cf` equals both `manifest.json files.archive.sha256` and `backfill_parity.json`. The merge `fb28232` changed `manifest.json` only in the `command` string and dropped `working_directory` (path-stable), not the archive hash, git head (`175b32b`) or row counts, so the loader's manifest check is unaffected. (a) `backfill_parity.json`: AUSTIN, CORPUS_CHRISTI, MIDLAND, EL_PASO each manifest 504 = csv 504 = db 504, `all_match` true, 0 duplicates dropped. (d) `smoke_review_fixes.json` independently shows 504 rows per city, newest 2026-09-28T23:00:00Z on the real project after the review-fix migration. WR-04 and WR-05 fixes to the loader apply to future loads only; the committed archive had 0 duplicates and the pinned Phase 3 fingerprints are tested to be unchanged (see SC6). |
+| SC4 | A GitHub-hosted runner connects using only repository secrets; a secret scan finds no keys | VERIFIED | (c) `gh run view 40035268724`: workflow "Supabase Smoke", `status completed`, `conclusion success`, `event workflow_dispatch`, `headSha fb28232ebe1984a8a5eddbbce4a39cfd81cdbc59`, which is `origin/main`. (a) The workflow maps `SUPABASE_DB_URL` into the one run step's env only, `permissions: contents: read`, dispatch-only, job guarded by `github.ref == 'refs/heads/main'`, both actions pinned by 40-hex SHA, `persist-credentials: false`. (b) Tracked-file greps: no credentialed Postgres URL, no `sb_secret_`, no tracked `.env`; `secret_scan_test.py` is in the passing run. (d) `smoke_actions_review_fixes.json` holds only booleans, run id, SHA and time. I did not re-resolve the action SHAs (the re-review did, via `git ls-remote`) and did not read the Actions log text, so "log has no connection details" rests on the owner-recorded JSON. |
+| SC5 | Consumer schema doc under `docs/`; `api-contract.md` / `pss_e_handoff.md` point to it | VERIFIED | (a) `docs/data-science/schema/city_rating_v1.md` names both migrations (line 6) and the evidence files (line 188); WR-02's meaning of `forecast_status = failed` after a cleaning failure and the degraded run-log meaning are documented; run-log comments in migration 2 match doc lines 176-177 (`test_run_log_comments_match_the_schema_doc`). Pointers from `api-contract.md` and `pss_e_handoff.md` are covered by `supabase_schema_doc_test.py`, which passed. One sentence at line 35 is imprecise (IN-10, advisory). |
+| SC6 | Every row names what produced it: config version that changes with any per-city conductor parameter, static ratings, bounds, bearings, plus forecast and anomaly model hashes; a conductor or model change alters values only, never schema | VERIFIED | (a) `backend/rating_identity.py` (standard library, `config`, `city_point` only) now owns the recipe and `supabase_store` re-exports it (`from rating_identity import`, line 57), so `build_rating_row` still fills `config_version`, `config_fingerprint`, model hashes and `rating_basis`. (b) `rating_identity_test.py` (per-city sensitivity, hash-seed stability, AST drift guard, schema stability) passed in the full run, and the loader test that recomputes the Phase 3 fingerprints from the manifest's git head and compares them to the four values in `backfill_parity.json` passed, so the WR-05 refactor changed no fingerprint value. Schema stability is guarded by the pinned original migration and the additive-only second migration. |
 
-**Score:** 5/6 truths verified (1 present, behavior-unverified)
+**Score:** 6/6 truths verified (0 present, behavior-unverified)
+
+### G-04-2 closure check (every review finding, against the code, not the summaries)
+
+| ID | Fix located in current code | Failing-first test exists in tree | Live / CI evidence | Status |
+|----|-----------------------------|-----------------------------------|--------------------|--------|
+| CR-01 | `supabase_store.py:328` reads `select current_user`; `:342` logs `redact(role, secrets + _project_identifiers(url))`; `conn.info.user` unreferenced | `test_tracer_postgres_run_logs_the_server_role_not_the_project_reference` (supabase_store_test.py) | n/a | Closed |
+| WR-01 | `dlr_orchestrator.py:372-373` returns 1 for any city error when `--store postgres`; CSV rule on `:374` unchanged | `test_main_with_postgres_exits_one_when_any_city_failed` (supabase_orchestrator_test.py) | n/a | Closed |
+| WR-02 | `city_pipeline.py:62-83,101-102`: `cleaning_error`, `forecast_status = "failed"` when cleaning failed on non-empty history, history emptied (never unvetted); orchestrator copies it to the run record (`dlr_orchestrator.py:259`); `build_run_row` classifies `degraded` | `test_cleaning_failure_on_existing_history_reports_forecast_failed` (city_pipeline_test.py) | n/a | Closed |
+| WR-03 | `supabase_store.py:842-896`: `_with_reconnect` reconnects once only when the session is lost, retries once, never retries a healthy-connection error | `test_store_reconnects_once_when_the_connection_was_lost`; live `test_store_recovers_from_a_terminated_backend` | live test ran in the 1686 pass | Closed |
+| WR-04 | `supabase_load_backfill.py:~350-357` ranks computed rows ahead of fallback rows, keep-first, mapped back by index | `test_backfill_keeps_the_row_the_cleaning_step_keeps_usable` and parametrized same-slot test | n/a (committed archive has 0 duplicates) | Closed |
+| WR-05 | Fingerprint child imports only `config, city_point, thermal_model, rating_identity`, refuses any other live backend module (exit 3), surfaces redacted head/tail stderr | `test_fingerprint_child_imports_only_the_identity_module_from_live_code`, `test_phase3_fingerprints_survive_a_config_missing_names_live_modules_read_at_import` | Phase 3 fingerprints equal `backfill_parity.json` | Closed |
+| IN-01 | `redact(..., limit=300)` default; `build_run_row` uses `limit=_RUN_ERROR_MAX_CHARS` (1000) at lines 659, 703; key collisions sum counts | `test_run_row_error_text_keeps_up_to_1000_characters` (supabase_run_log_test.py) | n/a | Closed |
+| IN-02 | `connect()` assigns `url = str(url).strip()` (line 310) before redaction and `psycopg.connect` | `test_connect_strips_whitespace_around_the_url_before_connecting` | live `test_a_url_with_a_trailing_newline_connects` ran | Closed |
+| IN-03 | Migration 2 replaces both run-log comments; text matches the schema doc | `test_run_log_comments_match_the_schema_doc` (supabase_migration_test.py) | (d) pushed 2026-10-23, `smoke_review_fixes.json` all_passed true | Closed |
+| IN-04 | Loader uses `supabase_store.finite` and `supabase_store.file_sha256` (public); no private-attribute access | `test_loader_reuses_the_store_helpers_instead_of_copies` | archive sha unchanged | Closed |
+| IN-05 | Workflow pinned by SHA, `persist-credentials: false`, job guarded to `refs/heads/main` | `test_smoke_workflow_pins_actions_by_sha_and_runs_only_on_main` (supabase_smoke_test.py) | (c) Actions run 40035268724 success on `fb28232` | Closed |
+| IN-06 | Migration 2 rebuilds the CHECK as `(valid_time at time zone 'UTC') = date_trunc('hour', valid_time at time zone 'UTC')`; `connect()` pins `set timezone = 'UTC'`; smoke adds `session_timezone_utc` and `utc_hour_check_zone_independent` | `test_review_fix_migration_makes_the_hour_check_zone_independent`; `test_hour_check_accepts_utc_hours_in_a_half_hour_offset_session` | (d) both checks true on the real project in `smoke_review_fixes.json`; (c) both ok in the Actions run per `zone_checks_ok` | Closed |
+
+`04-REVIEW-DISPOSITION.md` records these 12 as `fixed` (each with plan, task, commit; IN-03/IN-06/IN-05 with the live evidence) and the 5 new review findings as `open` (17 total). 04-UAT.md test 2 expected "every row has a disposition other than open, or the owner accepts them as open"; the 5 remaining are new advisory findings from the re-review, not the 12 that G-04-2 named. G-04-2 is closed.
 
 ### Deferred Items
 
-None filed as deferred. Relevant overlaps with later phases, noted for the owner but not used to excuse anything: Phase 5 05-01 lists a runner "exit policy" (bears on WR-01) and Phase 5 SC3 requires a failed city to be recorded.
+None filed as deferred. Overlap with later phases, noted but not used to excuse anything: Phase 5 05-01's runner exit policy builds on the WR-01 exit status fixed here; WR-06 and IN-07 touch the Phase 5 runner's log and run-log surface.
 
 ### Required Artifacts
 
 | Artifact | Expected | Status | Details |
 |----------|----------|--------|---------|
-| `supabase/migrations/20261019000000_create_city_rating.sql` | DB-01 schema | VERIFIED | Exists, substantive, applied to the real project (04-05 output; smoke checks) |
-| `backend/supabase_store.py` (903 lines) | writer, reader, identity | VERIFIED | Substantive and wired (orchestrator, smoke, loader import it) |
-| `backend/supabase_load_backfill.py` (535) | DB-03 loader | VERIFIED | Manifest sha check, DO NOTHING, parity; run by owner |
-| `backend/supabase_smoke.py` (295) | DB-04 live check | VERIFIED | `force_rollback=True`, run locally and in Actions |
-| `.github/workflows/supabase_smoke.yml` | dispatch-only smoke | VERIFIED | Run 40010766903 succeeded |
-| `docs/data-science/schema/city_rating_v1.md` | DB-05 contract | VERIFIED | Tested against migration |
-| `backend/tests/*` (supabase_*, rating_identity, secret_scan) | tests | VERIFIED | 43 offline re-run by me: pass; live-gated file exists (see SC2) |
-| `docs/data-science/decisions/supabase_store/*.json` (4) | live evidence | VERIFIED | Present, tracked, hold only booleans/counts/hashes/times, no host or URL |
-| `api-contract.md`, `pss_e_handoff.md` | pointers | VERIFIED | Links present |
+| `supabase/migrations/20261019000000_create_city_rating.sql` | DB-01 schema | VERIFIED | Hash-pinned unchanged, applied to the real project |
+| `supabase/migrations/20261023000000_...utc_hour_check_and_run_log_comments.sql` | IN-06/IN-03 additive | VERIFIED | Read in full; applied to the real project (owner) |
+| `backend/supabase_store.py` | writer, reader, reconnect, identity re-export | VERIFIED | Substantive and wired (orchestrator, smoke, loader) |
+| `backend/rating_identity.py` | DB-06 recipe, minimal import set | VERIFIED | Imported by `supabase_store` and by the fingerprint child |
+| `backend/supabase_load_backfill.py` | DB-03 loader | VERIFIED | Manifest sha check, DO NOTHING, computed-first dedup, isolated child |
+| `backend/supabase_smoke.py` | DB-04 live check incl. zone checks | VERIFIED | Run locally and in Actions with both zone checks true |
+| `.github/workflows/supabase_smoke.yml` | hardened dispatch-only smoke | VERIFIED | SHA-pinned, main-only, run 40035268724 success |
+| `docs/data-science/schema/city_rating_v1.md` | DB-05 contract | VERIFIED | Tested against both migrations |
+| `docs/data-science/decisions/supabase_store/*.json` (6) | live evidence | VERIFIED | Tracked; only booleans, counts, hashes, role, run id, times |
+| `backend/tests/*` (supabase_*, rating_identity, secret_scan, city_pipeline) | tests | VERIFIED | All 15 named failing-first tests exist; all pass |
 
 ### Key Link Verification
 
 | From | To | Via | Status |
 |------|----|-----|--------|
-| `dlr_orchestrator.py` | `supabase_store.py` | `SupabaseStore.from_env()`, `read_history`, `write_rating`, `record_run` (lines 215-291) | WIRED |
-| `dlr_orchestrator.py` | `city_pipeline.py` | `history_reader=store.read_history`, `archive=False` | WIRED |
-| `supabase_store.py` | `historical_archive.py` | `validate_history_frame`, `ARCHIVE_COLUMNS` in `read_history` | WIRED |
-| `supabase_store.py` | `ercot_dlr_merger.amps_to_mw` | `rating_mw`, `static_rating_mw` | WIRED |
-| `supabase_store.py` | `city_point` / `ampacity_forecast._model_path_for` | fingerprint snapshot, `FORECAST_ARTIFACT_PATHS` | WIRED |
-| `supabase_smoke.py` | `supabase_store.upsert_rating` | sentinel upserts (lines 113, 120) | WIRED |
-| `supabase_load_backfill.py` | `manifest.json` | sha256, window, rows by city, models, git head | WIRED |
+| `dlr_orchestrator.py` | `supabase_store.py` | `SupabaseStore.from_env()`, `read_history`, `write_rating`, `record_run` | WIRED |
+| `dlr_orchestrator.py` | `city_pipeline.py` | `history_reader=store.read_history`; `cleaning_error` -> `record["error"]` -> `build_run_row` | WIRED |
+| `supabase_store.py` | `rating_identity.py` | `from rating_identity import (...)` re-export, used by `build_rating_row` | WIRED |
+| `supabase_load_backfill.py` | `rating_identity.py` | child evaluates `rating_identity.rating_config_fingerprint` on Phase 3 sources | WIRED |
+| `supabase_load_backfill.py` | `supabase_store.py` | public `file_sha256`, `finite`, `redact` | WIRED |
+| `supabase_smoke.py` | migration 2 | Kolkata-session accept/refuse probe passes only with the UTC CHECK | WIRED (true on real project) |
+| `supabase_store.connect` | server | `select current_user` after `set timezone = 'UTC'`, inside the redacted try block | WIRED |
 | consumer docs | `city_rating_v1.md` | relative links | WIRED |
 
 ### Data-Flow Trace (Level 4)
 
 | Artifact | Data Variable | Source | Produces Real Data | Status |
 |----------|---------------|--------|--------------------|--------|
-| `city_rating` rows | live row | `build_rating_row` from real `run_city_pipeline` result | Yes (local live tracer; real project holds 2016 backfill rows from the archive) | FLOWING |
-| `read_history` frame | forecast/detector history | `HISTORY_SQL` on `public.city_rating` | Yes (query; validated through `validate_history_frame`) | FLOWING (SC2 caveat) |
+| `city_rating` rows | live row | `build_rating_row` from real `run_city_pipeline` result | Yes (live-local tests; real project holds 2016 backfill rows) | FLOWING |
+| `read_history` frame | forecast/detector history | `HISTORY_SQL` on `public.city_rating`, validated | Yes; exercised by the live orchestrator tests | FLOWING |
+| `pipeline_run` row | per-city outcome, error | `record["error"]` from `cleaning_error`, redacted with 1000-char limit | Yes (WR-02 test) | FLOWING |
 
 ### Behavioral Spot-Checks
 
 | Behavior | Command | Result | Status |
 |----------|---------|--------|--------|
-| Migration, schema doc, secret scan, DB-06 identity contract | `pytest backend/tests/supabase_migration_test.py supabase_schema_doc_test.py secret_scan_test.py rating_identity_test.py` (SUPABASE_DB_URL unset) | 43 passed | PASS |
-| Live-Postgres tests (SC2) | `DLR_TEST_PG_AUTOSTART=1 pytest supabase_live_test.py ...` | refused by permission classifier; not run | SKIP (human item) |
-| Full suite | run by orchestrator before this verification | 1505 passed, 43 skipped, 0 failed (the 43 are the gated live tests) | NOT re-run by me |
+| Whole suite incl. live-Postgres tests | `DLR_TEST_PG_AUTOSTART=1 .venv/bin/python -m pytest -q -p no:cacheprovider` (run once, throwaway local cluster) | `1686 passed, 78 warnings in 147.31s`, 0 failed, 0 skipped | PASS |
+| Original migration unchanged | `sha256sum supabase/migrations/20261019000000_create_city_rating.sql` | `7fbf1423e0b8ccf0eee6f79e502036e11c8f3c4c9d54f6badddda0473f76129d` (equals the pinned value) | PASS |
+| Archive integrity | recomputed sha256 of the Phase 3 archive | equals manifest and `backfill_parity.json` | PASS |
+| Actions run is on the pushed head | `gh run view 40035268724 --json conclusion,event,headSha` | success, workflow_dispatch, `fb28232` = `origin/main` | PASS |
 
 ### Probe Execution
 
@@ -144,78 +177,73 @@ No `probe-*.sh` declared by any plan; step skipped.
 
 ### Requirements Coverage
 
-All six IDs appear in PLAN frontmatter (`requirements:`) and in REQUIREMENTS.md (Phase 4, marked Complete). No orphaned Phase 4 requirement: REQUIREMENTS.md maps exactly DB-01..DB-06 to Phase 4 and every one is claimed by at least one plan.
+All six IDs appear in the `requirements:` frontmatter of at least one PLAN and in REQUIREMENTS.md (Phase 4, marked Complete). REQUIREMENTS.md maps exactly DB-01..DB-06 to Phase 4; there are no orphaned requirements.
 
 | Requirement | Source Plans | Description | Status | Evidence |
 |-------------|--------------|-------------|--------|----------|
-| DB-01 | 04-01, 04-05 | Versioned migration, per-city table keyed (city, valid_time), units in names/doc | SATISFIED | Migration applied to real project; column units in names and comments; `rating_mw` via `amps_to_mw` |
-| DB-02 | 04-01, 04-02 | Pipeline reads history from and writes to Postgres; idempotent upserts; CSV path kept | SATISFIED in code; runtime rerun = human item | Wiring verified; CSV default untouched (frozen files unmodified in phase commits); orchestrator-level rerun is SC2 |
-| DB-03 | 04-03, 04-06 | Phase 3 backfill loaded so forecast/detector do not cold-start | SATISFIED | SC3 evidence; archive hash recomputed |
-| DB-04 | 04-01, 04-03, 04-05, 04-06 | Writer secret only in Actions secrets; nothing secret committed; works from GitHub runners via pooler | SATISFIED, with CR-01 open | SC4 evidence; CR-01 is a log-hygiene defect on the success path, not a committed or consumer-visible secret |
-| DB-05 | 04-04 | Consumer schema contract doc; replaces open items in api-contract and pss_e_handoff | SATISFIED | SC5 evidence |
-| DB-06 | 04-01..04-04, 04-06 | Row provenance: config version/fingerprint, model hashes, schema stable | SATISFIED | SC6 evidence |
+| DB-01 | 04-01, 04-05, 04-09, 04-12 | Versioned migration, per-city table keyed (city, valid_time) | SATISFIED | SC1; both migrations applied to the real project |
+| DB-02 | 04-01, 04-02, 04-07, 04-08, 04-10 | Pipeline reads history from and writes to Postgres; idempotent upserts; CSV path kept | SATISFIED | SC2; live suite passed; WR-01 exit policy and WR-02 status; CSV exit rule unchanged |
+| DB-03 | 04-03, 04-06, 04-10, 04-11 | Phase 3 backfill loaded so forecast/detector do not cold-start | SATISFIED | SC3 |
+| DB-04 | 04-01, 04-03, 04-05, 04-06, 04-07, 04-09, 04-10, 04-12 | Writer secret only in Actions secrets; nothing secret committed; works from GitHub runners via pooler | SATISFIED | SC4; CR-01 (the one confirmed leak of the project reference to a log) is fixed and tested end to end |
+| DB-05 | 04-04, 04-08, 04-09, 04-12 | Consumer schema contract doc | SATISFIED | SC5 |
+| DB-06 | 04-01..04-04, 04-06, 04-11 | Row provenance: config version/fingerprint, model hashes, schema stable | SATISFIED | SC6 |
 
 ### Prohibitions (must_haves.prohibitions, all `verification: judgment`)
 
-Non-authoritative LLM-judge verdicts. Flag: unverified-prohibition, human review recommended (see human_verification item 4).
+Non-authoritative LLM-judge verdicts. Flag: unverified-prohibition, human review recommended. The 23 prohibitions of plans 04-01..04-06 were judged held in the first pass and accepted by the owner in 04-UAT.md test 4; I re-checked the highest-risk ones (no credential committed, original migration unedited, no edits to frozen/shadow files, no anon/authenticated grants) against current state and they still hold. The 16 from the gap plans are new:
 
-| Prohibition (abridged) | Verdict | Basis |
-|------------------------|---------|-------|
-| No sensitive data in `city_rating` (path, error text, token, host, project ref) | Held | `build_rating_row` stores only `detector_model_loaded` boolean; no error text; errors go only to `pipeline_run` via `redact()` |
-| No row without provisional labels | Held | `rating_basis`, `config_version` NOT NULL; writer fills from config; loader uses Phase 3 label |
-| No credential in migration/code/tests/committed file; no DELETE/TRUNCATE/DDL/BYPASSRLS for writer; no anon/authenticated privilege | Held | Migration reviewed; my tracked-file greps clean; smoke `writer_privileges_exact`, `anon_can_select` false on the real project |
-| No live DDL against non-local DB; no migration applied from plan 04-01 | Held | Fixture refuses non-local hosts (read); migration applied only in owner plan 04-05 |
-| No edits to frozen shadow/experiment files, shadow_collect.yml, data/shadow, archive schema constants | Held | `git diff d7f680a^..HEAD` over the shadow workflow and `ampacity_forecast`, `anomaly_detector`, `city_point`, `thermal_model` is empty; `git log` for the others shows only pre-phase commits |
-| No placeholder row for an outright-failed city (OD-9) | Held | `_run_cities_with_store` writes nothing on exception; failure recorded in run row |
-| No error text or paths in `city_rating` | Held | as above |
-| No live row without `config_fingerprint`; no model hash from anywhere but the loaded file | Held | `build_rating_row` always computes it; `model_identity` hashes the loaded files |
-| No overwrite/delete during backfill; no mismatched archive | Held | `do nothing`; sha256 and size checked against manifest |
-| No backfill labelled with live config; no go/no-go claim | Held | Loader pins `PHASE3_CONFIG_VERSION`; docs state NO-GO |
-| No parity from counts that hide drops | Held | Report carries `rows_dropped_by_validation`, `duplicates_dropped`, per-city `match` |
-| No connection details printed/logged/committed by smoke, loader, workflow; no admin URL on GitHub | Held for those three; see CR-01 for `connect()` under `--store postgres` | Evidence JSON and Actions log clean per 04-06 and my greps |
-| No push / secret / write dispatch by the executor | Held per summaries and `gh` (read-only use) | The owner performed those steps |
-| No docs presenting ratings as verified limits; no connection details; no Phase 5/6 claims | Held | Provisional banner in `city_rating_v1.md`; reviewed |
+| Plan | Prohibition (abridged) | Verdict | Basis |
+|------|------------------------|---------|-------|
+| 04-07 | No part of the connection URL, user, host or project reference logged, printed or raised; only the server-reported role | Held | `connect()` logs `redact(role, ...)` from `select current_user`; failure path redacts with connection identifiers; end-to-end tracer test. WR-06 concerns provider exception text, not the DB URL (see notes) |
+| 04-07 | At most one retry per call; never retry a healthy-connection failure | Held | `_with_reconnect` retries once, only when `_lost()` confirms the session is gone; CHECK-failure test |
+| 04-07 | No connection to the real project, no `.env` read, no printed connection string by the executor | Held | Tests use fakes or the local throwaway Postgres; I did the same |
+| 04-08 | No change to the CSV path's exit status or Phase 1 pinned assertions | Held | Line 374 keeps the CSV rule; Phase 1 tests are in the passing run |
+| 04-08 | No unvetted history after a cleaning failure; cleaning error not stored in `city_rating` | Held | `history.iloc[0:0]` on failure; `cleaning_error` reaches only `pipeline_run` via `redact` |
+| 04-08 | No `city_rating` column added or renamed | Held | Migration 2 changes one CHECK and two comments |
+| 04-09 | Original migration not edited; no non-local migration applied by the executor | Held | Hash equals the pinned value; the push was the owner's 04-12 step |
+| 04-09 | New migration adds no column, grant, policy, role or credential | Held | Read in full |
+| 04-09 | Executor does not push the workflow, set a secret or dispatch; actions pinned from official repos | Held | Pins named `actions/*`; re-review resolved them; push and dispatch by owner (04-12) |
+| 04-10 | Nothing stored or logged without `redact()`; the longer limit does not skip redaction | Held | Cut is applied after redaction (`redact` docstring and code, line 293) |
+| 04-10 | Loader hashing/checking/labelling unchanged by IN-04 | Held | Archive sha identical to manifest |
+| 04-11 | No fingerprint value changed | Held | Phase 3 fingerprints equal `backfill_parity.json` in a passing test |
+| 04-11 | Loader not run against a real database; no rewrite of loaded rows | Held | No loader run after the refactor per the summaries and git history; the parity JSON is the original owner run |
+| 04-11 | No edits to `backfill_archive.py`, `real_data_validation.py` or the frozen forecast modules | Held | Those two files changed in this window only through the owner's merge `fb28232` bringing in the Phase 3 PR #9 review fixes; no Phase 4 plan commit touches them (`git log --first-parent` shows only the merge) |
+| 04-12 | Executor does not push, set secrets, dispatch, read `.env` or connect to the real database | Held | Per summary and `gh` read-only use; evidence is the owner's |
+| 04-12 | No finding marked fixed without commit, passing test and (for IN-03/06/05) live evidence | Held | Ledger rows cite commits and failing-first tests; I confirmed the tests exist and the evidence files and Actions run |
 
 ### Anti-Patterns Found
 
-Debt-marker scan (TBD, FIXME, XXX, TODO, HACK) over the ten phase source/doc files: none.
+Debt-marker scan (TBD, FIXME, XXX) over the phase's source, migration and doc files: none (0 matches in every file).
 
-Code review (`04-REVIEW.md`, 12 findings, all `open` in `04-REVIEW-DISPOSITION.md`). I confirmed the following against the code:
+No blocker anti-pattern. Code-review state after the gap plans: `04-REVIEW.md` (re-review) reports 0 critical, 1 warning, 4 info, all prior 12 resolved (I independently confirmed each above). I confirmed WR-06 against the code:
 
-| File | Line | Finding | Severity | Impact |
+| File | Line | Pattern | Severity | Impact |
 |------|------|---------|----------|--------|
-| `backend/supabase_store.py` | 297 | CR-01 confirmed: `log.info("connected to Postgres as %s", conn.info.user)`; `dlr_orchestrator.main` sets `logging.basicConfig(level=INFO)` (line 333). For the pooler the user is `dlr_writer.<project_ref>`. The smoke test and loader configure no logging (INFO dropped), which is why the Actions smoke log was clean. | Critical per review; WARNING for this verification | Contradicts the module docstring's own rule that the project reference never reaches a log. Not a credential, repo is PRIVATE (`gh repo view`), no CI job runs `--store postgres` yet, so nothing has leaked. Would print in Phase 5's scheduled runner. Does not fail a Phase 4 must-have (the plan's failure-path password and smoke/loader/workflow prohibitions hold), so I did not mark the phase gaps_found. Fix before Phase 5. |
-| `backend/dlr_orchestrator.py` | 351 | WR-01 (per review; line seen, not re-derived): exit 0 when some cities fail to write but one succeeds | Warning | Scheduled job stays green with a data gap; Phase 5 05-01 "exit policy" is the natural home |
-| `backend/city_pipeline.py` | 83-89 | WR-02 confirmed: a `clean_history` exception empties history, forecast returns None, `forecast_status` becomes `cold_start`, counted healthy in `cities_ok` | Warning | Cleaning failure indistinguishable from a new city in the run log |
-| `backend/supabase_store.py` | 256-298 | WR-03 (per review): no reconnect on a long-lived connection | Warning | Phase 5 per-city children reduce, not remove, the exposure |
-| `backend/supabase_load_backfill.py` | 315-319 | WR-04 confirmed: `duplicated(keep="first")` contradicts the computed-after-fallback rule; committed archive has 0 duplicates | Warning | No effect on loaded rows today; wrong for a different archive |
-| `backend/supabase_load_backfill.py` | 189-245 | WR-05 (per review): identity child coupled to live module imports | Warning | Breaks backfill re-run after Phase 7 config changes |
-| various | | IN-01..IN-06 (dead constant, unstripped URL, migration comment wording, private-helper reuse, workflow pinning, tz-dependent CHECK) | Info | Not goal-blocking; IN-03 and IN-06 need a new additive migration |
+| `backend/dlr_orchestrator.py` | 273 (`out["errors"][name] = str(exc)`) | Per-city exception text redacted for the log (line 272) and the run row but raw in the printed report and the `--output` JSON | Warning (advisory) | A provider exception that echoes a URL or token would reach the Actions log through `_print_report`. Does not fail a Phase 4 must-have: DB errors are redacted at source (`StoreError`), no CI job runs `--store postgres` yet, and the repo is private. Fix before Phase 5's scheduled runner. |
+
+### Advisory Notes (not gaps)
+
+- **WR-06** (above): recommend fixing before Phase 5 plan 05-01 (suggested fix is three lines plus a test; same inconsistency on the CSV branch).
+- **IN-07**: a failed forecast stores `degraded` with `error: null`; a run where every city's ML forecast failed exits 0 with no stored reason. Fits Phase 5's exit policy.
+- **IN-08**: a cleaning failure on an empty history is not stored (latent: `clean_history` accepts an empty frame today).
+- **IN-09**: the manifest's git head is passed to `git show` unvalidated; a leading `-` would be read as an option. Low exposure (committed owner-run input, fixed argv, no shell).
+- **IN-10**: `city_rating_v1.md:35` says the CSV archive "keeps the first write for an exact instant"; a computed row may follow fallback rows and then owns the slot. Consumer-facing wording only; no behavior.
+- Owner-reported evidence caveat (unchanged): live database contents (504 rows per city, schema state, `\password` setup) are class (d), committed JSON cross-checked for internal and manifest consistency but not independently observable by me.
+- The 2026-10-30 Supabase auto-grant change requires re-running the local smoke afterwards (04-05/04-06 User Setup); it does not affect today's result.
+- Local `main` is 4 commits ahead of `origin/main` (docs and planning commits after `fb28232`); the code, migration and workflow under test are all in `fb28232` and unchanged since.
 
 ### Human Verification Required
 
-1. **Run the live-Postgres tests.**
-   **Test:** `DLR_TEST_PG_AUTOSTART=1 .venv/bin/python -m pytest backend/tests/supabase_live_test.py backend/tests/supabase_orchestrator_test.py -q` (local throwaway cluster, never Supabase).
-   **Expected:** all pass, none skipped, including the orchestrator rerun, history-from-Postgres and 30-day-boundary tests.
-   **Why human:** only runtime proof of SC2; the full suite skips them and my run was refused.
-
-2. **Dispose of the 12 open review findings, CR-01 first.**
-   **Test:** edit `04-REVIEW-DISPOSITION.md` or run `/gsd-code-review-fix 4`.
-   **Expected:** CR-01 fixed (log `select current_user`, or nothing, plus a `caplog` test) before Phase 5 runs `--store postgres` in Actions; WR-01, WR-02, WR-03 decided before Phase 5.
-   **Why human:** owner decides fix/accept/defer; if the owner wants zero open critical findings on a verified phase, route CR-01 through the fix first and re-verify.
-
-3. **Confirm the database password reset.**
-   **Test:** owner confirms the postgres password that appeared in chat in 04-05 was reset and `.env` updated.
-   **Expected:** old value invalid.
-   **Why human:** unobservable to the verifier. Related 04-05 deviation (orchestrator read `.env` structure once at the owner's request) is recorded and was owner-authorised; it does not affect the goal.
-
-4. **Acknowledge the judgment-tier prohibition verdicts** (table above, all judged held).
+1. **Acknowledge the 16 new judgment-tier prohibition verdicts** (table above, all judged held).
+   **Test:** read the table; accept or challenge any verdict.
+   **Expected:** owner accepts, as was done for the first 23 in 04-UAT.md test 4.
+   **Why human:** all prohibitions are `verification: judgment`; the verdicts are a non-authoritative LLM judgment and must not be silently absorbed into a passed verdict. This is the only open item; no must-have failed and no behavior is left unverified.
 
 ### Gaps Summary
 
-No must-have failed. No FAILED truth, MISSING or STUB artifact, NOT_WIRED link or unreferenced debt marker. Status is `human_needed` because (a) SC2's runtime behavior is evidenced only by gated live tests I could not run, (b) there are owner decisions that cannot be made programmatically (open critical review finding, password reset, judgment-tier prohibitions). Caveats the owner should know: DB contents (504 rows per city, schema state, secret set-up via `\password`) are owner-reported evidence in committed JSON, cross-checked for internal and manifest consistency but not independently observable; the 2026-10-30 Supabase auto-grant change requires re-running the local smoke afterwards (04-05/04-06 User Setup).
+No gaps. All six ROADMAP success criteria are verified against the current code, with SC2's runtime behavior now proven by the live-Postgres tests I ran (1686 passed, 0 skipped). G-04-2 is closed: all 12 prior findings are fixed in source with passing failing-first tests, and the live-infrastructure fixes (migration 20261023000000, hardened workflow) are on the real project and on GitHub (Actions run 40035268724, success, head `fb28232` = `origin/main`). Status is `human_needed` solely because judgment-tier prohibitions require human acknowledgement. The five new advisory findings (WR-06, IN-07..IN-10) are recorded `open` in 04-REVIEW-DISPOSITION.md and are notes, not gaps; WR-06 is worth fixing before Phase 5 runs `--store postgres` in GitHub Actions.
 
 ---
 
-_Verified: 2026-10-23T21:00:00Z_
+_Verified: 2026-10-23T23:59:00Z_
 _Verifier: Claude (gsd-verifier)_
