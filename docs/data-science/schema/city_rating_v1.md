@@ -180,6 +180,8 @@ One row per run, written by the scheduled runner (Phase 5) or by a direct `--sto
 
 A city written while its history could not be cleaned, or while its forecast raised, is `degraded`, with the redacted reason (`data cleaning failed: ...` or `forecast failed: ...`) in `cities_failed`; it is not in `cities_ok`. When both failed, the cleaning reason is the one stored. A cleaning failure on a city with no history rows keeps `forecast_status` at `cold_start`, but the city is still `degraded` and carries the reason: any reason stored for a written city makes it degraded.
 
+The live runner (`backend/dlr_live_run.py`, Phase 5) also writes a third outcome, `timeout`: the city's process was killed at its time budget and no row was written. The runner's entries carry `exit_code`, `duration_s`, `forecast_status`, `forecast_error`, `detector_model_loaded`, `cleaning_error` and `fault_injected` as well: an `error` or `timeout` city's reason is in `error`, a `degraded` city's in `cleaning_error` or `forecast_error`. The stored column comment still names only `error` and `degraded` until an additive migration updates it.
+
 ## Versioning
 
 - v1 is additive-only: columns may be added; none is renamed or removed, and none changes meaning.

@@ -125,10 +125,11 @@ cancelled. A run in flight is never cancelled.
 | ok | The child exited 0, left an output file with a summary row for the city, and that row says the rating row was written | written |
 | error | The child failed, or produced no usable result | none (OD-9) |
 | timeout | The child outlived 300 s and was killed | none (OD-9) |
-| degraded | An ok child whose ML forecast failed, or that ran with no anomaly model | written |
+| degraded | An ok child whose ML forecast failed, that ran with no anomaly model, or whose history could not be cleaned | written |
 
-`degraded` is decided by health: `forecast_status` must be `ok` or `cold_start` and an anomaly model
-must have loaded. A missing `forecast_status` counts as degraded.
+`degraded` is decided by health: `forecast_status` must be `ok` or `cold_start`, an anomaly model
+must have loaded and the history must have cleaned (no `cleaning_error`). A missing
+`forecast_status` counts as degraded.
 
 **Exit codes of `dlr_live_run.py`:** 0 when every city is ok and healthy; 1 for anything else (a city
 errored, timed out or was degraded, or a `pipeline_run` write failed), which turns the Actions run
@@ -153,8 +154,9 @@ starts, updated after each city and finished at the end:
 - `cities_ok`: the cities whose row was written with a healthy ML path, in `config.LOCATIONS` order.
 - `cities_failed`: an object per other city with `outcome` (`error`, `timeout` or `degraded`),
   `written`, `exit_code`, `duration_s`, `forecast_status`, `forecast_error`, `detector_model_loaded`,
-  the redacted `error` and `fault_injected`. The schema document and the column comment list only
-  `error` and `degraded`; `timeout` and the extra keys are also stored (the column is jsonb).
+  `cleaning_error`, the redacted `error` and `fault_injected`. The schema document lists all three
+  outcomes; the stored column comment still lists only `error` and `degraded` until an additive
+  migration updates it (Phase 6, with IN-11).
 - `provider_errors` and `sources`, keyed by city.
 - The table is not readable with the public key; read it with the owner's database connection or the
   Supabase SQL editor.

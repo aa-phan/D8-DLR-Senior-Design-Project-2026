@@ -112,6 +112,9 @@ def summarize(result: dict) -> dict:
         "forecast_status": pipe.get("forecast_status"),
         "forecast_error": pipe.get("forecast_error"),
         "detector_model_loaded": bool(pipe.get("detector_model")),
+        # A cleaning failure on a city with no history keeps forecast_status at
+        # cold_start, so the runner needs the reason itself to mark it degraded.
+        "cleaning_error": pipe.get("cleaning_error"),
     }
 
 

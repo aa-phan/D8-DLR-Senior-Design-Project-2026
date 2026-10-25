@@ -20,8 +20,8 @@ object per city with its `outcome`:
     error     the child failed or produced no usable result; no rating row was
               written (OD-9), so this entry is the city's only record
     timeout   the child outlived its time budget and was killed; no rating row
-    degraded  the rating row was written, but the ML forecast failed or no anomaly
-              model loaded
+    degraded  the rating row was written, but the ML forecast failed, no anomaly
+              model loaded, or the city's history could not be cleaned
 
 Error text lives here, not in `city_rating`, because `pipeline_run` is not readable
 by consumers (Phase 4 revokes the anon and authenticated roles) while `city_rating`
@@ -82,7 +82,8 @@ def pipeline_version(env=None) -> str:
 def _is_healthy(record) -> bool:
     return (record.get("outcome") == "ok"
             and record.get("forecast_status") in HEALTHY_FORECAST_STATUSES
-            and record.get("detector_model_loaded") is True)
+            and record.get("detector_model_loaded") is True
+            and not record.get("cleaning_error"))
 
 
 def build_run_row(state, env=None) -> dict:
@@ -115,6 +116,7 @@ def build_run_row(state, env=None) -> dict:
                 "forecast_status": rec.get("forecast_status"),
                 "forecast_error": _truncate(rec.get("forecast_error"), FORECAST_ERROR_MAX_CHARS),
                 "detector_model_loaded": bool(rec.get("detector_model_loaded")),
+                "cleaning_error": _truncate(rec.get("cleaning_error"), FORECAST_ERROR_MAX_CHARS),
                 "error": _truncate(rec.get("error"), ERROR_MAX_CHARS),
                 "fault_injected": bool(rec.get("fault_injected")),
             }

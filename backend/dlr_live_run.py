@@ -23,10 +23,11 @@ written. A child that exits non-zero is 'error', one that outlives
 remaining cities still run.
 
 Exit codes:
-    0  every city is 'ok', with forecast_status 'ok' or 'cold_start' and a loaded
-       anomaly model
-    1  anything else (a city errored or timed out, or ran without its ML
-       forecast or anomaly model), so the Actions run turns red
+    0  every city is 'ok', with forecast_status 'ok' or 'cold_start', a loaded
+       anomaly model and no history-cleaning failure
+    1  anything else (a city errored or timed out, ran without its ML forecast
+       or anomaly model, or could not clean its history), so the Actions run
+       turns red
     2  a usage error (argparse), for example an unknown --fault-city
 
 Fault drill (SCHED-01): `--fault-city CITY`, or the DLR_LIVE_FAULT_CITY variable
@@ -218,8 +219,8 @@ def classify(city, returncode, output, stderr_text, fault_injected=False, timed_
         "city": city, "outcome": "error", "exit_code": returncode,
         "rating_a": None, "fallback": None, "exhausted": None, "fallback_gates": [],
         "written": False, "forecast_status": "not_run", "forecast_error": None,
-        "detector_model_loaded": False, "provider_errors": {}, "sources": {},
-        "error": None, "fault_injected": fault_injected,
+        "detector_model_loaded": False, "cleaning_error": None, "provider_errors": {},
+        "sources": {}, "error": None, "fault_injected": fault_injected,
     }
     child_error = ((output or {}).get("errors") or {}).get(city)
 
@@ -246,6 +247,7 @@ def classify(city, returncode, output, stderr_text, fault_injected=False, timed_
         written=True, forecast_status=row.get("forecast_status"),
         forecast_error=None if row.get("forecast_error") is None else redact(row["forecast_error"], env),
         detector_model_loaded=bool(row.get("detector_model_loaded")),
+        cleaning_error=None if row.get("cleaning_error") is None else redact(row["cleaning_error"], env),
         provider_errors=_redact_counts(output.get("provider_errors"), env),
         sources=output.get("sources") or {},
     )
@@ -253,10 +255,11 @@ def classify(city, returncode, output, stderr_text, fault_injected=False, timed_
 
 
 def _healthy(record) -> bool:
-    """True when a record is 'ok' and ran with its ML forecast and anomaly model."""
+    """True when a record is 'ok', ran with its ML forecast and anomaly model, and cleaned its history."""
     return (record["outcome"] == "ok"
             and record["forecast_status"] in HEALTHY_FORECAST_STATUSES
-            and record["detector_model_loaded"] is True)
+            and record["detector_model_loaded"] is True
+            and not record.get("cleaning_error"))
 
 
 def _emit(city, stdout_text, stderr_text, env):
