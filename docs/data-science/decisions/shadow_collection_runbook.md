@@ -309,6 +309,13 @@ a cron-job.org job that POSTs to the workflow's `dispatches` endpoint
   this repo.
 - **Not measured:** how late runs start under the external trigger. Check `gh run list` before relying on
   timing, and note that rows from before 2026-10-15 were produced by GitHub-scheduled runs.
+- **Observed (2026-10-25):** the runs actually start at 05, 11, 17 and 23 UTC (minute 00), every day from
+  2026-10-21 to 2026-10-24. That is 00/06/12/18 in US Central Daylight Time, so the cron-job.org job is set
+  to Central, not UTC. When daylight saving ends on 2026-11-01 the runs move to 06, 12, 18 and 00 UTC.
+  Neither schedule affects the data: each run derives its decision time from the actual UTC run time and
+  takes the next 6-hourly grid hour 11 to 17 h ahead (see "Cadence and underlying weather model"), so both
+  give the same four valid times per day (18, 00, 06 and 12 UTC). The only effect is about 1 h less forecast
+  lead time after 2026-11-01 and one 7 h gap that day. The owner left the job on Central (2026-10-25).
 - **Failure mode:** if the cron-job.org job is disabled, misconfigured or its token expires, no runs start and
   nothing in the repo reports it. `forecast_shadow_healthcheck.py` only runs inside a collection run, so it
   cannot detect a missing run.
