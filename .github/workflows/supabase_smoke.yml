@@ -18,9 +18,8 @@ name: Supabase Smoke
 #   - The job runs only when github.ref is refs/heads/main, so a dispatch from another
 #     branch cannot run an edited copy of the smoke code with the writer secret. A branch
 #     that edits this workflow file itself can remove that guard, so the server-side
-#     control is a protected environment holding SUPABASE_DB_URL with a main-only
-#     deployment-branch rule. The owner may add it later together with the Phase 5
-#     workflow; it is not configured here.
+#     control is the `production` environment holding SUPABASE_DB_URL with a main-only
+#     deployment-branch rule (GitHub settings; dlr_live.yml uses the same environment).
 
 on:
   workflow_dispatch:
@@ -35,6 +34,7 @@ concurrency:
 jobs:
   smoke:
     if: github.ref == 'refs/heads/main'
+    environment: production
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

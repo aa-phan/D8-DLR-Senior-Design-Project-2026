@@ -424,3 +424,5 @@ def test_smoke_workflow_pins_actions_by_sha_and_runs_only_on_main():
         if line.startswith("    ") and not line.startswith("     "):
             job_keys.append(line.strip())
     assert "if: github.ref == 'refs/heads/main'" in job_keys
+    # T-04-38: the server-side control is the main-only `production` environment
+    assert any(re.fullmatch(r"environment: production(\s+#.*)?", key) for key in job_keys), job_keys

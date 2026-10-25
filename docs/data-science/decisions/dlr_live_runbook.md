@@ -303,6 +303,14 @@ yet.
 - Repository secrets (`SYNOPTIC_TOKEN`, `NREL_API_KEY`, `NREL_API_EMAIL`, `SUPABASE_DB_URL`) are not
   passed to workflows triggered by pull requests from forks, and this workflow does not run on pull
   requests at all.
+- The `rate` job runs only on `main` (`if: github.ref == 'refs/heads/main'`) and in the `production`
+  environment (T-04-38), as does `supabase_smoke.yml`. The environment's deployment-branch rule allows
+  `main` only, so a branch that edits a workflow cannot reach the writer secret. Set up in GitHub
+  (Settings, Environments): environment `production`, deployment branches "Selected branches" with
+  `main`, and an environment secret `SUPABASE_DB_URL` holding the same `dlr_writer` URL as the
+  repository secret. An environment secret takes precedence over the repository secret of the same
+  name. Delete the repository-level `SUPABASE_DB_URL` only after a live run in the environment is green;
+  until then it is the fallback.
 - Everything committed is now public and stays public in history: the eight per-city model files under
   `data/models/` (section 9), the data, the planning documents and the code. A scan of all 904 commits
   of history for credential patterns (database URLs with passwords, Supabase and JWT keys, GitHub

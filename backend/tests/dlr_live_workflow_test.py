@@ -41,6 +41,17 @@ def test_workflow_is_dispatch_only_and_separate_from_shadow_collection():
     assert not re.search(r"^\s*[a-z-]+:\s*write\b", text, flags=re.M)
 
 
+def test_job_holding_the_writer_secret_runs_only_on_main_in_the_production_environment():
+    # T-04-38: the ref guard stops a branch dispatch of an edited runner; the main-only
+    # `production` environment (GitHub settings) also covers a branch that edits this file.
+    text = _workflow()
+
+    assert re.search(r"^  rate:\s*\n(    .*\n)*?    if: github\.ref == 'refs/heads/main'\s*(#.*)?$",
+                     text, flags=re.M)
+    assert re.search(r"^  rate:\s*\n(    .*\n)*?    environment: production\s*(#.*)?$",
+                     text, flags=re.M)
+
+
 def test_timeout_fits_the_cities_and_the_cadence():
     text = _workflow()
 

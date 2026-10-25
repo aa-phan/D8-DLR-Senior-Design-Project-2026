@@ -31,6 +31,11 @@ concurrency:
 
 jobs:
   rate:
+    # T-04-38: only main runs with the writer secret. The ref guard stops a branch
+    # dispatch of an edited runner; the `production` environment (main-only deployment
+    # branch rule, set in GitHub settings) also covers a branch that edits this file.
+    if: github.ref == 'refs/heads/main'
+    environment: production
     runs-on: ubuntu-latest
     # 30 minutes. At the cap: 4 cities x CITY_TIMEOUT_S (300 s) = 1200 s (20 min) of
     # child processes, plus at most 10 min for checkout, install, the model pre-flight
