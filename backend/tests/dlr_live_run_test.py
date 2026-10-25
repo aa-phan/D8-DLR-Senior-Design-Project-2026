@@ -118,7 +118,7 @@ row = {
     "exhausted": False, "station_id": "T1", "fallback_gates": [],
     WRITE_FLAG_KEY: True, "history_rows": 168, "forecast_amps": 1100.0,
     "detector_signal": "ok", "forecast_status": "ok", "forecast_error": None,
-    "detector_model_loaded": True, "pid": os.getpid(),
+    "detector_model_loaded": True, "cleaning_error": None, "pid": os.getpid(),
 }
 if behavior == "notwritten":
     row[WRITE_FLAG_KEY] = False
@@ -133,6 +133,10 @@ elif behavior == "nodetectorkey":
     del row["detector_model_loaded"]
 elif behavior == "noforecaststatus":
     del row["forecast_status"]
+elif behavior == "cleaning_failed":
+    # no history rows, so the forecast status stays cold_start (city_pipeline WR-02)
+    row["forecast_status"] = "cold_start"
+    row["cleaning_error"] = "data cleaning failed: bad timestamps"
 summary, errors = [row], {}
 if behavior == "nosummary":
     summary, errors = [], {city: "station discovery failed"}
@@ -351,6 +355,7 @@ def test_exit_zero_without_a_written_row_is_an_error(tmp_path, monkeypatch, beha
     ("nodetector", 1),
     ("nodetectorkey", 1),  # a missing detector_model_loaded counts as false
     ("noforecaststatus", 1),  # no forecast status is not evidence of an ML forecast
+    ("cleaning_failed", 1),  # any stored reason makes a written city degraded
     ("cold_start", 0),
 ])
 def test_failed_forecast_or_missing_anomaly_model_fails_the_run_but_keeps_the_row(
@@ -369,6 +374,10 @@ def test_failed_forecast_or_missing_anomaly_model_fails_the_run_but_keeps_the_ro
         assert record["detector_model_loaded"] is False
     if behavior == "noforecaststatus":
         assert record["forecast_status"] is None
+    if behavior == "cleaning_failed":
+        assert record["cleaning_error"] == "data cleaning failed: bad timestamps"
+    else:
+        assert record["cleaning_error"] is None
     assert record["provider_errors"] == {"synoptic: HTTP 429": 2}
 
 

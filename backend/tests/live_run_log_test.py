@@ -36,7 +36,7 @@ def _record(city, outcome="ok", **over):
         "rating_a": 1000.0 if ok else None, "fallback": False if ok else None,
         "exhausted": False if ok else None, "fallback_gates": [], "written": ok,
         "forecast_status": "ok" if ok else "not_run", "forecast_error": None,
-        "detector_model_loaded": ok, "provider_errors": {}, "sources": {},
+        "detector_model_loaded": ok, "cleaning_error": None, "provider_errors": {}, "sources": {},
         "error": None if ok else f"{outcome} text for {city}", "fault_injected": False,
         "started_at": _STARTED, "finished_at": _FINISHED, "duration_s": 12.3,
     }
@@ -105,7 +105,7 @@ def test_build_run_row_splits_ok_failed_and_degraded_cities():
     assert failed[el_paso]["forecast_error"] == ("forecast failed: " + "f" * 1000)[:300]
     assert set(failed[el_paso]) == {
         "outcome", "written", "exit_code", "duration_s", "forecast_status", "forecast_error",
-        "detector_model_loaded", "error", "fault_injected"}
+        "detector_model_loaded", "cleaning_error", "error", "fault_injected"}
     assert failed[corpus]["duration_s"] == 12.3 and failed[el_paso]["detector_model_loaded"] is True
     # each child's composer counts are keyed by city; cities with none are omitted
     assert row["provider_errors"] == {austin: {"synoptic: HTTP 429": 2}, el_paso: {"nrel: HTTP 500": 1}}
@@ -123,6 +123,15 @@ def test_build_run_row_splits_ok_failed_and_degraded_cities():
     assert edge["cities_ok"] == [midland]
     assert {c: edge["cities_failed"][c]["outcome"] for c in (austin, corpus)} == {
         austin: "degraded", corpus: "degraded"}
+
+    # a history-cleaning failure makes a written city degraded even at cold_start, with the reason kept
+    cleaning = live_run_log.build_run_row(_state([
+        _record(austin, forecast_status="cold_start", cleaning_error="data cleaning failed: " + "c" * 1000),
+        _record(corpus),
+    ]), env=_ENV)
+    assert cleaning["cities_ok"] == [corpus]
+    assert cleaning["cities_failed"][austin]["outcome"] == "degraded"
+    assert cleaning["cities_failed"][austin]["cleaning_error"] == ("data cleaning failed: " + "c" * 1000)[:300]
 
     # config.LOCATIONS order, whatever order the records arrive in
     shuffled = live_run_log.build_run_row(_state([_record(el_paso), _record(austin)]), env=_ENV)

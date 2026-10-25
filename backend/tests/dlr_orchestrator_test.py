@@ -295,10 +295,12 @@ def test_summarize_row_shape_and_gate_names():
     assert list(row) == ["city", "rating_a", "static_rating_a", "fallback", "exhausted",
                          "station_id", "fallback_gates", "archived", "history_rows",
                          "forecast_amps", "detector_signal",
-                         "forecast_status", "forecast_error", "detector_model_loaded"]
+                         "forecast_status", "forecast_error", "detector_model_loaded",
+                         "cleaning_error"]
     assert row["forecast_status"] == "ok"
     assert row["forecast_error"] is None
     assert row["detector_model_loaded"] is False
+    assert row["cleaning_error"] is None
     assert row["fallback_gates"] == ["EXHAUSTED", "G4", "G6"]
     assert row["static_rating_a"] == city_point.city_point("AUSTIN").static_rating
     assert row["rating_a"] == result["rating"]
@@ -320,6 +322,17 @@ def test_summarize_tolerates_a_result_without_pipeline_details():
     assert row["forecast_status"] is None
     assert row["forecast_error"] is None
     assert row["detector_model_loaded"] is False
+    assert row["cleaning_error"] is None
+
+
+def test_summarize_reports_a_history_cleaning_failure():
+    # the live runner can only mark the city degraded if the summary row says so
+    result = _city_result("CORPUS_CHRISTI")
+    result["pipeline"]["cleaning_error"] = "data cleaning failed: bad timestamps"
+
+    row = orch.summarize(result)
+
+    assert row["cleaning_error"] == "data cleaning failed: bad timestamps"
 
 
 def test_summarize_reports_a_failed_forecast_and_whether_an_anomaly_model_loaded():
