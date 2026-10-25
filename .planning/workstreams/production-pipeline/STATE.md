@@ -1,18 +1,18 @@
 ---
 gsd_state_version: "1.0"
 current_phase: 05
-current_plan: 7
+current_plan: 8
 status: executing
-stopped_at: Completed 05-06-PLAN.md
-last_updated: "2026-10-24T23:14:22.908Z"
+stopped_at: Completed 05-07-PLAN.md
+last_updated: "2026-10-25T01:08:38.498Z"
 last_activity: 2026-10-24
 last_activity_desc: Phase 05 execution started
-state_head: ba9d554597b8d2ab23b8f932ad67ec193123479d
+state_head: 0e94ee3000f0ca1cb53516847b6a6c6144823295
 progress:
   total_phases: 7
   completed_phases: 4
   total_plans: 41
-  completed_plans: 32
+  completed_plans: 33
   percent: 57
 milestone_name: Production Pipeline (Supabase + live ratings)
 workstream: production-pipeline
@@ -37,7 +37,7 @@ whoever owns that analysis; they are not work items here.
 
 **Status:** Ready to execute
 **Current Phase:** 05
-**Current Plan:** 7
+**Current Plan:** 8
 **Total Plans in Phase:** 8
 **Last Activity:** 2026-10-24 — Phase 05 execution started
 **Last Activity Description:** Phase 05 execution started
@@ -168,6 +168,7 @@ These block or affect stringing the system together and belong to the phases nam
 - [Phase 05]: 05-05: a run that is unfinished or has a conclusion other than success/failure/timed_out/cancelled is not evidence a slot was attempted; the slot is missing and the window fails — Fail closed; startup_failure can be added to RED_CONCLUSIONS if the owner wants it visible
 - [Phase 05]: 05-05: runbook records the shadow job's observed 05/11/17/23 UTC hours as an observation only; live runs at minute 05 so it never shares a minute with shadow runs — Runbook must not instruct changes to the shadow job; discrepancy surfaced for the owner
 - [Phase 05]: 05-06: owner chose go-live after making the repository public (free Actions minutes); anon-refusal check T-05-29 recorded as skipped
+- [Phase 05]: 05-07: window start for 05-08 is run 40145300072 (2026-10-25T00:05:05Z, slot 00:00); owner test run 40144431987 counted as manual — First dispatch within 5 min after an hh:05 boundary; drill run 40146481713 overwrote three 00:00 slot rows (OD-7)
 
 ## Open Decisions
 
@@ -188,9 +189,9 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 
 ## Session Continuity
 
-**Last session:** 2026-10-24T23:14:22.758Z
+**Last session:** 2026-10-25T01:08:38.350Z
 
-**Stopped At:** Completed 05-06-PLAN.md
+**Stopped At:** Completed 05-07-PLAN.md
 **Resume File:** None
 
 ## Performance Metrics
@@ -226,6 +227,7 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 | Phase 05 P04 | 10 min | 3 tasks | 14 files |
 | Phase 05 P05 | 14 min | 2 tasks | 4 files |
 | Phase 05 P06 | 40 min | 3 tasks | 1 files |
+| Phase 05 P07 | 130 min | 2 tasks | 0 files |
 
 ## Accumulated Context
 
