@@ -175,8 +175,12 @@ def rating_row(city, valid_time, **overrides):
     return row
 
 
-def insert_rows(conn, rows):
-    """Parameter-bound INSERT of the given row dicts into public.city_rating."""
+def insert_rows(conn, rows, update_on_conflict=()):
+    """
+    Parameter-bound INSERT of the given row dicts into public.city_rating. With
+    `update_on_conflict` (column names), a row whose (city, valid_time) key exists is
+    updated in those columns instead, the shape of Phase 4's upsert (OD-7).
+    """
     from psycopg import sql
 
     for row in rows:
@@ -185,6 +189,11 @@ def insert_rows(conn, rows):
             sql.SQL(", ").join(sql.Identifier(c) for c in columns),
             sql.SQL(", ").join(sql.Placeholder() for _ in columns),
         )
+        if update_on_conflict:
+            statement += sql.SQL(" on conflict (city, valid_time) do update set {}").format(
+                sql.SQL(", ").join(
+                    sql.SQL("{0} = excluded.{0}").format(sql.Identifier(c)) for c in update_on_conflict)
+            )
         conn.execute(statement, [row[c] for c in columns])
 
 

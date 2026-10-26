@@ -8,6 +8,8 @@
 --                                            valid_time (fallback rows included, D-04), with 34
 --                                            published columns: 27 planned, 4 identity and source
 --                                            columns (D-01), and 3 computed ones (D-02, D-03)
+--   function public.assert_fresh(integer)    the freshness check the permanent alarm calls (HTTP
+--                                            200, or 503 naming the missing or stale cities)
 -- Changes privileges (OD-6):
 --   anon and authenticated lose every privilege on every public table and sequence, then get
 --   SELECT on public.city_rating and public.latest_rating only. Writes are refused by privilege,
@@ -136,5 +138,56 @@ alter table public.city_rating enable row level security;
 drop policy if exists city_rating_public_read on public.city_rating;
 create policy city_rating_public_read on public.city_rating for select to anon, authenticated using (true);
 
--- Ask PostgREST to reload its schema cache so the new view is served at once.
+-- The freshness check (API-01, D-02): the permanent alarm in plan 06-10 calls it through
+-- GET /rest/v1/rpc/assert_fresh. It answers 200 with a small JSON document when all four
+-- cities have a rating no older than max_age_minutes, and HTTP 503 (SQLSTATE PT503, which
+-- PostgREST maps to 503) naming the missing or stale cities when not. The comparison is the
+-- same direct timestamp test the view uses for is_stale, so exactly max_age_minutes is fresh.
+-- It runs as the caller (security invoker), so it sees what the caller's RLS shows, and an
+-- empty search_path means it cannot be redirected by a look-alike object.
+create or replace function public.assert_fresh(max_age_minutes integer default 90)
+returns jsonb
+language plpgsql
+stable
+security invoker
+set search_path = ''
+as $$
+declare
+    missing text[];
+    stale text[];
+    city_count integer;
+    oldest timestamptz;
+begin
+    if max_age_minutes is null or max_age_minutes < 0 or max_age_minutes > 10080 then
+        raise sqlstate '22023' using message = 'max_age_minutes must be between 0 and 10080';
+    end if;
+
+    select array_agg(c.city order by c.city) filter (where l.city is null),
+           array_agg(c.city order by c.city) filter (where l.valid_time < now() - make_interval(mins => max_age_minutes)),
+           count(l.city),
+           min(l.valid_time)
+      into missing, stale, city_count, oldest
+      from (values ('AUSTIN'), ('CORPUS_CHRISTI'), ('MIDLAND'), ('EL_PASO')) as c(city)
+      left join public.latest_rating l on l.city = c.city;
+
+    if missing is not null or stale is not null then
+        raise sqlstate 'PT503' using
+            message = 'stale or missing city rating',
+            detail = format('missing=%s stale=%s', coalesce(missing::text, '{}'), coalesce(stale::text, '{}'));
+    end if;
+
+    return jsonb_build_object(
+        'ok', true,
+        'cities', city_count,
+        'max_age_minutes', max_age_minutes,
+        'oldest_valid_time', oldest);
+end
+$$;
+
+revoke all on function public.assert_fresh(integer) from public, anon, authenticated;
+grant execute on function public.assert_fresh(integer) to anon, authenticated;
+
+comment on function public.assert_fresh(integer) is 'Freshness check for the permanent alarm. HTTP 200 with {ok, cities, max_age_minutes, oldest_valid_time} when every one of the four cities has a latest_rating row no older than max_age_minutes (default 90, OD-4; exactly the limit is fresh). HTTP 503 (SQLSTATE PT503) with detail missing=... stale=... when a city has no row or only an older one. SQLSTATE 22023 (HTTP 400) when max_age_minutes is outside 0..10080. Runs as the caller.';
+
+-- Ask PostgREST to reload its schema cache so the new view and function are served at once.
 notify pgrst, 'reload schema';
