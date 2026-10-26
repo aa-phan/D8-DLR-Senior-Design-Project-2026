@@ -42,6 +42,7 @@ import hashlib
 import os
 import re
 import sys
+from datetime import datetime, timezone
 
 import ampacity_forecast
 import anomaly_detector
@@ -161,7 +162,8 @@ def check(manifest_path: str = MANIFEST_PATH, load: bool = True) -> list[str]:
 
 def write_manifest(manifest_path: str = MANIFEST_PATH) -> list[str]:
     """
-    Hash the eight resolved artifacts into `manifest_path`, sorted by path. Returns
+    Hash the eight resolved artifacts into `manifest_path`, sorted by path, under a
+    dated `#` header line that says how the file was made. Returns
     the missing paths as problems, and writes nothing when there are any. Never
     deserializes an artifact.
     """
@@ -173,7 +175,13 @@ def write_manifest(manifest_path: str = MANIFEST_PATH) -> list[str]:
     ]
     if problems:
         return problems
-    lines = [f"{sha256_file(path)}  {_key(path)}" for path in sorted(_key(path) for _, _, path in artifacts)]
+    header = (
+        f"# {datetime.now(timezone.utc).date().isoformat()} SHA-256 of the models promoted to the live workflow "
+        f"(regenerate with: PYTHONPATH=backend python backend/dlr_live_check_models.py --write-manifest)"
+    )
+    lines = [header] + [
+        f"{sha256_file(path)}  {_key(path)}" for path in sorted(_key(path) for _, _, path in artifacts)
+    ]
     with open(manifest_path, "w", encoding="utf-8", newline="\n") as fh:
         fh.write("\n".join(lines) + "\n")
     return []

@@ -185,6 +185,9 @@ def test_write_manifest_round_trip_and_refuses_missing_files(models, tmp_path, m
 
     assert preflight.write_manifest(str(manifest)) == []
 
+    header = manifest.read_text().splitlines()[0]
+    assert header.startswith("# 20") and "SHA-256 of the models promoted" in header
+    assert "--write-manifest" in header  # IN-09: regenerating keeps the how-to line
     lines = [ln for ln in manifest.read_text().splitlines() if ln.strip() and not ln.startswith("#")]
     assert len(lines) == 8
     parsed = [ln.split("  ", 1) for ln in lines]
@@ -208,3 +211,14 @@ def test_write_manifest_round_trip_and_refuses_missing_files(models, tmp_path, m
     assert preflight.main(["--write-manifest"]) == 1
     assert gone in capsys.readouterr().err
     assert not refused.exists()
+
+
+def test_the_committed_models_match_the_committed_manifest(monkeypatch):
+    """
+    IN-09: a local retrain overwrites the tracked joblib files; this catches it before a red hourly
+    run does. Runs the real check (no stand-ins, no deserializing) from the repo root, as the
+    workflow does. Fix a failure by promoting the retrain: `--write-manifest`, then commit both.
+    """
+    repo = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    monkeypatch.chdir(repo)
+    assert preflight.check(preflight.MANIFEST_PATH, load=False) == []
