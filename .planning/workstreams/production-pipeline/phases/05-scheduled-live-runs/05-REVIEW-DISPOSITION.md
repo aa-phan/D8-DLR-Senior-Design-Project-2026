@@ -75,7 +75,7 @@ recorded: 2026-10-26T17:52:39.632Z
 | IN-05 | info | fixed | 05-REVIEW-FIX.md |
 | IN-06 | info | fixed | 05-REVIEW-FIX.md |
 | IN-07 | info | fixed | 05-REVIEW-FIX.md |
-| IN-08 | info | skipped | 05-REVIEW-FIX.md |
+| IN-08 | info | skipped | won't fix: skipped runs count toward billed minutes by decision (2026-10-26) |
 | IN-09 | info | fixed | 05-REVIEW-FIX.md |
 | IN-10 | info | fixed | 05-REVIEW-FIX.md |
 | IN-11 | info | fixed | 05-REVIEW-FIX.md |

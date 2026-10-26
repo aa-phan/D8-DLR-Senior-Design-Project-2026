@@ -127,6 +127,8 @@ def _run_slot_time(run, row):
 
 
 def _minutes_summary(placed_runs) -> dict:
+    # `skipped` runs are counted on purpose (decided 2026-10-26, review IN-08): they stay in
+    # the median behind the 30-day projection.
     minutes = [billed_minutes(r) for r in placed_runs
                if r.get("conclusion") and r.get("startedAt") and r.get("updatedAt")]
     if not minutes:
