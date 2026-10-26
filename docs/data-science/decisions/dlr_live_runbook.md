@@ -242,7 +242,7 @@ PYTHONPATH=backend .venv/bin/python backend/dlr_live_run.py
 
 It loads `.env` and, when `SUPABASE_DB_URL` is set there, writes production rows. `--end
 2026-10-24T14:05:00Z` rates a chosen past window end and so writes that slot (how a missed slot is
-filled by hand); `--cities MIDLAND` limits the cities; `--no-run-log` skips the `pipeline_run` row (the
+filled by hand; a future end is refused); `--cities MIDLAND` limits the cities; `--no-run-log` skips the `pipeline_run` row (the
 scheduled workflow never passes it) but still writes rating rows.
 
 ## 9. Models (OD-10)

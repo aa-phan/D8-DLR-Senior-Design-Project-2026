@@ -11,6 +11,7 @@ backend/tests/dlr_orchestrator_test.py's conventions (no conftest.py, plain
 asserts, no test classes).
 """
 
+import argparse
 import contextlib
 import json
 import logging
@@ -718,3 +719,22 @@ def test_a_failed_city_keeps_its_provider_errors_and_sources():
     # a malformed counts field never makes the classification raise
     odd = dlr_live_run.classify("MIDLAND", 1, {"provider_errors": ["x"], "sources": "y"}, "", env={})
     assert odd["provider_errors"] == {} and odd["sources"] == {}
+
+
+def test_end_must_not_be_in_the_future_and_timeout_must_be_positive():
+    """IN-04: a future slot has no weather, and a zero timeout turns every city into an instant timeout."""
+    now = datetime(2025, 6, 1, 10, 59, 59, tzinfo=timezone.utc)
+    assert dlr_live_run._end_arg("2025-06-01T10:55:00Z", now=now) == "2025-06-01T10:55:00Z"
+    assert dlr_live_run._end_arg("2025-06-01T10:59:59Z", now=now) == "2025-06-01T10:59:59Z"  # now itself
+    for future in ("2025-06-01T11:00:00Z", "2030-01-01T00:00:00Z"):
+        with pytest.raises(argparse.ArgumentTypeError, match="future"):
+            dlr_live_run._end_arg(future, now=now)
+    with pytest.raises(argparse.ArgumentTypeError, match="look like"):
+        dlr_live_run._end_arg("not a time", now=now)
+
+    for bad_end in (["--end", "2999-01-01T00:00:00Z"], ["--timeout-s", "0"], ["--timeout-s", "-5"],
+                    ["--timeout-s", "soon"]):
+        with pytest.raises(SystemExit) as raised:
+            dlr_live_run.main(bad_end)
+        assert raised.value.code == 2
+    assert dlr_live_run._positive_int("300") == 300

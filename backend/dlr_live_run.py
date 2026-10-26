@@ -469,12 +469,26 @@ def write_step_summary(run, path, env=None) -> None:
         fh.write("\n".join(lines) + "\n\n")
 
 
-def _end_arg(value):
+def _end_arg(value, now=None):
     try:
         slot_of(value)
     except ValueError:
         raise argparse.ArgumentTypeError(f"--end must look like 2026-10-24T14:00:00Z, got {value!r}")
+    now = datetime.now(timezone.utc) if now is None else now
+    if datetime.strptime(value, _TS_FMT).replace(tzinfo=timezone.utc) > _utc(now):
+        # a future slot has no weather: it would store static-fallback rows under a future valid_time
+        raise argparse.ArgumentTypeError(f"--end must not be in the future, got {value!r}")
     return value
+
+
+def _positive_int(value):
+    try:
+        number = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"must be a whole number of seconds, got {value!r}") from None
+    if number < 1:
+        raise argparse.ArgumentTypeError(f"must be at least 1 second, got {value!r}")
+    return number
 
 
 def main(argv=None) -> int:
@@ -483,7 +497,7 @@ def main(argv=None) -> int:
                         help="default: every city in config.LOCATIONS")
     parser.add_argument("--end", type=_end_arg, default=None,
                         help="window end (default: now floored to 5 minutes); for re-running a missed slot")
-    parser.add_argument("--timeout-s", type=int, default=CITY_TIMEOUT_S,
+    parser.add_argument("--timeout-s", type=_positive_int, default=CITY_TIMEOUT_S,
                         help="per-city child time budget in seconds")
     parser.add_argument("--fault-city", default=os.environ.get("DLR_LIVE_FAULT_CITY", ""),
                         help="drill only: run this city with its provider credentials blanked "
