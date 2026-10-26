@@ -221,7 +221,7 @@ None for the SQL: the migration and scripts are as planned.
 
 ### TDD note
 
-Both tasks wrote tests first. Task 1: all 10 tests failed against the empty tree (no migration, no verify file) and all 10 passed once the migration and `verify_monitoring.sql` existed. Task 2: 14 of the 24 tests failed (five new test functions, one parametrized x10, minus none passing) before the three owner files existed, then all 24 passed.
+Both tasks wrote tests first. Task 1: all 10 tests failed against the empty tree (no migration, no verify file) and all 10 passed once the migration and `verify_monitoring.sql` existed. Task 2: the 14 new tests (four plain functions plus one parametrized x10) all failed before the three owner files existed, then all 24 passed.
 
 ---
 
@@ -230,7 +230,7 @@ Both tasks wrote tests first. Task 1: all 10 tests failed against the empty tree
 
 ## Discrepancies
 
-none. (The plan and the 06-RESEARCH sketch differ on `ops.log_freshness`'s return type and `age_seconds`'s type, `void`/`integer` versus the plan's `integer` rows count/`numeric`; the plan governs and was implemented. `soak_cron_schedule.sql` carries the `*/5 * * * *` literal on exactly one line, as the acceptance criterion counts lines, so the header prose says "every five minutes" instead.)
+none. (The older 06-RESEARCH sketch had `ops.log_freshness` return `void` and `age_seconds` as `integer`; the plan says it returns the row count and keeps the exact age, so it returns `integer` and `age_seconds` is `numeric`. The plan governs and was implemented. `soak_cron_schedule.sql` carries the `*/5 * * * *` literal on exactly one line, as the acceptance criterion counts lines, so the header prose says "every five minutes" instead.)
 
 ## Issues Encountered
 

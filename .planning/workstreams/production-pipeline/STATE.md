@@ -1,19 +1,19 @@
 ---
 gsd_state_version: "1.0"
 current_phase: 06
-current_plan: 5
+current_plan: 6
 status: executing
-stopped_at: Completed 06-04-PLAN.md
-last_updated: "2026-10-26T20:41:52.530Z"
+stopped_at: Completed 06-05-PLAN.md
+last_updated: "2026-10-26T20:51:02.053Z"
 last_activity: 2026-10-26
 last_activity_desc: Phase 06 execution started
-state_head: a16c8f6bd5b7c4def17dcf6796bd3f6acc42700d
+state_head: 00204f180b97b081b6520a1b9c5271fb01c3de82
 progress:
   total_phases: 7
   completed_phases: 5
   total_plans: 66
-  completed_plans: 38
-  percent: 58
+  completed_plans: 39
+  percent: 59
 milestone_name: Production Pipeline (Supabase + live ratings)
 workstream: production-pipeline
 created: 2026-10-18
@@ -37,7 +37,7 @@ whoever owns that analysis; they are not work items here.
 
 **Status:** Ready to execute
 **Current Phase:** 06
-**Current Plan:** 5
+**Current Plan:** 6
 **Total Plans in Phase:** 13
 **Last Activity:** 2026-10-26 — Phase 06 execution started
 **Last Activity Description:** Phase 06 execution started
@@ -178,6 +178,8 @@ These block or affect stringing the system together and belong to the phases nam
 - [Phase 06]: 06-03: dry-soak lag and peak age use first_written_at; late fills listed separately, never a breach; age at --until also held to 90 min
 - [Phase 06]: 06-04: a table write passes only on 401/403 + 42501 + permission denied AND an identical before/after SHA-256 snapshot of city_rating rows older than the current UTC hour minus one hour; RLS-only, any 2xx and inconclusive answers fail (E2E-03)
 - [Phase 06]: 06-04: view PATCH/DELETE in the write check name the old target row (city + valid_time), so even an updatable view could not change a current rating (T-06-13)
+- [Phase 06]: 06-05: ops.freshness_log stores latest_rating's own is_stale and the exact numeric age_seconds, so breach equals age_seconds > 5400; the soak log, the consumer flag and assert_fresh share one 90-minute rule
+- [Phase 06]: 06-05: pg_cron scheduling lives only in owner SQL (supabase/ops/soak_cron_schedule.sql, soak_cron_unschedule.sql), never in a migration; job dlr-soak-freshness runs every five minutes, applied in 06-10 and removed in 06-12
 
 ## Open Decisions
 
@@ -201,9 +203,9 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 
 ## Session Continuity
 
-**Last session:** 2026-10-26T20:41:52.336Z
+**Last session:** 2026-10-26T20:51:01.855Z
 
-**Stopped At:** Completed 06-04-PLAN.md
+**Stopped At:** Completed 06-05-PLAN.md
 **Resume File:** None
 
 ## Performance Metrics
@@ -245,6 +247,7 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 | Phase 06 P02 | 5 min | 2 tasks | 1 files |
 | Phase 06 P03 | 7 min | 2 tasks | 2 files |
 | Phase 06 P04 | 10 min | 2 tasks | 4 files |
+| Phase 06 P05 | 7 min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
