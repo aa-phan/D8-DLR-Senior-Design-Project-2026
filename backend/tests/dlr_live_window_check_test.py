@@ -344,3 +344,12 @@ def test_fetch_rows_binds_parameters():
     assert ratings == [{"city": "AUSTIN", "valid_time": slot(1), "run_id": "42"}]
     # a connection handed in by the caller is the caller's to close
     assert conn.closed is False
+
+
+@pytest.mark.parametrize("value", ["", "   ", "garbage", "2026-10-25T00:30:00Z"])
+def test_a_bad_start_is_a_usage_error_not_a_traceback(value, capsys):
+    """IN-05: `--start ""` used to raise AttributeError out of the argument parser."""
+    with pytest.raises(SystemExit) as raised:
+        wc.main(["--start", value])
+    assert raised.value.code == 2
+    assert "--start" in capsys.readouterr().err

@@ -324,6 +324,8 @@ def _hour_arg(value):
         parsed = _ts(value)
     except ValueError:
         raise argparse.ArgumentTypeError(f"not an ISO timestamp: {value!r}") from None
+    if parsed is None:
+        raise argparse.ArgumentTypeError("--start is required, e.g. 2026-10-25T00:00:00Z")
     if parsed.minute or parsed.second or parsed.microsecond:
         raise argparse.ArgumentTypeError(f"--start must be on the hour, got {value!r}")
     return parsed
