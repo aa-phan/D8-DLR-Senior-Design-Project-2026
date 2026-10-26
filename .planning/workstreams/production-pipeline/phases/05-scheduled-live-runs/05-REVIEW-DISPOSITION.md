@@ -5,15 +5,15 @@ titles: json
 findings:
   - id: WR-01
     severity: warning
-    disposition: open
+    disposition: fixed
     title: "Step-summary error cell shows the head of a crash traceback and drops the exception"
   - id: WR-02
     severity: warning
-    disposition: open
+    disposition: fixed
     title: "A red fault-drill (or any red manual run) satisfies \"visible failed run\" for a slot that was never scheduled"
   - id: WR-03
     severity: warning
-    disposition: open
+    disposition: fixed
     title: "Child stdout and stderr are re-emitted to the Actions log outside `redact()`"
   - id: IN-01
     severity: info
@@ -51,18 +51,18 @@ findings:
     severity: info
     disposition: open
     title: "The model manifest has no repo-level guard, and `--write-manifest` drops the header comment"
-open: 12
+open: 9
 total: 12
-recorded: 2026-10-26T05:20:40.754Z
+recorded: 2026-10-26T16:40:18.137Z
 ---
 
 # Phase 05: Code Review Disposition
 
 | Finding | Severity | Disposition | Source |
 |---------|----------|-------------|--------|
-| WR-01 | warning | open | - |
-| WR-02 | warning | open | - |
-| WR-03 | warning | open | - |
+| WR-01 | warning | fixed | 05-REVIEW-FIX.md |
+| WR-02 | warning | fixed | 05-REVIEW-FIX.md |
+| WR-03 | warning | fixed | 05-REVIEW-FIX.md |
 | IN-01 | info | open | - |
 | IN-02 | info | open | - |
 | IN-03 | info | open | - |
