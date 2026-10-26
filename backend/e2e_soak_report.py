@@ -1,6 +1,6 @@
 """
-Dry-soak export and report (production-pipeline Phase 6: E2E-02, D-07)
-======================================================================
+Dry-soak and 72 h soak export and report (production-pipeline Phase 6: E2E-02, D-07, D-08)
+==========================================================================================
 E2E-02's 72 h soak fails structurally if the real write lag does not fit the 90-minute
 freshness budget (06-RESEARCH Pitfall 9). The dry soak answers that BEFORE the 72 h clock
 starts, from live rows Phase 5 has already written, so nobody waits a fresh 12-24 h.
@@ -37,6 +37,29 @@ Exit codes (report): 0 when the window passes, 1 when it does not, 2 on missing 
 input (the message names the file or column). export returns 1 on a failure, printed as the
 exception type plus redacted text.
 
+Soak mode (06-07, the 72 h window). The same two subcommands take `--mode soak`:
+
+    export  --mode soak --since G --until U --out-dir DIR
+        Everything the dry export writes, plus probes.csv from `ops.freshness_log` (the five-minute
+        probe log pg_cron fills; one read-only SELECT with bound parameters).
+
+    report  --mode soak --in-dir DIR [--min-hours 72] [--probe-interval-min 5] [--max-age-min 90]
+            [--annotations FILE] --out FILE.md [--json-out FILE]
+        Turns the window into a breach list. A WRITE breach is an exact interval in which a city's
+        current rating was strictly older than --max-age-min, found from the writes themselves
+        (running maximum valid_time from first_written_at, seeded from the newest live row first
+        written before G). The probe log adds coverage (distinct probe times against the expected
+        count, gaps longer than two intervals plus one minute including at both window edges,
+        incomplete probes) and any probe breach no write interval explains. Every breach is sorted by
+        start time, then config.LOCATIONS order, then kind, with the id `<kind>:<city>:<start ISO>`
+        (kinds write, probe, probe-gap).
+
+        A breach is explained only by a rule-derived cause (Phase 5's slot verdicts and pipeline_run)
+        or an owner annotation, printed verbatim with its author and date. A deploy during the
+        window is derived from the data and shown as context; it never excuses a breach (D-08).
+        Exit 0 only when the window is at least --min-hours, probes are present and every breach and
+        probe gap is explained; 1 otherwise; 2 on missing or malformed input or annotations.
+
 The module never writes to the database, data/shadow or any shadow file.
 """
 
@@ -52,13 +75,16 @@ from datetime import datetime, timedelta, timezone
 
 import config
 import dlr_live_window_check
+import latest_rating_contract
 
 BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(BACKEND_DIR)
 
-DEFAULT_MAX_AGE_MIN = 90   # OD-4: the same rule as latest_rating.is_stale and assert_fresh
+DEFAULT_MAX_AGE_MIN = latest_rating_contract.STALE_AFTER_MINUTES  # OD-4: 90, the rule of latest_rating.is_stale
 WARN_PEAK_MIN = 75         # above this a single slow hour would breach (06-RESEARCH Pitfall 9)
 DRY_MIN_HOURS = 12
+SOAK_MIN_HOURS = 72        # ROADMAP Phase 6 success criterion 4
+PROBE_INTERVAL_MIN = 5     # supabase/ops/soak_cron_schedule.sql runs every five minutes
 
 _ONE_HOUR = timedelta(hours=1)
 
@@ -66,6 +92,7 @@ WRITES_FILE = "writes.csv"
 RUNS_FILE = "runs.csv"
 GH_RUNS_FILE = "gh_runs.json"
 META_FILE = "export_meta.json"
+PROBES_FILE = "probes.csv"
 
 WRITES_COLUMNS = (
     "city", "valid_time", "first_written_at", "computed_at", "run_id", "origin", "status", "fallback",
@@ -73,6 +100,7 @@ WRITES_COLUMNS = (
     "forecast_method", "config_version",
 )
 RUNS_COLUMNS = ("run_id", "run_attempt", "started_at", "finished_at", "window_end", "cities_ok", "cities_failed")
+PROBES_COLUMNS = ("probed_at", "city", "latest_valid_time", "age_seconds", "breach")
 
 # Live rows only (a backfill row's first_written_at is the load time, not an arrival), plus one day
 # before --since so the newest row a consumer already saw at the window start seeds the walk.
@@ -90,6 +118,13 @@ RUNS_SQL = (
     "from public.pipeline_run "
     "where window_end >= %(since)s - interval '2 hours' and window_end < %(until)s "
     "order by window_end, run_id"
+)
+# The soak's own record (D-14): one row per city per five-minute probe, written by ops.log_freshness().
+PROBES_SQL = (
+    "select probed_at, city, latest_valid_time, age_seconds, breach "
+    "from ops.freshness_log "
+    "where probed_at >= %(since)s and probed_at < %(until)s "
+    "order by probed_at, city"
 )
 READ_ONLY_SQL = "set default_transaction_read_only = on"
 
@@ -177,14 +212,17 @@ def _slot_window(since, until):
     return slot_start, hours
 
 
-def export_dry(since, until, out_dir, connect_fn=None, fetch_runs_fn=None, now_fn=None) -> dict:
+def export_window(since, until, out_dir, mode="dry", connect_fn=None, fetch_runs_fn=None, now_fn=None) -> dict:
     """
     Read the live window read-only and write writes.csv, runs.csv, gh_runs.json and export_meta.json
-    into `out_dir`. Returns the export_meta dict. Nothing is written when any read fails.
+    into `out_dir`; in `soak` mode also probes.csv from ops.freshness_log. Returns the export_meta
+    dict. Nothing is written when any read fails.
 
     `connect_fn` defaults to Phase 4's `supabase_store.connect`, `fetch_runs_fn(start, hours)` to
     `dlr_live_window_check.fetch_runs`; a failure other than a StoreError is re-raised as a
-    StoreError carrying the exception type and redacted text.
+    StoreError carrying the exception type and redacted text. Soak mode fetches the Actions runs
+    from two hours before the first slot, so the slots a breach at the window start points to are
+    covered (cause attribution).
     """
     import supabase_store
 
@@ -195,16 +233,20 @@ def export_dry(since, until, out_dir, connect_fn=None, fetch_runs_fn=None, now_f
         fetch_runs_fn = dlr_live_window_check.fetch_runs
     params = {"since": since, "until": until}
     slot_start = since.replace(minute=0, second=0, microsecond=0)
+    if mode == "soak":
+        slot_start = slot_start - 2 * _ONE_HOUR
     gh_hours = max(1, math.ceil((until - slot_start) / _ONE_HOUR))
 
     conn = None
     failure = None
-    writes = run_rows = gh_runs = None
+    writes = run_rows = gh_runs = probes = None
     try:
         conn = connect_fn()
         conn.execute(READ_ONLY_SQL)  # before the first query: this session can no longer write
         writes = _rows(conn, WRITES_SQL, params)
         run_rows = _rows(conn, RUNS_SQL, params)
+        if mode == "soak":
+            probes = _rows(conn, PROBES_SQL, params)
         gh_runs = fetch_runs_fn(slot_start, gh_hours)
     except supabase_store.StoreError:
         raise
@@ -221,16 +263,20 @@ def export_dry(since, until, out_dir, connect_fn=None, fetch_runs_fn=None, now_f
 
     now = now_fn() if now_fn is not None else datetime.now(timezone.utc)
     meta = {
-        "mode": "dry",
+        "mode": mode,
         "since": _iso(since),
         "until": _iso(until),
         "exported_at": _iso(now),
         "rows": {"writes": len(writes), "runs": len(run_rows), "gh_runs": len(gh_runs)},
         "git_head": _git_head(),
     }
+    if mode == "soak":
+        meta["rows"]["probes"] = len(probes)
     os.makedirs(out_dir, exist_ok=True)
     _write_csv(os.path.join(out_dir, WRITES_FILE), WRITES_COLUMNS, writes)
     _write_csv(os.path.join(out_dir, RUNS_FILE), RUNS_COLUMNS, run_rows)
+    if mode == "soak":
+        _write_csv(os.path.join(out_dir, PROBES_FILE), PROBES_COLUMNS, probes)
     with open(os.path.join(out_dir, GH_RUNS_FILE), "w") as fh:
         json.dump(gh_runs, fh, indent=2)
         fh.write("\n")
@@ -240,12 +286,18 @@ def export_dry(since, until, out_dir, connect_fn=None, fetch_runs_fn=None, now_f
     return meta
 
 
+def export_dry(since, until, out_dir, connect_fn=None, fetch_runs_fn=None, now_fn=None) -> dict:
+    """The dry-soak export (see export_window)."""
+    return export_window(since, until, out_dir, "dry", connect_fn, fetch_runs_fn, now_fn)
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # report (offline)
 # ──────────────────────────────────────────────────────────────────────────────
 
 REQUIRED_WRITES_COLUMNS = ("city", "valid_time", "first_written_at", "computed_at", "run_id", "origin", "fallback")
 REQUIRED_RUNS_COLUMNS = ("run_id", "window_end", "cities_ok", "cities_failed")
+REQUIRED_PROBES_COLUMNS = PROBES_COLUMNS
 
 
 def _read_csv(path, name, required) -> list:
@@ -278,13 +330,34 @@ def _timestamp_cell(value):
     return parsed
 
 
-def load_inputs(in_dir) -> dict:
+def _float_cell(value):
+    if value is None or str(value).strip() == "":
+        return None
+    parsed = float(value)
+    if math.isnan(parsed) or math.isinf(parsed):
+        raise ValueError("not a finite number")
+    return parsed
+
+
+def _bool_cell(value):
+    text = str(value).strip().lower()
+    if text in ("true", "t", "1"):
+        return True
+    if text in ("false", "f", "0"):
+        return False
+    raise ValueError("not a boolean")
+
+
+def load_inputs(in_dir, mode="dry") -> dict:
     """
-    Read the four export files into `{writes, run_rows, runs, meta}` with timestamps parsed.
-    Raises InputError naming the file (and the column) when a file is missing, a required column
-    is absent or a value is malformed.
+    Read the export files into `{writes, run_rows, runs, meta}` (plus `probes` in soak mode) with
+    timestamps parsed. Raises InputError naming the file (and the column) when a file is missing,
+    a required column is absent or a value is malformed.
     """
-    paths = {name: os.path.join(in_dir, name) for name in (WRITES_FILE, RUNS_FILE, GH_RUNS_FILE, META_FILE)}
+    names = [WRITES_FILE, RUNS_FILE, GH_RUNS_FILE, META_FILE]
+    if mode == "soak":
+        names.append(PROBES_FILE)
+    paths = {name: os.path.join(in_dir, name) for name in names}
     for name, path in paths.items():
         if not os.path.isfile(path):
             raise InputError(f"missing input file: {name}")
@@ -324,7 +397,20 @@ def load_inputs(in_dir) -> dict:
         if not isinstance(meta, dict) or key not in meta:
             raise InputError(f"{META_FILE}: missing key {key}")
         _parse(META_FILE, 0, key, meta[key], _timestamp_cell)
-    return {"writes": writes, "run_rows": run_rows, "runs": runs, "meta": meta}
+    loaded = {"writes": writes, "run_rows": run_rows, "runs": runs, "meta": meta}
+
+    if mode == "soak":
+        probes = []
+        for number, raw in enumerate(_read_csv(paths[PROBES_FILE], PROBES_FILE, REQUIRED_PROBES_COLUMNS), start=2):
+            probes.append({
+                "probed_at": _parse(PROBES_FILE, number, "probed_at", raw["probed_at"], _timestamp_cell),
+                "city": raw["city"],
+                "latest_valid_time": _parse(PROBES_FILE, number, "latest_valid_time", raw["latest_valid_time"], _ts),
+                "age_seconds": _parse(PROBES_FILE, number, "age_seconds", raw["age_seconds"], _float_cell),
+                "breach": _parse(PROBES_FILE, number, "breach", raw["breach"], _bool_cell),
+            })
+        loaded["probes"] = probes
+    return loaded
 
 
 def _walk(writes, since):
@@ -533,11 +619,292 @@ def evaluate_dry(inputs, since, until, max_age_min=DEFAULT_MAX_AGE_MIN, min_hour
     }
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# soak mode (06-07, E2E-02): the 72 h window as a breach list
+# ──────────────────────────────────────────────────────────────────────────────
+
+ALL_CITIES = "ALL"  # the city of a probe gap: it belongs to the log, not to one city
+KIND_ORDER = {"write": 0, "probe": 1, "probe-gap": 2}
+
+
+def _new_breach(kind, city, start, end, peak_age=None, ended_by="", max_valid_time=None) -> dict:
+    return {
+        "kind": kind, "city": city, "start": start, "end": end, "peak_age": peak_age,
+        "probe_count": 0, "ended_by": ended_by, "max_valid_time": max_valid_time,
+        "cause": None, "context": [], "explanation": None,
+    }
+
+
+def _close_segment(city, current, started, ended, limit, ended_by):
+    """
+    The breach (or None) inside one stretch in which `current` was the city's newest valid_time,
+    from `started` until `ended`. With no rating at all the whole stretch is a breach; otherwise
+    the breach starts when the age reaches the limit (or at `started` when it already has) and
+    exists only if the stretch ends STRICTLY after that, on the exact timedelta (OD-4).
+    """
+    if ended <= started:
+        return None
+    if current is None:
+        return _new_breach("write", city, started, ended, None, ended_by)
+    threshold = current + limit
+    if ended <= threshold:
+        return None
+    return _new_breach("write", city, max(started, threshold), ended, ended - current, ended_by, current)
+
+
+def write_breaches(writes, since, until, max_age_min=DEFAULT_MAX_AGE_MIN) -> list:
+    """
+    The exact intervals in which a city's current rating was strictly older than `max_age_min`,
+    from the writes alone (06-RESEARCH Pattern 3).
+
+    Per city the live rows first written before `until` are walked in (first_written_at,
+    valid_time) order with a running maximum valid_time, seeded from the newest live row first
+    written before `since`. The maximum is what a consumer sees as current. A breach interval
+    starts where the age first exceeds the limit (or at `since` when it already does, or when the
+    city had no rating at all) and ends at the next write that advances the maximum, or at
+    `until`. peak_age is the end minus the maximum (None with no rating). A late-filled older
+    slot never advances the maximum and a backfill row is ignored, so neither creates a breach.
+    """
+    since, until = _ts(since), _ts(until)
+    limit = timedelta(minutes=max_age_min)
+    live = [w for w in writes if w["origin"] == "live" and w["first_written_at"] < until]
+    cities = sorted({w["city"] for w in live} | set(config.LOCATIONS), key=_city_order)
+
+    found = []
+    for city in cities:
+        mine = [w for w in live if w["city"] == city]
+        current = None
+        for w in mine:
+            if w["first_written_at"] < since and (current is None or w["valid_time"] > current):
+                current = w["valid_time"]
+        inside = sorted((w for w in mine if w["first_written_at"] >= since),
+                        key=lambda w: (w["first_written_at"], w["valid_time"]))
+        started = since
+        for w in inside:
+            if current is not None and w["valid_time"] <= current:
+                continue  # a late fill or a same-slot rewrite: the maximum does not move
+            breach = _close_segment(city, current, started, w["first_written_at"], limit, "write")
+            if breach is not None:
+                found.append(breach)
+            current, started = w["valid_time"], w["first_written_at"]
+        breach = _close_segment(city, current, started, until, limit, "window end")
+        if breach is not None:
+            found.append(breach)
+    return found
+
+
+def probe_findings(probes, since, until, interval_min=PROBE_INTERVAL_MIN) -> dict:
+    """
+    What the probe log covers in [since, until): the distinct probe times against the expected
+    count (whole intervals in the window), the gaps longer than two intervals plus one minute
+    (the window edges count: a log that starts late or stops early has a gap), the incomplete
+    probes (a city missing from the probe) and each city's probe rows in time order.
+    """
+    since, until = _ts(since), _ts(until)
+    interval = timedelta(minutes=interval_min)
+    allowed = 2 * interval + timedelta(minutes=1)
+    by_time, by_city = {}, {}
+    for row in probes:
+        if since <= row["probed_at"] < until:
+            by_time.setdefault(row["probed_at"], []).append(row)
+            by_city.setdefault(row["city"], []).append(row)
+    times = sorted(by_time)
+
+    gaps = []
+    if times:
+        edges = [since] + times + [until]
+        for before, after in zip(edges, edges[1:]):
+            if after - before > allowed:
+                gaps.append({"start": before, "end": after})
+
+    incomplete = []
+    for when in times:
+        present = {row["city"] for row in by_time[when]}
+        missing = [c for c in config.LOCATIONS if c not in present]
+        if missing:
+            incomplete.append({"probed_at": when, "rows": len(by_time[when]), "missing": missing})
+
+    for rows in by_city.values():
+        rows.sort(key=lambda row: row["probed_at"])
+    return {
+        "interval_min": interval_min,
+        "expected": int((until - since) // interval),
+        "found": len(times),
+        "gaps": gaps,
+        "incomplete": incomplete,
+        "by_city": by_city,
+    }
+
+
+def merge_breaches(write_found, findings) -> list:
+    """
+    One sorted breach list from the write intervals and the probe log.
+
+    A probe row with breach true that falls inside a write interval of its own city is counted on
+    that interval. Consecutive uncovered breach rows of one city become a `probe` breach (the log
+    saw a breach no write interval explains), and each probe gap becomes a `probe-gap` breach for
+    city ALL. Ids are `<kind>:<city>:<start ISO>`; the order is start time, then
+    config.LOCATIONS order, then kind (write, probe, probe-gap).
+    """
+    breaches = [dict(b, context=list(b["context"])) for b in write_found]
+
+    for city in sorted(findings["by_city"], key=_city_order):
+        mine = [b for b in breaches if b["kind"] == "write" and b["city"] == city]
+        run = None
+        for row in findings["by_city"][city]:
+            if not row["breach"]:
+                run = None
+                continue
+            cover = next((b for b in mine if b["start"] <= row["probed_at"] <= b["end"]), None)
+            if cover is not None:
+                cover["probe_count"] += 1
+                run = None
+                continue
+            age = None if row["age_seconds"] is None else timedelta(seconds=row["age_seconds"])
+            if run is None:
+                run = _new_breach("probe", city, row["probed_at"], row["probed_at"], age, "probe")
+                run["probe_count"] = 0
+                breaches.append(run)
+            run["end"] = row["probed_at"]
+            run["probe_count"] += 1
+            if age is not None and (run["peak_age"] is None or age > run["peak_age"]):
+                run["peak_age"] = age
+
+    for gap in findings["gaps"]:
+        breaches.append(_new_breach("probe-gap", ALL_CITIES, gap["start"], gap["end"], None, "probe"))
+
+    for b in breaches:
+        b["id"] = f"{b['kind']}:{b['city']}:{_iso(b['start'])}"
+    breaches.sort(key=lambda b: (b["start"], _city_order(b["city"]), KIND_ORDER[b["kind"]]))
+    return breaches
+
+
+def _breach_json(b) -> dict:
+    return {
+        "id": b["id"],
+        "kind": b["kind"],
+        "city": b["city"],
+        "start": _iso(b["start"]),
+        "end": _iso(b["end"]),
+        "duration_min": _minutes(b["end"] - b["start"]),
+        "peak_age_min": None if b["peak_age"] is None else _minutes(b["peak_age"]),
+        "probe_count": b["probe_count"],
+        "ended_by": b["ended_by"],
+        "cause": b["cause"],
+        "context": b["context"],
+        "explanation": b["explanation"],
+    }
+
+
+def _breach_summary(b) -> str:
+    """A plain-English line for one breach, used in the failure list."""
+    span = f"from {_iso(b['start'])} to {_iso(b['end'])}"
+    if b["kind"] == "write":
+        what = (f"{b['city']}: the current rating was older than the limit {span}" +
+                ("" if b["peak_age"] is None else f" (peak {_minutes(b['peak_age']):.1f} min)"))
+        if b["peak_age"] is None:
+            what = f"{b['city']}: no rating at all {span}"
+    elif b["kind"] == "probe":
+        what = f"{b['city']}: the probe log saw a breach {span} that no write interval explains"
+    else:
+        what = f"the probe log has a gap {span} ({_minutes(b['end'] - b['start']):.1f} min)"
+    return f"{b['id']} has no cause or annotation: {what}"
+
+
+def evaluate_soak(inputs, since, until, max_age_min=DEFAULT_MAX_AGE_MIN, min_hours=SOAK_MIN_HOURS,
+                  interval_min=PROBE_INTERVAL_MIN, annotations=None) -> dict:
+    """
+    The soak result for [since, until) from loaded soak inputs (pure, no I/O, no wall clock).
+
+    It is the dry-mode statistics plus `breaches` (id, kind, city, start, end, peak_age_min,
+    probe_count, cause, context, explanation), `probe_coverage`, `trailing_age` and a `verdict`.
+    `annotations` is the parsed annotations file: `{"breaches": {id: {explanation, by, date}}}`.
+    A breach is explained when it has a rule-derived cause or an annotation; the window passes
+    only when it is at least `min_hours`, probes are present and every breach and probe gap is
+    explained.
+    """
+    since, until = _ts(since), _ts(until)
+    annotations = annotations or {}
+    notes = annotations.get("breaches") or {}
+
+    # the dry statistics, without the dry verdict: a breach is judged below, not by the dry rule
+    result = evaluate_dry(inputs, since, until, max_age_min, min_hours=0)
+    live = [w for w in inputs["writes"] if w["origin"] == "live" and w["first_written_at"] < until]
+    window_rows = [w for w in live if w["first_written_at"] >= since]
+
+    findings = probe_findings(inputs["probes"], since, until, interval_min)
+    breaches = merge_breaches(write_breaches(live, since, until, max_age_min), findings)
+
+    for b in breaches:
+        note = notes.get(b["id"])
+        if note is not None:
+            b["explanation"] = {"explanation": note["explanation"], "by": note["by"], "date": note["date"]}
+    known = {b["id"] for b in breaches}
+
+    window = until - since
+    hours = int(window // _ONE_HOUR)
+    failures = []
+    if window < timedelta(hours=min_hours):
+        failures.append(f"window shorter than {min_hours:g} h ({hours} h between the start and the end)")
+    if not window_rows:
+        failures.append("no live rows in the window")
+    if findings["found"] == 0:
+        failures.append("no probes in the window: the probe log recorded nothing")
+    unexplained = [b for b in breaches if not (b["cause"] or b["explanation"])]
+    failures += [_breach_summary(b) for b in unexplained]
+
+    warnings = list(result["warnings"])
+    for item in findings["incomplete"]:
+        warnings.append(f"incomplete probe at {_iso(item['probed_at'])}: {item['rows']} rows, "
+                        f"no row for {', '.join(item['missing'])}")
+    for note_id in sorted(set(notes) - known):
+        warnings.append(f"annotation for unknown breach id {note_id}: it matches no breach in this window")
+
+    verdict = "fail" if failures else "pass"
+    if verdict == "pass":
+        explained = len(breaches)
+        status = (f"every breach ({explained}) has a stated cause or an owner annotation" if explained
+                  else "no breach at all")
+        lines = [
+            f"PASS: over {hours} h each city's current rating was never more than {max_age_min:g} min old "
+            f"unless explained ({status}); {findings['found']} of {findings['expected']} expected probes were "
+            f"logged with no gap longer than {2 * interval_min + 1:g} min."
+        ]
+    else:
+        lines = ["FAIL: " + failure for failure in failures]
+
+    result.update({
+        "mode": "soak",
+        "hours": hours,
+        "min_hours": min_hours,
+        "probe_interval_min": interval_min,
+        "breaches": [_breach_json(b) for b in breaches],
+        "probe_coverage": {
+            "interval_min": interval_min,
+            "expected": findings["expected"],
+            "found": findings["found"],
+            "gap_limit_min": 2 * interval_min + 1,
+            "gaps": [{"start": _iso(g["start"]), "end": _iso(g["end"]), "duration_min": _minutes(g["end"] - g["start"])}
+                     for g in findings["gaps"]],
+            "incomplete": [{"probed_at": _iso(i["probed_at"]), "rows": i["rows"], "missing": i["missing"]}
+                           for i in findings["incomplete"]],
+        },
+        "trailing_age": {c["city"]: c["trailing_age_min"] for c in result["cities"]},
+        "warnings": warnings,
+        "failures": failures,
+        "verdict": verdict,
+        "lines": lines,
+    })
+    return result
+
+
 def _fmt(value) -> str:
     return "-" if value is None else f"{value:.1f}"
 
 
 def render_markdown(result) -> str:
+    if result.get("mode") == "soak":
+        return _render_soak(result)
     limit = f"{result['max_age_min']:g}"
     out = [
         "# Dry soak report (E2E-02, D-07)",
@@ -553,6 +920,14 @@ def render_markdown(result) -> str:
     if missing:
         out += ["", "Cities with no live row: " + ", ".join(missing)]
 
+    out += _stat_sections(result)
+    return "\n".join(out) + "\n"
+
+
+def _stat_sections(result) -> list:
+    """The write lag, peak age, fallback, late fill, slot verdict and largest-peak sections (both modes)."""
+    limit = f"{result['max_age_min']:g}"
+    out = []
     out += ["", "## Write lag (first_written_at minus valid_time, minutes)", "",
             "| city | writes | median | p95 | max | last-write lag max (informational) |",
             "|---|---|---|---|---|---|"]
@@ -600,6 +975,80 @@ def render_markdown(result) -> str:
     for e in slowest:
         out.append(f"| {e['city']} | {e['valid_time']} | {e['first_written_at']} | "
                    f"{e['peak_age_min']:.1f} | {e['write_lag_min']:.1f} |")
+    return out
+
+
+def _cell_text(text) -> str:
+    """One markdown table cell: no pipes, no line breaks."""
+    return str(text).replace("|", "/").replace("\r", " ").replace("\n", " ")
+
+
+def _explanation_cell(b) -> str:
+    if b["cause"]:
+        return "cause: " + _cell_text(b["cause"])
+    if b["explanation"]:
+        note = b["explanation"]
+        return f"owner annotation by {_cell_text(note['by'])} on {_cell_text(note['date'])} (verbatim below)"
+    return "no cause or annotation"
+
+
+def _render_soak(result) -> str:
+    limit = f"{result['max_age_min']:g}"
+    out = [
+        "# Soak report (E2E-02)",
+        "",
+        f"Window: {result['since']} to {result['until']} ({result['hours']} h; at least "
+        f"{result['min_hours']:g} h required). A breach is a current rating strictly older than {limit} min "
+        f"(OD-4: exactly {limit} min is fresh), or a gap in the probe log longer than "
+        f"{result['probe_coverage']['gap_limit_min']:g} min.",
+        "",
+    ]
+    out += [f"**{line}**" if i == 0 else line for i, line in enumerate(result["lines"])]
+    for warning in result["warnings"]:
+        out += ["", f"WARNING: {warning}"]
+
+    breaches = result["breaches"]
+    out += ["", "## Breaches", ""]
+    if breaches:
+        out += ["| id | city | from | to | peak age (min) | probes | cause or annotation | deploy context |",
+                "|---|---|---|---|---|---|---|---|"]
+        for b in breaches:
+            context = "; ".join(f"{c['old']} to {c['new']} ({c['class']}) first written {c['first_written_at']}"
+                                for c in b["context"]) or "-"
+            out.append(f"| {b['id']} | {b['city']} | {b['start']} | {b['end']} | {_fmt(b['peak_age_min'])} | "
+                       f"{b['probe_count']} | {_explanation_cell(b)} | {_cell_text(context)} |")
+    else:
+        out.append("No breaches.")
+
+    noted = [b for b in breaches if b["explanation"]]
+    if noted:
+        out += ["", "## Owner annotations (verbatim)", ""]
+        for b in noted:
+            note = b["explanation"]
+            text = note["explanation"].replace("\n", "\n  ")
+            out.append(f"- {b['id']} (by {note['by']}, {note['date']}): {text}")
+
+    cov = result["probe_coverage"]
+    out += ["", "## Probe coverage", "",
+            f"{cov['found']} of {cov['expected']} expected probes (one every {cov['interval_min']:g} min) "
+            f"were logged; a gap longer than {cov['gap_limit_min']:g} min fails the soak unless annotated."]
+    out += ["", "Gaps:", ""]
+    if cov["gaps"]:
+        out += ["| from | to | minutes |", "|---|---|---|"]
+        out += [f"| {g['start']} | {g['end']} | {g['duration_min']:.1f} |" for g in cov["gaps"]]
+    else:
+        out.append("No probe gaps.")
+    out += ["", "Incomplete probes (a city missing from the probe; listed, not a failure):", ""]
+    if cov["incomplete"]:
+        out += ["| probed at | rows | missing |", "|---|---|---|"]
+        out += [f"| {i['probed_at']} | {i['rows']} | {', '.join(i['missing'])} |" for i in cov["incomplete"]]
+    else:
+        out.append("No incomplete probes.")
+    out += ["", "Age of the newest rating at the end of the window (minutes):", "",
+            "| city | age |", "|---|---|"]
+    out += [f"| {city} | {_fmt(age)} |" for city, age in result["trailing_age"].items()]
+
+    out += _stat_sections(result)
     return "\n".join(out) + "\n"
 
 
@@ -621,21 +1070,38 @@ def _time_arg(value):
     return parsed
 
 
+def _read_annotations(path) -> dict:
+    """The annotations file as parsed JSON (Task 2 replaces this with the validating loader)."""
+    try:
+        with open(path) as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        raise InputError(f"annotations: cannot read {path} as JSON") from None
+    if not isinstance(data, dict):
+        raise InputError("annotations: expected a JSON object")
+    return data
+
+
 def _build_parser():
-    parser = argparse.ArgumentParser(description="Dry-soak export (read-only) and report (offline).")
+    parser = argparse.ArgumentParser(description="Dry-soak and 72 h soak export (read-only) and report (offline).")
     sub = parser.add_subparsers(dest="command", required=True)
 
     export = sub.add_parser("export", help="owner-run, read-only: copy the live window into files")
-    export.add_argument("--mode", choices=["dry"], required=True)
+    export.add_argument("--mode", choices=["dry", "soak"], required=True,
+                        help="soak also exports the probe log (probes.csv)")
     export.add_argument("--since", required=True, type=_time_arg, help="window start, ISO UTC")
     export.add_argument("--until", required=True, type=_time_arg, help="window end, ISO UTC")
-    export.add_argument("--out-dir", required=True, help="directory for the four export files")
+    export.add_argument("--out-dir", required=True, help="directory for the export files")
 
-    rep = sub.add_parser("report", help="offline: compute the dry soak from the export files")
-    rep.add_argument("--mode", choices=["dry"], required=True)
+    rep = sub.add_parser("report", help="offline: compute the dry soak or the 72 h soak from the export files")
+    rep.add_argument("--mode", choices=["dry", "soak"], required=True)
     rep.add_argument("--in-dir", required=True, help="directory written by export")
-    rep.add_argument("--min-hours", type=float, default=DRY_MIN_HOURS)
+    rep.add_argument("--min-hours", type=float, default=None,
+                     help=f"shortest window that can pass (default {DRY_MIN_HOURS} dry, {SOAK_MIN_HOURS} soak)")
     rep.add_argument("--max-age-min", type=float, default=DEFAULT_MAX_AGE_MIN)
+    rep.add_argument("--probe-interval-min", type=float, default=PROBE_INTERVAL_MIN,
+                     help="soak: minutes between probes (the pg_cron schedule)")
+    rep.add_argument("--annotations", default=None, help="soak: owner annotations.json")
     rep.add_argument("--out", required=True, help="markdown report path")
     rep.add_argument("--json-out", help="also write the full result as JSON")
     return parser
@@ -651,22 +1117,30 @@ def main(argv=None, connect_fn=None, fetch_runs_fn=None) -> int:
         if args.until <= args.since:
             parser.error("--until must be after --since")
         try:
-            meta = export_dry(args.since, args.until, args.out_dir,
-                              connect_fn=connect_fn, fetch_runs_fn=fetch_runs_fn)
+            meta = export_window(args.since, args.until, args.out_dir, args.mode,
+                                 connect_fn=connect_fn, fetch_runs_fn=fetch_runs_fn)
         except supabase_store.StoreError as exc:
             print(f"export failed: {supabase_store.redact(str(exc))}", file=sys.stderr)
             return 1
-        print(f"exported {meta['rows']['writes']} live rows and {meta['rows']['runs']} pipeline runs "
+        extra = f" and {meta['rows']['probes']} probe rows" if args.mode == "soak" else ""
+        print(f"exported {meta['rows']['writes']} live rows, {meta['rows']['runs']} pipeline runs{extra} "
               f"to {args.out_dir}")
         return 0
 
+    soak_mode = args.mode == "soak"
+    min_hours = args.min_hours if args.min_hours is not None else (SOAK_MIN_HOURS if soak_mode else DRY_MIN_HOURS)
     try:
-        inputs = load_inputs(args.in_dir)
+        inputs = load_inputs(args.in_dir, args.mode)
         since, until = _ts(inputs["meta"]["since"]), _ts(inputs["meta"]["until"])
+        annotations = _read_annotations(args.annotations) if soak_mode and args.annotations else None
     except InputError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
-    result = evaluate_dry(inputs, since, until, args.max_age_min, args.min_hours)
+    if soak_mode:
+        result = evaluate_soak(inputs, since, until, args.max_age_min, min_hours, args.probe_interval_min,
+                               annotations)
+    else:
+        result = evaluate_dry(inputs, since, until, args.max_age_min, min_hours)
     with open(args.out, "w") as fh:
         fh.write(render_markdown(result))
     if args.json_out:
