@@ -93,11 +93,28 @@ requirements state what must be true, not how; `psspy` API choices are theirs.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
+| DBX-01 | Phase 1 | Pending |
+| IN-01 | Phase 1 | Pending |
+| WB-01 | Phase 1 | Pending |
+| WB-02 | Phase 1 | Pending |
+| IN-02 | Phase 2 | Pending |
+| IN-03 | Phase 2 | Pending |
+| STU-01 | Phase 2 | Pending |
+| STU-02 | Phase 2 | Pending |
+| STU-03 | Phase 2 | Pending |
+| STU-04 | Phase 2 | Pending |
+| TST-01 | Phase 2 | Pending |
+| DBX-02 | Phase 3 | Pending |
+| TST-02 | Phase 3 | Pending |
+| SCH-01 | Phase 3 | Pending |
+| SCH-02 | Phase 3 | Pending |
+| DOC-01 | Phase 3 | Pending |
 
 **Coverage:**
-- v1 requirements: 17 total
-- Mapped to phases: 0 (filled by roadmap)
+- v1 requirements: 16 total (the initial definition said 17; the list above holds 16)
+- Mapped to phases: 16
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-10-26*
-*Last updated: 2026-10-26 after initial definition*
+*Last updated: 2026-10-26 after roadmap creation (traceability filled, count corrected to 16)*
