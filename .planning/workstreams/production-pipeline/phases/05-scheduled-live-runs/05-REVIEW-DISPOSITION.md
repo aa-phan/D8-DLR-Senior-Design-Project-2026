@@ -13,7 +13,7 @@ findings:
     title: "Provider errors and sources of a failed city are dropped"
   - id: IN-03
     severity: info
-    disposition: skipped
+    disposition: fixed
     title: "The health predicate and run constants are duplicated across modules"
   - id: IN-04
     severity: info
@@ -70,7 +70,7 @@ recorded: 2026-10-26T17:52:39.632Z
 |---------|----------|-------------|--------|
 | IN-01 | info | fixed | 05-REVIEW-FIX.md |
 | IN-02 | info | fixed | 05-REVIEW-FIX.md |
-| IN-03 | info | skipped | 05-REVIEW-FIX.md |
+| IN-03 | info | fixed | 872d282 (runner uses live_run_log.is_healthy; supabase_store copy kept) |
 | IN-04 | info | fixed | 05-REVIEW-FIX.md |
 | IN-05 | info | fixed | 05-REVIEW-FIX.md |
 | IN-06 | info | fixed | 05-REVIEW-FIX.md |
