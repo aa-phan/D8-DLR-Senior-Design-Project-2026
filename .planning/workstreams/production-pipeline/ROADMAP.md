@@ -231,16 +231,39 @@ is visible per row), and Phase 7's go lifts the label.
      every probe. Breaches are listed with causes.
   5. Insert, update and delete attempts with the anon key are all rejected.
 
-**Plans**: 7 plans
+**Re-plan note (2026-10-25)**: plans rewritten for CONTEXT D-01..D-15 (34-column contract with
+`age_minutes` / `is_stale` / `is_provisional`, dry soak from existing rows, probe smoke check, deploy
+annotations, permanent alarm, env-var examples for Python 3.7+, secret-scan extension, post-10-30
+re-check folding T-04-22). Offline build first (waves 1-3); every live step waits for 05-08's sign-off (D-06).
+**Plans**: 13 plans
 
 Plans:
-- [ ] 06-01-PLAN.md — `latest_rating` invoker view, SELECT-only anon grants, `assert_fresh` RPC, proven on a local Postgres; stdlib REST read check (tracer)
-- [ ] 06-02-PLAN.md — Anon write-rejection check with unchanged-snapshot proof; owner applies the migration live and runs read/hidden/write checks
-- [ ] 06-03-PLAN.md — REST interface contract (`docs/integration/rest-api.md`), curl / supabase-js / stdlib examples, pointers from the consumer docs
-- [ ] 06-04-PLAN.md — `ops.freshness_log` soak migration, owner pg_cron scripts, soak export and report with exact ages and causes
-- [ ] 06-05-PLAN.md — E2E trace (cron-job.org execution → run → rows → REST); supabase-js legitimacy check; owner runs examples and trace live; PSS/E question
-- [ ] 06-06-PLAN.md — Owner: soak migration, pg_cron, freshness alarm; 12-24 h dry soak report; go/no-go for the 72 h clock
-- [ ] 06-07-PLAN.md — 72 h soak report, end-of-soak privilege and write re-check, owner sign-off, soak job removal
+**Wave 1**
+- [ ] 06-01-PLAN.md — Tracer: `latest_rating` invoker view with the 34-column contract, SELECT-only grants, `assert_fresh`, real-label `is_provisional` and 90-minute boundary proofs on a local Postgres; `verify_exposure.sql`
+- [ ] 06-02-PLAN.md — Secret scan catches the project host, pooler reference and publishable key; owner-local exact-value scan (D-10)
+- [ ] 06-03-PLAN.md — Dry-soak export and report from the live rows written since 2026-10-25T00:00Z (D-07)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+- [ ] 06-04-PLAN.md — Stdlib REST client with URL/key redaction, fake PostgREST, live read / hidden-table / write-rejection checks (API-01, E2E-03)
+- [ ] 06-05-PLAN.md — `ops.freshness_log` soak migration reading `is_stale`, owner pg_cron scripts, probe smoke check
+
+**Wave 3** *(blocked on Wave 2 completion)*
+- [ ] 06-06-PLAN.md — REST contract `docs/integration/rest-api.md`, curl / supabase-js / Python 3.7+ examples (current rows and paged history), consumer-doc pointers
+- [ ] 06-07-PLAN.md — 72 h soak report (breaches, causes, derived deploy annotations, owner annotations); runbook sections for the permanent alarm, soak monitoring and the 10-31 re-check
+- [ ] 06-08-PLAN.md — E2E trace tool: cron-job.org execution → run → rows → REST (E2E-01)
+
+**Wave 4** *(blocked on Wave 3 completion and 05-08 sign-off)*
+- [ ] 06-09-PLAN.md — Owner: confirm the published contract, [BLOCKING] schema push of both migrations, live read/hidden/write checks
+
+**Wave 5** *(blocked on Wave 4 completion)*
+- [ ] 06-10-PLAN.md — Owner: 5-minute log, permanent freshness alarm and drill, probe smoke check, dry-soak report; go/no-go for the 72 h clock
+- [ ] 06-11-PLAN.md — Owner: supabase-js legitimacy check, examples and E2E trace live, PSS/E interpreter question
+
+**Wave 6** *(blocked on Wave 5 completion)*
+- [ ] 06-12-PLAN.md — Owner: 72 h soak export and report, end-of-soak checks, sign-off, soak job removal (alarm stays)
+
+**Wave 7** *(blocked on Wave 6 completion and 2026-10-31)*
+- [ ] 06-13-PLAN.md — Owner: permission re-check after Supabase's 2026-10-30 grant change, with T-04-22's smoke
 
 ### Phase 7: Per-City Conductors, Shadow Refit and Early Model Selection
 
