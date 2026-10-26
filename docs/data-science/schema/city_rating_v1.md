@@ -174,13 +174,13 @@ One row per run, written by the scheduled runner (Phase 5) or by a direct `--sto
 | `forecast_method` | `text` | Forecast method of the run. |
 | `pipeline_version` | `text` | Short git commit of the pipeline code. |
 | `cities_ok` | `text[]` | Cities whose rating row was written healthily. |
-| `cities_failed` | `jsonb` | City to outcome (`error` or `degraded`), whether a row was written, and redacted error text. |
+| `cities_failed` | `jsonb` | City to outcome (`error` or `degraded`), whether a row was confirmed written, and redacted error text. An `error` or `timeout` entry means no confirmed row: the child can exit non-zero after it stored its row, so a row may exist that the log does not know about. |
 | `provider_errors` | `jsonb` | Provider error summary of the run. |
 | `sources` | `jsonb` | Count of weather sources used per field. |
 
 A city written while its history could not be cleaned, or while its forecast raised, is `degraded`, with the redacted reason (`data cleaning failed: ...` or `forecast failed: ...`) in `cities_failed`; it is not in `cities_ok`. When both failed, the cleaning reason is the one stored. A cleaning failure on a city with no history rows keeps `forecast_status` at `cold_start`, but the city is still `degraded` and carries the reason: any reason stored for a written city makes it degraded.
 
-The live runner (`backend/dlr_live_run.py`, Phase 5) also writes a third outcome, `timeout`: the city's process was killed at its time budget and no row was written. The runner's entries carry `exit_code`, `duration_s`, `forecast_status`, `forecast_error`, `detector_model_loaded`, `cleaning_error` and `fault_injected` as well: an `error` or `timeout` city's reason is in `error`, a `degraded` city's in `cleaning_error` or `forecast_error`. The stored column comment still names only `error` and `degraded` until an additive migration updates it.
+The live runner (`backend/dlr_live_run.py`, Phase 5) also writes a third outcome, `timeout`: the city's process was killed at its time budget and no row was confirmed written. The runner's entries carry `exit_code`, `duration_s`, `forecast_status`, `forecast_error`, `detector_model_loaded`, `cleaning_error` and `fault_injected` as well: an `error` or `timeout` city's reason is in `error`, a `degraded` city's in `cleaning_error` or `forecast_error`. The stored column comment still names only `error` and `degraded` until an additive migration updates it.
 
 ## Versioning
 

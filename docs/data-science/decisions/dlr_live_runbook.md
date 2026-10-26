@@ -123,13 +123,18 @@ cancelled. A run in flight is never cancelled.
 | Outcome | Meaning | Rating row |
 |---|---|---|
 | ok | The child exited 0, left an output file with a summary row for the city, and that row says the rating row was written | written |
-| error | The child failed, or produced no usable result | none (OD-9) |
-| timeout | The child outlived 300 s and was killed | none (OD-9) |
+| error | The child failed, or produced no usable result | none confirmed (OD-9) |
+| timeout | The child outlived 300 s and was killed | none confirmed (OD-9) |
 | degraded | An ok child whose ML forecast failed, that ran with no anomaly model, or whose history could not be cleaned | written |
 
 `degraded` is decided by health: `forecast_status` must be `ok` or `cold_start`, an anomaly model
 must have loaded and the history must have cleaned (no `cleaning_error`). A missing
 `forecast_status` counts as degraded.
+
+"None confirmed" means the runner has no evidence of a written row. A child writes its rating inside the
+per-city loop and can still exit non-zero afterwards (a failing report print or `--output` dump, or a hang
+at shutdown that hits the time budget), so an `error` or `timeout` city may occasionally have a stored row
+that the run log does not know about. The slot is red either way, so no gap is hidden.
 
 **Exit codes of `dlr_live_run.py`:** 0 when every city is ok and healthy; 1 for anything else (a city
 errored, timed out or was degraded, or a `pipeline_run` write failed), which turns the Actions run
