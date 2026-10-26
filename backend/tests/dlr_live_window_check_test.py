@@ -112,7 +112,7 @@ def test_full_window_of_successful_runs_passes():
     assert wc.evaluate_window(runs, rows, ratings, START)["slots"][10]["verdict"] == "ok"
 
 
-@pytest.mark.parametrize("conclusion", ["failure", "timed_out", "cancelled"])
+@pytest.mark.parametrize("conclusion", ["failure", "timed_out", "cancelled", "startup_failure"])
 def test_red_runs_count_as_visible_failures(conclusion):
     runs, rows, ratings = healthy_window()
     # slot 7: replace the successful run, its run row and its rating rows with a red run

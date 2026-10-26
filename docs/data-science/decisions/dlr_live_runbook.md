@@ -429,7 +429,7 @@ window passed, 1 otherwise.
 |---|---|
 | ok | A run succeeded, its `pipeline_run` row lists all four cities in `cities_ok`, and `city_rating` has four rows at that slot written by the slot's runs |
 | incomplete | A successful run exists but one of those conditions fails. Fails the window |
-| failed-visible | No successful run, but at least one run is red (failure, timed_out or cancelled). Passes: the failure is visible |
+| failed-visible | No successful run, but at least one run is red (failure, timed_out, cancelled or startup_failure). Passes: the failure is visible |
 | missing | No run, or only unfinished or inconclusive runs. Fails the window |
 
 A run belongs to the slot of its `pipeline_run` `window_end` truncated to the hour; a run with no

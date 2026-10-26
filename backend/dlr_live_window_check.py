@@ -13,7 +13,7 @@ Each of the N hourly slots in the window gets one verdict:
                     written by a run of that slot
     incomplete      a successful run exists but one of those conditions fails
     failed-visible  no successful run, but at least one run is visibly red
-                    (conclusion failure, timed_out or cancelled); a fault-drill run
+                    (conclusion failure, timed_out, cancelled or startup_failure); a fault-drill run
                     (a pipeline_run city with fault_injected) never counts, so a
                     drill cannot stand in for a dispatch that never happened
     missing         no run at all, or only runs that are unfinished or have another
@@ -54,7 +54,8 @@ GH_RUN_LIMIT = 400
 GH_TIMEOUT_S = 120
 
 SUCCESS = "success"
-RED_CONCLUSIONS = ("failure", "timed_out", "cancelled")
+# startup_failure: the run could not start (broken workflow file); the Actions UI shows it red
+RED_CONCLUSIONS = ("failure", "timed_out", "cancelled", "startup_failure")
 RUNS_PER_DAY = 24
 DAYS_PER_MONTH = 30
 
