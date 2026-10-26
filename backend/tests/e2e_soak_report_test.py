@@ -300,3 +300,227 @@ def test_export_never_leaks_the_url(tmp_path, monkeypatch, capsys):
     for path in (tmp_path / "ok").iterdir():
         text = path.read_text()
         assert marker not in text and "postgres" not in text.lower()
+
+
+# ── Task 2: edge cases ────────────────────────────────────────────────────────
+
+def run_report(tmp_path, writes, runs, run_rows, hours=14, *extra, **kwargs):
+    directory = write_inputs(tmp_path / "in", writes, runs, run_rows, hours=hours, **kwargs)
+    return report(directory, *extra)
+
+
+def test_retry_rewrite_does_not_inflate_lag(tmp_path, capsys):
+    writes, runs, run_rows = healthy(14)
+    for w in writes:
+        if w["city"] == "AUSTIN" and w["valid_time"] == slot(5):
+            w["computed_at"] = w["first_written_at"] + timedelta(minutes=40)  # an OD-7 same-hour rewrite
+
+    code, markdown, result = run_report(tmp_path, writes, runs, run_rows)
+
+    assert code == 0
+    event = next(e for e in result["events"] if e["city"] == "AUSTIN" and e["valid_time"] == _iso(slot(5)))
+    assert event["write_lag_min"] == 8.0
+    assert event["peak_age_min"] == 68.0
+    assert event["last_write_lag_min"] == 48.0
+    assert city_entry(result, "AUSTIN")["last_write_lag_max_min"] == 48.0
+    assert city_entry(result, "AUSTIN")["lag"]["max_min"] == 8.0
+    assert result["overall"]["peak"]["max_min"] == 68.0
+
+
+def test_backfill_rows_are_ignored(tmp_path):
+    writes, runs, run_rows = healthy(14)
+    baseline = soak.evaluate_dry(_load(tmp_path / "a", writes, runs, run_rows), SINCE, until_for(14))
+
+    noisy = list(writes)
+    for city in CITIES:
+        # a backfill row whose load time lands inside the window, and one that would advance the maximum
+        noisy.append(write_row(city, slot(3), run_id="backfill-1", origin="backfill",
+                               first_written_at=slot(9) + timedelta(minutes=50)))
+        noisy.append(write_row(city, slot(40), run_id="backfill-2", origin="backfill",
+                               first_written_at=slot(9) + timedelta(minutes=55)))
+    again = soak.evaluate_dry(_load(tmp_path / "b", noisy, runs, run_rows), SINCE, until_for(14))
+
+    assert again == baseline
+    assert again["verdict"] == "pass"
+
+
+def _load(directory, writes, runs, run_rows, hours=14):
+    return soak.load_inputs(write_inputs(directory, writes, runs, run_rows, hours=hours))
+
+
+def test_missing_slot_is_a_128_minute_breach(tmp_path, capsys):
+    writes, runs, run_rows = healthy(14)
+    # EL_PASO alone loses the slot-6 row; the run itself is still there
+    one_city = [w for w in writes if not (w["city"] == "EL_PASO" and w["valid_time"] == slot(6))]
+
+    code, markdown, result = run_report(tmp_path / "one", one_city, runs, run_rows)
+
+    assert code == 1
+    assert result["verdict"] == "fail"
+    el_paso = city_entry(result, "EL_PASO")
+    assert el_paso["peak"]["max_min"] == 128.0
+    assert el_paso["peak"]["above_max"] == 1
+    assert all(city_entry(result, c)["peak"]["above_max"] == 0 for c in CITIES if c != "EL_PASO")
+    assert result["slots"]["slots"][6]["verdict"] == "incomplete"
+    assert "128.0" in markdown
+
+    # the whole slot missing: no run, no row for any city
+    gone = [w for w in writes if w["valid_time"] != slot(6)]
+    gone_runs = [r for r in runs if r["databaseId"] != BASE_ID + 6]
+    gone_rows = [r for r in run_rows if r["run_id"] != str(BASE_ID + 6)]
+    code, markdown, result = run_report(tmp_path / "all", gone, gone_runs, gone_rows)
+
+    assert code == 1
+    assert result["slots"]["slots"][6]["verdict"] == "missing"
+    assert all(city_entry(result, c)["peak"]["above_max"] == 1 for c in CITIES)
+
+
+@pytest.mark.parametrize("landed, breaches, shown, code", [
+    (timedelta(minutes=30), 0, 90.0, 0),                    # exactly 90 min: within budget (OD-4)
+    (timedelta(minutes=30, seconds=6), 1, 90.1, 1),         # 90.1 min: a breach
+    (timedelta(minutes=30, seconds=2), 1, 90.0, 1),         # displays as 90.0 but is over: exact timedelta decides
+])
+def test_exactly_90_minutes_is_within_budget(tmp_path, landed, breaches, shown, code):
+    writes, runs, run_rows = healthy(14)
+    for w in writes:
+        if w["city"] == "MIDLAND" and w["valid_time"] == slot(5):
+            w["first_written_at"] = w["computed_at"] = slot(5) + landed
+
+    got, markdown, result = run_report(tmp_path, writes, runs, run_rows)
+
+    assert got == code
+    midland = city_entry(result, "MIDLAND")
+    assert midland["peak"]["max_min"] == shown
+    assert midland["peak"]["above_max"] == breaches
+    assert result["verdict"] == ("pass" if code == 0 else "fail")
+
+
+def test_peak_over_75_warns_but_passes(tmp_path, capsys):
+    writes, runs, run_rows = healthy(14)
+    for w in writes:
+        if w["city"] == "CORPUS_CHRISTI" and w["valid_time"] == slot(7):
+            w["first_written_at"] = w["computed_at"] = slot(7) + timedelta(minutes=16)  # peak age 76
+
+    code, markdown, result = run_report(tmp_path, writes, runs, run_rows)
+
+    assert code == 0
+    assert city_entry(result, "CORPUS_CHRISTI")["peak"]["max_min"] == 76.0
+    assert city_entry(result, "CORPUS_CHRISTI")["peak"]["above_75"] == 1
+    assert "a single slow hour would breach" in capsys.readouterr().out
+    assert "a single slow hour would breach" in markdown
+    assert result["warnings"]
+
+    # a healthy window prints no such warning
+    writes, runs, run_rows = healthy(14)
+    code, markdown, result = run_report(tmp_path / "healthy", writes, runs, run_rows)
+    assert code == 0
+    assert "a single slow hour" not in capsys.readouterr().out
+    assert result["warnings"] == []
+
+
+def test_late_fill_of_an_old_slot_is_not_a_breach(tmp_path):
+    writes, runs, run_rows = healthy(14)
+    # a manual past-slot re-run: the 22:00 slot of the day before is first written at 06:20 inside the window
+    writes.append(write_row("AUSTIN", slot(-2), first_written_at=slot(6) + timedelta(minutes=20)))
+
+    code, markdown, result = run_report(tmp_path, writes, runs, run_rows)
+
+    assert code == 0
+    austin = city_entry(result, "AUSTIN")
+    assert austin["peak"]["max_min"] == 68.0
+    assert austin["peak"]["above_max"] == 0
+    assert austin["lag"]["count"] == 15  # the late fill is not an advancing write
+    assert result["late_fills"]["count"] == 1
+    assert "late fill" in markdown.lower()
+
+
+def test_fallback_share_is_informational(tmp_path):
+    writes, runs, run_rows = healthy(14)
+    expected = 0
+    for w in writes:
+        index = int((w["valid_time"] - SINCE).total_seconds() // 3600)
+        if w["city"] == "AUSTIN" and 0 <= index <= 14 and index % 4 != 0:
+            w["fallback"] = True
+            w["status"] = "fallback"
+            expected += 1
+
+    code, markdown, result = run_report(tmp_path, writes, runs, run_rows)
+
+    assert code == 0
+    assert result["failures"] == []
+    austin = city_entry(result, "AUSTIN")
+    assert austin["fallback"]["fallback"] == expected
+    assert austin["fallback"]["rows"] == 15
+    assert city_entry(result, "MIDLAND")["fallback"]["fallback"] == 0
+    assert "informational" in markdown.lower()
+    assert austin["peak"]["above_max"] == 0
+
+
+def test_short_or_empty_window_fails(tmp_path, capsys):
+    writes, runs, run_rows = healthy(11)
+    code, markdown, result = run_report(tmp_path / "short", writes, runs, run_rows, hours=11)
+    assert code == 1
+    assert "window shorter than 12 h" in capsys.readouterr().out
+    assert result["verdict"] == "fail"
+
+    # the same 11 hours pass when the owner lowers the minimum
+    code, markdown, result = run_report(tmp_path / "lowered", writes, runs, run_rows, 11, "--min-hours", "6")
+    assert code == 0
+
+    # no live rows inside the window: only the seed row written before --since
+    seed_only = [w for w in healthy(14)[0] if w["valid_time"] == slot(-1)]
+    code, markdown, result = run_report(tmp_path / "empty", seed_only, [], [])
+    assert code == 1
+    assert "no live rows in the window" in capsys.readouterr().out
+    assert result["verdict"] == "fail"
+
+    code, markdown, result = run_report(tmp_path / "nothing", [], [], [])
+    assert code == 1
+    assert "no live rows in the window" in capsys.readouterr().out
+    assert [c["status"] for c in result["cities"]] == ["missing"] * 4
+
+
+def test_bad_input_exits_2(tmp_path, capsys):
+    writes, runs, run_rows = healthy(14)
+
+    directory = write_inputs(tmp_path / "nofile", writes, runs, run_rows, drop=("writes.csv",))
+    assert report(directory)[0] == 2
+    assert "writes.csv" in capsys.readouterr().err
+
+    columns = [c for c in WRITE_COLUMNS if c != "first_written_at"]
+    directory = write_inputs(tmp_path / "nocolumn", writes, runs, run_rows, writes_columns=columns)
+    assert report(directory)[0] == 2
+    err = capsys.readouterr().err
+    assert "writes.csv" in err and "first_written_at" in err
+
+    directory = write_inputs(tmp_path / "nometa", writes, runs, run_rows, drop=("export_meta.json",))
+    assert report(directory)[0] == 2
+    assert "export_meta.json" in capsys.readouterr().err
+
+    directory = write_inputs(tmp_path / "badtime", writes, runs, run_rows)
+    text = (directory / "writes.csv").read_text().replace(_iso(slot(3)), "not-a-time", 1)
+    (directory / "writes.csv").write_text(text)
+    assert report(directory)[0] == 2
+    err = capsys.readouterr().err
+    assert "writes.csv" in err and "valid_time" in err
+
+
+def test_output_order_and_byte_identical_reports(tmp_path):
+    writes, runs, run_rows = healthy(14)
+    shuffled = list(reversed(writes))
+
+    directory = write_inputs(tmp_path / "in", shuffled, runs, run_rows, hours=14)
+    code, first_md, first_json = report(directory)
+    assert code == 0
+    md_bytes = (directory / "report.md").read_bytes()
+    json_bytes = (directory / "report.json").read_bytes()
+    assert report(directory)[0] == 0
+    assert (directory / "report.md").read_bytes() == md_bytes
+    assert (directory / "report.json").read_bytes() == json_bytes
+
+    # four cities that share one first_written_at come out in config.LOCATIONS order
+    assert [e["city"] for e in first_json["events"][:4]] == CITIES
+    assert [c["city"] for c in first_json["cities"]] == CITIES
+    positions = [first_md.index(f"| {c} |") for c in CITIES]
+    assert positions == sorted(positions)
+    assert "exported_at" not in first_md and "exported_at" not in json_bytes.decode()

@@ -244,16 +244,45 @@ def export_dry(since, until, out_dir, connect_fn=None, fetch_runs_fn=None, now_f
 # report (offline)
 # ──────────────────────────────────────────────────────────────────────────────
 
+REQUIRED_WRITES_COLUMNS = ("city", "valid_time", "first_written_at", "computed_at", "run_id", "origin", "fallback")
+REQUIRED_RUNS_COLUMNS = ("run_id", "window_end", "cities_ok", "cities_failed")
+
+
+def _read_csv(path, name, required) -> list:
+    """The rows of a CSV as dicts; InputError naming the file and column when a column is absent."""
+    with open(path, newline="") as fh:
+        reader = csv.DictReader(fh)
+        missing = [c for c in required if c not in (reader.fieldnames or [])]
+        if missing:
+            raise InputError(f"{name}: missing column {', '.join(missing)}")
+        return list(reader)
+
+
+def _parse(name, number, column, value, parser):
+    try:
+        return parser(value)
+    except (ValueError, TypeError):
+        raise InputError(f"{name} row {number}: column {column} has a malformed value {str(value)[:40]!r}") from None
+
+
 def _json_cell(text, default):
     if text is None or text == "":
         return default
     return json.loads(text)
 
 
+def _timestamp_cell(value):
+    parsed = _ts(value)
+    if parsed is None:
+        raise ValueError("empty timestamp")
+    return parsed
+
+
 def load_inputs(in_dir) -> dict:
     """
     Read the four export files into `{writes, run_rows, runs, meta}` with timestamps parsed.
-    Raises InputError naming the file when it is missing or unreadable.
+    Raises InputError naming the file (and the column) when a file is missing, a required column
+    is absent or a value is malformed.
     """
     paths = {name: os.path.join(in_dir, name) for name in (WRITES_FILE, RUNS_FILE, GH_RUNS_FILE, META_FILE)}
     for name, path in paths.items():
@@ -261,29 +290,79 @@ def load_inputs(in_dir) -> dict:
             raise InputError(f"missing input file: {name}")
 
     writes = []
-    with open(paths[WRITES_FILE], newline="") as fh:
-        for raw in csv.DictReader(fh):
-            row = dict(raw)
-            for column in ("valid_time", "first_written_at", "computed_at"):
-                row[column] = _ts(raw[column])
-            row["fallback"] = str(raw["fallback"]).strip().lower() in ("true", "t", "1")
-            writes.append(row)
+    for number, raw in enumerate(_read_csv(paths[WRITES_FILE], WRITES_FILE, REQUIRED_WRITES_COLUMNS), start=2):
+        row = dict(raw)
+        for column in ("valid_time", "first_written_at", "computed_at"):
+            row[column] = _parse(WRITES_FILE, number, column, raw[column], _timestamp_cell)
+        row["fallback"] = str(raw["fallback"]).strip().lower() in ("true", "t", "1")
+        writes.append(row)
 
     run_rows = []
-    with open(paths[RUNS_FILE], newline="") as fh:
-        for raw in csv.DictReader(fh):
-            row = dict(raw)
-            for column in ("started_at", "finished_at", "window_end"):
-                row[column] = _ts(raw.get(column))
-            row["cities_ok"] = _json_cell(raw.get("cities_ok"), [])
-            row["cities_failed"] = _json_cell(raw.get("cities_failed"), {})
-            run_rows.append(row)
+    for number, raw in enumerate(_read_csv(paths[RUNS_FILE], RUNS_FILE, REQUIRED_RUNS_COLUMNS), start=2):
+        row = dict(raw)
+        row["window_end"] = _parse(RUNS_FILE, number, "window_end", raw["window_end"], _timestamp_cell)
+        for column in ("started_at", "finished_at"):
+            row[column] = _parse(RUNS_FILE, number, column, raw.get(column), _ts)
+        row["cities_ok"] = _parse(RUNS_FILE, number, "cities_ok", raw["cities_ok"], lambda v: _json_cell(v, []))
+        row["cities_failed"] = _parse(RUNS_FILE, number, "cities_failed", raw["cities_failed"],
+                                      lambda v: _json_cell(v, {}))
+        run_rows.append(row)
 
-    with open(paths[GH_RUNS_FILE]) as fh:
-        runs = json.load(fh)
-    with open(paths[META_FILE]) as fh:
-        meta = json.load(fh)
+    try:
+        with open(paths[GH_RUNS_FILE]) as fh:
+            runs = json.load(fh)
+    except ValueError:
+        raise InputError(f"{GH_RUNS_FILE}: not valid JSON") from None
+    if not isinstance(runs, list):
+        raise InputError(f"{GH_RUNS_FILE}: expected a JSON list of runs")
+    try:
+        with open(paths[META_FILE]) as fh:
+            meta = json.load(fh)
+    except ValueError:
+        raise InputError(f"{META_FILE}: not valid JSON") from None
+    for key in ("since", "until"):
+        if not isinstance(meta, dict) or key not in meta:
+            raise InputError(f"{META_FILE}: missing key {key}")
+        _parse(META_FILE, 0, key, meta[key], _timestamp_cell)
     return {"writes": writes, "run_rows": run_rows, "runs": runs, "meta": meta}
+
+
+def _walk(writes, since):
+    """`(events, late_fills)`: see advance_events; a late fill is a live row first written inside the
+    window whose valid_time does not pass the city's running maximum."""
+    since = _ts(since)
+    live = [w for w in writes if w["origin"] == "live"]
+    running = {}
+    for w in live:
+        if w["first_written_at"] < since:
+            current = running.get(w["city"])
+            if current is None or w["valid_time"] > current:
+                running[w["city"]] = w["valid_time"]
+
+    inside = sorted((w for w in live if w["first_written_at"] >= since),
+                    key=lambda w: (w["first_written_at"], w["valid_time"], _city_order(w["city"])))
+    events, late_fills = [], []
+    for w in inside:
+        previous = running.get(w["city"])
+        if previous is not None and w["valid_time"] <= previous:
+            late_fills.append({
+                "city": w["city"],
+                "valid_time": w["valid_time"],
+                "first_written_at": w["first_written_at"],
+                "write_lag": w["first_written_at"] - w["valid_time"],
+            })
+            continue
+        events.append({
+            "city": w["city"],
+            "valid_time": w["valid_time"],
+            "first_written_at": w["first_written_at"],
+            "previous_valid_time": previous,
+            "peak_age": None if previous is None else w["first_written_at"] - previous,
+            "write_lag": w["first_written_at"] - w["valid_time"],
+            "last_write_lag": w["computed_at"] - w["valid_time"],
+        })
+        running[w["city"]] = w["valid_time"]
+    return events, late_fills
 
 
 def advance_events(writes, since) -> list:
@@ -296,35 +375,10 @@ def advance_events(writes, since) -> list:
     write that advances the maximum: city, valid_time, first_written_at, previous valid_time,
     peak_age (first_written_at minus the previous maximum; None when the city had no earlier row),
     write_lag (first_written_at minus valid_time) and last_write_lag (computed_at minus valid_time,
-    informational: a retry rewrites computed_at).
+    informational: a retry rewrites computed_at). A late-filled older slot never advances the
+    maximum, so it is no event; backfill rows are ignored.
     """
-    since = _ts(since)
-    live = [w for w in writes if w["origin"] == "live"]
-    running = {}
-    for w in live:
-        if w["first_written_at"] < since:
-            current = running.get(w["city"])
-            if current is None or w["valid_time"] > current:
-                running[w["city"]] = w["valid_time"]
-
-    inside = sorted((w for w in live if w["first_written_at"] >= since),
-                    key=lambda w: (w["first_written_at"], w["valid_time"], _city_order(w["city"])))
-    events = []
-    for w in inside:
-        previous = running.get(w["city"])
-        if previous is not None and w["valid_time"] <= previous:
-            continue
-        events.append({
-            "city": w["city"],
-            "valid_time": w["valid_time"],
-            "first_written_at": w["first_written_at"],
-            "previous_valid_time": previous,
-            "peak_age": None if previous is None else w["first_written_at"] - previous,
-            "write_lag": w["first_written_at"] - w["valid_time"],
-            "last_write_lag": w["computed_at"] - w["valid_time"],
-        })
-        running[w["city"]] = w["valid_time"]
-    return events
+    return _walk(writes, since)[0]
 
 
 def _lag_stats(deltas) -> dict:
@@ -364,7 +418,7 @@ def evaluate_dry(inputs, since, until, max_age_min=DEFAULT_MAX_AGE_MIN, min_hour
     limit = timedelta(minutes=max_age_min)
 
     live = [w for w in inputs["writes"] if w["origin"] == "live" and w["first_written_at"] < until]
-    events = advance_events(live, since)
+    events, late_fills = _walk(live, since)
 
     window_rows = [w for w in live if w["first_written_at"] >= since]
     running_max = {}
@@ -419,13 +473,24 @@ def evaluate_dry(inputs, since, until, max_age_min=DEFAULT_MAX_AGE_MIN, min_hour
         if s["verdict"] in ("missing", "incomplete"):
             failures.append(f"slot {s['slot']} is {s['verdict']}" + (f" ({s['note']})" if s["note"] else ""))
 
+    if hours < min_hours:
+        failures.insert(0, f"window shorter than {min_hours:g} h ({hours} h between --since and --until)")
+    if not window_rows:
+        failures.insert(0, "no live rows in the window")
+
+    warnings = []
+    if overall["peak"]["above_75"]:
+        warnings.append(
+            f"the current rating reached {overall['peak']['max_min']:.1f} min old (above {WARN_PEAK_MIN} min): "
+            f"a single slow hour would breach the {max_age_min:g} min limit")
+
     verdict = "fail" if failures else "pass"
-    peak_max = overall["peak"]["max_min"]
     if verdict == "pass":
         lines = [
-            f"PASS: all {hours} hourly slots landed; the current rating was never older than {peak_max:.1f} min "
-            f"(limit {max_age_min:g} min); a rating usually landed {overall['lag']['median_min']:.1f} min after its "
-            f"hour and at worst {overall['lag']['max_min']:.1f} min after."
+            f"PASS: all {hours} hourly slots landed; the current rating was never older than "
+            f"{_fmt(overall['peak']['max_min'])} min (limit {max_age_min:g} min); a rating usually landed "
+            f"{_fmt(overall['lag']['median_min'])} min after its hour and at worst "
+            f"{_fmt(overall['lag']['max_min'])} min after."
         ]
     else:
         lines = ["FAIL: " + failure for failure in failures]
@@ -451,8 +516,17 @@ def evaluate_dry(inputs, since, until, max_age_min=DEFAULT_MAX_AGE_MIN, min_hour
             }
             for e in events
         ],
+        "late_fills": {
+            "count": len(late_fills),
+            "max_lag_min": _minutes(max(f["write_lag"] for f in late_fills)) if late_fills else None,
+            "items": [
+                {"city": f["city"], "valid_time": _iso(f["valid_time"]),
+                 "first_written_at": _iso(f["first_written_at"]), "write_lag_min": _minutes(f["write_lag"])}
+                for f in late_fills
+            ],
+        },
         "slots": slots,
-        "warnings": [],
+        "warnings": warnings,
         "failures": failures,
         "verdict": verdict,
         "lines": lines,
@@ -475,6 +549,9 @@ def render_markdown(result) -> str:
     out += [f"**{line}**" if i == 0 else line for i, line in enumerate(result["lines"])]
     for warning in result["warnings"]:
         out += ["", f"WARNING: {warning}"]
+    missing = [c["city"] for c in result["cities"] if c["status"] == "missing"]
+    if missing:
+        out += ["", "Cities with no live row: " + ", ".join(missing)]
 
     out += ["", "## Write lag (first_written_at minus valid_time, minutes)", "",
             "| city | writes | median | p95 | max | last-write lag max (informational) |",
@@ -503,6 +580,15 @@ def render_markdown(result) -> str:
         f = c["fallback"]
         share = "-" if f["share"] is None else f"{100 * f['share']:.1f} %"
         out.append(f"| {c['city']} | {f['rows']} | {f['fallback']} | {share} |")
+
+    late = result["late_fills"]
+    out += ["", "## Late fills (an older slot first written inside the window; informational, never a breach)", ""]
+    if late["count"]:
+        out += ["| city | valid_time | first written | write lag |", "|---|---|---|---|"]
+        out += [f"| {i['city']} | {i['valid_time']} | {i['first_written_at']} | {i['write_lag_min']:.1f} |"
+                for i in late["items"]]
+    else:
+        out.append("No late fills.")
 
     out += ["", "## Slot verdicts (dlr_live_window_check.evaluate_window)", "",
             dlr_live_window_check.format_report(result["slots"])]
@@ -588,6 +674,8 @@ def main(argv=None, connect_fn=None, fetch_runs_fn=None) -> int:
             fh.write(render_json(result))
     for line in result["lines"]:
         print(line)
+    for warning in result["warnings"]:
+        print(f"WARNING: {warning}")
     return 0 if result["verdict"] == "pass" else 1
 
 
