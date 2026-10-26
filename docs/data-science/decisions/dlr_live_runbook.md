@@ -10,9 +10,9 @@ settings, not rationale; the rationale is in the Phase 5 plans and `REQUIREMENTS
 holds a secret value: tokens and keys live in cron-job.org and in GitHub's Actions secrets, never in
 this repository.
 
-Last updated 2026-10-24 (plan 05-06: owner's Actions quota recorded in section 12; the repository was made
-public the same day, so Actions minutes are free going forward). Figures marked
-"estimate" are replaced by measured ones in plans 05-06 and 05-08.
+Last updated 2026-10-26 (plan 05-08: measured Actions minutes for a full 24 h of hourly live runs and
+the same day of shadow runs, section 12). Earlier: 2026-10-24 (plan 05-06: owner's Actions quota recorded
+in section 12; the repository was made public the same day, so Actions minutes are free going forward).
 
 ## 1. Purpose and scope
 
@@ -292,7 +292,8 @@ measured and what the decision to go public was based on. They describe a privat
 describe the account's billing once the change is in effect. Minutes already billed this cycle (about
 1,028 overage minutes, $6.17) are not refunded by the change. Re-read the Billing page after the first
 full day of live runs to confirm that Actions usage stopped growing; that confirmation is not recorded
-yet.
+yet (on 2026-10-26 `gh` could not read billing without the `user` scope, so the Billing page is still the
+owner's check).
 
 **Security posture of a public repository.** The things that matter now:
 
@@ -331,9 +332,9 @@ GitHub bills each job rounded up to whole minutes; a run's billed minutes are ap
 
 | Workflow | Runs per day | Billed minutes per run | Minutes per month | Basis |
 |---|---|---|---|---|
-| Shadow Collection | 4 | median 5 | about 600 to 660 | Measured: `gh run list --workflow shadow_collect.yml`, 2026-10-16 to 2026-10-19 (median 5 billed minutes per run) |
-| DLR Live Ratings | 24 | 4 to 6 | about 2,900 to 4,300 | Estimate until 05-08: setup and install about 1.5 to 2 minutes, pre-flight seconds, four cities about 0.5 to 1 minute each. First run: 4 billed min (run 40141557468, 2026-10-24; job 3 min 6 s, EL_PASO 126 s of it); one sample, replaced by the 05-08 window measurement |
-| Total | 28 | | about 3,500 to 5,000 | Sum of the two rows above |
+| Shadow Collection | 4 | median 5 (max 6) | about 600 | Measured 2026-10-25 00:00Z to 2026-10-26 00:00Z (plan 05-08): 4 runs (created 05, 11, 17 and 23 UTC), billed 3, 5, 5 and 6 minutes, 19 in the day; median basis 4 x 5 x 30 = 600 (about 570 at the mean of 4.75). Earlier measurement 2026-10-16 to 2026-10-19: median 5 per run, about 600 to 660 |
+| DLR Live Ratings | 24 | median 4 (max 8) | about 2,880 | Measured 2026-10-25 00:00Z to 2026-10-26 00:00Z (plan 05-08): 25 runs (24 scheduled plus the 05-07 drill), billed 1 to 8 minutes, 103 in the day (the drill billed 1); median basis 24 x 4 x 30 = 2,880 (about 3,060 at the mean of the 24 scheduled runs, 4.25). Billed minutes are the checker's `ceil((updatedAt - startedAt) / 60 s)` approximation. Slowest runs (8 min) were the 00:05 and 16:05 runs; the first run (05-06) billed 4 |
+| Total | 28 | | about 3,500 | Sum of the two rows above (median basis); about 3,600 at the means |
 
 Owner's Billing figures, read from GitHub Settings, Billing and plans (account aa-phan) and recorded
 2026-10-24 (plan 05-06):
@@ -363,21 +364,25 @@ That is above the 2,000 included minutes (about 2,148 over). The 1,120 minutes t
 all billed: about $6.72 at $0.006 per minute, of which the live runs are 960 minutes (about $5.76) and
 the shadow runs 160 minutes (about $0.96, which Shadow Collection would spend anyway).
 
-Projection for a full month, using the table above:
+Projection for a full month, using the measured table above (private-repository basis, kept as history):
 
-| Item | Minutes per month |
+| Item | Minutes per 30 days (measured, 2026-10-25 window) |
 |---|---|
-| Shadow Collection | about 600 to 660 |
-| DLR Live Ratings | about 2,900 to 4,300 |
-| Total | about 3,500 to 5,000 |
+| Shadow Collection | about 600 |
+| DLR Live Ratings | about 2,880 |
+| Total | about 3,500 (about 3,600 at the means) |
 | Included | 2,000 |
-| Estimated overage | about 1,500 to 3,000 |
-| Estimated overage cost at $0.006 per minute | about $9 to $18 per month |
+| Overage | about 1,500 to 1,600 |
+| Overage cost at $0.006 per minute | about $9 to $10 per month |
 
-Shadow Collection alone (about 600 to 660 minutes) fits inside the 2,000 included minutes. A full month
-of hourly live runs does not, in any month, so going live commits the account to paid overage of
-roughly $9 to $18 per month at the estimated per-run minutes, unless a lever below is used. Dollar
-estimates assume the Linux rate of $0.006 per minute that the owner's figures imply.
+**Measured result, 2026-10-26 (plan 05-08): the measured total does not fit the 2,000 included minutes
+recorded at 05-06.** On a private-repository basis a full month of hourly live runs plus Shadow
+Collection would use about 3,500 minutes, about 1,500 to 1,600 over, roughly $9 to $10 per month at
+$0.006 per minute. That is lower than the earlier estimate of 3,500 to 5,000 minutes and $9 to $18, and
+it is moot while the repository stays public (hosted-runner minutes are free, 2026-10-24 update above):
+the quota is not the binding constraint now. It binds again if the repository is made private. Shadow
+Collection alone (about 600 minutes) fits inside the 2,000 included minutes. Dollar figures assume the
+Linux rate of $0.006 per minute that the owner's figures imply.
 
 Context only: GitHub's published included minutes for private repositories on personal plans are 2,000
 (Free) and 3,000 (Pro) per month.
