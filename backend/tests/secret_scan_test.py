@@ -1,6 +1,9 @@
 """
 Repeatable scan of every git-tracked file for credentials (production-pipeline
-Phase 4, DB-04, ROADMAP SC4). Runs in the normal suite.
+Phase 4, DB-04, ROADMAP SC4). Runs in the normal suite. Since Phase 6 (D-10; the
+repository has been public since 05-06) it also flags the Supabase project
+address (project host, pooler user carrying a project reference) and the
+publishable key, so none of them can be committed.
 
 The scan reports the path, the line number and the pattern name only, never the
 matched text, so a failure message cannot itself leak what it found. A planted
@@ -25,6 +28,11 @@ _SCHEME = "postgres" + "(?:ql)?://"
 _PG_URL = re.compile(_SCHEME + r"([^\s:/@'\"`]+):([^\s@/'\"`]+)@")
 _SB_KEY = re.compile("sb_" + "secret_" + r"[A-Za-z0-9_-]{16,}")
 _JWT = re.compile(r"\beyJ[A-Za-z0-9_-]{7,}\.eyJ[A-Za-z0-9_-]{7,}\.[A-Za-z0-9_-]{10,}")
+# D-10 (Phase 6): the project address and the publishable key never reach the public repository.
+# A project reference is 20 lowercase letters or digits (assumption A19 in 06-RESEARCH).
+_SB_HOST = re.compile(r"\b[a-z0-9]{20}\." + "supa" + "base" + r"\.(?:co|in|red)\b")
+_POOLER_REF = re.compile(r"\b(?:postgres|dlr_writer|authenticator)\.[a-z0-9]{20}\b")
+_SB_PUBLISHABLE = re.compile("sb_" + "publishable_" + r"[A-Za-z0-9_-]{16,}")
 _ALTER_ROLE = re.compile(
     r"(?i)\balter\s+role\s+\S+(?:\s+with)?\s+(?:encrypted\s+)?password\s+'([^']*)'"
 )
@@ -59,6 +67,12 @@ def _scan_line(line: str):
     for match in _ALTER_ROLE.finditer(line):
         if not _is_placeholder(match.group(1)):
             found.append("alter_role_literal")
+    if _SB_HOST.search(line):
+        found.append("supabase_project_host")
+    if _POOLER_REF.search(line):
+        found.append("pooler_project_reference")
+    if _SB_PUBLISHABLE.search(line):
+        found.append("supabase_publishable_key")
     return found
 
 
@@ -106,6 +120,8 @@ def test_the_scanner_flags_planted_credentials_and_ignores_placeholders(tmp_path
     user = "dlr_writer." + "abcdefghijklmnop"
     host = "@aws-0-us-east-1.pooler.example.invalid:5432/postgres"
     scheme = "postgres" + "ql://"
+    ref = "abcdefghij" + "klmnopqrst"  # a 20-character project reference, built at run time
+    domain = ".supa" + "base.co"
     plants = [
         (scheme + user + ":" + secret + host, "pg_url_credential"),
         ("DATABASE_URL=" + scheme + user + ":" + encoded + host, "pg_url_credential"),
@@ -114,6 +130,10 @@ def test_the_scanner_flags_planted_credentials_and_ignores_placeholders(tmp_path
          "jwt"),
         ("ALTER ROLE dlr_writer WITH " + "PASS" + "WORD '" + secret + "';", "alter_role_literal"),
         ("alter role dlr_writer " + "pass" + "word '" + secret + "';", "alter_role_literal"),
+        ("curl https://" + ref + domain + "/rest/v1/latest_rating", "supabase_project_host"),
+        ("SUPABASE_" + "URL=https://" + ref + domain, "supabase_project_host"),
+        ("user = postgres." + ref, "pooler_project_reference"),
+        ("apikey: " + "sb_" + "publishable_" + "A1b2C3d4E5f6G7h8I9j0", "supabase_publishable_key"),
     ]
     placeholders = [
         scheme + user + ":<password>" + host,
@@ -131,6 +151,18 @@ def test_the_scanner_flags_planted_credentials_and_ignores_placeholders(tmp_path
         "ALTER ROLE dlr_writer WITH " + "PASS" + "WORD '<password>';",
         "ALTER ROLE dlr_writer WITH " + "PASS" + "WORD :'writer_" + "pw';",
         "eyJ" + "short" + "." + "eyJ" + "short" + "." + "abc",
+        "curl https://<project-ref>" + domain + "/rest/v1/latest_rating",
+        "curl https://[ref]" + domain + "/rest/v1/latest_rating",
+        "curl ${SUPABASE_" + "URL}/rest/v1/latest_rating",
+        "curl https://" + "abcdefghij" + "klmnop" + domain + "/rest/v1/latest_rating",  # 16-character dummy reference
+        "user = postgres." + "<project-ref>",
+        "user = postgres." + "[ref]",
+        "user = postgres." + "...",
+        "user = dlr_writer." + "abcdefghij" + "klmnop",  # 16-character dummy reference
+        "host = aws-0-us-east-1.pooler" + domain.replace(".co", ".com"),
+        "apikey: <publishable-key>",
+        "apikey: " + "sb_" + "publishable_" + "xxxx",
+        "apikey: ${SUPABASE_PUBLISHABLE_" + "KEY}",
     ]
     planted = tmp_path / "planted.txt"
     planted.write_text("\n".join(text for text, _ in plants) + "\n", encoding="utf-8")
@@ -141,6 +173,7 @@ def test_the_scanner_flags_planted_credentials_and_ignores_placeholders(tmp_path
     assert found == [(str(planted), number, name) for number, (_, name) in enumerate(plants, start=1)]
     # The report holds no matched text.
     assert all(secret not in repr(item) and encoded not in repr(item) for item in found)
+    assert all(ref not in repr(item) and "A1b2C3d4E5f6G7h8I9j0" not in repr(item) for item in found)
 
     # Binary and oversized files are skipped, not scanned.
     binary = tmp_path / "model.joblib"
