@@ -93,7 +93,10 @@ _STDERR_TAIL_LINES = 20
 _MAX_TEXT_CHARS = 1000
 _MIN_SECRET_CHARS = 4
 _SUMMARY_ERROR_CHARS = 120
-_CREDENTIAL_PARAM_RE = re.compile(r"(?i)(token|api_key|apikey|key|email|password)=[^&\s]+")
+# Left boundary: `?token=`, `&api_key=` and a bare `key=` are masked, but `cache_key=` and
+# `monkey=` (ordinary diagnostics) are not.
+_CREDENTIAL_PARAM_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9_])(token|api_key|apikey|key|email|password)=[^&\s]+")
 _DB_URL_RE = re.compile(r"postgres(?:ql)?://\S+")
 
 
@@ -158,7 +161,8 @@ def redact(text, env=None, limit=_MAX_TEXT_CHARS) -> str:
     all of it, for the raw child streams re-emitted to the log). Removed, in this
     order: every REQUIRED_ENV value of 4 or more characters (and the password of
     a database URL), postgres URLs (-> `postgresql://***`), and the values of
-    `token=`, `api_key=`, `key=`, `email=` and `password=` parameters (-> `name=***`).
+    `token=`, `api_key=`, `key=`, `email=` and `password=` parameters (-> `name=***`;
+    a name that is the tail of a longer word, like `cache_key=`, is left alone).
     The cut comes last, so a longer text never lets a secret through. `env`
     defaults to the process environment.
     """

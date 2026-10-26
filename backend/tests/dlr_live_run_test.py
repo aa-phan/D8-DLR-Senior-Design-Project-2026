@@ -765,3 +765,24 @@ def test_child_output_cannot_inject_workflow_commands(capsys):
     assert child_lines == ["fine line", "[child] ::add-mask::value", "[child]   ::stop-commands::token",
                            "mid ::not-a-command::"]
     assert captured.err.splitlines() == ["[child] ::error::spoofed", "[child] ::endgroup::"]
+
+
+def test_redact_masks_credential_parameters_but_not_words_that_end_in_one():
+    """IN-10: `cache_key=` and `monkey=` are ordinary diagnostics; only real credential names are masked."""
+    kept = "cache_key=abc max_key=5 monkey=1 turkey=2 my_token_count=3 xtoken=4"
+    assert dlr_live_run.redact(kept, {}, limit=None) == kept
+
+    masked = {
+        "key=k1": "key=***",
+        "?token=t1&x=1": "?token=***&x=1",
+        "&api_key=a1": "&api_key=***",
+        "apikey=a2 end": "apikey=*** end",
+        "(email=me@example.test x": "(email=*** x",
+        "-password=p1": "-password=***",
+        "x KEY=k3": "x KEY=***",
+        "key=k1,cache_key=keep": "key=***",  # the value runs to the next space or &, as before
+        "line one\nkey=k4": "line one\nkey=***",
+    }
+    for text, expected in masked.items():
+        cleaned = dlr_live_run.redact(text, {}, limit=None)
+        assert cleaned == expected, (text, cleaned)
