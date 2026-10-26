@@ -1,19 +1,19 @@
 ---
 gsd_state_version: "1.0"
 current_phase: 06
-current_plan: 7
+current_plan: 8
 status: executing
-stopped_at: Completed 06-06-PLAN.md
-last_updated: "2026-10-26T21:48:48.837Z"
+stopped_at: Completed 06-07-PLAN.md
+last_updated: "2026-10-26T22:08:17.801Z"
 last_activity: 2026-10-26
 last_activity_desc: Phase 06 execution started
-state_head: 8a59df4a22718d8c1f324bfe545c486f7eae0dcf
+state_head: 0cc5bf58d14b4a594a2a70bb5881c401831c06d1
 progress:
   total_phases: 7
   completed_phases: 5
   total_plans: 66
-  completed_plans: 40
-  percent: 61
+  completed_plans: 41
+  percent: 62
 milestone_name: Production Pipeline (Supabase + live ratings)
 workstream: production-pipeline
 created: 2026-10-18
@@ -37,7 +37,7 @@ whoever owns that analysis; they are not work items here.
 
 **Status:** Ready to execute
 **Current Phase:** 06
-**Current Plan:** 7
+**Current Plan:** 8
 **Total Plans in Phase:** 13
 **Last Activity:** 2026-10-26 — Phase 06 execution started
 **Last Activity Description:** Phase 06 execution started
@@ -182,6 +182,9 @@ These block or affect stringing the system together and belong to the phases nam
 - [Phase 06]: 06-05: pg_cron scheduling lives only in owner SQL (supabase/ops/soak_cron_schedule.sql, soak_cron_unschedule.sql), never in a migration; job dlr-soak-freshness runs every five minutes, applied in 06-10 and removed in 06-12
 - [Phase 06]: 06-06: the three consumer examples read SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY from the environment only, send the key in the apikey header alone, page with valid_time ascending and stop on an empty page; the doc forbids the word bearer outright — D-10 (public repo, no project value committed) and T-06-20 (one credential header); a short-page stop breaks if the server cap drops below the page size
 - [Phase 06]: 06-06: rest-api.md column table is parsed by a test and compared with LATEST_COLUMNS; Phase 7's REVAL-01 go must remove the word provisional from both rating_basis and config_version for is_provisional to turn false (also in city_rating_v1.md) — The doc is the only contract consumers get (publishable key cannot read OpenAPI), so it must not drift; the flag reads the words in the labels, not a prefix
+- [Phase 06]: 06-07: a breach interval starts when the age reaches the limit and counts only if it ends strictly after 90 minutes on the exact timedelta; a deploy is context for a breach, never its explanation — OD-4 and D-08: exactly 90 minutes is fresh in the write measure, the probe log and the report; only a rule-derived cause or an owner annotation explains a breach
+- [Phase 06]: 06-07: deploy classification validates versions as 7-40 lowercase hex before calling git with an argv list; unknown commits, unchanged versions and unrecognised paths are flagged, never guessed — T-06-24: version strings come from the database; nothing is passed to a shell and nothing is inferred
+- [Phase 06]: 06-07: the freshness alarm is permanent (runbook section 14) and pausing the pipeline also pauses the alarm; cron-job.org disables a job after more than 25 failures — D-13..D-15 and Pitfall 13: a paused pipeline would make the alarm fail until cron-job.org disables it
 
 ## Open Decisions
 
@@ -205,9 +208,9 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 
 ## Session Continuity
 
-**Last session:** 2026-10-26T21:48:48.604Z
+**Last session:** 2026-10-26T22:08:17.564Z
 
-**Stopped At:** Completed 06-06-PLAN.md
+**Stopped At:** Completed 06-07-PLAN.md
 **Resume File:** None
 
 ## Performance Metrics
@@ -251,6 +254,7 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 | Phase 06 P04 | 10 min | 2 tasks | 4 files |
 | Phase 06 P05 | 7 min | 2 tasks | 6 files |
 | Phase 06 P06 | 11 min | 3 tasks | 10 files |
+| Phase 06 P07 | 13 min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
