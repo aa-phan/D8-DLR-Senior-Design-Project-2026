@@ -235,7 +235,7 @@ is visible per row), and Phase 7's go lifts the label.
 `age_minutes` / `is_stale` / `is_provisional`, dry soak from existing rows, probe smoke check, deploy
 annotations, permanent alarm, env-var examples for Python 3.7+, secret-scan extension, post-10-30
 re-check folding T-04-22). Offline build first (waves 1-3); every live step waits for 05-08's sign-off (D-06).
-**Plans**: 7/13 plans executed
+**Plans**: 8/13 plans executed
 
 Plans:
 **Wave 1**
@@ -250,7 +250,7 @@ Plans:
 **Wave 3** *(blocked on Wave 2 completion)*
 - [x] 06-06-PLAN.md — REST contract `docs/integration/rest-api.md`, curl / supabase-js / Python 3.7+ examples (current rows and paged history), consumer-doc pointers
 - [x] 06-07-PLAN.md — 72 h soak report (breaches, causes, derived deploy annotations, owner annotations); runbook sections for the permanent alarm, soak monitoring and the 10-31 re-check
-- [ ] 06-08-PLAN.md — E2E trace tool: cron-job.org execution → run → rows → REST (E2E-01)
+- [x] 06-08-PLAN.md — E2E trace tool: cron-job.org execution → run → rows → REST (E2E-01)
 
 **Wave 4** *(blocked on Wave 3 completion and 05-08 sign-off)*
 - [ ] 06-09-PLAN.md — Owner: confirm the published contract, [BLOCKING] schema push of both migrations, live read/hidden/write checks
@@ -374,5 +374,5 @@ instant and 07-14 waits for 07-12.
 | 3. Real-Data Validation | 5/5 | Complete    | 2026-10-21 |
 | 4. Supabase Store & Writer | 12/12 | Complete    | 2026-10-24 |
 | 5. Scheduled Live Runs | 8/8 | Complete    | 2026-10-26 |
-| 6. Exposure & E2E Verification | 7/13 | In Progress | - |
+| 6. Exposure & E2E Verification | 8/13 | In Progress | - |
 | 7. Per-City Conductors, Shadow Refit and Early Model Selection | 0/19 | Planned | - |
