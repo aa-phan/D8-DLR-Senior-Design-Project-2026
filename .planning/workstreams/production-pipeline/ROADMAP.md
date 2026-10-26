@@ -235,7 +235,7 @@ is visible per row), and Phase 7's go lifts the label.
 `age_minutes` / `is_stale` / `is_provisional`, dry soak from existing rows, probe smoke check, deploy
 annotations, permanent alarm, env-var examples for Python 3.7+, secret-scan extension, post-10-30
 re-check folding T-04-22). Offline build first (waves 1-3); every live step waits for 05-08's sign-off (D-06).
-**Plans**: 3/13 plans executed
+**Plans**: 4/13 plans executed
 
 Plans:
 **Wave 1**
@@ -244,7 +244,7 @@ Plans:
 - [x] 06-03-PLAN.md — Dry-soak export and report from the live rows written since 2026-10-25T00:00Z (D-07)
 
 **Wave 2** *(blocked on Wave 1 completion)*
-- [ ] 06-04-PLAN.md — Stdlib REST client with URL/key redaction, fake PostgREST, live read / hidden-table / write-rejection checks (API-01, E2E-03)
+- [x] 06-04-PLAN.md — Stdlib REST client with URL/key redaction, fake PostgREST, live read / hidden-table / write-rejection checks (API-01, E2E-03)
 - [ ] 06-05-PLAN.md — `ops.freshness_log` soak migration reading `is_stale`, owner pg_cron scripts, probe smoke check
 
 **Wave 3** *(blocked on Wave 2 completion)*
@@ -374,5 +374,5 @@ instant and 07-14 waits for 07-12.
 | 3. Real-Data Validation | 5/5 | Complete    | 2026-10-21 |
 | 4. Supabase Store & Writer | 12/12 | Complete    | 2026-10-24 |
 | 5. Scheduled Live Runs | 8/8 | Complete    | 2026-10-26 |
-| 6. Exposure & E2E Verification | 3/13 | In Progress | - |
+| 6. Exposure & E2E Verification | 4/13 | In Progress | - |
 | 7. Per-City Conductors, Shadow Refit and Early Model Selection | 0/19 | Planned | - |

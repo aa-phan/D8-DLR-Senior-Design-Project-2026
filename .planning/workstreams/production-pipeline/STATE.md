@@ -1,19 +1,19 @@
 ---
 gsd_state_version: "1.0"
 current_phase: 06
-current_plan: 4
+current_plan: 5
 status: executing
-stopped_at: Completed 06-03-PLAN.md
-last_updated: "2026-10-26T20:23:36.694Z"
+stopped_at: Completed 06-04-PLAN.md
+last_updated: "2026-10-26T20:41:52.530Z"
 last_activity: 2026-10-26
 last_activity_desc: Phase 06 execution started
-state_head: 4bee321f18bcf657d889ffb52d65e1c691d382d0
+state_head: a16c8f6bd5b7c4def17dcf6796bd3f6acc42700d
 progress:
   total_phases: 7
   completed_phases: 5
   total_plans: 66
-  completed_plans: 37
-  percent: 56
+  completed_plans: 38
+  percent: 58
 milestone_name: Production Pipeline (Supabase + live ratings)
 workstream: production-pipeline
 created: 2026-10-18
@@ -37,7 +37,7 @@ whoever owns that analysis; they are not work items here.
 
 **Status:** Ready to execute
 **Current Phase:** 06
-**Current Plan:** 4
+**Current Plan:** 5
 **Total Plans in Phase:** 13
 **Last Activity:** 2026-10-26 — Phase 06 execution started
 **Last Activity Description:** Phase 06 execution started
@@ -176,6 +176,8 @@ These block or affect stringing the system together and belong to the phases nam
 - [Phase 06]: Phase 06 P01: Phase 4 revoke already denies city_rating writes; the new sweep and verify_exposure.sql pin the view, sequences and future objects
 - [Phase 06]: 06-02: secret scan treats a project reference as exactly 20 lowercase letters or digits and flags project host, pooler reference and publishable key (D-10); owner-local exact-value test is env-gated
 - [Phase 06]: 06-03: dry-soak lag and peak age use first_written_at; late fills listed separately, never a breach; age at --until also held to 90 min
+- [Phase 06]: 06-04: a table write passes only on 401/403 + 42501 + permission denied AND an identical before/after SHA-256 snapshot of city_rating rows older than the current UTC hour minus one hour; RLS-only, any 2xx and inconclusive answers fail (E2E-03)
+- [Phase 06]: 06-04: view PATCH/DELETE in the write check name the old target row (city + valid_time), so even an updatable view could not change a current rating (T-06-13)
 
 ## Open Decisions
 
@@ -199,9 +201,9 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 
 ## Session Continuity
 
-**Last session:** 2026-10-26T20:23:36.501Z
+**Last session:** 2026-10-26T20:41:52.336Z
 
-**Stopped At:** Completed 06-03-PLAN.md
+**Stopped At:** Completed 06-04-PLAN.md
 **Resume File:** None
 
 ## Performance Metrics
@@ -242,6 +244,7 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 | Phase 06 P01 | 16 min | 2 tasks | 6 files |
 | Phase 06 P02 | 5 min | 2 tasks | 1 files |
 | Phase 06 P03 | 7 min | 2 tasks | 2 files |
+| Phase 06 P04 | 10 min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
