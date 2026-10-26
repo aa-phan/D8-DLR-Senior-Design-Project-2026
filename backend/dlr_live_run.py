@@ -94,9 +94,11 @@ _MAX_TEXT_CHARS = 1000
 _MIN_SECRET_CHARS = 4
 _SUMMARY_ERROR_CHARS = 120
 # Left boundary: `?token=`, `&api_key=` and a bare `key=` are masked, but `cache_key=` and
-# `monkey=` (ordinary diagnostics) are not.
+# `monkey=` (ordinary diagnostics) are not. Env-style names such as `NREL_API_KEY=` or
+# `SUPABASE_TOKEN=` are still masked through their `_api_key`/`_token`/... suffix.
 _CREDENTIAL_PARAM_RE = re.compile(
-    r"(?i)(?<![A-Za-z0-9_])(token|api_key|apikey|key|email|password)=[^&\s]+")
+    r"(?i)(?<![A-Za-z0-9_])([A-Za-z0-9_]*_(?:api_?key|token|password|secret)"
+    r"|token|api_key|apikey|key|email|password)=[^&\s]+")
 _DB_URL_RE = re.compile(r"postgres(?:ql)?://\S+")
 
 

@@ -782,6 +782,9 @@ def test_redact_masks_credential_parameters_but_not_words_that_end_in_one():
         "x KEY=k3": "x KEY=***",
         "key=k1,cache_key=keep": "key=***",  # the value runs to the next space or &, as before
         "line one\nkey=k4": "line one\nkey=***",
+        "NREL_API_KEY=n1 x": "NREL_API_KEY=*** x",
+        "SUPABASE_SERVICE_TOKEN=s1": "SUPABASE_SERVICE_TOKEN=***",
+        "db_password=p2": "db_password=***",
     }
     for text, expected in masked.items():
         cleaned = dlr_live_run.redact(text, {}, limit=None)
