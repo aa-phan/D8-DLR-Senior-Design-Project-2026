@@ -584,22 +584,22 @@ def make_probes(writes, hours=SOAK_HOURS, skip=None):
     return out
 
 
-def soak_report(directory, *extra):
-    """Run the soak report CLI; returns (exit code, markdown, parsed json)."""
+def soak_report(directory, *extra, git=None):
+    """Run the soak report CLI; returns (exit code, markdown, parsed json). `git` replaces the git runner."""
     out = directory / "report.md"
     out_json = directory / "report.json"
     code = soak.main(["report", "--mode", "soak", "--in-dir", str(directory), "--out", str(out),
-                      "--json-out", str(out_json), *extra])
+                      "--json-out", str(out_json), *extra], git_runner=git)
     markdown = out.read_text() if out.exists() else ""
     parsed = json.loads(out_json.read_text()) if out_json.exists() else None
     return code, markdown, parsed
 
 
-def soak_run(tmp_path, writes, runs, run_rows, probes="auto", hours=SOAK_HOURS, *extra, name="soak"):
+def soak_run(tmp_path, writes, runs, run_rows, probes="auto", hours=SOAK_HOURS, *extra, name="soak", git=None):
     probes = make_probes(writes, hours=hours) if isinstance(probes, str) else probes
     directory = write_inputs(tmp_path / name, writes, runs, run_rows, since=SINCE, until=soak_until(hours),
                              probes=probes, mode="soak")
-    return soak_report(directory, *extra)
+    return soak_report(directory, *extra, git=git)
 
 
 def drop_row(writes, city, valid_time):
@@ -661,8 +661,8 @@ def test_soak_export_reads_probes_read_only_and_bound(tmp_path):
 
 @pytest.mark.parametrize("landed, breaches, shown, code", [
     (timedelta(minutes=30), 0, None, 0),                  # exactly 90 min: within budget (OD-4)
-    (timedelta(minutes=30, seconds=6), 1, 90.1, 1),       # 90.1 min: a breach
-    (timedelta(minutes=30, seconds=2), 1, 90.0, 1),       # displays as 90.0 but is over: exact timedelta decides
+    (timedelta(minutes=30, seconds=6), 1, 90.1, 0),       # 90.1 min: a breach, explained as a late run
+    (timedelta(minutes=30, seconds=2), 1, 90.0, 0),       # displays as 90.0 but is over: exact timedelta decides
 ])
 def test_soak_exactly_90_minutes_is_not_a_breach(tmp_path, landed, breaches, shown, code):
     writes, runs, run_rows = healthy(SOAK_HOURS)
@@ -681,6 +681,7 @@ def test_soak_exactly_90_minutes_is_not_a_breach(tmp_path, landed, breaches, sho
         assert breach["id"] == f"write:MIDLAND:{_iso(slot(5) + timedelta(minutes=30))}"
         assert breach["peak_age_min"] == shown
         assert breach["probe_count"] == 0  # a few seconds between two probes: the log never saw it
+        assert breach["cause"].startswith("late run: written +30")  # still counted; the rule names why
     # the probe log applies the same strict rule: at the instant the rating is exactly 90 min old it is fresh
     at_90 = next(p for p in probes if p["city"] == "MIDLAND" and p["probed_at"] == slot(5) + timedelta(minutes=30))
     assert at_90["age_seconds"] == 5400 and at_90["breach"] is False
@@ -911,3 +912,318 @@ def test_unexplained_breach_fails_without_annotation(tmp_path, capsys):
     code, markdown, result = soak_run(tmp_path, writes, runs, run_rows, probes, SOAK_HOURS, "--annotations",
                                       str(annotations), name="soak3")
     assert code == 1
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Task 2: breach causes, derived deploys, owner annotations (D-08)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class FakeGit:
+    """The injectable git runner: records (argv, cwd) and answers `git diff --name-only` from a path list."""
+
+    def __init__(self, paths=(), code=0, raises=None):
+        self.paths, self.code, self.raises = list(paths), code, raises
+        self.calls = []
+
+    def __call__(self, argv, cwd):
+        self.calls.append((list(argv), cwd))
+        if self.raises is not None:
+            raise self.raises
+        return self.code, "".join(path + "\n" for path in self.paths)
+
+
+def set_versions(writes, old, new, from_slot):
+    """pipeline_version `old` for rows before slot `from_slot`, `new` from it on."""
+    for w in writes:
+        w["pipeline_version"] = new if w["valid_time"] >= slot(from_slot) else old
+    return writes
+
+
+def _hunter_url():
+    marker = "hunter" + "2" + "-marker"
+    return marker, "postgresql://dlr_writer:" + marker + "@db.example.invalid:5432/postgres"
+
+
+def _case_missing(writes, runs, run_rows):
+    writes = [w for w in writes if w["valid_time"] != slot(6)]
+    runs = [r for r in runs if r["databaseId"] != BASE_ID + 6]
+    run_rows = [r for r in run_rows if r["run_id"] != str(BASE_ID + 6)]
+    return writes, runs, run_rows, CITIES, f"no workflow run for slot {_iso(slot(6))} (dispatch missing)"
+
+
+def _case_failed_visible(writes, runs, run_rows):
+    writes = [w for w in writes if w["valid_time"] != slot(6)]
+    for r in runs:
+        if r["databaseId"] == BASE_ID + 6:
+            r["conclusion"] = "failure"
+    for r in run_rows:
+        if r["run_id"] == str(BASE_ID + 6):
+            r["cities_ok"], r["cities_failed"] = [], {}
+    return writes, runs, run_rows, CITIES, f"workflow run {BASE_ID + 6} concluded failure"
+
+
+def _failing_city(writes, runs, run_rows, conclusion):
+    writes = drop_row(writes, "EL_PASO", slot(6))
+    marker, url = _hunter_url()
+    for r in runs:
+        if r["databaseId"] == BASE_ID + 6:
+            r["conclusion"] = conclusion
+    for r in run_rows:
+        if r["run_id"] == str(BASE_ID + 6):
+            r["cities_ok"] = [c for c in CITIES if c != "EL_PASO"]
+            r["cities_failed"] = {"EL_PASO": {"outcome": "timeout", "written": False, "fault_injected": False,
+                                              "error": f"child exceeded 600 s talking to {url}"}}
+    return writes, runs, run_rows, ["EL_PASO"]
+
+
+def _case_city_failure(writes, runs, run_rows):
+    writes, runs, run_rows, cities = _failing_city(writes, runs, run_rows, "success")
+    return writes, runs, run_rows, cities, "city failure: timeout (child exceeded 600 s talking to"
+
+
+def _case_red_run_and_city_failure(writes, runs, run_rows):
+    writes, runs, run_rows, cities = _failing_city(writes, runs, run_rows, "failure")
+    return (writes, runs, run_rows, cities,
+            f"workflow run {BASE_ID + 6} concluded failure; city failure: timeout (child exceeded 600 s")
+
+
+def _case_late_run(writes, runs, run_rows):
+    for w in writes:
+        if w["city"] == "EL_PASO" and w["valid_time"] == slot(6):
+            w["first_written_at"] = w["computed_at"] = slot(6) + timedelta(minutes=40)
+    return writes, runs, run_rows, ["EL_PASO"], "late run: written +40 min after the slot"
+
+
+@pytest.mark.parametrize("case", [_case_missing, _case_failed_visible, _case_city_failure,
+                                  _case_red_run_and_city_failure, _case_late_run],
+                         ids=["missing", "failed-visible", "city-failure", "red-run-and-city-failure", "late-run"])
+def test_causes_follow_the_slot_verdicts(tmp_path, case, capsys):
+    writes, runs, run_rows = healthy(SOAK_HOURS)
+    writes, runs, run_rows, cities, expected = case(writes, runs, run_rows)
+
+    code, markdown, result = soak_run(tmp_path, writes, runs, run_rows)
+
+    assert code == 0, capsys.readouterr().out
+    assert result["verdict"] == "pass"
+    breaches = result["breaches"]
+    assert [b["city"] for b in breaches] == cities
+    assert all(b["kind"] == "write" for b in breaches)
+    for b in breaches:
+        assert b["cause"].startswith(expected) or b["cause"] == expected, b["cause"]
+        assert b["explanation"] is None
+    assert "no cause" not in markdown.lower()
+    marker, _ = _hunter_url()
+    assert marker not in markdown and marker not in json.dumps(result)  # the error text is redacted
+    # a cause appears in the table the owner reads
+    assert expected.split(" (child")[0] in markdown
+
+
+def test_annotation_explains_an_unexplained_breach(tmp_path, capsys):
+    writes, runs, run_rows = healthy(SOAK_HOURS)
+    writes = drop_row(writes, "EL_PASO", slot(6))  # run fine, row missing: no rule explains it
+    probes = make_probes(writes)
+    breach_id = f"write:EL_PASO:{_iso(slot(6) + timedelta(minutes=30))}"
+    note = {"explanation": "Supabase maintenance window; the city child could not connect | retried at 07:08",
+            "by": "A. Owner", "date": "2026-10-28"}
+    path = tmp_path / "annotations.json"
+    path.write_text(json.dumps({"breaches": {breach_id: note}, "events": []}))
+
+    parsed = soak.load_annotations(str(path))
+    assert parsed["breaches"][breach_id] == note and parsed["events"] == []
+
+    code, markdown, result = soak_run(tmp_path, writes, runs, run_rows, probes, SOAK_HOURS, "--annotations",
+                                      str(path))
+    assert code == 0, capsys.readouterr().out
+    assert result["breaches"][0]["cause"] is None
+    assert result["breaches"][0]["explanation"] == note
+    assert note["explanation"] in markdown  # verbatim, pipe and all
+    assert "A. Owner" in markdown and "2026-10-28" in markdown
+    # the table row stays one row even though the text has a pipe
+    row = next(line for line in markdown.splitlines() if line.startswith(f"| {breach_id}"))
+    assert row.count("|") == 9
+
+
+def test_unknown_or_malformed_annotations(tmp_path, capsys):
+    writes, runs, run_rows = healthy(SOAK_HOURS)
+    directory = write_inputs(tmp_path / "in", writes, runs, run_rows, since=SINCE, until=soak_until(),
+                             probes=make_probes(writes), mode="soak")
+    note = {"explanation": "x", "by": "A. Owner", "date": "2026-10-28"}
+    path = tmp_path / "annotations.json"
+
+    # an id that matches no breach is a warning, not a failure and not an excuse
+    path.write_text(json.dumps({"breaches": {"write:AUSTIN:2026-10-26T00:00:00Z": note}}))
+    code, markdown, result = soak_report(directory, "--annotations", str(path))
+    assert code == 0
+    assert "unknown breach id write:AUSTIN:2026-10-26T00:00:00Z" in capsys.readouterr().out
+    assert any("unknown breach id" in w for w in result["warnings"])
+
+    good_id = "write:AUSTIN:2026-10-26T00:00:00Z"
+    malformed = {
+        "not json": "{not json",
+        "top level list": [],
+        "unknown key": {"breach": {}},
+        "breaches not an object": {"breaches": []},
+        "entry not an object": {"breaches": {good_id: "because"}},
+        "missing by": {"breaches": {good_id: {"explanation": "x", "date": "2026-10-28"}}},
+        "empty explanation": {"breaches": {good_id: dict(note, explanation="  ")}},
+        "bad date": {"breaches": {good_id: dict(note, date="last tuesday")}},
+        "extra entry key": {"breaches": {good_id: dict(note, why="x")}},
+        "events not a list": {"events": {}},
+        "event without what": {"events": [{"time": "2026-10-26T10:00:00Z", "by": "A"}]},
+        "event bad time": {"events": [{"time": "noon", "what": "w", "by": "A"}]},
+    }
+    for label, content in malformed.items():
+        path.write_text(content if isinstance(content, str) else json.dumps(content))
+        capsys.readouterr()
+        code, _, _ = soak_report(directory, "--annotations", str(path))
+        err = capsys.readouterr().err
+        assert code == 2, label
+        assert "annotations" in err, label
+    capsys.readouterr()
+    assert soak_report(directory, "--annotations", str(tmp_path / "missing.json"))[0] == 2
+    assert "annotations" in capsys.readouterr().err
+
+
+def _deploy_writes(old="aaaaaaa", new="bbbbbbb", from_slot=5):
+    writes, _, _ = healthy(14)
+    return set_versions(writes, old, new, from_slot)
+
+
+@pytest.mark.parametrize("paths, expected", [
+    (["data/models/forecast_AUSTIN.joblib"], "model"),
+    (["backend/config.py"], "config"),
+    (["backend/city_point.py", "docs/notes.md"], "config"),
+    ([".github/workflows/dlr_live.yml"], "workflow"),
+    (["backend/other_module.py"], "code"),
+    (["requirements.txt"], "code"),
+    (["backend/config.py", "data/models/forecast_AUSTIN.joblib"], "model"),   # the first class in the order wins
+    (["docs/guide.md", ".planning/notes.md"], "no runtime change"),
+    (["backend/tests/some_test.py", "data/shadow/2026-10-26.csv"], "no runtime change"),
+    (["frontend/app.js"], "other"),                                            # never guessed as harmless
+])
+def test_derive_deploys_classifies_version_changes(paths, expected):
+    git = FakeGit(paths)
+
+    deploys = soak.derive_deploys(_deploy_writes(), SINCE, soak_until(), git_runner=git, repo_root="/repo/root")
+
+    assert len(deploys) == 1
+    deploy = deploys[0]
+    assert (deploy["old"], deploy["new"]) == ("aaaaaaa", "bbbbbbb")
+    assert deploy["class"] == expected
+    assert deploy["is_event"] is (expected != "no runtime change")
+    assert deploy["first_slot"] == _iso(slot(5))
+    assert deploy["first_written_at"] == _iso(slot(5) + LANDS_AT)
+    assert deploy["cities"] == CITIES
+    assert "pipeline_version" in deploy["changed"]
+    assert git.calls == [(["git", "diff", "--name-only", "aaaaaaa", "bbbbbbb"], "/repo/root")]
+
+
+@pytest.mark.parametrize("git", [FakeGit(code=128), FakeGit(raises=OSError("git missing"))], ids=["exit", "raises"])
+def test_derive_deploys_flags_a_commit_it_cannot_compare(git):
+    deploys = soak.derive_deploys(_deploy_writes(), SINCE, soak_until(), git_runner=git)
+
+    assert len(deploys) == 1
+    assert deploys[0]["class"] == "unknown: commit not available locally (run git fetch)"
+    assert deploys[0]["is_event"] is True
+
+
+def test_a_config_change_without_a_version_change_is_still_listed():
+    writes, _, _ = healthy(14)
+    for w in writes:
+        if w["valid_time"] >= slot(5):
+            w["config_fingerprint"] = "e" * 8
+    git = FakeGit(["backend/config.py"])
+
+    deploys = soak.derive_deploys(writes, SINCE, soak_until(), git_runner=git)
+
+    assert len(deploys) == 1
+    assert deploys[0]["old"] == deploys[0]["new"] == "abc1234"
+    assert deploys[0]["changed"] == ["config_fingerprint"]
+    assert deploys[0]["class"].startswith("unknown")
+    assert git.calls == []  # nothing to compare: the version did not move
+
+
+@pytest.mark.parametrize("version", ["unknown", "--output=/tmp/evil", "ABCDEF1", "abc123", "a" * 41, "abc1234; rm -rf /"])
+def test_unknown_pipeline_version_is_flagged(version, tmp_path):
+    git = FakeGit(["backend/config.py"])
+    writes = _deploy_writes("abc1234", version)
+
+    deploys = soak.derive_deploys(writes, SINCE, soak_until(), git_runner=git)
+
+    assert len(deploys) == 1
+    assert deploys[0]["class"].startswith("unknown")
+    assert deploys[0]["is_event"] is True
+    assert git.calls == []  # a value from the database never reaches git unless it is 7-40 lowercase hex
+
+    # and it is in the report the owner reads, without failing a healthy window
+    full, runs, run_rows = healthy(SOAK_HOURS)
+    set_versions(full, "abc1234", version, 5)
+    code, markdown, result = soak_run(tmp_path, full, runs, run_rows, git=git)
+    assert code == 0
+    assert result["deploys"][0]["class"].startswith("unknown")
+    assert "not a commit id" in markdown
+    assert git.calls == []
+
+
+def test_deploy_is_context_not_an_excuse(tmp_path, capsys):
+    writes, runs, run_rows = healthy(SOAK_HOURS)
+    set_versions(writes, "aaaaaaa", "bbbbbbb", 5)
+    writes = drop_row(writes, "EL_PASO", slot(6))  # the breach starts at 07:30 (slot 6 + 30 min)
+    probes = make_probes(writes)
+    git = FakeGit(["backend/config.py"])
+
+    code, markdown, result = soak_run(tmp_path, writes, runs, run_rows, probes, git=git)
+
+    assert code == 1  # a deploy two hours before it does not explain a breach
+    breach = result["breaches"][0]
+    assert breach["cause"] is None and breach["explanation"] is None
+    assert [(c["old"], c["new"], c["class"], c["first_written_at"]) for c in breach["context"]] == [
+        ("aaaaaaa", "bbbbbbb", "config", _iso(slot(5) + LANDS_AT))]
+    assert breach["id"] in capsys.readouterr().out
+    assert "aaaaaaa" in markdown and "bbbbbbb" in markdown
+
+    # an annotation is what explains it; the deploy stays as context
+    note = {"explanation": "deploy of backend/config.py broke the EL_PASO child", "by": "A. Owner", "date": "2026-10-28"}
+    path = tmp_path / "annotations.json"
+    path.write_text(json.dumps({"breaches": {breach["id"]: note}}))
+    code, markdown, result = soak_run(tmp_path, writes, runs, run_rows, probes, SOAK_HOURS, "--annotations",
+                                      str(path), name="annotated", git=git)
+    assert code == 0
+    assert result["breaches"][0]["context"] and result["breaches"][0]["explanation"] == note
+
+    # a deploy more than two hours before the breach is not its context, but it is still listed
+    far = healthy(SOAK_HOURS)[0]
+    set_versions(far, "aaaaaaa", "bbbbbbb", 1)
+    far = drop_row(far, "EL_PASO", slot(6))
+    code, markdown, result = soak_run(tmp_path, far, runs, run_rows, make_probes(far), name="far", git=git)
+    assert code == 1
+    assert result["breaches"][0]["context"] == []
+    assert len(result["deploys"]) == 1
+
+
+def test_manual_events_are_listed_in_time_order(tmp_path):
+    writes, runs, run_rows = healthy(SOAK_HOURS)
+    set_versions(writes, "aaaaaaa", "bbbbbbb", 5)
+    events = [
+        {"time": "2026-10-26T10:00:00Z", "what": "owner paused cron-job.org for ten minutes", "by": "A. Owner"},
+        {"time": "2026-10-25T09:30:00Z", "what": "edited the dispatch job's timeout", "by": "A. Owner"},
+        {"time": "2026-10-27T01:15:00Z", "what": "GitHub status incident", "by": "A. Owner"},
+    ]
+    path = tmp_path / "annotations.json"
+    path.write_text(json.dumps({"events": events}))
+
+    code, markdown, result = soak_run(tmp_path, writes, runs, run_rows, "auto", SOAK_HOURS, "--annotations",
+                                      str(path), git=FakeGit(["data/models/forecast_AUSTIN.joblib"]))
+
+    assert code == 0
+    assert [e["time"] for e in result["events"]] == ["2026-10-25T09:30:00Z", "2026-10-26T10:00:00Z",
+                                                     "2026-10-27T01:15:00Z"]
+    assert result["events"][0] == {"time": "2026-10-25T09:30:00Z", "what": "edited the dispatch job's timeout",
+                                   "by": "A. Owner"}
+    assert [d["class"] for d in result["deploys"]] == ["model"]
+    section = markdown.split("## Deploys and events during the window", 1)[1].split("\n## ", 1)[0]
+    positions = [section.index(text) for text in ("edited the dispatch job's timeout",
+                                                  "owner paused cron-job.org for ten minutes",
+                                                  "GitHub status incident")]
+    assert positions == sorted(positions)
+    assert "bbbbbbb" in section and "model" in section  # the derived deploy sits beside the owner's events

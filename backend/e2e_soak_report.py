@@ -68,6 +68,7 @@ import csv
 import json
 import math
 import os
+import re
 import statistics
 import subprocess
 import sys
@@ -811,17 +812,300 @@ def _breach_summary(b) -> str:
     return f"{b['id']} has no cause or annotation: {what}"
 
 
+# ── cause attribution (Phase 5's slot verdicts) ───────────────────────────────
+
+LATE_RUN_MIN = 30       # a row first written more than this after its slot makes the next breach a "late run"
+CONTEXT_WINDOW = timedelta(hours=2)   # a deploy this far before a breach (up to its end) is shown as its context
+CAUSE_ERROR_CHARS = 200
+
+
+def _plain(value) -> str:
+    """A number without a trailing .0 (40.0 -> '40', 30.1 -> '30.1')."""
+    return f"{round(value, 1):g}"
+
+
+def _city_failure(city, run_ids, run_rows_by_id):
+    """'city failure: <outcome> (<redacted error>)' when a run of the slot recorded the city as failed."""
+    import supabase_store
+
+    for run_id in run_ids:
+        failed = (run_rows_by_id.get(run_id) or {}).get("cities_failed")
+        if not isinstance(failed, dict) or city not in failed:
+            continue
+        entry = failed[city] if isinstance(failed[city], dict) else {}
+        text = f"city failure: {entry.get('outcome') or 'unknown'}"
+        error = entry.get("error")
+        if error:
+            text += f" ({supabase_store.redact(str(error), limit=CAUSE_ERROR_CHARS)})"
+        return text
+    return None
+
+
+def attribute_causes(breaches, inputs, since, until) -> list:
+    """
+    Set `cause` on every write breach from Phase 5's records; a breach no rule explains keeps
+    cause None (it then needs an owner annotation).
+
+    `dlr_live_window_check.evaluate_window` runs once over the window plus two hours of lead-in
+    with the Actions runs, pipeline_run rows and {city, valid_time, run_id} rows. For each write
+    breach the first slot after the city's newest rating before the breach (for a city with no
+    rating: the slot before its first row in the window) is inspected, and the rules apply in
+    this order:
+
+      missing         -> "no workflow run for slot <slot> (dispatch missing)"
+      failed-visible  -> "workflow run <id> concluded <conclusion>"
+      the city in that slot's cities_failed -> "city failure: <outcome>" with the redacted error
+                        (appended after a red run's cause: both are true)
+      the city's row first written more than LATE_RUN_MIN after the slot
+                      -> "late run: written +<n> min after the slot"
+    """
+    since, until = _ts(since), _ts(until)
+    lead_in = since.replace(minute=0, second=0, microsecond=0) - 2 * _ONE_HOUR
+    hours = max(1, math.ceil((until - lead_in) / _ONE_HOUR))
+    live = [w for w in inputs["writes"] if w["origin"] == "live" and w["first_written_at"] < until]
+    rating_rows = [{"city": w["city"], "valid_time": w["valid_time"], "run_id": w["run_id"]} for w in live]
+    window = dlr_live_window_check.evaluate_window(inputs["runs"], inputs["run_rows"], rating_rows, lead_in, hours)
+    slots = {s["slot"]: s for s in window["slots"]}
+    run_rows_by_id = {str(r["run_id"]): r for r in inputs["run_rows"]}
+
+    first_written = {}   # (city, valid_time) -> earliest first_written_at
+    first_in_window = {}  # city -> valid_time of its earliest row written inside the window
+    for w in live:
+        key = (w["city"], w["valid_time"])
+        if key not in first_written or w["first_written_at"] < first_written[key]:
+            first_written[key] = w["first_written_at"]
+        if w["first_written_at"] >= since and (w["city"] not in first_in_window
+                                               or w["valid_time"] < first_in_window[w["city"]]):
+            first_in_window[w["city"]] = w["valid_time"]
+
+    for b in breaches:
+        if b["kind"] != "write":
+            continue
+        if b["max_valid_time"] is not None:
+            slot_time = b["max_valid_time"].replace(minute=0, second=0, microsecond=0) + _ONE_HOUR
+        elif b["city"] in first_in_window:
+            slot_time = first_in_window[b["city"]] - _ONE_HOUR
+        else:
+            slot_time = since.replace(minute=0, second=0, microsecond=0)
+        verdict = slots.get(_iso(slot_time))
+        if verdict is None:
+            continue
+
+        parts = []
+        if verdict["verdict"] == "missing":
+            if verdict["run_ids"]:
+                parts.append(f"workflow run {', '.join(verdict['run_ids'])} did not finish "
+                             f"(slot {verdict['slot']}: {verdict['note']})")
+            else:
+                parts.append(f"no workflow run for slot {verdict['slot']} (dispatch missing)")
+        elif verdict["verdict"] == "failed-visible":
+            red = next((rid, c) for rid, c in zip(verdict["run_ids"], verdict["conclusions"])
+                       if c in dlr_live_window_check.RED_CONCLUSIONS)
+            parts.append(f"workflow run {red[0]} concluded {red[1]}")
+        failure = _city_failure(b["city"], verdict["run_ids"], run_rows_by_id)
+        if failure:
+            parts.append(failure)
+        if not parts:
+            written = first_written.get((b["city"], slot_time))
+            if written is not None and written - slot_time > timedelta(minutes=LATE_RUN_MIN):
+                parts.append(f"late run: written +{_plain((written - slot_time).total_seconds() / 60)} min "
+                             f"after the slot")
+        b["cause"] = "; ".join(parts) or None
+    return breaches
+
+
+# ── deploys derived from the data (D-08) ─────────────────────────────────────
+
+DEPLOY_COLUMNS = ("pipeline_version", "config_fingerprint", "forecast_model_sha256", "anomaly_model_sha256",
+                  "forecast_method", "config_version")
+CONFIG_PATHS = ("backend/config.py", "backend/city_point.py", "backend/rating_identity.py")
+WORKFLOW_PATH = ".github/workflows/dlr_live.yml"
+# paths that cannot change what a live run computes; anything else outside the runtime classes is "other"
+NON_RUNTIME_PREFIXES = ("docs/", ".planning/", "data/shadow/", "backend/tests/", "supabase/", ".github/", ".gitignore")
+_COMMIT_ID = re.compile(r"[0-9a-f]{7,40}")
+GIT_TIMEOUT_S = 30
+
+CLASS_NO_RUNTIME = "no runtime change"
+CLASS_FETCH = "unknown: commit not available locally (run git fetch)"
+CLASS_NOT_A_COMMIT = "unknown: pipeline_version is not a commit id"
+CLASS_SAME_VERSION = "unknown: pipeline_version unchanged, no commits to compare"
+
+
+def _run_git(argv, cwd):
+    """`(returncode, stdout)` of a git command, run as an argv list (no shell) in `cwd`."""
+    done = subprocess.run(argv, capture_output=True, text=True, timeout=GIT_TIMEOUT_S, cwd=cwd)
+    return done.returncode, done.stdout
+
+
+def _class_of_paths(paths) -> str:
+    if any(p.startswith("data/models/") for p in paths):
+        return "model"
+    if any(p in CONFIG_PATHS for p in paths):
+        return "config"
+    if WORKFLOW_PATH in paths:
+        return "workflow"
+    if any((p.startswith("backend/") and not p.startswith("backend/tests/")) or p == "requirements.txt"
+           for p in paths):
+        return "code"
+    if all(p.startswith(NON_RUNTIME_PREFIXES) for p in paths):
+        return CLASS_NO_RUNTIME
+    return "other"
+
+
+def _classify_change(old, new, runner, repo_root) -> tuple:
+    """`(class, files)`. Versions are validated as 7-40 lowercase hex before git is ever called."""
+    if not (_COMMIT_ID.fullmatch(old or "") and _COMMIT_ID.fullmatch(new or "")):
+        return CLASS_NOT_A_COMMIT, []
+    if old == new:
+        return CLASS_SAME_VERSION, []
+    try:
+        code, output = runner(["git", "diff", "--name-only", old, new], repo_root)
+    except Exception:  # noqa: BLE001 - an unreadable repository is a flag, never a guess
+        return CLASS_FETCH, []
+    if code != 0:
+        return CLASS_FETCH, []
+    files = [line.strip() for line in output.splitlines() if line.strip()]
+    return (_class_of_paths(files) if files else CLASS_NO_RUNTIME), files
+
+
+def derive_deploys(writes, since, until, git_runner=None, repo_root=REPO_ROOT) -> list:
+    """
+    Every deploy inside [since, until), derived from the rows themselves (06-RESEARCH Pattern 6).
+
+    Per city the live rows are ordered by valid_time; a row whose pipeline_version,
+    config_fingerprint, forecast_model_sha256, anomaly_model_sha256, forecast_method or
+    config_version differs from the city's previous row is a change point, and change points
+    first written inside the window are grouped per (old version, new version). Each group gives
+    {old, new, first_slot, first_written_at, cities, changed, class, files, is_event}.
+
+    The class comes from `git diff --name-only <old> <new>` (argv list, cwd `repo_root`, through
+    the injectable `git_runner(argv, cwd) -> (returncode, stdout)`): model, config, workflow, code,
+    "no runtime change" (listed, `is_event` false) or other. A version that is not 7 to 40
+    lowercase hex characters ('unknown' included) is flagged and never passed to git; a commit git
+    cannot find is flagged "run git fetch"; nothing is guessed.
+    """
+    since, until = _ts(since), _ts(until)
+    runner = git_runner or _run_git
+    live = [w for w in writes if w["origin"] == "live" and w["first_written_at"] < until]
+
+    groups = {}
+    for city in sorted({w["city"] for w in live}, key=_city_order):
+        rows = sorted((w for w in live if w["city"] == city), key=lambda w: (w["valid_time"], w["first_written_at"]))
+        for before, row in zip(rows, rows[1:]):
+            changed = [c for c in DEPLOY_COLUMNS if (before.get(c) or "") != (row.get(c) or "")]
+            if not changed or not (since <= row["first_written_at"] < until):
+                continue
+            key = (before.get("pipeline_version") or "", row.get("pipeline_version") or "")
+            group = groups.setdefault(key, {"first_slot": row["valid_time"], "first_written_at": row["first_written_at"],
+                                            "cities": set(), "changed": set()})
+            group["first_slot"] = min(group["first_slot"], row["valid_time"])
+            group["first_written_at"] = min(group["first_written_at"], row["first_written_at"])
+            group["cities"].add(city)
+            group["changed"].update(changed)
+
+    deploys = []
+    for (old, new), group in groups.items():
+        klass, files = _classify_change(old, new, runner, repo_root)
+        deploys.append({
+            "old": old,
+            "new": new,
+            "first_slot": _iso(group["first_slot"]),
+            "first_written_at": _iso(group["first_written_at"]),
+            "cities": sorted(group["cities"], key=_city_order),
+            "changed": [c for c in DEPLOY_COLUMNS if c in group["changed"]],
+            "class": klass,
+            "files": files[:20],
+            "is_event": klass != CLASS_NO_RUNTIME,
+        })
+    deploys.sort(key=lambda d: (d["first_written_at"], d["old"], d["new"]))
+    return deploys
+
+
+# ── owner annotations ────────────────────────────────────────────────────────
+
+def _annotation_error(path, message):
+    return InputError(f"annotations ({os.path.basename(str(path))}): {message}")
+
+
+def _nonblank(path, where, value, key):
+    if not isinstance(value, str) or not value.strip():
+        raise _annotation_error(path, f"{where} needs a non-empty text value for '{key}'")
+    return value
+
+
+def load_annotations(path) -> dict:
+    """
+    The owner's annotations file: `{"breaches": {id: {explanation, by, date}}, "events":
+    [{time, what, by}]}` (both keys optional). Returns it normalised: breach entries as written
+    (printed verbatim), events sorted by time with `time` as ISO UTC. Raises InputError (exit 2)
+    for a missing, unreadable or malformed file, an unknown key or a bad date or time. An id that
+    matches no breach is not an error here; the report warns about it.
+    """
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except OSError:
+        raise _annotation_error(path, "cannot be read") from None
+    except ValueError:
+        raise _annotation_error(path, "not valid JSON") from None
+    if not isinstance(data, dict):
+        raise _annotation_error(path, "expected a JSON object with 'breaches' and/or 'events'")
+    unknown = sorted(set(data) - {"breaches", "events"})
+    if unknown:
+        raise _annotation_error(path, f"unknown key {unknown[0]!r} (allowed: breaches, events)")
+
+    breaches = data.get("breaches", {})
+    if not isinstance(breaches, dict):
+        raise _annotation_error(path, "'breaches' must be an object keyed by breach id")
+    notes = {}
+    for breach_id, entry in breaches.items():
+        where = f"breaches[{breach_id!r}]"
+        if not isinstance(entry, dict):
+            raise _annotation_error(path, f"{where} must be an object with explanation, by and date")
+        extra = sorted(set(entry) - {"explanation", "by", "date"})
+        if extra:
+            raise _annotation_error(path, f"{where} has an unknown key {extra[0]!r}")
+        note = {key: _nonblank(path, where, entry.get(key), key) for key in ("explanation", "by", "date")}
+        try:
+            datetime.fromisoformat(note["date"].strip().replace("Z", "+00:00"))
+        except ValueError:
+            raise _annotation_error(path, f"{where} has a date that is not ISO 8601 (YYYY-MM-DD)") from None
+        notes[breach_id] = note
+
+    raw_events = data.get("events", [])
+    if not isinstance(raw_events, list):
+        raise _annotation_error(path, "'events' must be a list of {time, what, by}")
+    events = []
+    for number, entry in enumerate(raw_events):
+        where = f"events[{number}]"
+        if not isinstance(entry, dict):
+            raise _annotation_error(path, f"{where} must be an object with time, what and by")
+        extra = sorted(set(entry) - {"time", "what", "by"})
+        if extra:
+            raise _annotation_error(path, f"{where} has an unknown key {extra[0]!r}")
+        text = {key: _nonblank(path, where, entry.get(key), key) for key in ("time", "what", "by")}
+        try:
+            when = _ts(text["time"])
+        except ValueError:
+            raise _annotation_error(path, f"{where} has a time that is not ISO 8601") from None
+        events.append({"time": _iso(when), "what": text["what"], "by": text["by"]})
+    events.sort(key=lambda e: e["time"])  # stable: events at the same instant keep the owner's order
+    return {"breaches": notes, "events": events}
+
+
 def evaluate_soak(inputs, since, until, max_age_min=DEFAULT_MAX_AGE_MIN, min_hours=SOAK_MIN_HOURS,
-                  interval_min=PROBE_INTERVAL_MIN, annotations=None) -> dict:
+                  interval_min=PROBE_INTERVAL_MIN, annotations=None, git_runner=None, repo_root=REPO_ROOT) -> dict:
     """
     The soak result for [since, until) from loaded soak inputs (pure, no I/O, no wall clock).
 
     It is the dry-mode statistics plus `breaches` (id, kind, city, start, end, peak_age_min,
     probe_count, cause, context, explanation), `probe_coverage`, `trailing_age` and a `verdict`.
-    `annotations` is the parsed annotations file: `{"breaches": {id: {explanation, by, date}}}`.
-    A breach is explained when it has a rule-derived cause or an annotation; the window passes
-    only when it is at least `min_hours`, probes are present and every breach and probe gap is
-    explained.
+    `annotations` is the parsed annotations file (see load_annotations). A breach is explained
+    when it has a rule-derived cause (attribute_causes) or an annotation; the window passes only
+    when it is at least `min_hours`, probes are present and every breach and probe gap is
+    explained. Deploys are derived from the rows (derive_deploys, `git_runner` and `repo_root`
+    for the classification) and listed beside the owner's events; a deploy within two hours
+    before a breach, up to its end, is that breach's `context` and never its explanation (D-08).
     """
     since, until = _ts(since), _ts(until)
     annotations = annotations or {}
@@ -835,11 +1119,21 @@ def evaluate_soak(inputs, since, until, max_age_min=DEFAULT_MAX_AGE_MIN, min_hou
     findings = probe_findings(inputs["probes"], since, until, interval_min)
     breaches = merge_breaches(write_breaches(live, since, until, max_age_min), findings)
 
+    attribute_causes(breaches, inputs, since, until)
     for b in breaches:
         note = notes.get(b["id"])
         if note is not None:
             b["explanation"] = {"explanation": note["explanation"], "by": note["by"], "date": note["date"]}
     known = {b["id"] for b in breaches}
+
+    deploys = derive_deploys(live, since, until, git_runner, repo_root)
+    events = sorted(annotations.get("events") or [], key=lambda e: _ts(e["time"]))
+    for b in breaches:
+        b["context"] = [
+            {"old": d["old"], "new": d["new"], "class": d["class"], "first_written_at": d["first_written_at"]}
+            for d in deploys
+            if d["is_event"] and b["start"] - CONTEXT_WINDOW <= _ts(d["first_written_at"]) <= b["end"]
+        ]
 
     window = until - since
     hours = int(window // _ONE_HOUR)
@@ -857,6 +1151,10 @@ def evaluate_soak(inputs, since, until, max_age_min=DEFAULT_MAX_AGE_MIN, min_hou
     for item in findings["incomplete"]:
         warnings.append(f"incomplete probe at {_iso(item['probed_at'])}: {item['rows']} rows, "
                         f"no row for {', '.join(item['missing'])}")
+    for d in deploys:
+        if d["class"].startswith("unknown"):
+            warnings.append(f"deploy {d['old'] or '-'} to {d['new'] or '-'} first written {d['first_written_at']} "
+                            f"is flagged, not classified: {d['class']}")
     for note_id in sorted(set(notes) - known):
         warnings.append(f"annotation for unknown breach id {note_id}: it matches no breach in this window")
 
@@ -875,6 +1173,7 @@ def evaluate_soak(inputs, since, until, max_age_min=DEFAULT_MAX_AGE_MIN, min_hou
 
     result.update({
         "mode": "soak",
+        "advances": result["events"],  # the dry statistics' list of advancing writes; `events` is the owner's
         "hours": hours,
         "min_hours": min_hours,
         "probe_interval_min": interval_min,
@@ -890,6 +1189,8 @@ def evaluate_soak(inputs, since, until, max_age_min=DEFAULT_MAX_AGE_MIN, min_hou
                            for i in findings["incomplete"]],
         },
         "trailing_age": {c["city"]: c["trailing_age_min"] for c in result["cities"]},
+        "deploys": deploys,
+        "events": events,
         "warnings": warnings,
         "failures": failures,
         "verdict": verdict,
@@ -968,7 +1269,8 @@ def _stat_sections(result) -> list:
     out += ["", "## Slot verdicts (dlr_live_window_check.evaluate_window)", "",
             dlr_live_window_check.format_report(result["slots"])]
 
-    slowest = sorted((e for e in result["events"] if e["peak_age_min"] is not None),
+    advances = result["advances"] if result.get("mode") == "soak" else result["events"]
+    slowest = sorted((e for e in advances if e["peak_age_min"] is not None),
                      key=lambda e: -e["peak_age_min"])[:10]
     out += ["", "## Ten largest peak ages", "",
             "| city | valid_time | first written | peak age | write lag |", "|---|---|---|---|---|"]
@@ -1028,6 +1330,25 @@ def _render_soak(result) -> str:
             text = note["explanation"].replace("\n", "\n  ")
             out.append(f"- {b['id']} (by {note['by']}, {note['date']}): {text}")
 
+    out += ["", "## Deploys and events during the window", "",
+            "Deploys are derived from the rows (a change of pipeline_version, config_fingerprint, model hashes, "
+            "forecast_method or config_version from a city's previous row). A deploy is context for a breach; "
+            "it never excuses one (D-08). Events are the owner's own entries.", ""]
+    listed = [(d["first_written_at"], "deploy",
+               f"{d['old'] or '-'} to {d['new'] or '-'}: {d['class']}; changed {', '.join(d['changed'])}; "
+               f"cities {', '.join(d['cities'])}") for d in result["deploys"] if d["is_event"]]
+    listed += [(e["time"], "event", f"{e['what']} (by {e['by']})") for e in result["events"]]
+    listed.sort(key=lambda row: row[0])  # stable: a deploy and an event at one instant keep derived-first order
+    if listed:
+        out += ["| time (UTC) | kind | detail |", "|---|---|---|"]
+        out += [f"| {when} | {kind} | {_cell_text(detail)} |" for when, kind, detail in listed]
+    else:
+        out.append("No deploys and no owner events in the window.")
+    quiet = [d for d in result["deploys"] if not d["is_event"]]
+    if quiet:
+        out += ["", "Commits with no runtime change (listed, not deploys):", ""]
+        out += [f"- {d['old']} to {d['new']} first written {d['first_written_at']}" for d in quiet]
+
     cov = result["probe_coverage"]
     out += ["", "## Probe coverage", "",
             f"{cov['found']} of {cov['expected']} expected probes (one every {cov['interval_min']:g} min) "
@@ -1070,18 +1391,6 @@ def _time_arg(value):
     return parsed
 
 
-def _read_annotations(path) -> dict:
-    """The annotations file as parsed JSON (Task 2 replaces this with the validating loader)."""
-    try:
-        with open(path) as fh:
-            data = json.load(fh)
-    except (OSError, ValueError):
-        raise InputError(f"annotations: cannot read {path} as JSON") from None
-    if not isinstance(data, dict):
-        raise InputError("annotations: expected a JSON object")
-    return data
-
-
 def _build_parser():
     parser = argparse.ArgumentParser(description="Dry-soak and 72 h soak export (read-only) and report (offline).")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1107,7 +1416,7 @@ def _build_parser():
     return parser
 
 
-def main(argv=None, connect_fn=None, fetch_runs_fn=None) -> int:
+def main(argv=None, connect_fn=None, fetch_runs_fn=None, git_runner=None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
 
@@ -1132,13 +1441,13 @@ def main(argv=None, connect_fn=None, fetch_runs_fn=None) -> int:
     try:
         inputs = load_inputs(args.in_dir, args.mode)
         since, until = _ts(inputs["meta"]["since"]), _ts(inputs["meta"]["until"])
-        annotations = _read_annotations(args.annotations) if soak_mode and args.annotations else None
+        annotations = load_annotations(args.annotations) if soak_mode and args.annotations else None
     except InputError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     if soak_mode:
         result = evaluate_soak(inputs, since, until, args.max_age_min, min_hours, args.probe_interval_min,
-                               annotations)
+                               annotations, git_runner)
     else:
         result = evaluate_dry(inputs, since, until, args.max_age_min, min_hours)
     with open(args.out, "w") as fh:
