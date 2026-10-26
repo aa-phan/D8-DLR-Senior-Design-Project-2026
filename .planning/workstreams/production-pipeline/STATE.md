@@ -1,19 +1,19 @@
 ---
 gsd_state_version: "1.0"
-current_phase: 06 — Exposure & E2E Verification
-current_plan: Not started
+current_phase: 06
+current_plan: 2
 status: executing
-stopped_at: Phase 5 complete, ready to execute Phase 06
-last_updated: "2026-10-26T18:48:39.006Z"
+stopped_at: Completed 06-01-PLAN.md
+last_updated: "2026-10-26T20:07:59.490Z"
 last_activity: 2026-10-26
-last_activity_desc: Phase 5 complete, transitioned to Phase 06
-state_head: 20038294a06c2509f109517a44a7f2661a0f891a
+last_activity_desc: Phase 06 execution started
+state_head: 806a09ebd0c5bd0e337d1fef032359d0ec568fe8
 progress:
   total_phases: 7
   completed_phases: 5
   total_plans: 66
-  completed_plans: 34
-  percent: 71
+  completed_plans: 35
+  percent: 53
 milestone_name: Production Pipeline (Supabase + live ratings)
 workstream: production-pipeline
 created: 2026-10-18
@@ -36,11 +36,11 @@ whoever owns that analysis; they are not work items here.
 ## Current Position
 
 **Status:** Ready to execute
-**Current Phase:** 06 — Exposure & E2E Verification
-**Current Plan:** Not started
+**Current Phase:** 06
+**Current Plan:** 2
 **Total Plans in Phase:** 13
-**Last Activity:** 2026-10-26
-**Last Activity Description:** Phase 5 complete, transitioned to Phase 06
+**Last Activity:** 2026-10-26 — Phase 06 execution started
+**Last Activity Description:** Phase 06 execution started
 
 ## Planning Summary (2026-10-19)
 
@@ -171,6 +171,9 @@ These block or affect stringing the system together and belong to the phases nam
 - [Phase 05]: 05-07: window start for 05-08 is run 40145300072 (2026-10-25T00:05:05Z, slot 00:00); owner test run 40144431987 counted as manual — First dispatch within 5 min after an hh:05 boundary; drill run 40146481713 overwrote three 00:00 slot rows (OD-7)
 - [Phase 05]: 05-08: owner signed off the 24 h window (24 of 24 slots ok) and the budget with approve-push; main pushed fast-forward 702a833..d71c501 — Measured live 2,880 + shadow 600 min per 30 days exceeds 2,000 included on a private basis; moot while the repository is public. Next scheduled run 40272358123 green in environment production on the pushed SHA; repository-level SUPABASE_DB_URL secret now safe to delete (owner action)
 - [Phase 05]: close-out 2026-10-26: UAT 2/2 (billing flat since public, cron-job.org matches runbook), 05-VALIDATION nyquist_compliant, 05-SECURITY threats_open 0 (T-05-20 acceptance re-grounded on content, not privacy, after the repo went public), re-verification passed after the review fixes (14 findings, 0 open; IN-08 won't-fix)
+- [Phase 06]: Phase 06 P01: is_provisional is the word rule on rating_basis OR config_version, guarded offline against the real config strings (D-03 revised)
+- [Phase 06]: Phase 06 P01: age_minutes is ceil integer and is_stale a direct timestamp comparison; exactly 90 minutes is fresh in the view and assert_fresh
+- [Phase 06]: Phase 06 P01: Phase 4 revoke already denies city_rating writes; the new sweep and verify_exposure.sql pin the view, sequences and future objects
 
 ## Open Decisions
 
@@ -194,9 +197,9 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 
 ## Session Continuity
 
-**Last session:** 2026-10-26T18:50:00Z
+**Last session:** 2026-10-26T20:07:59.303Z
 
-**Stopped At:** Phase 5 complete, ready to execute Phase 06
+**Stopped At:** Completed 06-01-PLAN.md
 **Resume File:** None
 
 ## Performance Metrics
@@ -234,6 +237,7 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 | Phase 05 P06 | 40 min | 3 tasks | 1 files |
 | Phase 05 P07 | 130 min | 2 tasks | 0 files |
 | Phase 05 P08 | 1h 15m | 2 tasks | 1 files |
+| Phase 06 P01 | 16 min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
