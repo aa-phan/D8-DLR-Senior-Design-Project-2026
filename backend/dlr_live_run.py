@@ -267,20 +267,31 @@ def _healthy(record) -> bool:
             and not record.get("cleaning_error"))
 
 
+def _defang(text) -> str:
+    """
+    `text` with every line that would be an Actions workflow command (`::name::...`,
+    possibly indented) prefixed with `[child] `. The child's output is re-emitted at
+    line starts, where the runner would act on `::add-mask::` or `::stop-commands::`.
+    """
+    return "".join(f"[child] {line}" if line.lstrip().startswith("::") else line
+                   for line in text.splitlines(keepends=True))
+
+
 def _emit(city, stdout_text, stderr_text, env):
     """
     Re-emit a child's captured streams, grouped in the Actions log. The repo is public,
     so the logs are too: both streams go through `redact()` (uncut) first, because
     Actions masks only the exact secret values it holds, not a database password's
-    URL-encoded form or a credential inside a request URL in a traceback.
+    URL-encoded form or a credential inside a request URL in a traceback. A line that
+    would be a workflow command is defanged (`_defang`).
     """
     grouped = env.get("GITHUB_ACTIONS") == "true"
     if grouped:
         print(f"::group::{city}", flush=True)
     if stdout_text:
-        sys.stdout.write(redact(stdout_text, env, limit=None))
+        sys.stdout.write(_defang(redact(stdout_text, env, limit=None)))
     if stderr_text:
-        sys.stderr.write(redact(stderr_text, env, limit=None))
+        sys.stderr.write(_defang(redact(stderr_text, env, limit=None)))
     if grouped:
         print("::endgroup::", flush=True)
     sys.stdout.flush()
@@ -426,14 +437,15 @@ def run_live(cities=None, end=None, fault_city="", timeout_s=CITY_TIMEOUT_S, env
 
 def _cell(text, limit=_SUMMARY_ERROR_CHARS) -> str:
     """
-    A markdown table cell: one line, cut to `limit` characters, pipes escaped. A longer
-    text keeps its END behind a "..." marker: for a crash traceback the exception
+    A markdown table cell: one line, cut to `limit` characters, backslashes and pipes
+    escaped. A longer text keeps its END behind a "..." marker: for a crash traceback the exception
     line is the last one, and the head is only the frame that raised it.
     """
     flat = " ".join(str(text).split())
     if len(flat) > limit:
         flat = "..." + flat[-(limit - 3):]
-    return flat.replace("|", "\\|")
+    # backslashes first, so a text ending in "\\" cannot turn the next "\\|" into an escaped backslash
+    return flat.replace("\\", "\\\\").replace("|", "\\|")
 
 
 def write_step_summary(run, path, env=None) -> None:

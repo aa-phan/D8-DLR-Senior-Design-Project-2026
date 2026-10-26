@@ -738,3 +738,30 @@ def test_end_must_not_be_in_the_future_and_timeout_must_be_positive():
             dlr_live_run.main(bad_end)
         assert raised.value.code == 2
     assert dlr_live_run._positive_int("300") == 300
+
+
+def test_cell_escaping_survives_a_backslash_before_a_pipe():
+    """IN-06: `a\\|b` used to become `a\\\\|b`, which markdown reads as a backslash plus a column break."""
+    cell = dlr_live_run._cell("a\\|b")
+    assert cell == "a\\\\\\|b"  # a, escaped backslash, escaped pipe, b
+    # every "|" is preceded by an odd number of backslashes, so none can split the row
+    for i, ch in enumerate(cell):
+        if ch == "|":
+            run = len(cell[:i]) - len(cell[:i].rstrip("\\"))
+            assert run % 2 == 1
+    assert dlr_live_run._cell("plain | pipe") == "plain \\| pipe"
+
+
+def test_child_output_cannot_inject_workflow_commands(capsys):
+    """IN-06: the child's lines are re-emitted at line starts, where `::add-mask::` would be acted on."""
+    stdout = "fine line\n::add-mask::value\n  ::stop-commands::token\nmid ::not-a-command::\n"
+    stderr = "::error::spoofed\n::endgroup::"
+    dlr_live_run._emit("AUSTIN", stdout, stderr, {"GITHUB_ACTIONS": "true"})
+    captured = capsys.readouterr()
+
+    out_lines = captured.out.splitlines()
+    assert out_lines[0] == "::group::AUSTIN" and out_lines[-1] == "::endgroup::"  # the runner's own commands
+    child_lines = out_lines[1:-1]
+    assert child_lines == ["fine line", "[child] ::add-mask::value", "[child]   ::stop-commands::token",
+                           "mid ::not-a-command::"]
+    assert captured.err.splitlines() == ["[child] ::error::spoofed", "[child] ::endgroup::"]
