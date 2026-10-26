@@ -79,7 +79,11 @@ def pipeline_version(env=None) -> str:
     return supabase_store.run_context(env)["pipeline_version"]
 
 
-def _is_healthy(record) -> bool:
+def is_healthy(record) -> bool:
+    """
+    True when a city record is 'ok', ran with its ML forecast and anomaly model, and
+    cleaned its history. The one rule behind both `cities_ok` and the runner's exit code.
+    """
     return (record.get("outcome") == "ok"
             and record.get("forecast_status") in HEALTHY_FORECAST_STATUSES
             and record.get("detector_model_loaded") is True
@@ -103,7 +107,7 @@ def build_run_row(state, env=None) -> dict:
     sources = {}
     for rec in ordered:
         city = rec["city"]
-        if _is_healthy(rec):
+        if is_healthy(rec):
             cities_ok.append(city)
         else:
             written = bool(rec.get("written"))

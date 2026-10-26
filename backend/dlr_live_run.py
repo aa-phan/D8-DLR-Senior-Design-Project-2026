@@ -73,8 +73,9 @@ REPO_ROOT = os.path.dirname(BACKEND_DIR)
 ORCHESTRATOR = os.path.join(BACKEND_DIR, "dlr_orchestrator.py")
 
 CITY_TIMEOUT_S = 300
-PROVIDER = "composed"
-FORECAST_METHOD = "ml"
+# One definition, shared with the run row (`live_run_log`).
+PROVIDER = live_run_log.PROVIDER
+FORECAST_METHOD = live_run_log.FORECAST_METHOD
 # Phase 4 (04-02 SUMMARY): `--store postgres` selects the Supabase store; the
 # runner's per-city children skip the run row (the runner owns it, plan 05-03).
 STORE_ARGS = ("--store", "postgres", "--no-run-row")
@@ -84,9 +85,6 @@ WRITE_FLAG_KEY = "archived"
 PROVIDER_ENV = ("SYNOPTIC_TOKEN", "NREL_API_KEY", "NREL_API_EMAIL")
 DB_ENV = ("SUPABASE_DB_URL",)
 REQUIRED_ENV = PROVIDER_ENV + DB_ENV
-
-# forecast_status values (Phase 4) that count as a healthy ML forecast.
-HEALTHY_FORECAST_STATUSES = live_run_log.HEALTHY_FORECAST_STATUSES
 
 _TS_FMT = "%Y-%m-%dT%H:%M:%SZ"
 _STDERR_TAIL_LINES = 20
@@ -265,14 +263,6 @@ def classify(city, returncode, output, stderr_text, fault_injected=False, timed_
     return record
 
 
-def _healthy(record) -> bool:
-    """True when a record is 'ok', ran with its ML forecast and anomaly model, and cleaned its history."""
-    return (record["outcome"] == "ok"
-            and record["forecast_status"] in HEALTHY_FORECAST_STATUSES
-            and record["detector_model_loaded"] is True
-            and not record.get("cleaning_error"))
-
-
 def _defang(text) -> str:
     """
     `text` with every line that would be an Actions workflow command (`::name::...`,
@@ -435,7 +425,7 @@ def run_live(cities=None, end=None, fault_city="", timeout_s=CITY_TIMEOUT_S, env
             save_run_row()
     state["finished_at"] = _stamp(datetime.now(timezone.utc))
     save_run_row()
-    state["exit_code"] = 0 if all(_healthy(r) for r in records) and run_log["failed"] == 0 else 1
+    state["exit_code"] = 0 if all(live_run_log.is_healthy(r) for r in records) and run_log["failed"] == 0 else 1
     state["run_log"] = run_log if record_run else None
     log.info("live run %s attempt %s finished, exit code %d", run_id, run_attempt, state["exit_code"])
     return state
