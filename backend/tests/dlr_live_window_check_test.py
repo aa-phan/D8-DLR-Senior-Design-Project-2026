@@ -129,6 +129,52 @@ def test_red_runs_count_as_visible_failures(conclusion):
     assert result["passed"] is True
 
 
+def test_a_fault_drill_run_does_not_stand_in_for_a_missed_slot():
+    # WR-02: the drill always ends red; in an hour whose scheduled dispatch never happened it must
+    # not turn 'missing' into 'failed-visible'
+    runs, rows, ratings = healthy_window()
+    del runs[7], rows[7]
+    ratings = [r for r in ratings if r["valid_time"] != slot(7)]
+    drill = BASE_ID + 700
+    end = slot(7) + timedelta(minutes=30)
+    runs.append(gh_run(drill, end + timedelta(seconds=20), conclusion="failure"))
+    rows.append(run_row(drill, end, cities_ok=CITIES[1:],
+                        cities_failed={CITIES[0]: {"outcome": "error", "fault_injected": True}}))
+
+    result = wc.evaluate_window(runs, rows, ratings, START)
+
+    assert result["slots"][7]["verdict"] == "missing"
+    assert str(drill) not in result["slots"][7]["run_ids"]
+    assert str(drill) in result["slots"][7]["note"]
+    assert result["passed"] is False
+    assert result["minutes"]["count"] == 24  # the drill still billed: 23 healthy runs plus the drill
+
+    # a red run that is not a drill still counts as visible
+    rows[-1] = run_row(drill, end, cities_ok=[], cities_failed={CITIES[0]: {"outcome": "error"}})
+    again = wc.evaluate_window(runs, rows, ratings, START)
+    assert again["slots"][7]["verdict"] == "failed-visible"
+    assert again["passed"] is True
+
+
+def test_a_fault_drill_in_a_good_slot_leaves_it_ok_even_when_it_overwrote_rating_rows():
+    runs, rows, ratings = healthy_window()
+    drill = BASE_ID + 701
+    end = slot(4) + timedelta(minutes=45)
+    runs.append(gh_run(drill, end + timedelta(seconds=20), conclusion="failure"))
+    rows.append(run_row(drill, end, cities_ok=CITIES[1:],
+                        cities_failed={CITIES[0]: {"outcome": "error", "fault_injected": True}}))
+    # the drill's healthy cities overwrote the original run's rows (OD-7)
+    ratings = [r for r in ratings if not (r["valid_time"] == slot(4) and r["city"] in CITIES[1:])]
+    ratings += rating_rows(drill, slot(4), cities=CITIES[1:])
+
+    result = wc.evaluate_window(runs, rows, ratings, START)
+
+    assert result["slots"][4]["verdict"] == "ok"
+    assert result["slots"][4]["run_ids"] == [str(BASE_ID + 4)]
+    assert str(drill) in result["slots"][4]["note"]
+    assert result["passed"] is True
+
+
 def test_a_slot_with_no_run_fails_the_window():
     runs, rows, ratings = healthy_window()
     del runs[3], rows[3]

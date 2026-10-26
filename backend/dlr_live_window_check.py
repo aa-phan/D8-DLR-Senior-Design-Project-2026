@@ -13,7 +13,9 @@ Each of the N hourly slots in the window gets one verdict:
                     written by a run of that slot
     incomplete      a successful run exists but one of those conditions fails
     failed-visible  no successful run, but at least one run is visibly red
-                    (conclusion failure, timed_out or cancelled)
+                    (conclusion failure, timed_out or cancelled); a fault-drill run
+                    (a pipeline_run city with fault_injected) never counts, so a
+                    drill cannot stand in for a dispatch that never happened
     missing         no run at all, or only runs that are unfinished or have another
                     conclusion (skipped, ...): nothing shows the slot was attempted
 
@@ -107,6 +109,14 @@ def _cities_listed(row) -> set:
     return set()
 
 
+def _is_drill(row) -> bool:
+    """True when the pipeline_run row records a city failed on purpose (the SCHED-01 fault drill)."""
+    failed = (row or {}).get("cities_failed")
+    if not isinstance(failed, dict):
+        return False
+    return any(isinstance(v, dict) and v.get("fault_injected") for v in failed.values())
+
+
 def _run_slot_time(run, row):
     """The instant that decides a run's slot: its pipeline_run window_end, else its start."""
     window_end = _ts((row or {}).get("window_end"))
@@ -138,13 +148,14 @@ def evaluate_window(runs, run_rows, rating_rows, start, hours=24) -> dict:
     `{"slots": [{slot, verdict, run_ids, conclusions, note}], "minutes": {count,
     median, max, projected_30d}, "passed": bool}`; see the module docstring for the
     verdicts. `minutes` covers every finished run placed in the window, red ones
-    included, because a red run still bills.
+    included (a fault-drill run too), because a red run still bills.
     """
     start = _ts(start)
     cities = list(config.LOCATIONS)
     rows_by_id = {str(r["run_id"]): r for r in run_rows}
 
     placed = [[] for _ in range(hours)]  # per slot: (run id, run, pipeline_run row)
+    drills = [[] for _ in range(hours)]  # per slot: drill runs, billed but never evidence for the slot
     for run in runs:
         run_id = str(run["databaseId"])
         row = rows_by_id.get(run_id)
@@ -153,7 +164,8 @@ def evaluate_window(runs, run_rows, rating_rows, start, hours=24) -> dict:
             continue
         index = math.floor((when - start) / _ONE_HOUR)
         if 0 <= index < hours:
-            placed[index].append((run_id, run, row))
+            # A drill always ends red; counting it would let a missed dispatch pass as failed-visible.
+            (drills if _is_drill(row) else placed)[index].append((run_id, run, row))
 
     rated = {}  # (city, valid_time) -> set of run ids that wrote it
     for rating in rating_rows:
@@ -165,7 +177,8 @@ def evaluate_window(runs, run_rows, rating_rows, start, hours=24) -> dict:
         entries = sorted(placed[index], key=lambda e: (str(e[1].get("startedAt") or ""), e[0]))
         run_ids = [e[0] for e in entries]
         conclusions = [e[1].get("conclusion") or e[1].get("status") or "unknown" for e in entries]
-        slot_run_ids = set(run_ids)
+        # a drill's rating rows still count: it may have overwritten a good run's rows in the same hour (OD-7)
+        slot_run_ids = set(run_ids) | {e[0] for e in drills[index]}
         successful = [e for e in entries if e[1].get("conclusion") == SUCCESS]
 
         if successful:
@@ -195,6 +208,10 @@ def evaluate_window(runs, run_rows, rating_rows, start, hours=24) -> dict:
         else:
             verdict, note = "missing", "no run"
 
+        if drills[index]:
+            drill_ids = ", ".join(sorted(e[0] for e in drills[index]))
+            note = "; ".join(filter(None, [note, f"fault-drill run {drill_ids} not counted"]))
+
         slots.append({
             "slot": _iso(slot_time),
             "verdict": verdict,
@@ -205,7 +222,7 @@ def evaluate_window(runs, run_rows, rating_rows, start, hours=24) -> dict:
 
     return {
         "slots": slots,
-        "minutes": _minutes_summary([e[1] for entries in placed for e in entries]),
+        "minutes": _minutes_summary([e[1] for group in (placed, drills) for entries in group for e in entries]),
         "passed": all(s["verdict"] not in ("missing", "incomplete") for s in slots),
     }
 
