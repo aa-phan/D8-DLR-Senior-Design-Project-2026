@@ -221,6 +221,8 @@ class FakePostgrest(object):
                  write_mode="revoked", rpc_available=True, require_key=True, latest_override=None,
                  route_overrides=None, table_write_response=None, view_write_response=None,
                  count_override=None, before_request=None):
+        if write_mode not in ("revoked", "rls_only", "open"):
+            raise ValueError("write_mode must be revoked, rls_only or open")
         self.rows = [dict(r) for r in (rows or [])]
         self.key = key
         self.max_rows = max_rows
@@ -336,15 +338,21 @@ class FakePostgrest(object):
 
     # -- reads -------------------------------------------------------------
 
+    @staticmethod
+    def _filter(rows, query):
+        """Rows matching every column filter in the query pairs (repeated filters are ANDed)."""
+        for name, text in query:
+            if name in _RESERVED or "." not in text:
+                continue
+            op, value = text.split(".", 1)
+            rows = [r for r in rows if _matches(r, name, op, value)]
+        return rows
+
     def _read(self, relation, record):
         query = record["query"]
         rows = self.latest_view_rows() if relation == "latest_rating" else [dict(r) for r in self.rows]
         try:
-            for name, text in query:
-                if name in _RESERVED or "." not in text:
-                    continue
-                op, value = text.split(".", 1)
-                rows = [r for r in rows if _matches(r, name, op, value)]
+            rows = self._filter(rows, query)
         except ValueError as exc:
             return 400, {}, {"code": "PGRST100", "message": str(exc)}
         for name, text in query:
@@ -405,5 +413,49 @@ class FakePostgrest(object):
             return 500, {}, dict(_VIEW_NOT_UPDATABLE)
         if self.table_write_response is not None:
             return self.table_write_response[0], {}, self.table_write_response[1]
-        return 401, {}, {"code": "42501", "details": None, "hint": None,
-                         "message": "permission denied for table city_rating"}
+        if self.write_mode == "revoked":
+            return 401, {}, {"code": "42501", "details": None, "hint": None,
+                             "message": "permission denied for table city_rating"}
+        if self.write_mode == "rls_only":
+            if record["method"] == "POST":
+                return 401, {}, {"code": "42501", "details": None, "hint": None,
+                                 "message": "new row violates row-level security policy for table \"city_rating\""}
+            return 200, {}, []  # a grant without a write policy: PATCH and DELETE match nothing and change nothing
+        return self._apply_write(record)
+
+    def _apply_write(self, record):
+        """write_mode "open": the change is applied to the stored rows, as on a misconfigured project."""
+        try:
+            body = json.loads(record["body"]) if record["body"] else None
+            query = record["query"]
+            method = record["method"]
+            prefer = record["headers"].get("prefer", "")
+            if method == "POST":
+                items = body if isinstance(body, list) else [body]
+                upsert = "resolution=merge-duplicates" in prefer
+                done = []
+                for item in items:
+                    key = (item["city"], supabase_rest.parse_ts(item["valid_time"]))
+                    existing = next((r for r in self.rows
+                                     if (r["city"], supabase_rest.parse_ts(r["valid_time"])) == key), None)
+                    if existing is None:
+                        existing = dict(item)
+                        self.rows.append(existing)
+                    elif upsert:
+                        existing.update(item)
+                    else:
+                        return 409, {}, {"code": "23505", "message": "duplicate key value violates unique constraint"}
+                    done.append(dict(existing))
+                status = 201
+            else:
+                matched = self._filter(self.rows, query)
+                if method == "PATCH":
+                    for row in matched:
+                        row.update(body)
+                else:
+                    self.rows = [r for r in self.rows if not any(r is m for m in matched)]
+                done = [dict(r) for r in matched]
+                status = 200
+        except (ValueError, KeyError, TypeError, AttributeError) as exc:
+            return 400, {}, {"code": "PGRST102", "message": "invalid body: %s" % exc}
+        return status, {}, (done if "return=representation" in prefer else None)

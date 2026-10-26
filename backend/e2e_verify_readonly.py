@@ -28,6 +28,40 @@ answer 401, 403, 404 or 406. Any 2xx, even an empty list, fails as "readable by 
 The per-city lines (city, valid_time, age_minutes, is_stale, status, rating_amps,
 is_provisional) are printed so the owner can read the answer, not just the verdict.
 
+--check-writes (OFF by default; E2E-03, OD-6) proves: "trying to add, change or delete data
+with the public key is refused, and the data afterwards is identical."
+
+  snapshot_before            every city_rating row older than the current UTC hour minus one
+                             hour is read (paged past the 1000-row cap, cross-checked against
+                             count=exact) and fingerprinted with SHA-256; with no such row the
+                             check fails as "nothing to prove unchanged" and sends no write
+  write:table_insert         \
+  write:table_upsert          |  the public key tries to INSERT, upsert (on_conflict=city,valid_time,
+  write:table_patch           |  merge-duplicates), PATCH and DELETE on public.city_rating; each
+  write:table_delete         /   must be refused by PRIVILEGE: HTTP 401 or 403, code 42501 and
+                                 "permission denied". Any 2xx fails as "write accepted" (including
+                                 200 with an empty list); 42501 with "row-level security" fails as
+                                 "RLS-only rejection: a write grant is still present"; anything
+                                 else fails as inconclusive
+  write:view_insert          \
+  write:view_patch            |  the same three writes against public.latest_rating pass on any
+  write:view_delete          /   non-2xx answer and fail on any 2xx
+  snapshot_unchanged         the snapshot is read again; the row count and the SHA-256 must be
+                             identical, because a status code alone can pass on a project that
+                             silently changed data
+
+The INSERT body is a complete, constraint-valid copy of a real row at the sentinel key (AUSTIN,
+2000-01-01T00:00:00Z, run_id e2e-03-sentinel), so a wrongly granted INSERT would succeed and be
+caught; the upsert and the PATCH move one old row by +1 A. If any write was accepted or the snapshot
+changed, the script exits 1 and prints a RECOVERY block (the original row, the statement to put it
+back, the sentinel delete) for the OWNER to run on the admin connection. The script itself holds no
+elevated credential and never deletes, restores or retries anything.
+
+Run it with NO backfill load and NO manual past-slot re-run in progress: those are the only
+legitimate writers of rows older than the cutoff. The live hourly upsert (OD-7) writes only its own
+current-hour slot, which is after the cutoff, so it cannot change the snapshot. A "snapshot changed"
+failure with no accepted write names those two benign causes to rule out first.
+
 Exit codes: 0 every check passed, 1 a check failed, 2 SUPABASE_URL or SUPABASE_PUBLISHABLE_KEY
 is missing, or the key is a secret key or a service_role token (no request is made).
 
@@ -40,11 +74,13 @@ Nothing here is run against the live project by the build; that is the owner's s
 """
 
 import argparse
+import hashlib
 import json
 import math
 import os
 import sys
 from collections import namedtuple
+from datetime import datetime, timedelta, timezone
 
 import config
 import latest_rating_contract
@@ -56,6 +92,12 @@ EXPECTED_CITIES = config.LOCATIONS
 HIDDEN_TARGETS = (("public", "pipeline_run"), ("ops", "freshness_log"))
 HIDDEN_OK_STATUSES = (401, 403, 404, 406)
 KEYLESS_OK_STATUSES = (401, 403)
+
+# E2E-03: the sentinel key sits in the year 2000, never the latest slot of any city.
+SENTINEL_CITY = "AUSTIN"
+SENTINEL_VALID_TIME = "2000-01-01T00:00:00Z"
+SENTINEL_RUN_ID = "e2e-03-sentinel"
+WRITE_PREFER = "return=representation"
 
 
 # ---------------------------------------------------------------------------
@@ -287,8 +329,192 @@ def check_hidden(cfg, opener=None, now=None, lines=None, attempts=None):
     return results
 
 
-CHECKS = {"read": check_read, "hidden": check_hidden}
-DEFAULT_CHECKS = ("read", "hidden")
+# ---------------------------------------------------------------------------
+# --check-writes (E2E-03)
+# ---------------------------------------------------------------------------
+
+Snapshot = namedtuple("Snapshot", ["count", "digest", "target"])
+
+
+class SnapshotError(RuntimeError):
+    """The snapshot could not be read or does not add up. The message is redacted."""
+
+
+def snapshot(cfg, cutoff, opener=None):
+    """
+    Count, SHA-256 and first row of every city_rating row with valid_time before `cutoff` (an ISO
+    string). Paged past the server's row cap and cross-checked against `count=exact`; raises
+    SnapshotError when they disagree or a request fails. The digest is taken over the canonical JSON
+    of all rows ordered by (city, valid_time), so any changed value, added row or removed row moves it.
+    """
+    params = [("select", "*"), ("valid_time", "lt." + cutoff)]
+    try:
+        rows = supabase_rest.get_all(cfg, "city_rating", params, "city.asc,valid_time.asc", opener=opener)
+        total = supabase_rest.count_exact(cfg, "city_rating", params, opener=opener)
+    except supabase_rest.RestError as exc:
+        raise SnapshotError("could not read the snapshot: %s" % _fail_text(exc, cfg))
+    if total != len(rows):
+        raise SnapshotError("snapshot is not consistent: count=exact reports %d rows but %d were fetched"
+                            % (total, len(rows)))
+    canonical = json.dumps(rows, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return Snapshot(count=len(rows), digest=digest, target=rows[0] if rows else None)
+
+
+def _body_of(response):
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    return body if isinstance(body, dict) else None
+
+
+def _classify_table_write(response):
+    """(ok, detail, code) for a write to public.city_rating: only a privilege-layer refusal passes."""
+    status = response.status
+    body = _body_of(response) or {}
+    code = body.get("code") if isinstance(body.get("code"), str) else None
+    message = str(body.get("message") or "").lower()
+    if 200 <= status < 300:
+        return False, "write accepted (HTTP %d)" % status, code
+    if code == "42501" and status in (401, 403):
+        if "row-level security" in message:
+            return (False, "RLS-only rejection: a write grant is still present (HTTP %d 42501, %s)"
+                    % (status, "row-level security"), code)
+        if "permission denied" in message:
+            return True, "refused by privilege (HTTP %d 42501 permission denied)" % status, code
+    return False, "inconclusive: HTTP %d, code %s" % (status, code), code
+
+
+def _classify_view_write(response):
+    status = response.status
+    body = _body_of(response) or {}
+    code = body.get("code") if isinstance(body.get("code"), str) else None
+    if 200 <= status < 300:
+        return False, "write accepted (HTTP %d)" % status, code
+    return True, "refused (HTTP %d)" % status, code
+
+
+def _sql_literal(value):
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def _recovery_lines(target, accepted, changed):
+    """The owner's recovery steps. Printed, never executed."""
+    city, valid_time = target.get("city"), target.get("valid_time")
+    reasons = []
+    if accepted:
+        reasons.append("accepted writes: " + ", ".join(accepted))
+    if changed:
+        reasons.append("the snapshot changed or could not be re-read")
+    return [
+        "RECOVERY (owner only, on the admin connection; this script executed none of these statements)",
+        "  Why: " + "; ".join(reasons),
+        "  1. Restore the original value of the target row:",
+        "     update public.city_rating set rating_amps = %r where city = %s and valid_time = %s;" % (
+            target.get("rating_amps"), _sql_literal(city), _sql_literal(valid_time)),
+        "  2. If the target row was deleted, put it back from this copy of its original values:",
+        "     " + json.dumps(target, sort_keys=True),
+        "  3. Remove the sentinel row:",
+        "     delete from public.city_rating where city = %s and valid_time = %s;" % (
+            _sql_literal(SENTINEL_CITY), _sql_literal(SENTINEL_VALID_TIME)),
+        "  4. Remove the grant that let the write through, then run --check-writes again:",
+        "     revoke insert, update, delete, truncate on public.city_rating, public.latest_rating"
+        " from anon, authenticated;",
+    ]
+
+
+def _write_specs(target):
+    """The seven attempts, in order: (name, kind, method, path, params, extra headers, body)."""
+    amps = target["rating_amps"] + 1.0
+    sentinel = dict(target, city=SENTINEL_CITY, valid_time=SENTINEL_VALID_TIME, run_id=SENTINEL_RUN_ID)
+    bumped = dict(target, rating_amps=amps)
+    # The view writes name the same OLD row, which the view never shows, so even a view that became
+    # updatable could not change a current rating.
+    key_filter = [("city", "eq." + str(target["city"])), ("valid_time", "eq." + str(target["valid_time"]))]
+    prefer = {"Prefer": WRITE_PREFER}
+    merge = {"Prefer": "resolution=merge-duplicates," + WRITE_PREFER}
+    view_sentinel = {c: sentinel.get(c) for c in latest_rating_contract.STORED_COLUMNS}
+    return [
+        ("table_insert", "table", "POST", "city_rating", None, prefer, sentinel),
+        ("table_upsert", "table", "POST", "city_rating", [("on_conflict", "city,valid_time")], merge, [bumped]),
+        ("table_patch", "table", "PATCH", "city_rating", key_filter, prefer, {"rating_amps": amps}),
+        ("table_delete", "table", "DELETE", "city_rating", key_filter, prefer, None),
+        ("view_insert", "view", "POST", "latest_rating", None, prefer, view_sentinel),
+        ("view_patch", "view", "PATCH", "latest_rating", key_filter, prefer, {"rating_amps": amps}),
+        ("view_delete", "view", "DELETE", "latest_rating", key_filter, prefer, None),
+    ]
+
+
+def check_writes(cfg, opener=None, now=None, lines=None, attempts=None):
+    """
+    E2E-03: the public key cannot write, and the data is provably unchanged. Sends write attempts
+    with the publishable key only, classifies each, and compares a before and after snapshot of
+    every row older than the cutoff. `lines` collects the RECOVERY block; `attempts` collects one
+    record per attempt for the evidence file.
+    """
+    results = []
+    now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    cutoff_time = now.replace(minute=0, second=0, microsecond=0) - timedelta(hours=1)
+    cutoff = cutoff_time.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    try:
+        before = snapshot(cfg, cutoff, opener=opener)
+    except SnapshotError as exc:
+        return [CheckResult("snapshot_before", False, str(exc))]
+    if before.count == 0:
+        return [CheckResult(
+            "snapshot_before", False,
+            "nothing to prove unchanged: no city_rating row is older than %s, so a write could not be shown "
+            "to leave the data unchanged; no write was sent" % cutoff)]
+    target = before.target
+    if not _is_number(target.get("rating_amps")) or not target.get("city") or not target.get("valid_time"):
+        return [CheckResult("snapshot_before", False, "the first stored row has no usable city, valid_time and rating_amps; no write was sent")]
+    results.append(CheckResult("snapshot_before", True, "%d rows older than the cutoff, sha256 %s"
+                               % (before.count, before.digest[:12])))
+
+    accepted = []
+    for name, kind, method, path, params, extra, body in _write_specs(target):
+        try:
+            response = supabase_rest.request(cfg, method, path, params, headers=extra, body=body, opener=opener)
+        except supabase_rest.RestError as exc:
+            ok, detail, code, status = False, "request failed: %s" % _fail_text(exc, cfg), None, None
+        else:
+            status = response.status
+            ok, detail, code = (_classify_table_write if kind == "table" else _classify_view_write)(response)
+        if detail.startswith("write accepted"):
+            accepted.append(name)
+        results.append(CheckResult("write:" + name, ok, detail))
+        if attempts is not None:
+            attempts.append({"name": name, "method": method, "path": path, "status": status, "code": code,
+                             "verdict": "pass" if ok else "fail"})
+
+    changed = False
+    try:
+        after = snapshot(cfg, cutoff, opener=opener)
+    except SnapshotError as exc:
+        changed = True
+        results.append(CheckResult("snapshot_unchanged", False, "could not re-read the snapshot: %s" % exc))
+    else:
+        if (after.count, after.digest) == (before.count, before.digest):
+            results.append(CheckResult("snapshot_unchanged", True, "%d rows, sha256 %s identical before and after"
+                                       % (after.count, after.digest[:12])))
+        else:
+            changed = True
+            detail = "snapshot changed: %d rows -> %d rows, sha256 %s -> %s." % (
+                before.count, after.count, before.digest[:12], after.digest[:12])
+            if not accepted:
+                detail += (" No write was accepted above, so first confirm that no backfill load and no manual "
+                           "past-slot re-run ran during the check before treating this as a write-protection failure.")
+            results.append(CheckResult("snapshot_unchanged", False, detail))
+    if (accepted or changed) and lines is not None:
+        lines.extend(_recovery_lines(target, accepted, changed))
+    return results
+
+
+CHECKS = {"read": check_read, "hidden": check_hidden, "writes": check_writes}
+DEFAULT_CHECKS = ("read", "hidden")  # writes only when --check-writes is given
+LINES_AFTER_RESULTS = ("writes",)  # the RECOVERY block follows the verdicts; the city lines precede them
 
 
 # ---------------------------------------------------------------------------
@@ -320,6 +546,8 @@ def main(argv=None, opener=None, now=None):
     parser = argparse.ArgumentParser(description="Check the public REST interface as a consumer (read-only).")
     parser.add_argument("--check-read", action="store_true", help="the latest_rating read contract")
     parser.add_argument("--check-hidden", action="store_true", help="the private tables are not readable")
+    parser.add_argument("--check-writes", action="store_true",
+                        help="the public key cannot write and the data is unchanged (sends write attempts)")
     parser.add_argument("--json-out", default=None, help="write the check results JSON here")
     args = parser.parse_args(argv)
     selected = [name for name in CHECKS if getattr(args, "check_%s" % name, False)]
@@ -337,11 +565,11 @@ def main(argv=None, opener=None, now=None):
     for name in selected:
         lines = []
         group = CHECKS[name](cfg, opener=opener, now=now, lines=lines, attempts=attempts)
-        for line in lines:
-            print(supabase_rest.redact_rest(line, cfg, limit=None))
-        for result in group:
-            print(supabase_rest.redact_rest(
-                "%s %s: %s" % ("PASS" if result.ok else "FAIL", result.name, result.detail), cfg, limit=None))
+        verdicts = [supabase_rest.redact_rest(
+            "%s %s: %s" % ("PASS" if r.ok else "FAIL", r.name, r.detail), cfg, limit=None) for r in group]
+        extra = [supabase_rest.redact_rest(line, cfg, limit=None) for line in lines]
+        for line in (verdicts + extra if name in LINES_AFTER_RESULTS else extra + verdicts):
+            print(line)
         results.extend(group)
 
     failed = [r.name for r in results if not r.ok]

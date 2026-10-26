@@ -402,3 +402,255 @@ def test_latest_columns_come_from_the_contract(monkeypatch):
     with _fake() as fake:
         results = ev.check_read(_cfg(fake))
     assert any(r.name == "latest_rating_columns" and not r.ok and "brand_new_column" in r.detail for r in results)
+
+
+# ---------------------------------------------------------------------------
+# E2E-03: anon writes are refused and the data is provably unchanged
+# ---------------------------------------------------------------------------
+
+CUTOFF = "2026-10-26T11:00:00"  # NOW floored to the hour (12:00) minus one hour
+TABLE_ATTEMPTS = ["write:table_insert", "write:table_upsert", "write:table_patch", "write:table_delete"]
+VIEW_ATTEMPTS = ["write:view_insert", "write:view_patch", "write:view_delete"]
+
+
+def _write_rows(newest=NEWEST, slots=6):
+    """Four cities x six hourly slots; every slot older than 11:00Z is before the cutoff."""
+    return make_rating_rows(slots, newest=newest)
+
+
+def _before_cutoff(rows):
+    return sorted((r for r in rows if r["valid_time"] < CUTOFF), key=lambda r: (r["city"], r["valid_time"]))
+
+
+def _by_name(results):
+    return {r.name: r for r in results}
+
+
+def _write_requests(fake):
+    return [r for r in fake.requests if r["method"] != "GET"]
+
+
+def _rows_snapshot(fake):
+    return json.dumps(fake.rows, sort_keys=True)
+
+
+def test_check_writes_passes_when_writes_are_refused_by_privilege():
+    with _fake(rows=_write_rows(), write_mode="revoked") as fake:
+        before = _rows_snapshot(fake)
+        results = ev.check_writes(_cfg(fake), now=NOW)
+        after = _rows_snapshot(fake)
+        writes = _write_requests(fake)
+    assert all(r.ok for r in results), results
+    names = [r.name for r in results]
+    assert set(TABLE_ATTEMPTS + VIEW_ATTEMPTS + ["snapshot_before", "snapshot_unchanged"]) <= set(names)
+    assert before == after
+    assert [(w["method"], w["path"].rsplit("/", 1)[1]) for w in writes] == [
+        ("POST", "city_rating"), ("POST", "city_rating"), ("PATCH", "city_rating"), ("DELETE", "city_rating"),
+        ("POST", "latest_rating"), ("PATCH", "latest_rating"), ("DELETE", "latest_rating")]
+    assert "refused by privilege" in _by_name(results)["write:table_insert"].detail
+
+
+def test_rls_only_rejection_fails(monkeypatch, capsys):
+    with _fake(rows=_write_rows(), write_mode="rls_only") as fake:
+        results = _by_name(ev.check_writes(_cfg(fake), now=NOW))
+        _set_env(monkeypatch, fake)
+        assert ev.main(["--check-writes"], now=NOW) == 1
+    insert = results["write:table_insert"]
+    assert not insert.ok and "RLS-only" in insert.detail and "a write grant is still present" in insert.detail
+    for name in ("write:table_patch", "write:table_delete"):
+        assert not results[name].ok and "write accepted" in results[name].detail
+    assert all(results[name].ok for name in VIEW_ATTEMPTS)
+    assert results["snapshot_unchanged"].ok  # nothing changed, yet the grants are wrong: the verdict is the attempts
+    assert "write:table_patch" in capsys.readouterr().out
+
+
+def test_accepted_writes_fail_and_print_recovery(monkeypatch, capsys, tmp_path):
+    rows = _write_rows()
+    target = _before_cutoff(rows)[0]
+    out = tmp_path / "evidence.json"
+    with _fake(rows=rows, write_mode="open") as fake:
+        _set_env(monkeypatch, fake)
+        code = ev.main(["--check-writes", "--json-out", str(out)], now=NOW)
+    text = capsys.readouterr().out
+    assert code == 1
+    assert "RECOVERY" in text
+    assert target["city"] in text and target["valid_time"] in text
+    assert "2000-01-01T00:00:00Z" in text and "delete from public.city_rating" in text
+    report = json.loads(out.read_text(encoding="utf-8"))
+    verdicts = {c["name"]: c for c in report["checks"]}
+    for name in TABLE_ATTEMPTS:
+        assert not verdicts[name]["ok"] and "write accepted" in verdicts[name]["detail"]
+    assert not verdicts["snapshot_unchanged"]["ok"] and "snapshot changed" in verdicts["snapshot_unchanged"]["detail"]
+
+
+def test_constraint_rejection_is_inconclusive():
+    body = {"code": "23502", "message": "null value in column \"rating_amps\" violates not-null constraint"}
+    with _fake(rows=_write_rows(), table_write_response=(400, body)) as fake:
+        results = _by_name(ev.check_writes(_cfg(fake), now=NOW))
+    for name in TABLE_ATTEMPTS:
+        assert not results[name].ok and "inconclusive" in results[name].detail
+    assert all(results[name].ok for name in VIEW_ATTEMPTS)
+
+
+def test_403_permission_denied_passes_like_401():
+    body = {"code": "42501", "message": "permission denied for table city_rating"}
+    with _fake(rows=_write_rows(), table_write_response=(403, body)) as fake:
+        results = ev.check_writes(_cfg(fake), now=NOW)
+    assert all(r.ok for r in results), results
+
+
+@pytest.mark.parametrize("status,expect_ok", [(401, True), (500, True), (405, True), (200, False), (201, False)])
+def test_view_write_verdicts(status, expect_ok):
+    with _fake(rows=_write_rows(), view_write_response=(status, {"message": "x"} if status >= 400 else [])) as fake:
+        results = _by_name(ev.check_writes(_cfg(fake), now=NOW))
+    for name in VIEW_ATTEMPTS:
+        assert results[name].ok is expect_ok, results[name]
+        if not expect_ok:
+            assert "write accepted" in results[name].detail
+    assert all(results[name].ok for name in TABLE_ATTEMPTS)
+
+
+def test_rows_after_the_cutoff_do_not_break_the_snapshot():
+    rows = make_rating_rows(6, newest=NEWEST - timedelta(hours=1))  # 11:00 and older; nothing at 12:00 yet
+    live_upsert = make_rating_rows(1, newest=NEWEST, cities=("AUSTIN",))  # the current-hour slot (OD-7)
+
+    def hook(fake, record):
+        if record["method"] != "GET" and not getattr(fake, "_hooked", False):
+            fake._hooked = True
+            fake.rows.extend(live_upsert)
+
+    with _fake(rows=rows, before_request=hook) as fake:
+        results = ev.check_writes(_cfg(fake), now=NOW)
+        assert len(fake.rows) == len(rows) + 1
+    assert all(r.ok for r in results), results
+
+
+def test_change_before_the_cutoff_fails():
+    def hook(fake, record):
+        if record["method"] != "GET" and not getattr(fake, "_hooked", False):
+            fake._hooked = True
+            _before_cutoff(fake.rows)[-1]["rating_amps"] += 5.0
+
+    lines = []
+    with _fake(rows=_write_rows(), before_request=hook) as fake:
+        results = _by_name(ev.check_writes(_cfg(fake), now=NOW, lines=lines))
+    changed = results["snapshot_unchanged"]
+    assert not changed.ok and "snapshot changed" in changed.detail
+    assert "backfill load" in changed.detail and "manual past-slot re-run" in changed.detail
+    assert any("RECOVERY" in line for line in lines)
+
+
+@pytest.mark.parametrize("label,rows", [
+    ("no_rows_at_all", []),
+    ("only_rows_after_the_cutoff", make_rating_rows(2, newest=NEWEST)),  # 12:00 and 11:00: neither is before 11:00
+])
+def test_empty_table_fails_without_writing(label, rows):
+    with _fake(rows=rows) as fake:
+        results = ev.check_writes(_cfg(fake), now=NOW)
+        assert _write_requests(fake) == []
+    assert len(results) == 1 and not results[0].ok
+    assert "nothing to prove unchanged" in results[0].detail
+
+
+def test_check_writes_is_idempotent():
+    with _fake(rows=_write_rows(), write_mode="revoked") as fake:
+        start = _rows_snapshot(fake)
+        first = ev.check_writes(_cfg(fake), now=NOW)
+        second = ev.check_writes(_cfg(fake), now=NOW)
+        assert _rows_snapshot(fake) == start
+        deletes = [w for w in _write_requests(fake) if w["method"] == "DELETE"]
+    assert [tuple(r) for r in first] == [tuple(r) for r in second]
+    assert all(r.ok for r in first)
+    assert len(deletes) == 4  # two attempts per run, two runs; the script retries nothing itself
+
+
+def test_snapshot_pages_and_cross_checks_the_count():
+    rows = make_rating_rows(625, newest=NEWEST)  # 2500 rows
+    old = [r for r in rows if r["valid_time"] < CUTOFF]
+    assert 2000 < len(old) < 2500
+    with _fake(rows=rows, max_rows=1000) as fake:
+        snap = ev.snapshot(_cfg(fake), "2026-10-26T11:00:00Z")
+        pages = [dict(r["query"]).get("offset") for r in fake.requests if "offset" in dict(r["query"])]
+    first = min(old, key=lambda r: (r["city"], r["valid_time"]))
+    assert snap.count == len(old)
+    assert (snap.target["city"], snap.target["valid_time"]) == (first["city"], first["valid_time"])
+    assert pages == ["0", "1000", "2000", str(len(old))]
+    assert len(snap.digest) == 64
+    with _fake(rows=rows, max_rows=1000, count_override=len(old) - 1) as fake:
+        with pytest.raises(ev.SnapshotError):
+            ev.snapshot(_cfg(fake), "2026-10-26T11:00:00Z")
+        results = ev.check_writes(_cfg(fake), now=NOW)
+        assert _write_requests(fake) == []
+    assert len(results) == 1 and not results[0].ok and "count=exact" in results[0].detail
+
+
+def test_write_requests_headers_and_insert_body():
+    rows = _write_rows()
+    target = _before_cutoff(rows)[0]
+    with _fake(rows=rows) as fake:
+        ev.check_writes(_cfg(fake), now=NOW)
+        writes = _write_requests(fake)
+        everything = list(fake.requests)
+    assert len(writes) == 7
+    for record in everything:
+        assert record["headers"]["apikey"] == KEY and "authorization" not in record["headers"]
+    for record in writes:
+        assert "return=representation" in record["headers"]["prefer"]
+    insert, upsert, patch, delete, view_insert, view_patch, view_delete = writes
+    body = json.loads(insert["body"])
+    assert set(body) == set(target)
+    assert body["city"] == "AUSTIN" and body["valid_time"] == "2000-01-01T00:00:00Z"
+    assert body["run_id"] == "e2e-03-sentinel"
+    assert dict(upsert["query"])["on_conflict"] == "city,valid_time"
+    assert "resolution=merge-duplicates" in upsert["headers"]["prefer"]
+    merged = json.loads(upsert["body"])
+    assert isinstance(merged, list) and merged[0]["rating_amps"] == target["rating_amps"] + 1.0
+    assert merged[0]["city"] == target["city"] and merged[0]["valid_time"] == target["valid_time"]
+    for record in (patch, delete):
+        filters = dict(record["query"])
+        assert filters["city"] == "eq." + target["city"] and filters["valid_time"] == "eq." + target["valid_time"]
+    assert json.loads(patch["body"]) == {"rating_amps": target["rating_amps"] + 1.0}
+    assert list(json.loads(view_insert["body"])) == list(contract.STORED_COLUMNS)
+    for record in (view_patch, view_delete):
+        assert dict(record["query"])["city"] == "eq." + target["city"]
+
+
+def test_writes_json_out_has_no_url_or_key(tmp_path, monkeypatch, capsys):
+    import urllib.request
+
+    out = tmp_path / "evidence.json"
+    with _fake(rows=_write_rows(), key=OTHER_KEY) as fake:
+        monkeypatch.setenv(rest.ENV_URL, URL)
+        monkeypatch.setenv(rest.ENV_KEY, OTHER_KEY)
+
+        def redirect_to_fake(request, timeout=None):
+            moved = urllib.request.Request(request.full_url.replace(URL, fake.url), data=request.data,
+                                           headers=dict(request.header_items()), method=request.get_method())
+            return urllib.request.urlopen(moved, timeout=timeout)
+
+        code = ev.main(["--check-writes", "--json-out", str(out)], opener=redirect_to_fake, now=NOW)
+    captured = capsys.readouterr()
+    assert code == 0, captured.out
+    text = out.read_text(encoding="utf-8")
+    for blob in (text, captured.out, captured.err):
+        assert not any(s in blob for s in (URL, HOST, REF, OTHER_KEY)), blob
+    report = json.loads(text)
+    assert [a["name"] for a in report["attempts"]] == [n.split(":", 1)[1] for n in TABLE_ATTEMPTS + VIEW_ATTEMPTS]
+    for attempt in report["attempts"]:
+        assert set(attempt) == {"name", "method", "path", "status", "code", "verdict"}
+        assert attempt["path"] in ("city_rating", "latest_rating") and attempt["verdict"] == "pass"
+
+
+@pytest.mark.parametrize("age,is_stale,expect_ok", [
+    (90, False, True),   # exactly 90 minutes is fresh (OD-4)
+    (91, True, True),
+    (90, True, False),
+    (91, False, False),
+])
+def test_stale_flag_boundary_is_strictly_more_than_90(age, is_stale, expect_ok):
+    def mutate(rows):
+        rows[0].update(age_minutes=age, is_stale=is_stale)
+
+    with _fake(latest_override=_latest_with(mutate)) as fake:
+        flags = next(r for r in ev.check_read(_cfg(fake)) if r.name == "latest_rating_flags")
+    assert flags.ok is expect_ok, flags
