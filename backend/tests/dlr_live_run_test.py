@@ -502,17 +502,40 @@ def test_step_summary_lists_cities_in_order_with_redacted_errors(tmp_path, monke
     assert "dummy-synoptic_token" not in text  # the crash text echoed the token; it is redacted
     assert json.loads(out_json.read_text())["exit_code"] == 1
 
-    # a long error is cut to 120 characters and its pipes are escaped, whatever the child printed
+    # a long error is cut to its last 120 characters and its pipes are escaped, whatever the child printed
     run = {"run_id": "r1", "run_attempt": 1, "slot": "2025-06-01T10:00:00Z", "cities": [
         {"city": "AUSTIN", "outcome": "error", "rating_a": None, "fallback": None, "written": False,
          "forecast_status": "not_run", "detector_model_loaded": False, "fault_injected": True,
-         "error": "a|b " + "z" * 400 + " " + _db_url()}]}
+         "error": "head-marker " + "z" * 400 + " a|b " + _db_url()}]}
     other = tmp_path / "other.md"
     dlr_live_run.write_step_summary(run, str(other), env={"SUPABASE_DB_URL": _db_url()})
     row = next(line for line in other.read_text().splitlines() if line.startswith("| AUSTIN"))
     cell = row.rstrip().removesuffix(" |").split(" | ")[-1].strip()
     assert "a\\|b" in cell and "pw-secret-1" not in cell
     assert len(cell.replace("\\|", "|")) <= 120
+    assert "head-marker" not in cell
+
+
+def test_step_summary_error_cell_shows_the_exception_line_of_a_traceback(tmp_path):
+    # WR-01: the reason is the LAST line of a traceback; the cell must not cut it off
+    traceback_text = (
+        "Traceback (most recent call last):\n"
+        '  File "/work/backend/dlr_orchestrator.py", line 411, in <module>\n'
+        "    main()\n"
+        '  File "/work/backend/dlr_orchestrator.py", line 300, in main\n'
+        "    token = _require_token()\n"
+        "OSError: Set SYNOPTIC_TOKEN in .env before running"
+    )
+    run = {"run_id": "r1", "run_attempt": 1, "slot": "2025-06-01T10:00:00Z", "cities": [
+        {"city": "AUSTIN", "outcome": "error", "rating_a": None, "fallback": None, "written": False,
+         "forecast_status": "not_run", "detector_model_loaded": False, "fault_injected": True,
+         "error": traceback_text}]}
+    path = tmp_path / "summary.md"
+    dlr_live_run.write_step_summary(run, str(path), env={})
+    row = next(line for line in path.read_text().splitlines() if line.startswith("| AUSTIN"))
+    cell = row.rstrip().removesuffix(" |").split(" | ")[-1].strip()
+    assert cell.endswith("OSError: Set SYNOPTIC_TOKEN in .env before running")
+    assert len(cell) <= 120
 
 
 # ──────────────────────────────────────────────────────────────────────────────

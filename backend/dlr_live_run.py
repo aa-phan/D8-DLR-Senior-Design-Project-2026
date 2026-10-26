@@ -415,8 +415,14 @@ def run_live(cities=None, end=None, fault_city="", timeout_s=CITY_TIMEOUT_S, env
 
 
 def _cell(text, limit=_SUMMARY_ERROR_CHARS) -> str:
-    """A markdown table cell: one line, cut to `limit` characters, pipes escaped."""
-    flat = " ".join(str(text).split())[:limit]
+    """
+    A markdown table cell: one line, cut to `limit` characters, pipes escaped. A longer
+    text keeps its END behind a "..." marker: for a crash traceback the exception
+    line is the last one, and the head is only the frame that raised it.
+    """
+    flat = " ".join(str(text).split())
+    if len(flat) > limit:
+        flat = "..." + flat[-(limit - 3):]
     return flat.replace("|", "\\|")
 
 
@@ -424,7 +430,8 @@ def write_step_summary(run, path, env=None) -> None:
     """
     Append the run to the Actions step summary: a heading, one table row per
     city, in run order, and a `pipeline_run: N writes, M failed` line. The error
-    column is redacted, cut to 120 characters and has its pipes escaped.
+    column is redacted, cut to its last 120 characters (the exception line of a
+    traceback comes last) and has its pipes escaped.
     """
     lines = [
         f"## DLR live run {run['run_id']} attempt {run['run_attempt']} (slot {run['slot']})",
