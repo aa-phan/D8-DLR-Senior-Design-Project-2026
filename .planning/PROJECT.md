@@ -85,6 +85,7 @@ ethical commitment, not a nice-to-have).
 - ✓ WX-07: `PIPELINE_SCHEMA` v3 extended with per-field provenance columns (`wind_source`, `temp_source`, `humidity_source`, `solar_source`) — v1.1 (Phase 6)
 - ✓ WX-08: `PRD.md` §7.1 and `data_provider.md` ratified to record the shipped per-variable composition, resolving the "Pending" status and the System Design Report's self-flagged discrepancy — v1.1 (Phase 10)
 - ✓ DB-01..DB-06: Postgres on Supabase is the production system of record for per-city ratings — two committed migrations (`city_rating`, `pipeline_run`, `dlr_writer` role, RLS; UTC-evaluated hour check), `--store postgres` pipeline path reading history from and upserting to Postgres, Phase 3 backfill loaded (504 rows per city, parity checked), writer secret only in `.env`/GitHub secrets with redaction on every log and report path, consumer contract `docs/data-science/schema/city_rating_v1.md`, per-row config/model identity — production-pipeline Phase 4 (all 19 code-review findings fixed; live smoke on the real project and GitHub Actions run 40035268724)
+- ✓ PIPE-02, SCHED-01, SCHED-02: Ratings accrue in Supabase hourly with no human involved — dispatch-only `dlr_live.yml` triggered by cron-job.org at hh:05 UTC, one orchestrator child per city with a 300 s kill and a per-run `pipeline_run` row, SHA-256-checked committed models, fault drill isolated to one city, runbook with measured Actions minutes (free while the repository is public) — production-pipeline Phase 5 (24/24 slot window passed; 14 code-review findings dispositioned, 0 open)
 
 ### Active
 
@@ -199,4 +200,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-10-24 after production-pipeline Phase 4*
+*Last updated: 2026-10-26 after production-pipeline Phase 5*

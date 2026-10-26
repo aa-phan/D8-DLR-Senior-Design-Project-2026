@@ -47,7 +47,7 @@ infrastructure was replaced on 2026-10-21; see "Re-sequencing" above.)
 - [x] **Phase 2: Data Cleaning** — cross-row outlier, gap and duplicate handling on city history (completed 2026-10-20)
 - [x] **Phase 3: Real-Data Validation** — ratings and calibration on backfilled data; production go/no-go (completed 2026-10-21)
 - [x] **Phase 4: Supabase Store & Writer** — schema migration, Postgres read/write, backfill load, secrets (completed 2026-10-24)
-- [ ] **Phase 5: Scheduled Live Runs** — new workflow, cron-job.org trigger, failure isolation, runbook
+- [x] **Phase 5: Scheduled Live Runs** — new workflow, cron-job.org trigger, failure isolation, runbook (completed 2026-10-26)
 - [ ] **Phase 6: Exposure & E2E Verification** — REST via RLS, `latest_rating` view, soak test
 - [ ] **Phase 7: Per-City Conductors, Shadow Refit and Early Model Selection** — protocol v4, per-city conductor configs, cooling/reference refit, selection by 2026-11-01, re-validation and go/no-go (parallel with 4-6)
 
@@ -201,7 +201,7 @@ conductor configs, refit models or forecast method later is a config/model swap,
      recorded.
   4. The runbook covers the cron-job.org setup, pausing, changing cadence, and Actions-minute
      budget.
-**Plans:** 8/8 plans executed
+**Plans:** 8/8 plans complete
 
 Plans:
 - [x] 05-01-PLAN.md — Live runner (one orchestrator child per city, timeouts, exit policy, fault drill) and dispatch-only `dlr_live.yml` (tracer)
@@ -373,6 +373,6 @@ instant and 07-14 waits for 07-12.
 | 2. Data Cleaning | 4/4 | Complete    | 2026-10-20 |
 | 3. Real-Data Validation | 5/5 | Complete    | 2026-10-21 |
 | 4. Supabase Store & Writer | 12/12 | Complete    | 2026-10-24 |
-| 5. Scheduled Live Runs | 8/8 | In Progress | - |
+| 5. Scheduled Live Runs | 8/8 | Complete    | 2026-10-26 |
 | 6. Exposure & E2E Verification | 0/13 | Planned | - |
 | 7. Per-City Conductors, Shadow Refit and Early Model Selection | 0/19 | Planned | - |

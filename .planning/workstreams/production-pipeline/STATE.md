@@ -1,23 +1,23 @@
 ---
 gsd_state_version: "1.0"
-current_phase: 05
-current_plan: 8
+current_phase: 06 — Exposure & E2E Verification
+current_plan: Not started
 status: executing
-stopped_at: Completed 05-08-PLAN.md
-last_updated: "2026-10-26T16:16:31.643Z"
+stopped_at: Phase 5 complete, ready to execute Phase 06
+last_updated: "2026-10-26T18:48:39.006Z"
 last_activity: 2026-10-26
-last_activity_desc: Phase 07 planning complete — 19 plans ready
-state_head: e86d88a0ed175475d9838444cd370f9fa064e9fe
+last_activity_desc: Phase 5 complete, transitioned to Phase 06
+state_head: 20038294a06c2509f109517a44a7f2661a0f891a
 progress:
   total_phases: 7
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 66
   completed_plans: 34
-  percent: 52
+  percent: 71
 milestone_name: Production Pipeline (Supabase + live ratings)
 workstream: production-pipeline
 created: 2026-10-18
-current_phase_name: Per-City Conductors, Shadow Refit and Early Model Selection
+current_phase_name: Exposure & E2E Verification
 ---
 
 # Project State
@@ -36,11 +36,11 @@ whoever owns that analysis; they are not work items here.
 ## Current Position
 
 **Status:** Ready to execute
-**Current Phase:** 05
-**Current Plan:** 8
-**Total Plans in Phase:** 19
-**Last Activity:** 2026-10-26 — Plan 05-08 complete
-**Last Activity Description:** Phase 07 planning complete — 19 plans ready
+**Current Phase:** 06 — Exposure & E2E Verification
+**Current Plan:** Not started
+**Total Plans in Phase:** 13
+**Last Activity:** 2026-10-26
+**Last Activity Description:** Phase 5 complete, transitioned to Phase 06
 
 ## Planning Summary (2026-10-19)
 
@@ -170,6 +170,7 @@ These block or affect stringing the system together and belong to the phases nam
 - [Phase 05]: 05-06: owner chose go-live after making the repository public (free Actions minutes); anon-refusal check T-05-29 recorded as skipped
 - [Phase 05]: 05-07: window start for 05-08 is run 40145300072 (2026-10-25T00:05:05Z, slot 00:00); owner test run 40144431987 counted as manual — First dispatch within 5 min after an hh:05 boundary; drill run 40146481713 overwrote three 00:00 slot rows (OD-7)
 - [Phase 05]: 05-08: owner signed off the 24 h window (24 of 24 slots ok) and the budget with approve-push; main pushed fast-forward 702a833..d71c501 — Measured live 2,880 + shadow 600 min per 30 days exceeds 2,000 included on a private basis; moot while the repository is public. Next scheduled run 40272358123 green in environment production on the pushed SHA; repository-level SUPABASE_DB_URL secret now safe to delete (owner action)
+- [Phase 05]: close-out 2026-10-26: UAT 2/2 (billing flat since public, cron-job.org matches runbook), 05-VALIDATION nyquist_compliant, 05-SECURITY threats_open 0 (T-05-20 acceptance re-grounded on content, not privacy, after the repo went public), re-verification passed after the review fixes (14 findings, 0 open; IN-08 won't-fix)
 
 ## Open Decisions
 
@@ -193,9 +194,9 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 
 ## Session Continuity
 
-**Last session:** 2026-10-26T05:11:05.435Z
+**Last session:** 2026-10-26T18:50:00Z
 
-**Stopped At:** Completed 05-08-PLAN.md
+**Stopped At:** Phase 5 complete, ready to execute Phase 06
 **Resume File:** None
 
 ## Performance Metrics
