@@ -47,10 +47,15 @@ custom API server; dashboard or PSS/E-side code; analysing rating values.
   the same rule as `assert_fresh` and the soak log). This covers OD-9: a city that fails keeps
   showing its last good row, and these columns tell consumers it is old. `rpc/assert_fresh` stays
   as planned for the alarm. — **Reversibility:** one-way — part of the published column contract.
-- **D-03:** The view adds an `is_provisional` boolean derived from `rating_basis` (live rows start
-  with `PROVISIONAL (OD-5)`, see `docs/data-science/schema/city_rating_v1.md`), so consumers
+- **D-03:** The view adds an `is_provisional` boolean, true when the word "provisional"
+  (case-insensitive) appears in `rating_basis` OR `config_version` (both NOT NULL), so consumers
   branch on a boolean and Phase 7's GO (REVAL-01) turns it false for new rows without a contract
-  change. — **Reversibility:** one-way — part of the published column contract.
+  change. Revised 2026-10-25 after research: only backfill rows start with `PROVISIONAL (OD-5)`;
+  live rows store `config.RATING_BASIS` ("Per-conductor amperes ... Values are provisional ...")
+  and `config.RATING_CONFIG_VERSION` (`v1-provisional-2026-10-13`), so a prefix test would read
+  every live row as final. A drift-guard test feeds the real `config.RATING_BASIS` and
+  `config.RATING_CONFIG_VERSION` through the view and expects true. Phase 7's GO must remove the
+  word from both strings. — **Reversibility:** one-way — part of the published column contract.
 - **D-04:** `latest_rating` returns the newest row per city by `valid_time`, fallback rows
   included. The fallback is the value the system published and is safe by the owner's rule;
   consumers see `status = 'fallback'` and `fallback_gates` on it. Never skip to an older computed
