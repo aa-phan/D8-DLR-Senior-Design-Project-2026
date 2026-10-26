@@ -395,3 +395,250 @@ def test_soak_migration_reapplies_cleanly(pg_url):
     for name, text in before[3]:
         assert text and text.strip(), name
     assert before[4][0] and before[4][1]
+
+
+# ---------------------------------------------------------------------------
+# Task 2: the owner's pg_cron scripts and the probe smoke check, against a stub cron schema.
+# ---------------------------------------------------------------------------
+
+_JOB = "dlr-soak-freshness"
+_SCHEDULE = "*/5 * * * *"
+_COMMAND = "select ops.log_freshness()"
+_SCHEDULE_SQL = os.path.join(_OPS_DIR, "soak_cron_schedule.sql")
+_UNSCHEDULE_SQL = os.path.join(_OPS_DIR, "soak_cron_unschedule.sql")
+_SMOKE_SQL = os.path.join(_OPS_DIR, "soak_probe_smoke.sql")
+
+_SMOKE_CHECKS = (
+    "last_three_probes_wrote_four_rows",
+    "last_three_runs_succeeded",
+    "no_breach_in_the_last_three_probes",
+    "soak_job_active_every_5_minutes",
+)
+
+# pg_cron is not installed locally. This stub has the documented tables and the two functions the
+# owner scripts call, so the scripts run exactly as written (06-RESEARCH, Supabase Cron docs).
+_STUB_CRON_SQL = """
+create schema cron;
+create table cron.job (
+    jobid bigint generated always as identity primary key,
+    schedule text not null,
+    command text not null,
+    nodename text not null default 'localhost',
+    nodeport integer not null default 5432,
+    database text not null default current_database(),
+    username text not null default current_user,
+    active boolean not null default true,
+    jobname text unique
+);
+create table cron.job_run_details (
+    jobid bigint,
+    runid bigint generated always as identity primary key,
+    job_pid integer,
+    database text,
+    username text,
+    command text,
+    status text,
+    return_message text,
+    start_time timestamptz,
+    end_time timestamptz
+);
+create function cron.schedule(job_name text, schedule text, command text) returns bigint
+language plpgsql as $$
+declare
+    id bigint;
+begin
+    insert into cron.job (jobname, schedule, command) values (job_name, schedule, command)
+    on conflict (jobname) do update set schedule = excluded.schedule, command = excluded.command, active = true
+    returning jobid into id;
+    return id;
+end
+$$;
+create function cron.unschedule(job_id bigint) returns boolean
+language plpgsql as $$
+begin
+    delete from cron.job where jobid = job_id;
+    return found;
+end
+$$;
+"""
+
+
+def _install_stub_cron(conn):
+    conn.execute(_STUB_CRON_SQL)
+
+
+def _run_file(conn, path):
+    """Run an owner SQL file as pasted in the SQL editor; return the rows of every result set, as dicts."""
+    from psycopg.rows import dict_row
+
+    with open(path, encoding="utf-8") as handle:
+        text = handle.read()
+    results = []
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(text)
+        while True:
+            if cur.description is not None:
+                results.append(cur.fetchall())
+            if not cur.nextset():
+                break
+    return results
+
+
+def _jobs(conn, name=_JOB):
+    return conn.execute("select jobid, jobname, schedule, command, active from cron.job where jobname = %s",
+                        [name]).fetchall()
+
+
+def test_schedule_file_creates_one_job_and_is_repeatable(pg_url):
+    with _session(pg_url) as conn:
+        _install_stub_cron(conn)
+        conn.execute("select cron.schedule('some-other-job', '0 * * * *', 'select 1')")
+        results = _run_file(conn, _SCHEDULE_SQL)
+        shown = results[-1]                      # the SQL editor shows the last result: the job row
+        assert len(shown) == 1
+        assert {k: shown[0][k] for k in ("jobname", "schedule", "command", "active")} == {
+            "jobname": _JOB, "schedule": _SCHEDULE, "command": _COMMAND, "active": True}
+        assert set(shown[0]) == {"jobid", "jobname", "schedule", "command", "active"}
+        first = _jobs(conn)
+        assert len(first) == 1
+        _run_file(conn, _SCHEDULE_SQL)           # run twice: the same named job is updated, not duplicated
+        again = _jobs(conn)
+        assert again == first
+        # An existing job with a stale definition is brought back to the soak definition.
+        conn.execute("update cron.job set schedule = '0 * * * *', active = false where jobname = %s", [_JOB])
+        _run_file(conn, _SCHEDULE_SQL)
+        assert _jobs(conn) == first
+        assert len(_jobs(conn, "some-other-job")) == 1       # nothing else is touched
+
+
+def test_unschedule_file_removes_the_job_and_is_a_no_op_after(pg_url):
+    with _session(pg_url) as conn:
+        _install_stub_cron(conn)
+        conn.execute("select cron.schedule('some-other-job', '0 * * * *', 'select 1')")
+        _run_file(conn, _SCHEDULE_SQL)
+        assert len(_jobs(conn)) == 1
+        results = _run_file(conn, _UNSCHEDULE_SQL)
+        assert len(_jobs(conn)) == 0
+        assert len(_jobs(conn, "some-other-job")) == 1       # the freshness alarm and any other job stay
+        assert list(results[-1][0].values()) == [0]          # the editor reports 0 remaining
+        again = _run_file(conn, _UNSCHEDULE_SQL)             # no row, no call: a no-op, not an error
+        assert list(again[-1][0].values()) == [0]
+        assert len(_jobs(conn, "some-other-job")) == 1
+
+
+def _seed_healthy_soak(conn, probes=4):
+    """The scheduled job, three succeeded runs and `probes` probes of four city rows, newest first."""
+    now = conn.execute("select now()").fetchone()[0]
+    _run_file(conn, _SCHEDULE_SQL)
+    jobid = _jobs(conn)[0][0]
+    for back in range(3):
+        start = now - timedelta(minutes=5 * back)
+        conn.execute("insert into cron.job_run_details (jobid, command, status, return_message, start_time, end_time) "
+                     "values (%s, %s, 'succeeded', '1 row', %s, %s)", [jobid, _COMMAND, start, start + timedelta(seconds=1)])
+    for back in range(probes):
+        probed_at = now - timedelta(minutes=5 * back)
+        for city in config.LOCATIONS:
+            conn.execute("insert into ops.freshness_log (probed_at, city, latest_valid_time, age_seconds, breach) "
+                         "values (%s, %s, %s, 600, false)", [probed_at, city, probed_at - timedelta(minutes=10)])
+    return jobid, now
+
+
+def _smoke(conn):
+    rows = local_pg.run_select_file(conn, _SMOKE_SQL)
+    assert [r["check_name"] for r in rows] == sorted(_SMOKE_CHECKS)
+    assert all(set(r) == {"check_name", "ok", "detail"} for r in rows)
+    return {r["check_name"]: r for r in rows}
+
+
+def test_probe_smoke_passes_on_healthy_probes(pg_url):
+    with _session(pg_url) as conn:
+        _install_stub_cron(conn)
+        jobid, now = _seed_healthy_soak(conn)
+        # Evidence older than the last three runs and probes does not count: an old failure and an
+        # old breach sit beyond the window and the checks still pass.
+        conn.execute("insert into cron.job_run_details (jobid, command, status, start_time) values (%s, %s, 'failed', %s)",
+                     [jobid, _COMMAND, now - timedelta(minutes=60)])
+        conn.execute("insert into ops.freshness_log (probed_at, city, breach) values (%s, 'AUSTIN', true)",
+                     [now - timedelta(minutes=60)])
+        checks = _smoke(conn)
+        assert [name for name, row in checks.items() if row["ok"] is not True] == []
+        assert all(row["detail"] for row in checks.values())
+
+
+@pytest.mark.parametrize("name, mutation, expected_failing", [
+    ("a failed latest run",
+     "update cron.job_run_details set status = 'failed', return_message = 'permission denied' "
+     "where runid = (select runid from cron.job_run_details order by start_time desc limit 1)",
+     {"last_three_runs_succeeded"}),
+    ("only two runs so far",
+     "delete from cron.job_run_details where runid = (select runid from cron.job_run_details order by start_time desc limit 1)",
+     {"last_three_runs_succeeded"}),
+    ("a probe with three rows",
+     "delete from ops.freshness_log where id = (select id from ops.freshness_log order by probed_at desc, id desc limit 1)",
+     {"last_three_probes_wrote_four_rows"}),
+    ("a breach in the latest probe",
+     "update ops.freshness_log set breach = true, age_seconds = 6000 "
+     "where id = (select id from ops.freshness_log where city = 'MIDLAND' order by probed_at desc limit 1)",
+     {"no_breach_in_the_last_three_probes"}),
+    ("a missing city in the third probe",
+     "delete from ops.freshness_log where city = 'EL_PASO' and probed_at = "
+     "(select probed_at from ops.freshness_log order by probed_at desc offset 8 limit 1)",
+     {"last_three_probes_wrote_four_rows"}),
+    ("the job paused",
+     "update cron.job set active = false",
+     {"soak_job_active_every_5_minutes"}),
+    ("the job on another schedule",
+     "update cron.job set schedule = '*/10 * * * *'",
+     {"soak_job_active_every_5_minutes"}),
+    ("the job running another command",
+     "update cron.job set command = 'select 1'",
+     {"soak_job_active_every_5_minutes"}),
+    ("the job unscheduled",
+     "delete from cron.job",
+     {"soak_job_active_every_5_minutes", "last_three_runs_succeeded"}),
+    ("no probe written yet",
+     "delete from ops.freshness_log",
+     {"last_three_probes_wrote_four_rows", "no_breach_in_the_last_three_probes"}),
+])
+def test_probe_smoke_fails_on_a_failed_run_a_short_probe_or_a_breach(pg_url, name, mutation, expected_failing):
+    with _session(pg_url) as conn:
+        _install_stub_cron(conn)
+        _seed_healthy_soak(conn)
+        assert [n for n, row in _smoke(conn).items() if row["ok"] is not True] == []   # healthy before the fault
+        conn.execute(mutation)
+        checks = _smoke(conn)
+        failing = {n for n, row in checks.items() if row["ok"] is not True}
+        assert failing == expected_failing, (name, {n: checks[n]["detail"] for n in failing})
+        for n in failing:
+            assert checks[n]["detail"], (name, n)         # the owner is told why
+
+
+def test_owner_sql_files_name_the_job_and_command():
+    texts = {}
+    for path in (_SCHEDULE_SQL, _UNSCHEDULE_SQL, _SMOKE_SQL):
+        with open(path, encoding="utf-8") as handle:
+            texts[path] = handle.read()
+        assert _JOB in texts[path], path
+        # Plain SQL the owner pastes in the SQL editor: no psql meta-commands, no transaction control.
+        code = "\n".join(line.split("--", 1)[0] for line in texts[path].splitlines())
+        assert not re.search(r"^\s*\\", code, re.MULTILINE), path
+        assert not re.search(r"\b(begin|commit|rollback)\b", code, re.IGNORECASE), path
+    schedule = "\n".join(line.split("--", 1)[0] for line in texts[_SCHEDULE_SQL].splitlines())
+    assert schedule.count("cron.schedule(") == 1
+    assert f"'{_JOB}'" in schedule and f"'{_SCHEDULE}'" in schedule and _COMMAND in schedule
+    assert "cron.job" in schedule
+    unschedule = "\n".join(line.split("--", 1)[0] for line in texts[_UNSCHEDULE_SQL].splitlines())
+    assert unschedule.count("cron.unschedule(") == 1
+    assert f"where jobname = '{_JOB}'" in unschedule
+    assert "cron.schedule" not in unschedule
+    # The smoke check is one read-only SELECT with the four named checks.
+    code = "\n".join(line.split("--", 1)[0] for line in texts[_SMOKE_SQL].splitlines())
+    bare = re.sub(r"'(?:[^']|'')*'", "''", code)
+    statements = [s.strip() for s in bare.split(";") if s.strip()]
+    assert len(statements) == 1 and re.match(r"(select|with)\b", statements[0], re.IGNORECASE)
+    for forbidden in ("insert ", "update ", "delete ", "drop ", "alter ", "create ", "grant ", "revoke ",
+                      "truncate ", "set role", "pg_sleep", "cron.schedule", "cron.unschedule"):
+        assert forbidden not in statements[0].lower(), forbidden
+    for name in _SMOKE_CHECKS:
+        assert f"'{name}'" in code, name
+    assert "check_name" in code and "detail" in code
