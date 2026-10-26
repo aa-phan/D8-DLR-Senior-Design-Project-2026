@@ -284,11 +284,14 @@ ml-modeling workstream's evaluation; record it in that workstream's STATE.md as 
   1. Confirmation protocol v4 is signed by the owner before any FRESH-basis outcome is computed or
      read. It does all of the following:
      - retires the 2026-11-24 run;
-     - fixes one early evaluation instant (about 2026-11-01) and its valid-time cutoff;
-     - names the evidence bases (ABLATION re-score, per-city TEST-split scoring, one early FRESH
-       read) and what each may support;
-     - states the selection rule with a conductor-independent (relative) threshold;
-     - states the outcome if no candidate qualifies.
+     - fixes one early evaluation instant (2026-11-01T00:00Z, valid-time cutoff strictly before
+       2026-10-25T00:00Z) and a pre-registered conditional re-test (instant 2026-11-08T00:00Z,
+       cutoff 2026-11-01T00:00Z) that runs only if the first read names no winner (D-05, D-08);
+     - names the evidence bases (ABLATION re-score, per-city TEST-split scoring, the FRESH read)
+       and what each may support (FRESH decides; ABLATION and TEST only veto, D-02);
+     - states the selection rule with a conductor-independent (relative) threshold (2% of the
+       city's mean truth ampacity, D-06);
+     - states the outcome if no candidate qualifies (no pick, then the conditional re-test, D-07).
   2. Per-city conductor configurations (conductor type, diameter, AC resistance, maximum operating
      temperature, elevation, azimuth) are in config with a recorded source per value. The production
      rating, training and validation paths use them. The shadow collector and the frozen
@@ -296,20 +299,71 @@ ml-modeling workstream's evaluation; record it in that workstream's STATE.md as 
      golden test. Power Systems' values replace provisional ones with a config-version bump and no
      code change.
   3. `ml_cooling_corrected` and `reference_ml_refit_24h` are refit per city under the production
-     conductor configs. Only rows before 2026-03-17 are used (asserted). The refits are saved as new,
-     hashed artifacts; the 12 frozen Drake artifacts are not overwritten. `ml_wind_corrected` is
-     reused without a refit.
+     conductor configs when those differ from the frozen Drake configuration (D-10): for every city
+     whose Power Systems values arrive by 2026-10-31T00:00Z, the two are refit on rows before
+     2026-03-17 only (asserted) and saved as new, hashed artifacts; the 12 frozen Drake artifacts
+     are not overwritten. A city still on the Drake assumption at that deadline uses its frozen
+     artifacts as its production-conductor models (no duplicate refit). The refit tooling is built
+     and tested either way, and the ABLATION refits under the bracketing set always run.
+     `ml_wind_corrected` is reused without a refit.
   4. Before the FRESH read, two analyses are run with criteria pre-registered in v4 and reported:
      - an ABLATION conductor-invariance re-score (fit on train, score on validation, under
        bracketing conductor configs);
      - per-city TEST-split scoring.
-  5. By 2026-11-01, the single FRESH read runs once under v4, and a recorded owner decision names:
+  5. At or after 2026-11-01T00:00Z the v4 read 1 runs once. If it names no winner, the
+     pre-registered conditional re-test (read 2) runs once at or after 2026-11-08T00:00Z under the
+     same rules, grading all rows including read 1's (D-08). A recorded owner decision names:
      - which shadow model moves forward, if any;
      - the interim G6 forecast method (OD-3 revisited: naive, or `ml` with B2 fixed).
 
      After that decision, B1, B2, B4 and B5 are closed, the Phase 3 validation is re-run on the same
      non-FRESH window, and a new go/no-go is signed. A GO lifts the provisional label on stored rows.
-**Plans**: 0 plans (run `/gsd-discuss-phase 7` or `/gsd-plan-phase 7`)
+**Plans**: 19 plans
+
+Plans:
+*Waiting on owner gates:* while the v4 signature (07-02) is pending, 07-01, 07-03, 07-04, 07-08 and
+07-19 run (none depends on 07-02). At the Power Systems gate (07-11 Task 2), 07-11's ABLATION/TEST run
+and veto record are already done; only the read-1 dry-run rehearsal remains, since 07-12 waits for its
+instant and 07-14 waits for 07-12.
+
+**Wave 1**
+- [ ] 07-01-PLAN.md — Tracer: COND-02 golden of the frozen shadow path captured from the untouched d71c501 tree; per-city production conductor table, `production_city_point` resolver and rating identity (COND-01, COND-02)
+- [ ] 07-02-PLAN.md — Draft confirmation protocol v4 in plain English with a machine-checked registry; owner signs (blocking-human); record the amendment in both STATE files (SEL-01)
+
+**Wave 2** *(07-03, 07-04 after 07-01; 07-05, 07-06 after the v4 signature)*
+- [ ] 07-03-PLAN.md — Conductor refit tooling (new hashed location, verify-before-load, headline loader) and the ABLATION conductor-invariance driver (SEL-02, SEL-03)
+- [ ] 07-04-PLAN.md — Production callers on the per-city resolver, caller-split guard, production expectations in tests (COND-02, COND-01)
+- [ ] 07-05-PLAN.md — v4 ship rule (relative 2% bar, 3-of-4 cities, vetoes, no pick) in a new decision module (SEL-01, SEL-04)
+- [ ] 07-06-PLAN.md — Signed round registry (v4-read1, v4-read2, v4-late-descriptive) and an armed guard with no override in the evaluation core; `--round` for the live-system check (SEL-01, SEL-04)
+
+**Wave 3** *(07-07 after 07-05 and 07-06; 07-08, 07-19 after 07-04)*
+- [ ] 07-07-PLAN.md — Headline port on signed rounds with a required, hash-checked veto record; v4 rule in both evaluators (SEL-04, SEL-03)
+- [ ] 07-08-PLAN.md — B5: naive band for G6 when the ml lookback withholds the forecast; `g6_forecast_method` in trace and the band-engagement table (REVAL-01)
+- [ ] 07-19-PLAN.md — B2 projected-wind training feature; v2 rating config label and schema-doc conductor-basis paragraph (split from 07-04) (REVAL-01, COND-01)
+
+**Wave 4**
+- [ ] 07-09-PLAN.md — Production-conductor geometry seam, frozen-Drake secondary, scored-artifact provenance, D-03 descriptive gate (SEL-04, SEL-02, COND-02)
+
+**Wave 5**
+- [ ] 07-10-PLAN.md — TEST-split scorer and the signed TEST veto; registry parity test pinning every signed value (SEL-03, SEL-01)
+
+**Wave 6**
+- [ ] 07-11-PLAN.md — Run ABLATION and TEST, write the veto record; owner's Power Systems gate at 2026-10-31T00:00Z with conditional config bump, refit and TEST re-score (SEL-03, SEL-02, COND-01)
+
+**Wave 7**
+- [ ] 07-12-PLAN.md — Owner's go after an automated preflight, then v4 read 1 at or after 2026-11-01T00:00Z, once (SEL-04)
+
+**Wave 8** *(07-14 after 07-12, so nothing rewrites tracked files during the read-1 preflight)*
+- [ ] 07-13-PLAN.md — Read-1 results in plain English and the owner's recorded SEL-04 decision (SEL-04)
+- [ ] 07-14-PLAN.md — REVAL re-run: B2 retrain with a new live manifest (not pushed), ml and naive replays with zero fidelity mismatches, report tables (REVAL-01)
+
+**Wave 9**
+- [ ] 07-15-PLAN.md — Conditional read 2 at or after 2026-11-08T00:00Z, only if read 1 named no winner (SEL-04)
+- [ ] 07-17-PLAN.md — Re-validation report, B1/B2/B4/B5 closures, owner-signed go/no-go and label text (REVAL-01)
+
+**Wave 10**
+- [ ] 07-16-PLAN.md — Read-2 results (or not-run note) and the owner's final SEL-04 decision (SEL-04)
+- [ ] 07-18-PLAN.md — Owner-approved promotion push, first live run verified, optional owner-run relabel of stored rows (REVAL-01)
 
 ## Progress
 
@@ -320,5 +374,5 @@ ml-modeling workstream's evaluation; record it in that workstream's STATE.md as 
 | 3. Real-Data Validation | 5/5 | Complete    | 2026-10-21 |
 | 4. Supabase Store & Writer | 12/12 | Complete    | 2026-10-24 |
 | 5. Scheduled Live Runs | 8/8 | In Progress | - |
-| 6. Exposure & E2E Verification | 0/7 | Planned | - |
-| 7. Per-City Conductors, Shadow Refit and Early Model Selection | 0/0 | Not planned | - |
+| 6. Exposure & E2E Verification | 0/13 | Planned | - |
+| 7. Per-City Conductors, Shadow Refit and Early Model Selection | 0/19 | Planned | - |

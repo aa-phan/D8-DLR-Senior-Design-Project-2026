@@ -143,21 +143,30 @@ proposals.
 - [ ] **SEL-01**: Confirmation protocol v4, amending signed v3, is drafted for the owner and signed
   before any FRESH-basis outcome is computed or read. It contains:
   - the retirement of the 2026-11-24 run;
-  - one early evaluation instant (about 2026-11-01) and its cutoff;
+  - one early evaluation instant (2026-11-01T00:00Z) and its cutoff (valid_time strictly before
+    2026-10-25T00:00Z), plus a pre-registered conditional re-test (instant 2026-11-08T00:00Z,
+    cutoff 2026-11-01T00:00Z) that runs only if the first read names no winner (amended
+    2026-10-25, Phase 7 D-08);
   - the evidence bases and what each may support;
   - a conductor-independent (relative) selection threshold;
   - the action if no candidate qualifies.
 - [ ] **SEL-02**: `ml_cooling_corrected` and `reference_ml_refit_24h` are refit per city under the
-  production conductor configs, on rows before 2026-03-17 only (asserted). They are saved as new,
-  hashed artifacts without overwriting the frozen Drake artifacts. `ml_wind_corrected` is reused
-  without a refit.
+  production conductor configs wherever those differ from the frozen Drake configuration, on rows
+  before 2026-03-17 only (asserted). They are saved as new, hashed artifacts without overwriting
+  the frozen Drake artifacts. `ml_wind_corrected` is reused without a refit. *(Amended 2026-10-25,
+  Phase 7 D-10: a city still on the Drake assumption at the Power Systems deadline,
+  2026-10-31T00:00Z, uses its frozen artifacts as its production-conductor models and gets no
+  duplicate refit; the refit tooling is built and tested regardless.)*
 - [ ] **SEL-03**: Before the FRESH read, two analyses are run and reported against criteria
   pre-registered in v4:
   - an ABLATION conductor-invariance re-score (fit on train, score on validation, under
     bracketing conductor configs);
   - per-city TEST-split scoring.
-- [ ] **SEL-04**: By 2026-11-01 the single v4 FRESH read runs once. A recorded owner decision names
-  which shadow model, if any, replaces `ml`, and the interim G6 forecast method (OD-3 revisited).
+- [ ] **SEL-04**: At or after 2026-11-01T00:00Z the v4 read 1 runs once. If it names no winner, the
+  pre-registered conditional re-test runs once at or after 2026-11-08T00:00Z under the same rules,
+  grading all rows including read 1's. A recorded owner decision names which shadow model, if any,
+  replaces `ml`, and the interim G6 forecast method (OD-3 revisited). *(Amended 2026-10-25, Phase 7
+  D-08: replaces "the single v4 FRESH read".)*
 - [ ] **REVAL-01**: After SEL-04, B1, B2, B4 and B5 are closed, the Phase 3 validation is re-run on the
   same non-FRESH window with the new configs and models, and a new go/no-go is signed. A GO lifts
   the provisional label on stored rows.

@@ -120,6 +120,12 @@ None yet.
 
 ### Blockers/Concerns
 
+- **Pending amendment (2026-10-25, production-pipeline Phase 7):** confirmation protocol v4 is being
+  drafted for the owner's signature. If signed, it retires the 2026-11-24 evaluation, moves the
+  selection to one FRESH read at 2026-11-01T00:00Z (valid_time cutoff 2026-10-25T00:00Z) with a
+  pre-registered conditional re-test at 2026-11-08T00:00Z, uses a relative ship threshold (2% of
+  the city's mean truth ampacity) and names no pick when no candidate qualifies. Until it is signed,
+  v3 (`confirmation_protocol_v3_per_city.md`) governs. Plan 07-02 records the signed outcome here.
 - **Resolved:** the new ML dependency was added in Phase 1 (`scikit-learn==1.9.1` is pinned in
   `requirements.txt`, with its legitimacy audit recorded there).
 - The live `historical_archive.py` archive (`config.HISTORICAL_ARCHIVE_PATH`) was empty when this
