@@ -1,19 +1,19 @@
 ---
 gsd_state_version: "1.0"
 current_phase: 06
-current_plan: 2
+current_plan: 3
 status: executing
-stopped_at: Completed 06-01-PLAN.md
-last_updated: "2026-10-26T20:07:59.490Z"
+stopped_at: Completed 06-02-PLAN.md
+last_updated: "2026-10-26T20:13:45.079Z"
 last_activity: 2026-10-26
 last_activity_desc: Phase 06 execution started
-state_head: 806a09ebd0c5bd0e337d1fef032359d0ec568fe8
+state_head: bf9233c43b9760e411144ebd74e071b9e8dd00ca
 progress:
   total_phases: 7
   completed_phases: 5
   total_plans: 66
-  completed_plans: 35
-  percent: 53
+  completed_plans: 36
+  percent: 55
 milestone_name: Production Pipeline (Supabase + live ratings)
 workstream: production-pipeline
 created: 2026-10-18
@@ -37,7 +37,7 @@ whoever owns that analysis; they are not work items here.
 
 **Status:** Ready to execute
 **Current Phase:** 06
-**Current Plan:** 2
+**Current Plan:** 3
 **Total Plans in Phase:** 13
 **Last Activity:** 2026-10-26 — Phase 06 execution started
 **Last Activity Description:** Phase 06 execution started
@@ -174,6 +174,7 @@ These block or affect stringing the system together and belong to the phases nam
 - [Phase 06]: Phase 06 P01: is_provisional is the word rule on rating_basis OR config_version, guarded offline against the real config strings (D-03 revised)
 - [Phase 06]: Phase 06 P01: age_minutes is ceil integer and is_stale a direct timestamp comparison; exactly 90 minutes is fresh in the view and assert_fresh
 - [Phase 06]: Phase 06 P01: Phase 4 revoke already denies city_rating writes; the new sweep and verify_exposure.sql pin the view, sequences and future objects
+- [Phase 06]: 06-02: secret scan treats a project reference as exactly 20 lowercase letters or digits and flags project host, pooler reference and publishable key (D-10); owner-local exact-value test is env-gated
 
 ## Open Decisions
 
@@ -197,9 +198,9 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 
 ## Session Continuity
 
-**Last session:** 2026-10-26T20:07:59.303Z
+**Last session:** 2026-10-26T20:13:44.888Z
 
-**Stopped At:** Completed 06-01-PLAN.md
+**Stopped At:** Completed 06-02-PLAN.md
 **Resume File:** None
 
 ## Performance Metrics
@@ -238,6 +239,7 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 | Phase 05 P07 | 130 min | 2 tasks | 0 files |
 | Phase 05 P08 | 1h 15m | 2 tasks | 1 files |
 | Phase 06 P01 | 16 min | 2 tasks | 6 files |
+| Phase 06 P02 | 5 min | 2 tasks | 1 files |
 
 ## Accumulated Context
 
