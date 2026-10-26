@@ -379,3 +379,318 @@ def test_current_or_superseded_column(served, tmp_path):
         "superseded by a later slot", "superseded by a later slot", "current", "current"]
     assert all(c["match"] for c in result["cities"])
     assert "superseded by a later slot" in (tmp_path / "trace.md").read_text()
+
+
+# ── Task 2: every failing link is named ───────────────────────────────────────
+
+def _exec_offset(seconds):
+    return EXEC_AT + timedelta(seconds=seconds)
+
+
+@pytest.mark.parametrize("offsets, found, expect", [
+    ([-61], False, "no workflow_dispatch run"),      # one second before the 60 s allowance
+    ([-60], True, None),                              # exactly 60 s before is inside
+    ([0], True, None),
+    ([300], True, None),                              # exactly 300 s after is inside
+    ([301], False, "no workflow_dispatch run"),       # one second later is not
+    ([], False, "no workflow_dispatch run"),          # zero candidates
+    ([10, 20], False, "2 workflow_dispatch runs"),    # two candidates: the correlation is ambiguous
+    ([301, 10], True, None),                          # an excluded neighbour is not a second candidate
+])
+def test_candidate_window_edges(offsets, found, expect, served, tmp_path, capsys):
+    # a run inside the window is the one the fixture rows belong to; the others get their own ids
+    runs = [gh_run(RUN_ID if -60 <= s <= 300 else RUN_ID + 100 + i, created=_exec_offset(s))
+            for i, s in enumerate(offsets)]
+    run, reason = trace.find_run(EXEC_AT, runs)
+    assert (run is not None) is found
+    if not found:
+        assert expect in reason
+    else:
+        assert run["databaseId"] == RUN_ID
+
+    # through the CLI: a missing or ambiguous run is a failed link and nothing else is claimed
+    world = World(runs=runs)
+    served(world)
+    code = run_main(world, tmp_path)
+    out = capsys.readouterr().out
+    if found:
+        assert code == 0
+    else:
+        assert code == 1
+        assert "FAIL Actions run" in out and expect in out
+        result = read_json(tmp_path)
+        assert result["run"] is None and all(not c["match"] for c in result["cities"])
+        assert world.connects == 0  # no run, so no database read
+
+
+def test_schedule_runs_are_not_candidates():
+    runs = [gh_run(RUN_ID, event="schedule"), gh_run(RUN_ID + 1, event="push")]
+    assert trace.find_run(EXEC_AT, runs)[0] is None
+
+
+def test_run_must_be_a_successful_dispatch_of_the_live_workflow(served, tmp_path, capsys):
+    world = World()
+    served(world)
+    assert run_main(world, tmp_path) == 0
+    argv = world.gh.calls[0][0]
+    assert argv == ["gh", "run", "view", str(RUN_ID), "--json", trace.GH_VIEW_FIELDS]  # an argv list, no shell
+    assert "shell" not in world.gh.calls[0][1]
+    capsys.readouterr()
+
+    cases = [
+        ({"conclusion": "failure"}, "conclusion"),
+        ({"conclusion": None}, "conclusion"),
+        ({"event": "schedule"}, "event"),
+        ({"workflowName": "Some Other Workflow"}, "workflowName"),
+        ({"databaseId": RUN_ID + 1}, "databaseId"),
+    ]
+    for overrides, field in cases:
+        world = World(view=gh_view(**overrides))
+        served(world)
+        code = run_main(world, tmp_path)
+        out = capsys.readouterr().out
+        assert code == 1, overrides
+        failing = [line for line in out.splitlines() if line.startswith("FAIL Actions run result")]
+        assert failing and field in failing[0], (overrides, out)
+
+    # gh itself failing is a failed link, not a crash
+    world = World()
+    world.gh = FakeGh(returncode=1, stderr="HTTP 404: Not Found")
+    served(world)
+    assert run_main(world, tmp_path) == 1
+    assert "FAIL Actions run result" in capsys.readouterr().out
+
+
+def test_superseded_rows_fail_with_the_newer_run_named(served, tmp_path, capsys):
+    # a later run in the same hourly slot overwrote the fourth city (OD-7 rewrites run_id)
+    rest_rows = make_rows()
+    taken = rest_rows.pop()
+    overwritten = dict(taken, run_id=str(OTHER_RUN_ID))
+    sql_table = [to_sql_row(r) for r in rest_rows] + [to_sql_row(overwritten)]
+    world = World(rest_rows=rest_rows + [overwritten], sql_rows=sql_table)
+    served(world)
+
+    code = run_main(world, tmp_path)
+
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "superseded by run %s" % OTHER_RUN_ID in out
+    result = read_json(tmp_path)
+    entry = city_entry(result, taken["city"])
+    assert entry["currency"] == "superseded by run %s" % OTHER_RUN_ID
+    assert entry["match"] is False and entry["sql"] is None
+    assert link(result, "SQL rows")["ok"] is False and taken["city"] in link(result, "SQL rows")["detail"]
+    # the three untouched cities still matched; the verdict is never "match" for the overwritten one
+    assert [c["match"] for c in result["cities"]].count(True) == 3
+    # the slot lookup ran once, bound to the slot, and only because rows were missing
+    slot_calls = [c for c in world.conn.calls if "valid_time = %(valid_time)s" in " ".join(c[0].split())]
+    assert len(slot_calls) == 1 and slot_calls[0][1] == {"valid_time": SLOT}
+    healthy = World()
+    healthy_fake = served(healthy)
+    assert run_main(healthy, tmp_path) == 0
+    assert not [c for c in healthy.conn.calls if "valid_time = %(valid_time)s" in " ".join(c[0].split())]
+    assert healthy_fake is not None
+
+
+def test_empty_or_one_sided_rows_fail(served, tmp_path, capsys):
+    # empty against empty never matches
+    found = trace.compare_rows([], [])
+    assert [m.city for m in found] == CITIES and all("no SQL row and no REST row" in m.reason for m in found)
+
+    # REST answers an empty list
+    world = World(rest_rows=[])
+    served(world)
+    assert run_main(world, tmp_path) == 1
+    assert "no REST rows" in capsys.readouterr().out
+
+    # one city present on the SQL side only
+    rows = make_rows()
+    gone = rows.pop(2)
+    world = World(rest_rows=rows)
+    served(world)
+    assert run_main(world, tmp_path) == 1
+    out = capsys.readouterr().out
+    assert "FAIL SQL equals REST" in out and gone["city"] in out and "no REST row" in out
+    assert city_entry(read_json(tmp_path), gone["city"])["match"] is False
+
+    # one city present on the REST side only (nothing else holds its slot)
+    sql = [to_sql_row(r) for r in make_rows()]
+    missing = sql.pop(0)
+    world = World(sql_rows=sql)
+    served(world)
+    assert run_main(world, tmp_path) == 1
+    out = capsys.readouterr().out
+    assert "FAIL SQL rows" in out and missing["city"] in out and "no SQL row" in out
+
+    # nothing at all on either side
+    world = World(rest_rows=[], sql_rows=[])
+    served(world)
+    assert run_main(world, tmp_path) == 1
+    assert all(c["match"] is False for c in read_json(tmp_path)["cities"])
+    capsys.readouterr()
+
+
+def test_incomplete_pipeline_run_or_bad_status_fails(served, tmp_path, capsys):
+    # the run listed only three cities in cities_ok
+    world = World(pipeline=pipeline_row(cities_ok=CITIES[:3]))
+    served(world)
+    assert run_main(world, tmp_path) == 1
+    out = capsys.readouterr().out
+    assert "FAIL pipeline_run" in out and CITIES[3] in out
+
+    # no pipeline_run row at all
+    world = World()
+    world.conn.pipeline = None
+    served(world)
+    assert run_main(world, tmp_path) == 1
+    assert "FAIL pipeline_run" in capsys.readouterr().out
+
+    # a non-2xx execution status
+    for status in ("500", "404", "199", "301"):
+        world = World()
+        served(world)
+        assert run_main(world, tmp_path, status=status) == 1
+        out = capsys.readouterr().out
+        assert "FAIL cron-job.org execution" in out and status in out
+    world = World()
+    served(world)
+    assert run_main(world, tmp_path, status="204") == 0
+
+
+def test_explicit_run_id_must_agree(served, tmp_path, capsys):
+    world = World()
+    served(world)
+    assert run_main(world, tmp_path, "--run-id", str(RUN_ID)) == 0
+
+    code = run_main(world, tmp_path, "--run-id", str(RUN_ID + 5))
+    out = capsys.readouterr().out
+    assert code == 1
+    assert str(RUN_ID + 5) in out and str(RUN_ID) in out and "disagrees" in out
+    assert [c[0][3] for c in world.gh.calls] == [str(RUN_ID)]  # the disagreeing id was never traced
+
+    # usage and configuration errors are exit 2, never 1
+    assert run_main(world, tmp_path, "--run-id", "12ab") == 2
+    assert run_main(world, tmp_path, execution_time="2026-10-19T14:05:02") == 2  # no offset: maybe local time
+    assert run_main(world, tmp_path, execution_time="not a time") == 2
+    assert run_main(world, tmp_path, status="ok") == 2
+    assert trace.main([], fetch_runs_fn=world.fetch_runs) == 2  # required arguments missing
+    capsys.readouterr()
+
+
+def test_missing_configuration_is_exit_2(monkeypatch, tmp_path, capsys):
+    world = World()
+    monkeypatch.delenv(rest.ENV_URL, raising=False)
+    monkeypatch.delenv(rest.ENV_KEY, raising=False)
+    assert run_main(world, tmp_path) == 2
+    assert "SUPABASE_URL" in capsys.readouterr().err
+    # no database URL and no injected connection
+    monkeypatch.setenv(rest.ENV_URL, "http://127.0.0.1:9")
+    monkeypatch.setenv(rest.ENV_KEY, KEY)
+    monkeypatch.delenv("SUPABASE_DB_URL", raising=False)
+    code = trace.main(["--execution-time", EXEC_ISO, "--execution-status", "204"], fetch_runs_fn=world.fetch_runs)
+    assert code == 2
+    assert "SUPABASE_DB_URL" in capsys.readouterr().err
+
+
+def test_sql_read_is_read_only_and_bound(served, tmp_path):
+    world = World()
+    served(world)
+    assert run_main(world, tmp_path) == 0
+
+    assert world.connects == 1 and world.conn.closed
+    first_sql, first_params = world.conn.calls[0]
+    assert first_sql.strip().lower() == "set default_transaction_read_only = on"
+    assert first_params is None
+    assert len(world.conn.calls) == 3
+    for sql, params in world.conn.calls[1:]:
+        assert sql.lstrip().lower().startswith("select")
+        assert set(sql.lower().split()).isdisjoint({"insert", "update", "delete", "drop", "alter", "truncate", "grant"})
+        assert params == {"run_id": str(RUN_ID)}
+        assert str(RUN_ID) not in sql and "%(run_id)s" in sql  # a bound parameter, never formatted in
+    for column in contract.STORED_COLUMNS:
+        assert column in world.conn.calls[1][0]
+    assert "age_minutes" not in world.conn.calls[1][0] and "is_stale" not in world.conn.calls[1][0]
+    # REST: GET only
+    assert {r["method"] for r in world.fake.requests} == {"GET"}
+
+
+def test_failures_never_leak_url_or_key(served, tmp_path, monkeypatch, capsys):
+    marker = "hunter" + "2" + "-marker"
+    db_url = "postgresql://dlr_writer:" + marker + "@db.example.invalid:5432/postgres"
+    world = World()
+    fake = served(world)
+    monkeypatch.setenv("SUPABASE_DB_URL", db_url)
+
+    def boom():
+        raise RuntimeError("connection to %s refused (password %s)" % (db_url, marker))
+
+    world.connect = boom
+    with pytest.raises(supabase_store.StoreError) as raised:
+        trace.sql_rows(RUN_ID, connect_fn=boom)
+    assert marker not in str(raised.value) and "RuntimeError" in str(raised.value)
+    assert raised.value.__cause__ is None  # no exception chained, so no traceback carries the URL
+
+    # a REST error that echoes the project URL and the key
+    fake.route_overrides["city_rating"] = (500, {"message": "upstream %s/rest/v1/city_rating failed apikey=%s" % (fake.url, KEY)})
+    code = run_main(world, tmp_path)
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "FAIL SQL rows" in captured.out and "FAIL REST rows" in captured.out
+    seen = captured.out + captured.err
+    for path in tmp_path.iterdir():
+        seen += path.read_text()
+    for secret in (marker, db_url, fake.url, KEY, "127.0.0.1", "db.example.invalid"):
+        assert secret not in seen, secret
+    assert "RuntimeError" in seen  # the failure is still named, just redacted
+
+    # an Actions listing that fails while echoing the project URL
+    def bad_list(start, hours):
+        raise RuntimeError("gh said %s and %s" % (fake.url, KEY))
+
+    world = World()
+    served(world)
+    fake2 = world.fake
+    code = trace.main(["--execution-time", EXEC_ISO, "--execution-status", "204", "--out", str(tmp_path / "x.md")],
+                      fetch_runs_fn=lambda s, h: (_ for _ in ()).throw(RuntimeError("gh said %s and %s" % (fake2.url, KEY))),
+                      run_cmd=world.gh, connect_fn=world.connect)
+    captured = capsys.readouterr()
+    assert code == 1
+    assert fake2.url not in captured.out and KEY not in captured.out
+    assert fake2.url not in (tmp_path / "x.md").read_text() and KEY not in (tmp_path / "x.md").read_text()
+
+
+def test_evidence_is_deterministic_and_clean(served, tmp_path):
+    world = World()
+    fake = served(world)
+    first, second = tmp_path / "one", tmp_path / "two"
+    for directory in (first, second):
+        directory.mkdir()
+        assert run_main(world, directory) == 0
+    for name in ("trace.md", "trace.json"):
+        assert (first / name).read_bytes() == (second / name).read_bytes()
+    text = (first / "trace.md").read_text() + (first / "trace.json").read_text()
+    for secret in (fake.url, KEY, "127.0.0.1", "postgres", "apikey", "sb_publishable"):
+        assert secret not in text, secret
+    parsed = json.loads((first / "trace.json").read_text())
+    assert parsed["execution"] == {"time": EXEC_ISO, "status": 204}
+    assert parsed["run"]["id"] == str(RUN_ID)
+    assert parsed["cities"][0]["sql"]["valid_time"] == "2026-10-19T14:00:00Z"
+    assert (first / "trace.md").read_text().endswith("E2E TRACE OK\n")
+
+
+def test_a_run_landing_during_the_trace_is_not_a_mismatch(served, tmp_path):
+    # the next hourly run replaces latest_rating for every city between the run-id read and the latest read
+    world = World()
+    later = make_rating_rows([SLOT + timedelta(hours=1)], run_id=str(LATER_RUN_ID))
+    landed = []
+
+    def hook(fake, record):
+        if record["path"].endswith("/latest_rating") and not landed:
+            fake.rows.extend(later)
+            landed.append(True)
+
+    served(world, before_request=hook)
+    assert run_main(world, tmp_path) == 0
+    result = read_json(tmp_path)
+    assert landed and all(c["match"] for c in result["cities"])
+    assert {c["currency"] for c in result["cities"]} == {"superseded by a later slot"}

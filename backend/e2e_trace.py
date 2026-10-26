@@ -91,6 +91,12 @@ PIPELINE_RUN_SQL = (
     "from public.pipeline_run "
     "where run_id = %(run_id)s"
 )
+SLOT_SQL = (
+    "select city, run_id "
+    "from public.city_rating "
+    "where valid_time = %(valid_time)s "
+    "order by city"
+)
 LATEST_SELECT = "city,valid_time,run_id,rating_basis,config_version,is_provisional"
 
 # the stored columns that are instants; everything else compares as the value it is
@@ -265,11 +271,24 @@ def _query(conn, sql, params) -> list:
     return [dict(zip(names, row)) for row in cursor.fetchall()]
 
 
+def _slot_of(rows, pipeline_row):
+    """The run's hourly slot: the valid_time of any of its rows, else its window_end cut to the hour (OD-7)."""
+    for row in rows:
+        if row.get("valid_time") is not None:
+            return _aware(row["valid_time"])
+    if pipeline_row and pipeline_row.get("window_end") is not None:
+        return _aware(pipeline_row["window_end"]).replace(minute=0, second=0, microsecond=0)
+    return None
+
+
 def sql_rows(run_id, connect_fn=None) -> dict:
     """
-    `{"rows": [...], "pipeline_run": dict or None}`: the run's city_rating rows (the stored columns,
-    ordered by city) and its pipeline_run row. The session is set read-only before the first
-    statement and every SELECT binds `run_id`; no value is formatted into SQL text. `connect_fn`
+    `{"rows": [...], "pipeline_run": dict or None, "slot": datetime or None, "slot_holders": {city: run_id}}`:
+    the run's city_rating rows (the stored columns, ordered by city), its pipeline_run row and, only when
+    fewer than four cities came back, who holds the run's hourly slot now (a later run in the same slot
+    rewrites run_id, OD-7), which names the run that overwrote the missing rows. The session is set
+    read-only before the first statement and every SELECT binds its parameters (`run_id`, `valid_time`);
+    no value is formatted into SQL text. `connect_fn`
     defaults to Phase 4's `supabase_store.connect`. Any failure other than a StoreError is re-raised as
     a StoreError carrying the exception type and redacted text, with no exception chained.
     """
@@ -284,7 +303,13 @@ def sql_rows(run_id, connect_fn=None) -> dict:
         conn.execute(READ_ONLY_SQL)  # before the first query: this session can no longer write
         rows = _query(conn, CITY_RATING_SQL, params)
         pipeline = _query(conn, PIPELINE_RUN_SQL, params)
-        out = {"rows": rows, "pipeline_run": pipeline[0] if pipeline else None}
+        pipeline_row = pipeline[0] if pipeline else None
+        slot, holders = None, {}
+        if len({r.get("city") for r in rows}) < len(config.LOCATIONS):
+            slot = _slot_of(rows, pipeline_row)
+            if slot is not None:
+                holders = {r["city"]: str(r["run_id"]) for r in _query(conn, SLOT_SQL, {"valid_time": slot})}
+        out = {"rows": rows, "pipeline_run": pipeline_row, "slot": slot, "slot_holders": holders}
     except supabase_store.StoreError:
         raise
     except Exception as exc:  # noqa: BLE001 - re-raised below as a redacted StoreError
@@ -339,6 +364,13 @@ def _currency(run_id, row, latest_row) -> str:
     return "latest_rating shows an older slot"
 
 
+def _gone(run_id, holder) -> str:
+    """The currency of a city whose row for this run is missing: who holds its slot now, if anyone."""
+    if holder and str(holder) != str(run_id):
+        return "superseded by run %s" % holder
+    return "no row"
+
+
 def _summary(row):
     return {c: _shown(_canon(c, row.get(c))) for c in latest_rating_contract.STORED_COLUMNS}
 
@@ -374,7 +406,8 @@ def trace(execution_time, execution_status, cfg, run_id=None, fetch_runs_fn=None
         "cities": [],
     }
 
-    def finish(sql=None, rest=None, mismatches=(), latest=()):
+    def finish(sql=None, rest=None, mismatches=(), latest=(), holders=None):
+        holders = holders or {}
         latest_by = {r.get("city"): r for r in latest}
         sql_by = {r.get("city"): r for r in (sql or [])}
         rest_by = {r.get("city"): r for r in (rest or [])}
@@ -390,7 +423,8 @@ def trace(execution_time, execution_status, cfg, run_id=None, fetch_runs_fn=None
                 "sql": _summary(s) if s is not None else None,
                 "rest": _summary(r) if r is not None else None,
                 "match": bool(compared and s is not None and r is not None and not mine),
-                "currency": _currency(run_id_used, s or r, latest_by.get(city)) if (s or r) else "no row",
+                "currency": _currency(run_id_used, s or r, latest_by.get(city)) if (s or r) else _gone(
+                    run_id_used, holders.get(city)),
                 "mismatches": [
                     {"column": m.column, "sql": m.sql, "rest": m.rest, "reason": m.reason} for m in mine],
             })
@@ -398,6 +432,10 @@ def trace(execution_time, execution_status, cfg, run_id=None, fetch_runs_fn=None
         return result
 
     run_id_used = None
+    ok_status = 200 <= int(execution_status) < 300
+    add("cron-job.org execution", ok_status,
+        "%s answered HTTP %s" % (_iso(execution_time), execution_status) if ok_status else
+        "%s answered HTTP %s, expected a 2xx" % (_iso(execution_time), execution_status))
     start = execution_time.replace(minute=0, second=0, microsecond=0)
     try:
         runs = fetch_runs_fn(start, 1)
@@ -409,9 +447,14 @@ def trace(execution_time, execution_status, cfg, run_id=None, fetch_runs_fn=None
         add("Actions run", False, reason)
         return finish()
     run_id_used = str(run["databaseId"])
+    if run_id is not None and str(run_id) != run_id_used:
+        add("Actions run", False, "the explicit --run-id %s disagrees with the run %s that the execution time "
+            "correlates to; nothing was traced for either" % (run_id, run_id_used))
+        return finish()
     add("Actions run", True, "run %s created %s" % (run_id_used, _iso(run["createdAt"])))
     result["run"] = {"id": run_id_used, "event": run.get("event"), "conclusion": run.get("conclusion"),
                      "created_at": _iso(run["createdAt"])}
+    _check_view(add, result, run_id_used, run_cmd, cfg)
 
     sql = rest = latest = None
     try:
@@ -419,19 +462,13 @@ def trace(execution_time, execution_status, cfg, run_id=None, fetch_runs_fn=None
     except supabase_store.StoreError as exc:
         add("SQL rows", False, _failure_text(exc, cfg))
     else:
-        add("SQL rows", True, "%d rows for run %s" % (len(sql["rows"]), run_id_used))
-        pipeline = sql["pipeline_run"]
-        if pipeline is not None:
-            result["pipeline_run"] = {
-                "cities_ok": list(pipeline.get("cities_ok") or []),
-                "window_end": _iso(pipeline["window_end"]) if pipeline.get("window_end") else None,
-            }
+        _check_sql(add, result, run_id_used, sql)
     try:
         rest = rest_rows(run_id_used, cfg, opener)
     except supabase_rest.RestError as exc:
         add("REST rows", False, _failure_text(exc, cfg))
     else:
-        add("REST rows", True, "%d rows for run %s" % (len(rest["rows"]), run_id_used))
+        _check_rest(add, run_id_used, rest)
         latest = rest["latest"]
 
     mismatches = []
@@ -449,7 +486,76 @@ def trace(execution_time, execution_status, cfg, run_id=None, fetch_runs_fn=None
 
     if rest is not None:
         _check_latest(add, run_id_used, sql, rest)
-    return finish(sql["rows"] if sql else None, rest["rows"] if rest else None, mismatches, latest or ())
+    return finish(sql["rows"] if sql else None, rest["rows"] if rest else None, mismatches, latest or (),
+                  sql["slot_holders"] if sql else None)
+
+
+def _check_view(add, result, run_id, run_cmd, cfg):
+    """`gh run view`: the run is the one asked for, a workflow_dispatch, concluded success, in the live workflow."""
+    try:
+        view = view_run(run_id, run_cmd)
+    except Exception as exc:  # noqa: BLE001 - a link that could not be read
+        add("Actions run result", False, "could not read the run: %s" % _failure_text(exc, cfg))
+        return
+    problems = []
+    if str(view.get("databaseId")) != str(run_id):
+        problems.append("databaseId is %r, expected %s" % (view.get("databaseId"), run_id))
+    if view.get("event") != "workflow_dispatch":
+        problems.append("event is %r, expected 'workflow_dispatch'" % (view.get("event"),))
+    if view.get("conclusion") != "success":
+        problems.append("conclusion is %r, expected 'success'" % (view.get("conclusion"),))
+    if view.get("workflowName") != WORKFLOW_NAME:
+        problems.append("workflowName is %r, expected %r" % (view.get("workflowName"), WORKFLOW_NAME))
+    result["run"].update({
+        "event": view.get("event"), "conclusion": view.get("conclusion"), "status": view.get("status"),
+        "workflow": view.get("workflowName"), "head_sha": view.get("headSha"),
+    })
+    add("Actions run result", not problems,
+        "; ".join(problems) if problems else "concluded success in workflow %r as a workflow_dispatch" % WORKFLOW_NAME)
+
+
+def _check_sql(add, result, run_id, sql):
+    """One SQL row per city (naming who overwrote any missing one) and a pipeline_run row listing every city."""
+    counts = {}
+    for row in sql["rows"]:
+        counts[row.get("city")] = counts.get(row.get("city"), 0) + 1
+    problems = []
+    for city in config.LOCATIONS:
+        if counts.get(city, 0) == 0:
+            holder = sql["slot_holders"].get(city)
+            if holder and holder != str(run_id):
+                problems.append("%s superseded by run %s" % (city, holder))
+            else:
+                problems.append("%s has no row for run %s" % (city, run_id))
+        elif counts[city] > 1:
+            problems.append("%s has %d rows for run %s" % (city, counts[city], run_id))
+    add("SQL rows", not problems,
+        "; ".join(problems) if problems else "%d rows for run %s, one per city" % (len(sql["rows"]), run_id))
+
+    pipeline = sql["pipeline_run"]
+    if pipeline is None:
+        add("pipeline_run", False, "no pipeline_run row for run %s" % run_id)
+        return
+    listed = list(pipeline.get("cities_ok") or [])
+    lacking = [c for c in config.LOCATIONS if c not in listed]
+    result["pipeline_run"] = {
+        "cities_ok": listed,
+        "window_end": _iso(pipeline["window_end"]) if pipeline.get("window_end") else None,
+    }
+    add("pipeline_run", not lacking,
+        "cities_ok lacks %s" % ", ".join(lacking) if lacking else "cities_ok lists all %d cities" % len(config.LOCATIONS))
+
+
+def _check_rest(add, run_id, rest):
+    """The REST service returns one row per city for the run id."""
+    present = {row.get("city") for row in rest["rows"]}
+    if not rest["rows"]:
+        add("REST rows", False, "no REST rows for run %s" % run_id)
+        return
+    lacking = [c for c in config.LOCATIONS if c not in present]
+    add("REST rows", not lacking,
+        "no REST row for %s (run %s)" % (", ".join(lacking), run_id) if lacking
+        else "%d rows for run %s" % (len(rest["rows"]), run_id))
 
 
 def _check_latest(add, run_id, sql, rest):
