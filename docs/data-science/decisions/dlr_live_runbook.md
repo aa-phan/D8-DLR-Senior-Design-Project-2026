@@ -429,10 +429,19 @@ window passed, 1 otherwise.
 |---|---|
 | ok | A run succeeded, its `pipeline_run` row lists all four cities in `cities_ok`, and `city_rating` has four rows at that slot written by the slot's runs |
 | incomplete | A successful run exists but one of those conditions fails. Fails the window |
-| failed-visible | No successful run, but at least one run is red (failure, timed_out, cancelled or startup_failure). Passes: the failure is visible |
+| failed-visible | No successful run, but at least one non-drill run is red (failure, timed_out, cancelled or startup_failure). Passes: the failure is visible. A fault-drill run never counts (see below) |
 | missing | No run, or only unfinished or inconclusive runs. Fails the window |
 
 A run belongs to the slot of its `pipeline_run` `window_end` truncated to the hour; a run with no
 `pipeline_run` row is placed by its start time and counts only if it is red. Rows from any run of the
 slot count, so a later drill or re-run that overwrote some cities' rows in the same hour does not turn an
 earlier good run into a failure.
+
+A fault-drill run is excluded from the slot's verdict: it always ends red, so counting it would let a
+slot whose scheduled run never happened pass as failed-visible. The check recognises a drill by a
+`fault_injected` entry in the run's saved `cities_failed`, which the runner writes after the drilled
+city's child ends. A drill that was cancelled or killed before that city finished, or that died before
+its first row was written, leaves no such entry and still counts as a red run; the report's note names
+a run it excluded ("fault-drill run ... not counted"), so a slot that shows `failed-visible` right after
+a drill dispatch should be checked against the drill's run id by hand. Its rating rows (when it got that
+far) still count toward the slot, and its minutes are still billed.
