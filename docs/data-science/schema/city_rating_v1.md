@@ -11,7 +11,7 @@
 
 - A Supabase-hosted Postgres database, table `public.city_rating`: one row per city per hour.
 - Rows are written by `dlr_orchestrator --store postgres` (the scheduled runner arrives in Phase 5) and, for history, by the one-time backfill loader (see "Backfill rows").
-- Consumers read the table through Supabase's REST API once Phase 6 grants SELECT to the `anon` role on the table and adds the `latest_rating` view. Until Phase 6 delivers that, no consumer role has any access to the table (OD-6). Nothing in this document says Phase 5 or Phase 6 is already live.
+- Consumers read the table `public.city_rating` and the view `public.latest_rating` (one current row per city, plus the computed columns `age_minutes`, `is_stale` and `is_provisional`) through Supabase's REST API; the contract is [`rest-api.md`](../../integration/rest-api.md). The read grant (SELECT for the `anon` role, OD-6) takes effect when the owner applies Phase 6's migration; until then the table is not readable with the publishable key. Nothing in this document says Phase 5 or Phase 6 is already live.
 - No connection details (host, project reference, key, URL) are published in this repository's docs. The owner hands them to the teams that need them.
 - The full history will be public by owner decision (OD-6), so no column holds anything sensitive: no file path, no credential, no error text.
 
@@ -111,6 +111,7 @@ Rules for consumers:
 
 - Display the label wherever a value is shown. Do not drop the static-rating caveat or the line-bearing caveat.
 - Every row, live or backfill, stays provisional until Phase 7's re-validation go (REVAL-01) lifts the label.
+- `latest_rating.is_provisional` is true while the word provisional (any case) appears in `rating_basis` or in `config_version`, so Phase 7's REVAL-01 go must remove the word from both strings for it to turn false (D-03). A phrase such as "no longer provisional" would still read as provisional.
 - Phase 3's go/no-go on real data was a NO-GO and stays recorded as written in `docs/data-science/decisions/real_data_validation.md`. On 2026-10-21 the owner decided to publish provisional rows anyway, so Phases 4 to 6 are not blocked by it. Never describe any row, the backfill included, as having passed a go/no-go.
 
 ## What produced each row (DB-06)
@@ -131,6 +132,7 @@ For consumers: within one city, a change in `config_fingerprint`, `forecast_mode
 - Cadence is hourly (OD-1): one row per city per hour once Phase 5's scheduled runner is live.
 - The target is that the newest `valid_time` of each city is no older than 90 minutes (OD-4), once Phase 5 runs. Before Phase 5 delivers the schedule, rows appear only when someone runs the pipeline.
 - A city that fails outright writes no row (OD-9), so its newest row ages and the freshness check flags it. A consumer sees the gap as an old latest row, not as an error row.
+- `latest_rating` shows each city's age on its row: `age_minutes` (whole minutes, rounded up) and `is_stale` (true when strictly more than 90 minutes old; exactly 90 is fresh). `rpc/assert_fresh` checks all four cities at once and answers HTTP 503 naming the missing or stale ones (D-02). Details: [`rest-api.md`](../../integration/rest-api.md).
 - Run outcomes, including per-city failures, go to `public.pipeline_run`. That table is an operational log; consumers never read it.
 
 ## Forecast fields

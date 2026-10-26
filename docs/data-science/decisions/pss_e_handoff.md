@@ -57,7 +57,8 @@ its own step, separate from the forecast itself.
 
 The production pipeline (production-pipeline Phase 4) stores every city's hourly result in one place. The contract is [`city_rating_v1.md`](../schema/city_rating_v1.md). What it settles for the points this note used to list as undefined:
 
-- **Format and transport:** a Postgres table, `public.city_rating`, read through Supabase REST from Phase 6 (a Python stdlib example is planned there). Until Phase 6 delivers the read grant, no consumer has access.
+- **Format and transport:** a Postgres table, `public.city_rating`, read through Supabase REST (Phase 6), contract [`rest-api.md`](../../integration/rest-api.md), readable when the owner applies Phase 6's migration. A Python 3.7+ standard-library example is `docs/integration/examples/read_ratings.py`.
+- **Interpreter question (D-11):** the example assumes Python 3.7 or newer with TLS 1.2. Power Systems is asked to print `sys.version` and `ssl.OPENSSL_VERSION` inside PSS/E's Python and to run the example once; the question is sent along with the example. A Python 2.7 answer becomes a follow-up, not a blocker.
 - **Cadence:** hourly (OD-1), once Phase 5's scheduled runner is live; the latest row of a city is expected to be no older than 90 minutes.
 - **Amps, MW and the forecast band:** all stored on every row: `rating_amps`, `rating_mw`, `forecast_amps`, `forecast_ci_lower_amps`, `forecast_ci_upper_amps`, `forecast_horizon_min`. The forecast fields are empty while the forecast is in cold start.
 - **Granularity:** one independent row per city per hour. Rows of different cities are never combined.

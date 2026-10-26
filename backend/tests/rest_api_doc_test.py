@@ -165,3 +165,138 @@ def test_doc_links_resolve():
     for needle in ("examples/read_ratings.py", "examples/curl.sh", "examples/supabase_js.mjs",
                    "../data-science/schema/city_rating_v1.md", "../data-science/decisions/dlr_live_runbook.md"):
         assert "](%s)" % needle in text, needle
+
+
+# ---------------------------------------------------------------------------
+# Pointers from the existing consumer docs (Task 3). The expected heading lists below were copied
+# from the files as they stood before the edit (git HEAD of 2026-10-26), so a heading that is
+# removed or renamed fails here.
+# ---------------------------------------------------------------------------
+
+API_CONTRACT = REPO / "docs" / "frontend" / "specs" / "api-contract.md"
+F1_SPEC = REPO / "docs" / "frontend" / "specs" / "F1-data-access-api.md"
+PSS_E = REPO / "docs" / "data-science" / "decisions" / "pss_e_handoff.md"
+SCHEMA_DOC = REPO / "docs" / "data-science" / "schema" / "city_rating_v1.md"
+CONSUMER_DOCS = (API_CONTRACT, F1_SPEC, PSS_E, SCHEMA_DOC)
+
+EXPECTED_HEADINGS = {
+    API_CONTRACT: [
+        "## Authentication",
+        "## Data sources overview",
+        "## Request/response formats",
+        "### 1. Station pipeline CSV (`pipeline_output_v1`)",
+        "### 2. Merged ERCOT and DLR CSV",
+        "### 3. Historical archive CSV",
+        "### 4. City rating dict (`rate_city`)",
+        "### 5. Shadow prediction JSONL",
+        "### 6. Forecast result object (not exported)",
+        "## Python entry points",
+        "## Error codes",
+        "## Rate limits",
+        "## PROPOSED: HTTP surface",
+        "## Open decisions on `api/` shape",
+        "## Compatibility rules for consumers",
+    ],
+    F1_SPEC: [
+        "## Current Implementation",
+        "## Interface & Data Contract",
+        "## Blocked by",
+        "## Blocks",
+        "## Parallel-safe with",
+        "## Known Issues",
+        "## Acceptance Criteria",
+        "## Open Questions",
+    ],
+    PSS_E: [
+        "## The understanding",
+        "## What DS actually produces today that would feed this",
+        "## What the production store fixes (2026-10)",
+        "## Still open with Power Systems",
+    ],
+    SCHEMA_DOC: [
+        "## Where the data lives",
+        "## Key and time semantics",
+        "## Columns: public.city_rating",
+        "## What fallback means",
+        "## Provisional label (OD-5)",
+        "## What produced each row (DB-06)",
+        "## Freshness and failures",
+        "## Forecast fields",
+        "## Backfill rows",
+        "## Reading rules for consumers",
+        "## Run log: public.pipeline_run (operational, not for consumers)",
+        "## Versioning",
+    ],
+}
+
+
+def _headings(path):
+    return [line for line in path.read_text(encoding="utf-8").splitlines() if re.match(r"#{2,3} ", line)]
+
+
+def _section(path, heading):
+    lines = path.read_text(encoding="utf-8").splitlines()
+    start = lines.index(heading)
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")), len(lines))
+    return "\n".join(lines[start + 1:end])
+
+
+def test_consumer_docs_link_to_the_rest_contract():
+    for path in CONSUMER_DOCS:
+        text = path.read_text(encoding="utf-8")
+        targets = re.findall(r"\]\(([^)\s]*integration/rest-api\.md)\)", text)
+        assert targets, "%s has no link to docs/integration/rest-api.md" % path.name
+        for target in targets:
+            assert (path.parent / target).resolve() == DOC.resolve(), (path.name, target)
+
+
+def test_consumer_docs_keep_their_headings():
+    for path, expected in EXPECTED_HEADINGS.items():
+        found = _headings(path)
+        assert [h for h in found if h in expected] == expected, path.name  # none lost, order kept
+        if path == SCHEMA_DOC:
+            # Phase 4's REQUIRED_HEADINGS: no new `## ` heading may be added to the schema doc
+            assert [h for h in found if h.startswith("## ")] == expected, path.name
+
+
+def test_city_rating_doc_states_the_view_and_the_word_rule():
+    lives = _section(SCHEMA_DOC, "## Where the data lives")
+    for needle in ("public.latest_rating", "age_minutes", "is_stale", "is_provisional", "rest-api.md",
+                   "REST API", "OD-6", "when the owner applies Phase 6's migration"):
+        assert needle in lives, needle
+    assert "no consumer role has any access" not in lives
+    provisional = _section(SCHEMA_DOC, "## Provisional label (OD-5)")
+    for needle in ("latest_rating.is_provisional", "the word provisional", "rating_basis", "config_version",
+                   "REVAL-01", "both strings", "(D-03)", "no longer provisional"):
+        assert needle in provisional, needle
+    fresh = _section(SCHEMA_DOC, "## Freshness and failures")
+    for needle in ("is_stale", "age_minutes", "rpc/assert_fresh", "(D-02)"):
+        assert needle in fresh, needle
+    assert "supabase" + ".co" not in SCHEMA_DOC.read_text(encoding="utf-8")  # still no connection details
+
+
+def test_consumer_docs_state_the_live_interface():
+    api = API_CONTRACT.read_text(encoding="utf-8")
+    auth = _section(API_CONTRACT, "## Authentication")
+    for needle in ("rest-api.md", "publishable key", "apikey", "read-only", "DS owner"):
+        assert needle in auth, needle
+    rows = [line for line in api.splitlines() if line.startswith("| `public.latest_rating`")]
+    assert len(rows) == 1 and "rest-api.md" in rows[0]
+    assert len([line for line in api.splitlines() if line.startswith("| `public.city_rating`")]) == 1
+    items = {m.group(1): m.group(0) for m in re.finditer(r"^(\d+)\. .*$", api, re.MULTILINE)}
+    for number in ("4", "8"):
+        assert "(live per-city ratings: Supabase REST, see rest-api.md)" in items[number], number
+
+    f1 = _section(F1_SPEC, "## Interface & Data Contract")
+    assert "rest-api.md" in f1
+    for needle in ("latest_rating", "is_stale", "status", "fallback_gates", "static-fallback"):
+        assert needle in f1, needle
+
+    pss = PSS_E.read_text(encoding="utf-8")
+    fixes = _section(PSS_E, "## What the production store fixes (2026-10)")
+    for needle in ("rest-api.md", "docs/integration/examples/read_ratings.py", "Python 3.7", "sys.version",
+                   "ssl.OPENSSL_VERSION", "when the owner applies Phase 6's migration"):
+        assert needle in fixes, needle
+    assert "a Python stdlib example is planned there" not in pss
+    assert "no consumer has access" not in pss
+    assert pss.rstrip().endswith("recorded as a standalone note per the user's request.*")
