@@ -697,3 +697,24 @@ def test_no_run_log_flag_skips_recording(tmp_path, monkeypatch):
     assert [c.calls[0][1]["finished_at"] is None for c in conns] == [True, True, False]
     assert all("insert into public.pipeline_run" in c.calls[0][0] for c in conns)
     assert "pipeline_run: 3 writes, 0 failed" in summary.read_text()
+
+
+def test_a_failed_city_keeps_its_provider_errors_and_sources():
+    """IN-02: the per-provider counts of a failed child are the only record of why it failed."""
+    output = {"summary": [], "errors": {"MIDLAND": "NSRDB breaker open"},
+              "sources": {"temp": {"synoptic": 2}},
+              "provider_errors": {"nsrdb: HTTP 500 api_key=SECRETKEY1": 3}}
+
+    record = dlr_live_run.classify("MIDLAND", 1, output, "stderr text", env={})
+
+    assert record["outcome"] == "error" and record["written"] is False
+    assert record["error"] == "NSRDB breaker open"
+    assert record["provider_errors"] == {"nsrdb: HTTP 500 api_key=***": 3}  # redacted like an ok city's
+    assert record["sources"] == {"temp": {"synoptic": 2}}
+
+    # no output file (a timeout or a crash before it was written): nothing to keep, nothing invented
+    assert dlr_live_run.classify("MIDLAND", 1, None, "boom", env={})["provider_errors"] == {}
+    assert dlr_live_run.classify("MIDLAND", None, None, "", timed_out=True, env={})["sources"] == {}
+    # a malformed counts field never makes the classification raise
+    odd = dlr_live_run.classify("MIDLAND", 1, {"provider_errors": ["x"], "sources": "y"}, "", env={})
+    assert odd["provider_errors"] == {} and odd["sources"] == {}

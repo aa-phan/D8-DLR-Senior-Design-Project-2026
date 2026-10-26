@@ -211,8 +211,9 @@ def classify(city, returncode, output, stderr_text, fault_injected=False, timed_
     Outcomes, first match wins: timed out -> 'timeout'; non-zero exit -> 'error';
     no usable --output -> 'error' ("no output"); no summary row for the city ->
     'error' ("no summary row", plus the child's own `errors[city]`); write flag
-    false -> 'error' ("row not written"); otherwise 'ok'. Every 'error' text is
-    redacted (`env` defaults to the process environment) and a row is never
+    false -> 'error' ("row not written"); otherwise 'ok'. Whenever an --output file
+    was left, its `provider_errors` and `sources` are kept, whatever the outcome.
+    Every 'error' text is redacted (`env` defaults to the process environment) and a row is never
     invented for a city that has none (OD-9).
     """
     output = output if isinstance(output, dict) else None
@@ -224,6 +225,11 @@ def classify(city, returncode, output, stderr_text, fault_injected=False, timed_
         "sources": {}, "error": None, "fault_injected": fault_injected,
     }
     child_error = ((output or {}).get("errors") or {}).get(city)
+    if output is not None:
+        # Kept for a failed city too: its per-provider counts are the only record of why (OD-9).
+        provider_errors, sources = output.get("provider_errors"), output.get("sources")
+        record["provider_errors"] = _redact_counts(provider_errors if isinstance(provider_errors, dict) else {}, env)
+        record["sources"] = sources if isinstance(sources, dict) else {}
 
     def fail(outcome, text):
         record["outcome"] = outcome
@@ -249,8 +255,6 @@ def classify(city, returncode, output, stderr_text, fault_injected=False, timed_
         forecast_error=None if row.get("forecast_error") is None else redact(row["forecast_error"], env),
         detector_model_loaded=bool(row.get("detector_model_loaded")),
         cleaning_error=None if row.get("cleaning_error") is None else redact(row["cleaning_error"], env),
-        provider_errors=_redact_counts(output.get("provider_errors"), env),
-        sources=output.get("sources") or {},
     )
     return record
 
