@@ -152,9 +152,10 @@ def child_argv(city: str, end: str, output_path: str) -> list:
     ]
 
 
-def redact(text, env=None) -> str:
+def redact(text, env=None, limit=_MAX_TEXT_CHARS) -> str:
     """
-    `text` with secrets removed, cut to its last 1000 characters. Removed, in this
+    `text` with secrets removed, cut to its last `limit` characters (1000; None keeps
+    all of it, for the raw child streams re-emitted to the log). Removed, in this
     order: every REQUIRED_ENV value of 4 or more characters (and the password of
     a database URL), postgres URLs (-> `postgresql://***`), and the values of
     `token=`, `api_key=`, `key=`, `email=` and `password=` parameters (-> `name=***`).
@@ -181,7 +182,7 @@ def redact(text, env=None) -> str:
         text = text.replace(secret, "***")
     text = _DB_URL_RE.sub("postgresql://***", text)
     text = _CREDENTIAL_PARAM_RE.sub(lambda m: f"{m.group(1)}=***", text)
-    return text[-_MAX_TEXT_CHARS:]
+    return text if limit is None else text[-limit:]
 
 
 def _redact_counts(counts, env=None) -> dict:
@@ -263,14 +264,19 @@ def _healthy(record) -> bool:
 
 
 def _emit(city, stdout_text, stderr_text, env):
-    """Re-emit a child's captured streams, grouped in the Actions log."""
+    """
+    Re-emit a child's captured streams, grouped in the Actions log. The repo is public,
+    so the logs are too: both streams go through `redact()` (uncut) first, because
+    Actions masks only the exact secret values it holds, not a database password's
+    URL-encoded form or a credential inside a request URL in a traceback.
+    """
     grouped = env.get("GITHUB_ACTIONS") == "true"
     if grouped:
         print(f"::group::{city}", flush=True)
     if stdout_text:
-        sys.stdout.write(stdout_text)
+        sys.stdout.write(redact(stdout_text, env, limit=None))
     if stderr_text:
-        sys.stderr.write(stderr_text)
+        sys.stderr.write(redact(stderr_text, env, limit=None))
     if grouped:
         print("::endgroup::", flush=True)
     sys.stdout.flush()

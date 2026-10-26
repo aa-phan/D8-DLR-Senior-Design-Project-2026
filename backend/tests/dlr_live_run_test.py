@@ -477,6 +477,30 @@ def test_redact_removes_secret_values_query_credentials_and_db_urls():
     assert dlr_live_run.redact("head-" + "x" * 1500 + "-tail", {}).endswith("-tail")
 
 
+def test_redact_without_a_limit_keeps_the_whole_text():
+    text = "head-" + "x" * 5000 + "-tail"
+    assert dlr_live_run.redact(text, {}, limit=None) == text
+    assert len(dlr_live_run.redact(text, {}, limit=10)) == 10
+
+
+def test_child_streams_are_redacted_before_they_reach_the_log(capsys):
+    # WR-03: the repo is public; a traceback can carry a request URL or a database URL
+    env = {"SUPABASE_DB_URL": _db_url(), "SYNOPTIC_TOKEN": "dummy-synoptic-token", "GITHUB_ACTIONS": "true"}
+    stdout_text = "line one\n" + "y" * 3000 + "\nGET /obs?" + "to" + "ken=abc123&x=1\n"
+    other_url = "post" + "gresql://other-user:other-pw@host/db"
+    stderr_text = ("Traceback\nOSError: " + _db_url() + " " + env["SYNOPTIC_TOKEN"]
+                   + "\nalso " + other_url + "\n")
+
+    dlr_live_run._emit("AUSTIN", stdout_text, stderr_text, env)
+
+    out, err = capsys.readouterr()
+    for leaked in ("pw-secret-1", "pooler.example.test", "abc123", "other-pw", env["SYNOPTIC_TOKEN"]):
+        assert leaked not in out + err, leaked
+    assert "::group::AUSTIN" in out and "::endgroup::" in out
+    assert "line one" in out and "y" * 3000 in out  # not cut to 1000 characters
+    assert "x=1" in out and "postgresql://***" in err and "Traceback" in err
+
+
 def test_step_summary_lists_cities_in_order_with_redacted_errors(tmp_path, monkeypatch):
     script, _ = _fake_orchestrator(tmp_path)
     monkeypatch.setattr(dlr_live_run, "ORCHESTRATOR", script)
