@@ -10,8 +10,9 @@ settings, not rationale; the rationale is in the Phase 5 plans and `REQUIREMENTS
 holds a secret value: tokens and keys live in cron-job.org and in GitHub's Actions secrets, never in
 this repository.
 
-Last updated 2026-10-26 (plan 05-08: measured Actions minutes for a full 24 h of hourly live runs and
-the same day of shadow runs, section 12). Earlier: 2026-10-24 (plan 05-06: owner's Actions quota recorded
+Last updated 2026-10-26 (plan 06-07: the permanent freshness alarm, soak monitoring and the
+post-2026-10-30 permission re-check, sections 14 to 16). Earlier: 2026-10-26 (plan 05-08: measured
+Actions minutes for a full 24 h of hourly live runs and the same day of shadow runs, section 12). Earlier: 2026-10-24 (plan 05-06: owner's Actions quota recorded
 in section 12; the repository was made public the same day, so Actions minutes are free going forward).
 
 ## 1. Purpose and scope
@@ -193,10 +194,19 @@ choose Disable workflow. If the workflow is disabled while the cron-job.org job 
 cron-job.org receives errors and may disable its own job after repeated failures; check its state
 after resuming.
 
-**Resume.** Re-enable the cron-job.org job (and the workflow, if it was disabled). Nothing needs to be
-reset: there is no state outside the database. Missed slots are not back-filled. The gap stays in
-`city_rating` until it is filled by hand with a local run for that slot (section 8), and Phase 6's
-freshness check will show the gap while it exists.
+**Pausing the pipeline also pauses the freshness alarm (section 14).** Switch off the cron-job.org job
+named "DLR freshness alarm" at the same time as the dispatch job. A paused pipeline writes no new
+ratings, so within 90 minutes every city is stale and the alarm would fail on every check. It would
+email once, then keep failing, and cron-job.org disables a job that fails more than 25 times in a row
+(about 6.5 hours at 15 minutes); a disabled alarm stays off until someone switches it back on.
+
+**Resume.** Re-enable the cron-job.org dispatch job (and the workflow, if it was disabled). Nothing
+needs to be reset: there is no state outside the database. Resuming re-enables both jobs: switch the
+freshness alarm back on too, then check that the alarm job is enabled and that its next execution
+answers HTTP 200 once the first new hourly rating has landed (an alarm switched on earlier fails until
+then). Missed slots are not back-filled. The gap stays in `city_rating` until it is filled by hand with
+a local run for that slot (section 8), and the freshness alarm (section 14) will fire while the newest
+rating is older than 90 minutes.
 
 ## 7. Change cadence
 
@@ -278,7 +288,7 @@ year, set the constant to 1 so the previous year is skipped too, and set it back
 |---|---|---|
 | A run is red (a city errored, timed out or was degraded, a `pipeline_run` write failed) | The Actions run is red and GitHub's failure notification goes to the account that owns the dispatch token, per its notification settings. The step summary and `cities_failed` name the city | Section 13 counts red runs as visible |
 | A dispatch fails, for example an expired token | Nothing starts and nothing in the repository reports it | cron-job.org failure notifications |
-| The cron-job.org job is disabled, misconfigured or its token has expired | No run starts and nothing in the repository reports it | cron-job.org failure notifications and Phase 6's freshness check (a city whose latest `valid_time` is older than 90 minutes) |
+| The cron-job.org job is disabled, misconfigured or its token has expired | No run starts and nothing in the repository reports it | cron-job.org failure notifications and the freshness alarm (section 14): a city whose latest `valid_time` is older than 90 minutes |
 | Supabase free-tier pause | Every child fails to connect; red runs | Unpause the project in Supabase, then confirm with the next run |
 | A model file is missing or altered | The pre-flight fails and the run is red before any city is rated | Section 9 |
 | GitHub Actions minutes exhausted | No workflow in the account starts. Not expected while the repository is public (hosted-runner minutes are free); it applies again if the repository is made private | Section 12 |
@@ -445,3 +455,177 @@ its first row was written, leaves no such entry and still counts as a red run; t
 a run it excluded ("fault-drill run ... not counted"), so a slot that shows `failed-visible` right after
 a drill dispatch should be checked against the drill's run id by hand. Its rating rows (when it got that
 far) still count toward the slot, and its minutes are still billed.
+
+## 14. Freshness alarm (permanent)
+
+In plain English: every 15 minutes a cron-job.org job asks the database whether every city's current
+rating is at most 90 minutes old. If one is not, the job fails and, after 2 failures in a row, an email
+goes to the owner. When the ratings are fresh again a recovery email follows. The alarm is permanent
+(D-13): it stays on after the 72 h soak is over and the soak's own log job has been removed.
+
+**What it is.** A cron-job.org job titled "DLR freshness alarm". It is separate from the dispatch job
+(section 2) and from the Shadow Collection job; those two are never changed for it. It is not a
+database job: the 5-minute log job of section 15 is the soak's record, this alarm is not.
+
+| Setting | Value |
+|---|---|
+| Title | DLR freshness alarm |
+| URL | `<SUPABASE_URL>/rest/v1/rpc/assert_fresh` (typed into cron-job.org only; the default `max_age_minutes` is 90) |
+| Method | GET |
+| Header `apikey` | `<SUPABASE_PUBLISHABLE_KEY>`: the publishable key only, never the secret key (D-10) |
+| Expected result | HTTP 200. HTTP 503 with code `PT503` means a city is missing or stale; 400 means a bad `max_age_minutes` |
+| Schedule | every 15 minutes, time zone UTC (`*/15 * * * *`) |
+| Timeout | 30 s (cron-job.org's own limit) |
+| Notify on failure | after 2 failures (the "failures required before a notification is sent" option) |
+| Notify on success after a failure | on (the recovery email) |
+| Notify when the job is disabled | on |
+| Emails go to | the owner's cron-job.org account only (D-15); there is no team address yet |
+
+The URL and the key are entered in cron-job.org and nowhere else: not in this repository, not in a
+`.env`, not in a message (D-10). The key is the one the dashboard and PSS/E teams use, so it can only
+read; the secret key is never used here. The same 90 minutes as `latest_rating.is_stale` and the soak
+report apply (OD-4): a rating exactly 90 minutes old is fresh, one second more is stale.
+
+**How soon it tells you.** A city-hour that is lost goes stale 90 minutes after its slot starts. The
+first failing check follows within 15 minutes and the second 15 minutes after that, so the email arrives
+about 105-120 minutes after the missed hour began. One slow hour (a rating that lands 30 or more minutes
+late) can trip it for the same reason.
+
+**It stays on after the soak.** At soak end only the 5-minute log job is removed (section 15). Leave
+this alarm running. This runbook is where the owner records that it is permanent.
+
+**To pause the alarm.** Open the job in cron-job.org and switch it off. Pause it whenever the pipeline
+is paused (section 6): with no new ratings it would fail on every check. To resume, switch it back on and
+check that the next execution answers 200.
+
+**When it fires.** Work from the cause towards the data:
+
+1. Read the newest `pipeline_run` rows and the `cities_failed` of each (the query in section 5): which
+   city failed, with what `outcome` and redacted error.
+2. Look at the Actions history for the live workflow: `gh run list --workflow dlr_live.yml --limit 6`.
+   A missing run points at the dispatch job (section 2: expired token, disabled job); a red run points
+   at the run's log.
+3. Check what consumers see: `PYTHONPATH=backend .venv/bin/python backend/e2e_verify_readonly.py --check-read`
+   prints each city's age and `latest_rating.is_stale`.
+
+Then follow the matching row of section 11. Fresh ratings end the alarm on their own: the next check
+answers 200 and the recovery email arrives.
+
+**The 25-failure auto-disable.** cron-job.org disables a job that fails more than 25 times in a row,
+which at 15 minutes is a continuous outage of about 6.5 hours. The "job disabled" email is on for that
+case. To recover: fix the cause (above), then re-enable the job in cron-job.org (a disabled job does not
+come back by itself) and check that its next execution answers 200.
+
+## 15. Soak monitoring (Phase 6)
+
+In plain English: for three days a database job writes down every five minutes how old each city's
+current rating is. At the end one report lists every time a rating was older than 90 minutes, with a
+cause for each, and every deploy that happened in that time. The soak passes when the window is at least
+72 h long, the log has no gap longer than 11 minutes and every breach has a cause or an owner annotation.
+
+**Start (owner, after the dry-soak review, D-07).**
+
+1. Enable the Cron integration once: Supabase dashboard, Integrations, Cron.
+2. Run `supabase/ops/soak_cron_schedule.sql` in the SQL editor. It creates one job, `dlr-soak-freshness`,
+   that calls `ops.log_freshness()` every five minutes (`*/5 * * * *`). Running it again changes nothing.
+3. After 15 to 20 minutes run `supabase/ops/soak_probe_smoke.sql`: every row must be `ok` before the
+   72 h clock starts.
+4. Run `supabase/ops/verify_monitoring.sql`: every row must be `ok` (the public key cannot read the log).
+
+**The dry soak (before the clock, D-07).** It measures how late each hourly rating really lands, from
+rows already written, so nobody waits a fresh 12-24 hours:
+
+```bash
+PYTHONPATH=backend .venv/bin/python backend/e2e_soak_report.py export --mode dry --since 2026-10-25T00:00:00Z --until <DRY_END_UTC> --out-dir <DRY_DIR>
+PYTHONPATH=backend .venv/bin/python backend/e2e_soak_report.py report --mode dry --in-dir <DRY_DIR> --out <DRY_DIR>/dry_report.md --json-out <DRY_DIR>/dry_report.json
+```
+
+**The 72 h soak.** `<G>` is the start of the clock (a 5-minute boundary) and `<U>` is at least 72 hours
+later. The 72 h window never overlaps the dry-soak window. `export` is read-only and runs from the
+owner's main checkout (it needs `SUPABASE_DB_URL` in `.env` and `gh` signed in); `report` is offline and
+gives the same bytes for the same files:
+
+```bash
+PYTHONPATH=backend .venv/bin/python backend/e2e_soak_report.py export --mode soak --since <G> --until <U> --out-dir <SOAK_DIR>
+PYTHONPATH=backend .venv/bin/python backend/e2e_soak_report.py report --mode soak --in-dir <SOAK_DIR> --annotations <SOAK_DIR>/annotations.json --out <SOAK_DIR>/soak_report.md --json-out <SOAK_DIR>/soak_report.json
+```
+
+It exits 0 only when the window is at least 72 h (`--min-hours`), probes are present and every breach
+and probe gap is explained; 1 otherwise; 2 when a file or `annotations.json` is missing or malformed.
+Run it during the soak as often as you like; a run before 72 h have passed fails on length only.
+
+**Reading the report.**
+
+- A write breach is an exact interval in which a city's current rating was older than 90 minutes,
+  computed from when each row was first written (a same-hour retry cannot move it). Its id is
+  `write:<city>:<start>`. A probe breach (`probe:`) is one the probe log saw that no write interval
+  explains; a probe gap (`probe-gap:ALL:`) is a hole in the log longer than 11 minutes, window edges
+  included.
+- The cause is derived, not guessed: no workflow run for the slot (dispatch missing); a run that
+  concluded failure; the city listed as failed in that run's `pipeline_run` row (with its redacted
+  error); or a row first written more than 30 minutes after its slot (a late run). A breach none of
+  these explains needs an owner annotation.
+- Deploys are derived from the data (D-08): any slot where a city's `pipeline_version`,
+  `config_fingerprint`, model hashes, `forecast_method` or `config_version` differs from its previous
+  row, classified with `git diff --name-only <old> <new>` as model, config, workflow, code or no runtime
+  change. If the commit is not in the local clone the report says so: run `git fetch` and report again.
+  A deploy within two hours before a breach is shown beside it as context. A deploy never excuses a
+  breach, and the soak is not paused or restarted for one.
+
+**annotations.json.** Only the owner writes it; nothing is written on the owner's behalf. Breach ids come
+from the report. The text is printed verbatim with its author and date. Events are things the data cannot
+show (a cron-job.org edit, an owner pause, an incident):
+
+```json
+{
+  "breaches": {
+    "write:EL_PASO:2026-10-29T06:30:00Z": {
+      "explanation": "<what happened, in the owner's words>",
+      "by": "<owner name>",
+      "date": "2026-10-30"
+    }
+  },
+  "events": [
+    {"time": "2026-10-29T10:00:00Z", "what": "<what changed>", "by": "<owner name>"}
+  ]
+}
+```
+
+An annotation whose id matches no breach is listed as a warning and excuses nothing.
+
+**No writes during the write check.** Run `--check-writes` (section 16) with no backfill load and no
+past-slot re-run in progress: those are the only legitimate writers of old rows, and a changed row would
+look like an accepted write. The hourly run is harmless; it writes only the current slot.
+
+**Teardown at soak end (D-13).** After the soak record has been exported and the owner has signed off,
+run `supabase/ops/soak_cron_unschedule.sql` in the SQL editor: it removes the job `dlr-soak-freshness`
+and shows `remaining_jobs`, which must be 0. The alarm stays: section 14 is permanent. `ops.freshness_log`
+keeps its rows as the frozen soak record; there is no retention job and nothing deletes them.
+
+## 16. Permission re-check after 2026-10-30
+
+In plain English: Supabase changes the default permissions of new tables on 2026-10-30 (existing projects
+included). Ours are written out explicitly, so nothing should change, and this re-check proves it. Run
+it on or after 2026-10-31. It also closes Phase 4's carried item T-04-22 (the `consumers_cannot_write`
+smoke after 10-30). The two values below go in your shell, never in a file:
+
+```bash
+export SUPABASE_URL=<SUPABASE_URL> SUPABASE_PUBLISHABLE_KEY=<SUPABASE_PUBLISHABLE_KEY>
+PYTHONPATH=backend .venv/bin/python backend/e2e_verify_readonly.py --check-read --check-hidden --check-writes --json-out <RECHECK_FILE>
+```
+
+| Check | Command | What it means |
+|---|---|---|
+| Read | `e2e_verify_readonly.py --check-read` | With only the public key you see exactly one current rating per city, with the documented columns |
+| Hidden tables | `e2e_verify_readonly.py --check-hidden` | The private run log and the soak log cannot be read with the public key |
+| Writes | `e2e_verify_readonly.py --check-writes` | Trying to add, change or delete data with the public key is refused, and the data afterwards is identical |
+| Database permission list | `supabase/ops/verify_exposure.sql` in the SQL editor | The database's own list says the public key can read the ratings table and the view and nothing else |
+| Writer smoke | `supabase_smoke.py`, check `consumers_cannot_write` (owner command in its docstring, with `--report <RECHECK_SMOKE_FILE>`) | The public roles hold no write privilege on either table, checked as the CI writer role |
+
+```bash
+PYTHONPATH=backend .venv/bin/python -c "from dotenv import load_dotenv; load_dotenv('.env'); import sys, supabase_smoke; sys.exit(supabase_smoke.main(['--report', '<RECHECK_SMOKE_FILE>']))"
+```
+
+Compare the result with 06-09's live evidence. Any difference (a check that passed then and fails now, a
+new column, a grant that appeared or went away) is a discrepancy to bring to the owner; do not fix it
+silently. Run `--check-writes` only when no backfill load or past-slot re-run is in progress (section 15).
