@@ -2,17 +2,17 @@
 gsd_state_version: "1.0"
 current_phase: 05
 current_plan: 8
-status: executing
-stopped_at: Phase 7 context gathered
-last_updated: "2026-10-26T04:52:44.521Z"
-last_activity: 2026-10-24
-last_activity_desc: Phase 06 planning complete — 13 plans ready (Phase 05 still current: 05-08 open)
-state_head: 49669489806eeb7362ba05669f0a290a10c7226e
+status: verifying
+stopped_at: Completed 05-08-PLAN.md
+last_updated: "2026-10-26T05:11:11.197Z"
+last_activity: 2026-10-26
+last_activity_desc: "Completed 05-08: 24 h window passed (24/24), measured minutes recorded, owner signed off, main pushed (d71c501), run 40272358123 green in production. Phase 5 ready for verification"
+state_head: 8b0cca3516360ca57e88922ab5429804430fefc9
 progress:
   total_phases: 7
   completed_phases: 4
-  total_plans: 47
-  completed_plans: 33
+  total_plans: 57
+  completed_plans: 34
   percent: 57
 milestone_name: Production Pipeline (Supabase + live ratings)
 workstream: production-pipeline
@@ -35,12 +35,12 @@ whoever owns that analysis; they are not work items here.
 
 ## Current Position
 
-**Status:** Ready to execute
+**Status:** Phase complete — ready for verification
 **Current Phase:** 05
 **Current Plan:** 8
 **Total Plans in Phase:** 8
-**Last Activity:** 2026-10-24 — Phase 05 execution started
-**Last Activity Description:** Phase 06 planning complete — 13 plans ready
+**Last Activity:** 2026-10-26 — Plan 05-08 complete
+**Last Activity Description:** 24 h window passed, measured Actions minutes recorded, owner sign-off (approve-push), run 40272358123 green in environment production. Owner action: the repository-level SUPABASE_DB_URL secret is now safe to delete; confirm on the Billing page that Actions usage is flat
 
 ## Planning Summary (2026-10-19)
 
@@ -169,6 +169,7 @@ These block or affect stringing the system together and belong to the phases nam
 - [Phase 05]: 05-05: runbook records the shadow job's observed 05/11/17/23 UTC hours as an observation only; live runs at minute 05 so it never shares a minute with shadow runs — Runbook must not instruct changes to the shadow job; discrepancy surfaced for the owner
 - [Phase 05]: 05-06: owner chose go-live after making the repository public (free Actions minutes); anon-refusal check T-05-29 recorded as skipped
 - [Phase 05]: 05-07: window start for 05-08 is run 40145300072 (2026-10-25T00:05:05Z, slot 00:00); owner test run 40144431987 counted as manual — First dispatch within 5 min after an hh:05 boundary; drill run 40146481713 overwrote three 00:00 slot rows (OD-7)
+- [Phase 05]: 05-08: owner signed off the 24 h window (24 of 24 slots ok) and the budget with approve-push; main pushed fast-forward 702a833..d71c501 — Measured live 2,880 + shadow 600 min per 30 days exceeds 2,000 included on a private basis; moot while the repository is public. Next scheduled run 40272358123 green in environment production on the pushed SHA; repository-level SUPABASE_DB_URL secret now safe to delete (owner action)
 
 ## Open Decisions
 
@@ -192,10 +193,10 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 
 ## Session Continuity
 
-**Last session:** 2026-10-25T06:13:06.783Z
+**Last session:** 2026-10-26T05:11:05.435Z
 
-**Stopped At:** Phase 7 context gathered
-**Resume File:** .planning/workstreams/production-pipeline/phases/07-per-city-conductors-shadow-refit-and-early-model-selection/07-CONTEXT.md
+**Stopped At:** Completed 05-08-PLAN.md
+**Resume File:** None
 
 ## Performance Metrics
 
@@ -231,6 +232,7 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 | Phase 05 P05 | 14 min | 2 tasks | 4 files |
 | Phase 05 P06 | 40 min | 3 tasks | 1 files |
 | Phase 05 P07 | 130 min | 2 tasks | 0 files |
+| Phase 05 P08 | 1h 15m | 2 tasks | 1 files |
 
 ## Accumulated Context
 

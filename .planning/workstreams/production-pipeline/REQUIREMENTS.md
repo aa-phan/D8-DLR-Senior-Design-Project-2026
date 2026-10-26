@@ -105,13 +105,13 @@ proposals.
 
 ### Scheduled live runs (Phase 5)
 
-- [ ] **PIPE-02** (carried over): a new workflow (`.github/workflows/dlr_live.yml` or similar) runs
+- [x] **PIPE-02** (carried over): a new workflow (`.github/workflows/dlr_live.yml` or similar) runs
   the integrated pipeline for all four cities on `workflow_dispatch`, triggered by cron-job.org at
   the decided cadence, and upserts into Supabase.
-- [ ] **SCHED-01**: A failed city or provider in one run is recorded (row status or a run-log
+- [x] **SCHED-01**: A failed city or provider in one run is recorded (row status or a run-log
   table) and does not stop the other cities or the next run. A failed run is visible in the
   Actions history.
-- [ ] **SCHED-02**: The operating runbook documents the cron-job.org job (URL, token scope, how to
+- [x] **SCHED-02**: The operating runbook documents the cron-job.org job (URL, token scope, how to
   pause it, how to change cadence) and estimates GitHub Actions minutes for the chosen cadence
   alongside the existing shadow-collection usage.
 
@@ -210,9 +210,9 @@ proposals.
 | DB-04 | Phase 4 | Complete |
 | DB-05 | Phase 4 | Complete |
 | DB-06 | Phase 4 | Complete |
-| PIPE-02 | Phase 5 | Pending |
-| SCHED-01 | Phase 5 | Pending |
-| SCHED-02 | Phase 5 | Pending |
+| PIPE-02 | Phase 5 | Complete |
+| SCHED-01 | Phase 5 | Complete |
+| SCHED-02 | Phase 5 | Complete |
 | API-01 | Phase 6 | Pending |
 | API-02 | Phase 6 | Pending |
 | E2E-01 | Phase 6 | Pending |

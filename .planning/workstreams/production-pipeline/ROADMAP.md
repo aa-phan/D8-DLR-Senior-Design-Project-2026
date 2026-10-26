@@ -201,7 +201,7 @@ conductor configs, refit models or forecast method later is a config/model swap,
      recorded.
   4. The runbook covers the cron-job.org setup, pausing, changing cadence, and Actions-minute
      budget.
-**Plans:** 7/8 plans executed
+**Plans:** 8/8 plans executed
 
 Plans:
 - [x] 05-01-PLAN.md — Live runner (one orchestrator child per city, timeouts, exit policy, fault drill) and dispatch-only `dlr_live.yml` (tracer)
@@ -211,7 +211,7 @@ Plans:
 - [x] 05-05-PLAN.md — Runbook (cron-job.org, token scope, pause, cadence, minutes budget) and the 24 h window check
 - [x] 05-06-PLAN.md — Owner: secrets and billing figures, go-live decision and push, first verified dispatch
 - [x] 05-07-PLAN.md — Owner: cron-job.org hourly job; one-city fault drill in production
-- [ ] 05-08-PLAN.md — 24 h window evidence, measured Actions minutes, owner sign-off
+- [x] 05-08-PLAN.md — 24 h window evidence, measured Actions minutes, owner sign-off
 
 ### Phase 6: Exposure & E2E Verification
 
@@ -319,6 +319,6 @@ ml-modeling workstream's evaluation; record it in that workstream's STATE.md as 
 | 2. Data Cleaning | 4/4 | Complete    | 2026-10-20 |
 | 3. Real-Data Validation | 5/5 | Complete    | 2026-10-21 |
 | 4. Supabase Store & Writer | 12/12 | Complete    | 2026-10-24 |
-| 5. Scheduled Live Runs | 7/8 | In Progress | - |
+| 5. Scheduled Live Runs | 8/8 | In Progress | - |
 | 6. Exposure & E2E Verification | 0/7 | Planned | - |
 | 7. Per-City Conductors, Shadow Refit and Early Model Selection | 0/0 | Not planned | - |
