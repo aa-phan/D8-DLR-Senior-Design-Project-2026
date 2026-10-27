@@ -1,19 +1,19 @@
 ---
 gsd_state_version: "1.0"
 current_phase: 06
-current_plan: 9
+current_plan: 10
 status: executing
-stopped_at: Completed 06-08-PLAN.md
-last_updated: "2026-10-26T22:19:55.276Z"
+stopped_at: Completed 06-09-PLAN.md
+last_updated: "2026-10-27T01:20:01.813Z"
 last_activity: 2026-10-26
 last_activity_desc: Phase 06 execution started
-state_head: 2cb5c9958120c22624939532050b3518fcaeeb75
+state_head: 3c0d506af60833be8c9c3bc0ea311094fc392daa
 progress:
   total_phases: 7
   completed_phases: 5
   total_plans: 66
-  completed_plans: 42
-  percent: 64
+  completed_plans: 43
+  percent: 65
 milestone_name: Production Pipeline (Supabase + live ratings)
 workstream: production-pipeline
 created: 2026-10-18
@@ -37,7 +37,7 @@ whoever owns that analysis; they are not work items here.
 
 **Status:** Ready to execute
 **Current Phase:** 06
-**Current Plan:** 9
+**Current Plan:** 10
 **Total Plans in Phase:** 13
 **Last Activity:** 2026-10-26 — Phase 06 execution started
 **Last Activity Description:** Phase 06 execution started
@@ -186,6 +186,7 @@ These block or affect stringing the system together and belong to the phases nam
 - [Phase 06]: 06-07: deploy classification validates versions as 7-40 lowercase hex before calling git with an argv list; unknown commits, unchanged versions and unrecognised paths are flagged, never guessed — T-06-24: version strings come from the database; nothing is passed to a shell and nothing is inferred
 - [Phase 06]: 06-07: the freshness alarm is permanent (runbook section 14) and pausing the pipeline also pauses the alarm; cron-job.org disables a job after more than 25 failures — D-13..D-15 and Pitfall 13: a paused pipeline would make the alarm fail until cron-job.org disables it
 - [Phase 06]: 06-08: E2E trace correlates a cron-job.org execution to exactly one workflow_dispatch run created within -60 s/+300 s (inclusive), refuses to guess on zero or several candidates, reads SQL rows read-only and REST rows by run_id, and rejects an execution time without a UTC offset
+- [Phase 06]: 06-09: owner published the 34-column latest_rating contract as built; both Phase 6 migrations live and pinned by SHA-256. View writes are refused with HTTP 500 (55000), table writes 401 (42501).
 
 ## Open Decisions
 
@@ -209,9 +210,9 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 
 ## Session Continuity
 
-**Last session:** 2026-10-26T22:19:55.026Z
+**Last session:** 2026-10-27T01:20:01.554Z
 
-**Stopped At:** Completed 06-08-PLAN.md
+**Stopped At:** Completed 06-09-PLAN.md
 **Resume File:** None
 
 ## Performance Metrics
@@ -257,6 +258,7 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 | Phase 06 P06 | 11 min | 3 tasks | 10 files |
 | Phase 06 P07 | 13 min | 3 tasks | 4 files |
 | Phase 06 P08 | 10 min | 2 tasks | 2 files |
+| Phase 06 P09 | owner-gated, ~15min executor | 3 tasks | 3 files |
 
 ## Accumulated Context
 

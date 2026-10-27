@@ -235,7 +235,7 @@ is visible per row), and Phase 7's go lifts the label.
 `age_minutes` / `is_stale` / `is_provisional`, dry soak from existing rows, probe smoke check, deploy
 annotations, permanent alarm, env-var examples for Python 3.7+, secret-scan extension, post-10-30
 re-check folding T-04-22). Offline build first (waves 1-3); every live step waits for 05-08's sign-off (D-06).
-**Plans**: 8/13 plans executed
+**Plans**: 9/13 plans executed
 
 Plans:
 **Wave 1**
@@ -253,7 +253,7 @@ Plans:
 - [x] 06-08-PLAN.md — E2E trace tool: cron-job.org execution → run → rows → REST (E2E-01)
 
 **Wave 4** *(blocked on Wave 3 completion and 05-08 sign-off)*
-- [ ] 06-09-PLAN.md — Owner: confirm the published contract, [BLOCKING] schema push of both migrations, live read/hidden/write checks
+- [x] 06-09-PLAN.md — Owner: confirm the published contract, [BLOCKING] schema push of both migrations, live read/hidden/write checks
 
 **Wave 5** *(blocked on Wave 4 completion)*
 - [ ] 06-10-PLAN.md — Owner: 5-minute log, permanent freshness alarm and drill, probe smoke check, dry-soak report; go/no-go for the 72 h clock
@@ -374,5 +374,5 @@ instant and 07-14 waits for 07-12.
 | 3. Real-Data Validation | 5/5 | Complete    | 2026-10-21 |
 | 4. Supabase Store & Writer | 12/12 | Complete    | 2026-10-24 |
 | 5. Scheduled Live Runs | 8/8 | Complete    | 2026-10-26 |
-| 6. Exposure & E2E Verification | 8/13 | In Progress | - |
+| 6. Exposure & E2E Verification | 9/13 | In Progress | - |
 | 7. Per-City Conductors, Shadow Refit and Early Model Selection | 0/19 | Planned | - |
