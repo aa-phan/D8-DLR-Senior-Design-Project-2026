@@ -38,7 +38,7 @@ key-files:
 
 key-decisions:
   - "supabase-js approved at exactly 2.117.3 (not the 2.118.0 named in the research): the owner's registry check recorded it, and the command sheet pins it so neither @2 nor latest is typed"
-  - "The PSS/E interpreter question is non-blocking (D-11): at plan close the owner has not confirmed sending it, so it is recorded as an open owner follow-up with the date TBD"
+  - "The PSS/E interpreter question is non-blocking (D-11): the owner sent it on the evening of 2026-10-26 US Central (2026-10-27 UTC); the answer is an open owner follow-up"
 
 patterns-established:
   - "Trace by an unchanged production trigger: the trace used the hh:05 cron-job.org execution as it was (04:05:02Z, HTTP 204); the dispatch job was not modified"
@@ -157,7 +157,7 @@ The differences between SQL and REST that remain (for example `1825.0` against `
 
 ## PSS/E interpreter question (D-11)
 
-**Not confirmed sent.** At plan close the owner has not confirmed sending the question (`sys.version` and `ssl.OPENSSL_VERSION` inside PSS/E's Python, plus one run of `read_ratings.py`) to the Power Systems team. Per the plan this is non-blocking: the phase does not wait for the answer. Open owner follow-up, send date TBD. If the answer is Python 2.7, it is recorded as a follow-up (the example targets 3.7+), not a blocker.
+**Sent.** The owner sent the question (`sys.version` and `ssl.OPENSSL_VERSION` inside PSS/E's Python, plus one run of `read_ratings.py`) to the Power Systems team on the evening of 2026-10-26 US Central (2026-10-27 UTC), shortly after plan close; the team expects to answer on 2026-10-27. Per the plan this is non-blocking: the phase does not wait for the answer. Open owner follow-up: record the answer. If the answer is Python 2.7, it is recorded as a follow-up (the example targets 3.7+), not a blocker.
 
 ## Evidence hygiene
 
@@ -177,12 +177,12 @@ Note: `actuals.commits: 6` is measured with `git rev-list --count 45ea9e3..dd9fa
 
 ## Deviations from Plan
 
-1. **PSS/E question not confirmed sent.** The plan's must-have says it "was sent". The owner has not confirmed that at close. The plan marks it non-blocking (D-11), so the plan completes with this open; tracked as an owner follow-up (see Discrepancies). The plan's task 3 done criterion "the PSS/E question as sent" is therefore NOT met as written.
+1. **PSS/E question sent just after plan close.** At first close the owner had not yet confirmed sending it; the owner then confirmed it was sent on the evening of 2026-10-26 US Central (2026-10-27 UTC). The must-have "was sent" is now met; the answer is pending (non-blocking, D-11).
 2. **Co-Authored-By line.** The plan text names Claude Opus 5.5; commits in this continuation carry the runtime's configured attribution line instead (Claude Sonnet 5.5), as the environment instructs.
 
 ## Discrepancies
 
-- **PSS/E question unsent** (above): plan truth not met as written; owner follow-up, date TBD.
+- **PSS/E question** (above): sent 2026-10-26 US Central (2026-10-27 UTC) after first close; answer pending.
 - **MIDLAND `observation_time` is 2026-10-27T02:00:00Z while the other three cities show 03:00:00Z**, all in the same run and all `valid_time` 04:00Z. SQL and REST agree, so the trace is clean; the row is current. This is informational: MIDLAND's newest upstream weather observation was one hour older than the others at that run. Worth a glance if it repeats during the soak (06-12 data).
 - **AUSTIN published the static fallback again** (G4: computed 1098 A judged implausible, so 1825 A). Same pattern the dry soak recorded (AUSTIN 50 % fallback). The row is fresh and valid for the trace; the underlying cause is for a later review, not this plan.
 - **Owner-side facts** (all example outputs, the registry checks, the npm install result, the cron-job.org execution time) are relayed by the owner. The executor verified only what is in the committed trace files and the repository, and never contacted the live project.
@@ -199,7 +199,7 @@ None. No placeholder values or empty data flows in the files this plan created.
 ## User Setup Required
 
 Done by the owner during this plan (examples, scratch install, trace). Open owner items:
-- Send the PSS/E interpreter question to the Power Systems team and note the date (non-blocking).
+- Record the Power Systems team's answer to the PSS/E interpreter question (sent 2026-10-26 US Central; non-blocking).
 - Optionally delete the scratch folder `~/dlr-js-check` (outside the repository) and unset `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` in the terminal used.
 
 ## Threat Flags
