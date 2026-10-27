@@ -19,6 +19,7 @@ plain asserts, no test classes, no network.
 
 import contextlib
 import glob
+import hashlib
 import os
 import re
 from datetime import datetime, timedelta, timezone
@@ -30,6 +31,12 @@ import latest_rating_contract as contract
 import local_pg
 
 _MIGRATIONS_DIR = local_pg.MIGRATIONS_DIR
+# SHA-256 of the two Phase 6 migrations as applied to the live project (plan 06-09, 2026-10-26).
+# Both files are live: a fix goes in a new additive migration, never an edit here.
+_APPLIED_PHASE6_MIGRATION_SHA256 = {
+    "20261026195124_expose_latest_rating.sql": "7e2d5f0192e4eab126f66a703ac31d69504c463885e34f764ff78eb465dea0cb",
+    "20261026204258_soak_freshness_log.sql": "246da223294c58809e03743abb62f6fa0107015488af631b0cf64fbffa8c8552",
+}
 _PHASE4_MIGRATIONS = (
     os.path.join(_MIGRATIONS_DIR, "20261019000000_create_city_rating.sql"),
     os.path.join(_MIGRATIONS_DIR, "20261023000000_city_rating_utc_hour_check_and_run_log_comments.sql"),
@@ -646,3 +653,10 @@ def test_verify_exposure_sql_reports_every_check_ok(pg_url):
         conn.execute("create policy sneaky_write on public.city_rating for insert to anon with check (true)")
         bad = {r["check_name"] for r in local_pg.run_select_file(conn, _VERIFY_SQL) if r["ok"] is not True}
     assert {"read_policy_city_rating_public_read", "no_write_policy_for_anon_or_authenticated"} <= bad
+
+
+def test_phase6_migrations_are_unchanged_after_apply():
+    # Both files are applied to the live project; neither may be edited afterwards (T-06-31).
+    for name, expected in _APPLIED_PHASE6_MIGRATION_SHA256.items():
+        with open(os.path.join(_MIGRATIONS_DIR, name), "rb") as handle:
+            assert hashlib.sha256(handle.read()).hexdigest() == expected, name
