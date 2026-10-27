@@ -36,6 +36,8 @@ Result: **40 passed, 0 skipped, 0 failed.** In plain English:
 
 Do not change the hourly dispatch job on cron-job.org to make the trace easier (plan prohibition): the trace uses the execution history as it is. Do not touch the 06-10 jobs (alarm, soak) either.
 
+**The 72 hour soak is running** (window start 2026-10-27T03:35:00Z, end 2026-10-30T03:35:00Z). Everything in these steps is read only (GET and HEAD requests, one read-only database session, `gh run view`), so it does not disturb the soak. Do not trigger anything by hand, edit a job, or re-run a workflow.
+
 ## 3. Owner steps, in order
 
 All commands run from `/Users/aphan/Senior_Design`, in your own terminal (in Claude Code you can prefix each with `! ` for a command that needs no value typed in; Step 1 must be typed in your own terminal). The two values below are never pasted into chat, a file or a commit. `.env` does not hold `SUPABASE_URL` or `SUPABASE_PUBLISHABLE_KEY`; read them from the Supabase dashboard (Project Settings, Data API / API keys). Use the **publishable** key, never the secret key.
@@ -74,12 +76,13 @@ echo "exit=$?"
 
 Expect exit 0 each time: four city lines and a history line (row count, first and last `valid_time`). The script does not print its Python version; the interpreters are 3.9.6 (`/usr/bin/python3`, deliberately older than 3.11, D-11) and 3.12.13 (`.venv/bin/python`), as recorded in section 1.
 
-### Step 4. supabase-js in a scratch folder (only after the Task 2 checkpoint is approved)
+### Step 4. supabase-js in a scratch folder (Task 2 checkpoint approved: version 2.117.3)
 
-Replace `<approved version>` with the exact version you approve at the checkpoint (for example `2.117.0`; do not type `@2` or `latest`).
+The approved exact version is **2.117.3** (owner reply "approved 2.117.3"; registry facts recorded at the checkpoint: published 2026-10-07, maintainer `@supabase.io`, GitHub Actions trusted publishing, no install scripts, Node 22 or newer). Do not type `@2` or `latest`.
 
 ```
-mkdir -p ~/dlr-js-check && cd ~/dlr-js-check && npm init -y && npm install --ignore-scripts @supabase/supabase-js@<approved version>
+mkdir -p ~/dlr-js-check && cd ~/dlr-js-check && npm init -y && npm install --ignore-scripts --save-exact @supabase/supabase-js@2.117.3
+node -e "const p=require('./package-lock.json').packages['node_modules/@supabase/supabase-js']; console.log(p.version); console.log(p.integrity)"
 cp /Users/aphan/Senior_Design/docs/integration/examples/supabase_js.mjs .
 node --version
 node supabase_js.mjs
@@ -87,7 +90,9 @@ echo "exit=$?"
 cd /Users/aphan/Senior_Design
 ```
 
-Expect exit 0: a table of four rows and a history count. The scratch folder is outside the repository on purpose; nothing is added to the repository. The copy of `supabase_js.mjs` is run from the scratch folder so Node finds the package there. If you rejected the package at the checkpoint, skip this step and say "not run: package rejected".
+The integrity check is the `node -e` line. It must print exactly `2.117.3` and then `sha512-K+f8PimXDunPWQ63CKRXaF5pbVPJxmfw5ryAnh0s9S9PkwcuqBjiSpIaqpF7KLDljeYwXIL85ST8QxaO0+XuvA==`. If either differs, stop, do not run the script, and tell me.
+
+Expect exit 0: a table of four rows and a history count. The scratch folder is outside the repository on purpose; nothing is added to the repository. The copy of `supabase_js.mjs` is run from the scratch folder so Node finds the package there. Install scripts are off (`--ignore-scripts`) for the package and its dependencies.
 
 ### Step 5. Find the execution's actual time in cron-job.org
 
@@ -116,6 +121,8 @@ echo "exit=$?"
 
 It also needs an authenticated GitHub CLI (`gh auth status` should say you are logged in). Expect exit 0 and PASS lines for each link. If it reports "superseded" or "2 candidates" or "0 candidates", repeat with the **next hour's** execution (Step 5 again); do not edit the job. Exit 1 means a link failed: send me the printed PASS/FAIL lines.
 
+The trace writes exactly two files, both in the phase directory (`.planning/workstreams/production-pipeline/phases/06-exposure-e2e-verification/`): `06-E2E-TRACE.md` (the four-way table) and `06-e2e-trace.json` (the same evidence, machine readable). Nothing else is written, and the database session is set read only before its first statement. You do not need to commit them; I check and commit them after you reply.
+
 ### Step 7. Send the PSS/E question (does not block the phase)
 
 Send the Power Systems team this text (from `docs/integration/rest-api.md`, "PSS/E environment"):
@@ -135,5 +142,7 @@ The phase does not wait for the reply. If the answer is Python 2.7, that becomes
 - `exit=2` from `read_ratings.py` means a missing environment value.
 
 ## 5. After you reply
+
+Before pasting anything into chat, scan it for the project URL, the key or a database address; the trace output is already redacted, the other outputs print row values only, but check anyway and replace any hit with `<redacted>`.
 
 Reply "done" with each example's exit code and first lines, the trace's PASS/FAIL lines, and the date the PSS/E question was sent. The executor then checks the trace JSON (exit 0, one candidate run, conclusion success, four cities each with match true, the `is_provisional` check passed), runs the secret scan on the staged trace files, confirms no `package.json` or `node_modules` exists in the repository, commits both trace files, and writes the SUMMARY. Nothing is pushed.
