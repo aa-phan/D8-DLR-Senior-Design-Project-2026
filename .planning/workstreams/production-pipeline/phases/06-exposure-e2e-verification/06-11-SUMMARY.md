@@ -38,7 +38,7 @@ key-files:
 
 key-decisions:
   - "supabase-js approved at exactly 2.117.3 (not the 2.118.0 named in the research): the owner's registry check recorded it, and the command sheet pins it so neither @2 nor latest is typed"
-  - "The PSS/E interpreter question is non-blocking (D-11): the owner sent it on the evening of 2026-10-26 US Central (2026-10-27 UTC); the answer is an open owner follow-up"
+  - "The PSS/E interpreter question is non-blocking (D-11): the owner sent it on the evening of 2026-10-26 US Central (2026-10-27 UTC) and the team answered on 2026-10-27: Python 3.14.0, OpenSSL 3.0.18, read_ratings.py exit 0"
 
 patterns-established:
   - "Trace by an unchanged production trigger: the trace used the hh:05 cron-job.org execution as it was (04:05:02Z, HTTP 204); the dispatch job was not modified"
@@ -157,7 +157,13 @@ The differences between SQL and REST that remain (for example `1825.0` against `
 
 ## PSS/E interpreter question (D-11)
 
-**Sent.** The owner sent the question (`sys.version` and `ssl.OPENSSL_VERSION` inside PSS/E's Python, plus one run of `read_ratings.py`) to the Power Systems team on the evening of 2026-10-26 US Central (2026-10-27 UTC), shortly after plan close; the team expects to answer on 2026-10-27. Per the plan this is non-blocking: the phase does not wait for the answer. Open owner follow-up: record the answer. If the answer is Python 2.7, it is recorded as a follow-up (the example targets 3.7+), not a blocker.
+**Sent.** The owner sent the question (`sys.version` and `ssl.OPENSSL_VERSION` inside PSS/E's Python, plus one run of `read_ratings.py`) to the Power Systems team on the evening of 2026-10-26 US Central (2026-10-27 UTC), shortly after plan close; the team answered on 2026-10-27 (relayed by the owner):
+
+- `sys.version`: `3.14.0 (tags/v3.14.0:ebf955d, Oct  7 2025, 10:15:03) [MSC v.1944 64 bit (AMD64)]`
+- `ssl.OPENSSL_VERSION`: `OpenSSL 3.0.18 30 Sep 2025`
+- `python read_ratings.py --city AUSTIN` inside PSS/E's Python: exit status 0; four city lines (all `stale=False`, `provisional=True`; AUSTIN `fallback` G4 1825.0 A) and 66 AUSTIN rows from 2026-10-24T23:00:00Z to 2026-10-27T16:00:00Z.
+
+PSS/E's interpreter is Python 3.14 with TLS-capable OpenSSL 3.0, well above the 3.7 floor, so the standard-library example works as written there. No Python 2.7 follow-up is needed (assumption A21 settled for PSS/E).
 
 ## Evidence hygiene
 
@@ -177,12 +183,12 @@ Note: `actuals.commits: 6` is measured with `git rev-list --count 45ea9e3..dd9fa
 
 ## Deviations from Plan
 
-1. **PSS/E question sent just after plan close.** At first close the owner had not yet confirmed sending it; the owner then confirmed it was sent on the evening of 2026-10-26 US Central (2026-10-27 UTC). The must-have "was sent" is now met; the answer is pending (non-blocking, D-11).
+1. **PSS/E question sent just after plan close.** At first close the owner had not yet confirmed sending it; the owner then confirmed it was sent on the evening of 2026-10-26 US Central (2026-10-27 UTC). The must-have "was sent" is now met, and the answer arrived on 2026-10-27 (Python 3.14.0, OpenSSL 3.0.18, `read_ratings.py` exit 0 inside PSS/E).
 2. **Co-Authored-By line.** The plan text names Claude Opus 5.5; commits in this continuation carry the runtime's configured attribution line instead (Claude Sonnet 5.5), as the environment instructs.
 
 ## Discrepancies
 
-- **PSS/E question** (above): sent 2026-10-26 US Central (2026-10-27 UTC) after first close; answer pending.
+- **PSS/E question** (above): sent 2026-10-26 US Central (2026-10-27 UTC) after first close; answered 2026-10-27 (Python 3.14.0, OpenSSL 3.0.18, example exit 0).
 - **MIDLAND `observation_time` is 2026-10-27T02:00:00Z while the other three cities show 03:00:00Z**, all in the same run and all `valid_time` 04:00Z. SQL and REST agree, so the trace is clean; the row is current. This is informational: MIDLAND's newest upstream weather observation was one hour older than the others at that run. Worth a glance if it repeats during the soak (06-12 data).
 - **AUSTIN published the static fallback again** (G4: computed 1098 A judged implausible, so 1825 A). Same pattern the dry soak recorded (AUSTIN 50 % fallback). The row is fresh and valid for the trace; the underlying cause is for a later review, not this plan.
 - **Owner-side facts** (all example outputs, the registry checks, the npm install result, the cron-job.org execution time) are relayed by the owner. The executor verified only what is in the committed trace files and the repository, and never contacted the live project.
@@ -199,7 +205,6 @@ None. No placeholder values or empty data flows in the files this plan created.
 ## User Setup Required
 
 Done by the owner during this plan (examples, scratch install, trace). Open owner items:
-- Record the Power Systems team's answer to the PSS/E interpreter question (sent 2026-10-26 US Central; non-blocking).
 - Optionally delete the scratch folder `~/dlr-js-check` (outside the repository) and unset `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` in the terminal used.
 
 ## Threat Flags
@@ -209,7 +214,7 @@ None. No new network endpoints, auth paths or schema surface; no URL, project re
 ## Next Phase Readiness
 
 - API-02 and E2E-01 evidence is committed. 06-12 (soak close, earliest at 2026-10-30T03:35:00Z) and 06-13 (permission re-check) are unaffected: this plan's reads were GET and HEAD plus one read-only database session and did not touch the soak jobs.
-- Open follow-up carried forward: PSS/E interpreter answer.
+- PSS/E interpreter answered (Python 3.14.0, OpenSSL 3.0.18); no follow-up carried forward.
 
 ---
 *Phase: 06-exposure-e2e-verification*
