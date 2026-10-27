@@ -119,10 +119,10 @@ proposals.
 
 - [ ] **API-01**: The consumer tables or views are exposed through Supabase's REST API, read-only
   for the anon role under RLS. A `latest_rating` view returns one current row per city.
-- [ ] **API-02**: Documented example requests that work as written: `curl` for any consumer,
+- [x] **API-02**: Documented example requests that work as written: `curl` for any consumer,
   `supabase-js` for the frontend, and Python stdlib `urllib` for the PSS/E environment (no
   third-party packages).
-- [ ] **E2E-01**: End to end, a cron-job.org trigger produces a workflow run, which produces new
+- [x] **E2E-01**: End to end, a cron-job.org trigger produces a workflow run, which produces new
   rows, which are visible through the REST API with matching values, for all four cities.
 - [ ] **E2E-02**: Live at any time: over a soak window of at least 72 h, querying `latest_rating`
   at any moment returns, for every city, a row whose `valid_time` is no older than one cadence
@@ -223,8 +223,8 @@ proposals.
 | SCHED-01 | Phase 5 | Complete |
 | SCHED-02 | Phase 5 | Complete |
 | API-01 | Phase 6 | Pending |
-| API-02 | Phase 6 | Pending |
-| E2E-01 | Phase 6 | Pending |
+| API-02 | Phase 6 | Complete |
+| E2E-01 | Phase 6 | Complete |
 | E2E-02 | Phase 6 | Pending |
 | E2E-03 | Phase 6 | Pending |
 | COND-01 | Phase 7 | Pending |
