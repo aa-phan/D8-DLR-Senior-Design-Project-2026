@@ -109,6 +109,12 @@ CASE_ERRORS = {
     3: "error opening the case file",
     4: "prerequisite requirements not met",
 }
+SAVE_ERRORS = {
+    1: "case file name is blank",
+    2: "file error",
+    3: "file error",
+    4: "prerequisite requirements not met",
+}
 BRNDAT_ERRORS = {
     1: "bus not found",
     2: "branch not found",
@@ -310,8 +316,13 @@ class PsseApi(object):
 
     # -- reads ---------------------------------------------------------------------------
 
+    @staticmethod
+    def _branch_selectors(flag):
+        # Identical for every bulk call so the columns stay aligned (research Pitfall 8).
+        return dict(sid=-1, owner=1, ties=1, flag=flag, entry=1)
+
     def _branch_read(self, flag):
-        selectors = dict(sid=-1, owner=1, ties=1, flag=flag, entry=1)
+        selectors = self._branch_selectors(flag)
         ints = self._bulk("abrnint", 3, string=["FROMNUMBER", "TONUMBER", "STATUS"], **selectors)
         chars = self._bulk("abrnchar", 1, string=["ID"], **selectors)
         if len(chars[0]) != len(ints[0]):
@@ -338,3 +349,166 @@ class PsseApi(object):
                 transformers[row.key] = row
         return ([lines[key] for key in sorted(lines)],
                 [transformers[key] for key in sorted(transformers)])
+
+    def bus_table(self):
+        """dict bus number -> BusRow for every bus, with base kV, voltage and the case's limits."""
+        ints = self._bulk("abusint", 2, sid=-1, flag=2, string=["NUMBER", "TYPE"])
+        reals = self._bulk("abusreal", 6, sid=-1, flag=2,
+                           string=["BASE", "PU", "NVLMLO", "NVLMHI", "EVLMLO", "EVLMHI"])
+        if len(reals[0]) != len(ints[0]):
+            raise PsseCallError("abusreal", None, _UNEQUAL)
+        if not all(_is_int(v) for column in ints for v in column) or not all(
+                _is_number(v) for column in reals for v in column):
+            raise PsseCallError("abusint", None, _COLUMN_TYPE)
+        table = {}
+        for index, number in enumerate(ints[0]):
+            if number in table:
+                raise PsseCallError("abusint", None, "duplicate bus number")
+            table[number] = BusRow(number, ints[1][index],
+                                   *[float(column[index]) for column in reals])
+        return table
+
+    def branch_loading(self, rate_set, basis):
+        """BranchFlow for every line (any status), sorted by key.
+
+        `basis` "current" reads the larger-end percent of current rating, "mva" the percent of
+        MVA rating (research D-11); the rating, P and the larger-end apparent flow come with it.
+        """
+        pct_item = pct_string(rate_set, basis)
+        selectors = self._branch_selectors(2)
+        ints = self._bulk("abrnint", 3, string=["FROMNUMBER", "TONUMBER", "STATUS"], **selectors)
+        chars = self._bulk("abrnchar", 1, string=["ID"], **selectors)
+        reals = self._bulk("abrnreal", 4, string=[rate_set, pct_item, "P", "MAXMVA"], **selectors)
+        if len(chars[0]) != len(ints[0]):
+            raise PsseCallError("abrnchar", None, _UNEQUAL)
+        if len(reals[0]) != len(ints[0]):
+            raise PsseCallError("abrnreal", None, _UNEQUAL)
+        if (not all(_is_int(v) for column in ints for v in column)
+                or not all(isinstance(v, str) for v in chars[0])
+                or not all(_is_number(v) for column in reals for v in column)):
+            raise PsseCallError("abrnreal", None, _COLUMN_TYPE)
+        flows = {}
+        for index in range(len(ints[0])):
+            row = BranchFlow(ints[0][index], ints[1][index], chars[0][index].strip(),
+                             ints[2][index] == 1, *[float(column[index]) for column in reals])
+            if row.key in flows:
+                raise PsseCallError("abrnint", None, "duplicate branch key")
+            flows[row.key] = row
+        return [flows[key] for key in sorted(flows)]
+
+    @staticmethod
+    def _ref_parts(ref):
+        """(from bus, to bus, stripped ckt) of a BranchRef or BranchRow, validated."""
+        from_bus, to_bus, ckt = ref.from_bus, ref.to_bus, ref.ckt
+        if not _is_int(from_bus) or not _is_int(to_bus) or not isinstance(ckt, str) or not ckt.strip():
+            raise ValueError("a branch needs integer bus numbers and a circuit identifier")
+        return from_bus, to_bus, ckt.strip()
+
+    def read_rate(self, ref, rate_set):
+        """The rating (MVA) of rate set `rate_set` on the branch `ref`, read from the case."""
+        if rate_set not in RATE_INDEX:
+            raise ValueError("rate_set must be one of %s" % ", ".join(sorted(RATE_INDEX)))
+        from_bus, to_bus, ckt = self._ref_parts(ref)
+        result = self._call("brndat", ibus=from_bus, jbus=to_bus, ickt=ckt, string=rate_set)
+        if not isinstance(result, (tuple, list)) or len(result) != 2:
+            raise PsseCallError("brndat", None, _SHAPE)
+        ierr = self._plain_ierr("brndat", result[0])
+        if ierr != 0:
+            raise PsseCallError("brndat", ierr, BRNDAT_ERRORS.get(ierr, "unknown brndat error"))
+        if not _is_number(result[1]):
+            raise PsseCallError("brndat", None, _SHAPE)
+        return float(result[1])
+
+    # -- writes --------------------------------------------------------------------------
+
+    def _branch_change(self, ref, intgar, ratings):
+        from_bus, to_bus, ckt = self._ref_parts(ref)
+        ierr = self._plain_ierr("branch_chng_3", self._call(
+            "branch_chng_3", ibus=from_bus, jbus=to_bus, ckt=ckt, intgar=intgar,
+            realar=[self._real_sentinel] * 12, ratings=ratings, namear=self._char_sentinel))
+        if ierr > 0:
+            raise PsseCallError("branch_chng_3", ierr,
+                                BRANCH_CHNG_ERRORS.get(ierr, "unknown branch_chng_3 error"))
+        if ierr < 0:
+            # Data warnings (for example "branch reactance is 0.0"): accepted, because the
+            # read-back of the rating decides whether the write took (research D-09).
+            self.warnings.append(("branch_chng_3", ierr))
+
+    def set_rate(self, ref, rate_set, mva):
+        """Write `mva` (finite, above 0) to rate set `rate_set` of `ref`, leaving everything else."""
+        if rate_set not in RATE_INDEX:
+            raise ValueError("rate_set must be one of %s" % ", ".join(sorted(RATE_INDEX)))
+        if not _is_number(mva):
+            raise ValueError("mva must be a number")
+        try:
+            value = float(mva)
+        except OverflowError:
+            raise ValueError("mva is out of range") from None
+        if not (math.isfinite(value) and value > 0):
+            raise ValueError("mva must be finite and greater than 0")
+        ratings = [self._real_sentinel] * 12
+        ratings[RATE_INDEX[rate_set]] = value
+        self._branch_change(ref, [self._int_sentinel] * 6, ratings)
+
+    def set_status(self, ref, in_service):
+        """Put the branch in service (True) or out of service (False); ratings are untouched."""
+        if not isinstance(in_service, bool):
+            raise ValueError("in_service must be True or False")
+        intgar = [1 if in_service else 0] + [self._int_sentinel] * 5
+        self._branch_change(ref, intgar, [self._real_sentinel] * 12)
+
+    @staticmethod
+    def _subsystem_id(sid):
+        if not _is_int(sid) or not 0 <= sid <= 11:
+            raise ValueError("sid must be an integer from 0 to 11")
+        return sid
+
+    def define_subsystem(self, sid, buses):
+        """Define subsystem `sid` as exactly these buses (bsys)."""
+        self._subsystem_id(sid)
+        members = list(buses)
+        if not members or not all(_is_int(bus) and bus > 0 for bus in members):
+            raise ValueError("buses must be a non-empty list of positive bus numbers")
+        ierr = self._plain_ierr("bsys", self._call(
+            "bsys", sid=sid, usekv=0, basekv=[self._real_sentinel, self._real_sentinel],
+            numarea=0, areas=[], numbus=len(members), buses=members, numowner=0, owners=[],
+            numzone=0, zones=[]))
+        if ierr != 0:
+            raise PsseCallError("bsys", ierr, _NOT_LISTED)
+
+    def scale_load(self, sid, increment_mw):
+        """Add `increment_mw` to the load of subsystem `sid` at constant P/Q (scal_2, research A13)."""
+        self._subsystem_id(sid)
+        try:
+            increment = float(increment_mw) if _is_number(increment_mw) else float("nan")
+        except OverflowError:
+            increment = float("nan")
+        if not math.isfinite(increment):
+            raise ValueError("increment_mw must be a finite number")
+        result = self._call(
+            "scal_2", sid=sid, all=0, apiopt=0, status=[self._int_sentinel, 3, 0, 1, 0],
+            scalval=[increment, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        if not isinstance(result, (tuple, list)) or not result:
+            raise PsseCallError("scal_2", None, _SHAPE)
+        ierr = self._plain_ierr("scal_2", result[0])
+        if ierr != 0:
+            raise PsseCallError("scal_2", ierr, _NOT_LISTED)
+
+    def save_case(self, path):
+        """Save the working case to `path`; never onto the protected case file (Pitfall 4)."""
+        if _normalise_path(path) == self._protected:
+            raise CaseProtected("refusing to save onto the case file that was loaded")
+        ierr = self._plain_ierr("save", self._call("save", path))
+        if ierr != 0:
+            raise PsseCallError("save", ierr, SAVE_ERRORS.get(ierr, "unknown save error"))
+
+    def version(self):
+        """The PSS/E version as 'major.minor.modlvl', or 'unknown' on any failure."""
+        try:
+            result = self._call("psseversion")
+            if (not isinstance(result, (tuple, list)) or len(result) < 4
+                    or not all(_is_int(part) for part in result[1:4])):
+                return "unknown"
+            return "%d.%d.%d" % tuple(result[1:4])
+        except Exception:
+            return "unknown"

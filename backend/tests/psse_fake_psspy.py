@@ -283,3 +283,177 @@ class FakePsspy(object):
             else:
                 return (3, [])
         return (0, columns)
+
+    @_recorded
+    def abrnreal(self, sid, owner, ties, flag, entry, string):
+        keys = self._branch_keys(sid, flag)
+        if keys is None:
+            return (4, [])
+        columns = []
+        for item in string:
+            column = []
+            for key in keys:
+                value = self._branch_real(self.fake_state.branches[key], item)
+                if value is None:
+                    return (3, [])
+                column.append(value)
+            columns.append(column)
+        return (0, columns)
+
+    @staticmethod
+    def _branch_real(branch, item):
+        """One real item of a branch, or None for an unknown item name."""
+        if item in ("RATEA", "RATEB", "RATEC"):
+            return branch["rates"]["ABC".index(item[-1])]
+        if item == "P":
+            return branch["p_mw"]
+        if item == "MAXMVA":
+            return branch["max_mva"]
+        for prefix, field in (("MAXPCTRATE", "current_mva"), ("MXPCTMVARAT", "max_mva")):
+            if item.startswith(prefix) and item[len(prefix):] in ("A", "B", "C"):
+                rate = branch["rates"]["ABC".index(item[-1])]
+                return 100.0 * branch[field] / rate if rate else 0.0
+        return None
+
+    # -- bulk bus reads ----------------------------------------------------------------------
+
+    def _bus_numbers(self, sid, flag):
+        """Bus numbers for abus* flag 1 (in-service, type below 4) or 2 (all); None when unsupported."""
+        if self.fake_state is None or sid != -1 or flag not in (1, 2):
+            return None
+        return [number for number in sorted(self.fake_state.buses)
+                if flag == 2 or self.fake_state.buses[number]["type_code"] < 4]
+
+    @_recorded
+    def abusint(self, sid, flag, string):
+        numbers = self._bus_numbers(sid, flag)
+        if numbers is None:
+            return (4, [])
+        columns = []
+        for item in string:
+            if item == "NUMBER":
+                columns.append(list(numbers))
+            elif item == "TYPE":
+                columns.append([self.fake_state.buses[number]["type_code"] for number in numbers])
+            else:
+                return (3, [])
+        return (0, columns)
+
+    @_recorded
+    def abusreal(self, sid, flag, string):
+        numbers = self._bus_numbers(sid, flag)
+        if numbers is None:
+            return (4, [])
+        fields = {"BASE": "base_kv", "PU": "pu", "NVLMLO": "nvlmlo", "NVLMHI": "nvlmhi",
+                  "EVLMLO": "evlmlo", "EVLMHI": "evlmhi"}
+        columns = []
+        for item in string:
+            if item not in fields:
+                return (3, [])
+            columns.append([self.fake_state.buses[number][fields[item]] for number in numbers])
+        return (0, columns)
+
+    # -- single branch read and change -------------------------------------------------------
+
+    @_recorded
+    def brndat(self, ibus, jbus, ickt, string):
+        if self.fake_state is None:
+            return (4, 0.0)
+        if ibus not in self.fake_state.buses or jbus not in self.fake_state.buses:
+            return (1, 0.0)
+        branch = self.fake_state.branches.get(_branch_key(ibus, jbus, ickt))
+        if branch is None:
+            return (2, 0.0)
+        if string not in ("RATEA", "RATEB", "RATEC"):
+            return (3, 0.0)
+        return (0, branch["rates"]["ABC".index(string[-1])])
+
+    @_recorded
+    def branch_chng_3(self, ibus, jbus, ckt, intgar, realar, ratings, namear):
+        if self.fake_state is None:
+            return 4
+        if ibus not in self.fake_state.buses or jbus not in self.fake_state.buses:
+            return 1
+        branch = self.fake_state.branches.get(_branch_key(ibus, jbus, ckt))
+        if branch is None:
+            return 9
+        if branch["kind"] == "transformer":
+            return 3
+        lists_ok = (isinstance(intgar, list) and len(intgar) == 6
+                    and isinstance(realar, list) and len(realar) == _RATE_SLOTS
+                    and isinstance(ratings, list) and len(ratings) == _RATE_SLOTS)
+        if not lists_ok:
+            return 1
+        if any(value != REAL_SENTINEL for value in realar) or namear != CHAR_SENTINEL:
+            return 1
+        if any(value != INT_SENTINEL for value in intgar[1:]):
+            return 1
+        if intgar[0] != INT_SENTINEL and not (_is_int(intgar[0]) and intgar[0] in (0, 1)):
+            return 1
+        for value in ratings:
+            if value == REAL_SENTINEL:
+                continue
+            if (isinstance(value, bool) or not isinstance(value, (int, float))
+                    or not math.isfinite(value) or not value > 0):
+                return 1
+        if intgar[0] != INT_SENTINEL:
+            branch["status"] = intgar[0]
+        for index, value in enumerate(ratings):
+            if value != REAL_SENTINEL:
+                branch["rates"][index] = float(value)
+        return 0
+
+    # -- save, subsystems and load scaling ---------------------------------------------------
+
+    @_recorded
+    def save(self, sfile):
+        if not isinstance(sfile, str) or not sfile.strip():
+            return 1
+        if self.fake_state is None:
+            return 4
+        if not os.path.isdir(os.path.dirname(os.path.abspath(sfile))):
+            return 3
+        try:
+            with open(sfile, "w") as handle:
+                handle.write("FAKE PSSE CASE\n")
+        except OSError:
+            return 3
+        self._registry[_normalise(sfile)] = copy.deepcopy(self.fake_state)
+        self.fake_saved_paths.append(sfile)
+        return 0
+
+    @_recorded
+    def bsys(self, sid, usekv, basekv, numarea, areas, numbus, buses, numowner, owners, numzone,
+             zones):
+        if self.fake_state is None:
+            return 5
+        if not _is_int(sid) or not 0 <= sid <= 11:
+            return 1
+        if usekv != 0 or numarea != len(areas) or numowner != len(owners) or numzone != len(zones):
+            return 4
+        if numbus != len(buses):
+            return 2
+        if any(bus not in self.fake_state.buses for bus in buses):
+            return 3
+        self.fake_subsystems[sid] = list(buses)
+        return 0
+
+    @_recorded
+    def scal_2(self, sid, all, apiopt, status, scalval):  # noqa: A002 - the manual's name
+        if sid not in self.fake_subsystems or self.fake_state is None:
+            return (1, [], [])
+        if all != 0 or apiopt != 0:
+            return (2, [], [])
+        if len(status) != 5 or status[1] != 3 or status[3] != 1 or len(scalval) != 7:
+            return (4, [], [])
+        loads = self.fake_state.loads
+        loaded = [bus for bus in self.fake_subsystems[sid] if loads.get(bus, [0.0, 0.0])[0] != 0.0]
+        total = sum(loads[bus][0] for bus in loaded)
+        if loaded:
+            factor = (total + scalval[0]) / total
+            if factor < 0.0:
+                return (6, [], [])
+            for bus in loaded:
+                loads[bus] = [loads[bus][0] * factor, loads[bus][1] * factor]
+        return (0, [sum(loads[bus][0] for bus in loaded), sum(loads[bus][1] for bus in loaded)],
+                [0.0])
