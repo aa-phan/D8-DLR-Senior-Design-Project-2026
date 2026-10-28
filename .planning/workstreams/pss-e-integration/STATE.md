@@ -2,15 +2,19 @@
 gsd_state_version: "1.0"
 milestone: v1.6
 milestone_name: PSS/E Integration
-status: planning
-last_updated: "2026-10-26T19:50:08.000Z"
-last_activity: 2026-10-26
+current_phase: 1
+current_phase_name: Result-Table Spec and Rating I/O
+status: executing
+stopped_at: Completed 01-01-PLAN.md
+last_updated: "2026-10-28T10:31:49.910Z"
+last_activity: 2026-10-28
+last_activity_desc: Phase 1 execution started
+state_head: 68b0f43601d04bc31dada54c259f9db4a05c4e6c
 progress:
   total_phases: 3
   completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
-  percent: 0
+  total_plans: 5
+  completed_plans: 1
 ---
 
 # Project State
@@ -26,10 +30,10 @@ higher than the static rating.
 
 ## Current Position
 
-Phase: 1 of 3 (Result-Table Spec and Rating I/O)
-Plan: 0 of TBD in current phase
-Status: Ready to plan
-Last activity: 2026-10-26 — Roadmap created (3 phases, 16 requirements mapped)
+Phase: 1 (Result-Table Spec and Rating I/O) — EXECUTING
+Plan: 2 of 5
+Status: Ready to execute
+Last activity: 2026-10-28 — Phase 1 execution started
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -47,6 +51,11 @@ Progress: [░░░░░░░░░░] 0%
 | - | - | - | - |
 
 *Updated after each plan completion*
+**Per-Plan Metrics:**
+
+| Plan | Duration | Tasks | Files |
+|------|----------|-------|-------|
+| Phase 1 P01 | 22 min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -58,6 +67,8 @@ Recent decisions affecting current work:
 - [Milestone]: No standalone migration; the four result tables and the PSS/E write grant ship in production-pipeline Phase 6, and this workstream hands it the spec (DBX-01).
 - [Milestone]: Dashboard is out of scope; Power Systems owns the case and the branch mapping; `psspy` API choices belong to the implementer.
 - [Milestone]: Static rating is the fallback when a `city_rating` row is missing, older than 90 minutes or provisional (IN-01).
+- [Phase 1]: 01-01: result-table DDL stays reference-only; dlr_psse_writer holds INSERT and SELECT on the four psse_* tables, applied MVA enforced as sqrt(3) x kV x circuit amps / 1000 (no power factor) — D-01, D-03, D-06; proven on local Postgres 18.6 with Supabase legacy default grants
+- [Phase 1]: 01-01: static-fallback dispatch rows carry NULL city_rating link times (link rule); stale/provisional row link lives only in psse_run.ratings_used — psse_dispatched_capacity_link_rule_ck ties both link columns to rating_source = city_rating
 
 ### Pending Todos
 
@@ -80,6 +91,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-26 19:50
-Stopped at: Roadmap created; ready to plan Phase 1
+Last session: 2026-10-28T10:31:49.877Z
+Stopped at: Completed 01-01-PLAN.md
 Resume file: None

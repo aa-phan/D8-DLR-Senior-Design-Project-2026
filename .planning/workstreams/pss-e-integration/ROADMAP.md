@@ -34,6 +34,7 @@ the third needs Phase 6 live, Power Systems' case file and the laptop.
 ## Phase Details
 
 ### Phase 1: Result-Table Spec and Rating I/O
+
 **Goal**: Phase 6 has what it needs to build the PSS/E result tables and write grant, and the job can choose each city's rating and record every run.
 **Depends on**: Nothing (first phase). Time-critical: Phase 6 is building its migration now, so the spec goes first.
 **Requirements**: DBX-01, IN-01, WB-01, WB-02
@@ -42,14 +43,16 @@ the third needs Phase 6 live, Power Systems' case file and the laptop.
   2. For each city the job uses the newest `city_rating` row, and uses the city's static rating, recorded as such, when that row is missing, older than 90 minutes or provisional (today every row is provisional, so all four cities show static).
   3. Every run writes one run record (start and end time, case identifier, per-city rating used and its source, outcome ok, fallback or failed, any error), including a run whose study fails.
   4. A run that fails partway leaves no result set that looks complete: results are all written, or the run is marked failed.
-**Plans**: 5 plans
-- [ ] 01-01-PLAN.md — Reference DDL (four tables, `dlr_psse_writer` role, grants, RLS) proven on a local Postgres
+
+**Plans**: 1/5 plans executed
+- [x] 01-01-PLAN.md — Reference DDL (four tables, `dlr_psse_writer` role, grants, RLS) proven on a local Postgres
 - [ ] 01-02-PLAN.md — Rating selection with static fallback, units, constants copy and drift test
 - [ ] 01-03-PLAN.md — Spec `psse_results_v1.md`, Phase 6 hand-off note, doc/DDL drift test
 - [ ] 01-04-PLAN.md — Run record and atomic writer (one transaction, failed record on rollback)
 - [ ] 01-05-PLAN.md — `run_once`: read ratings, study, validate, single write at the end
 
 ### Phase 2: Study on Power Systems' Case
+
 **Goal**: Given the ratings, the job applies them to the mapped branches and produces load-flow, N-1, voltage-margin and dispatched-capacity results, proven on the Mac with a fake `psspy`.
 **Depends on**: Phase 1. Power Systems' city-to-branch mapping (a placeholder is enough until it arrives).
 **Requirements**: IN-02, IN-03, STU-01, STU-02, STU-03, STU-04, TST-01
@@ -58,9 +61,11 @@ the third needs Phase 6 live, Power Systems' case file and the laptop.
   2. Ratings reach PSS/E in the units its branch rating expects (conversion stated and tested, amps to MVA at the branch's voltage), and a load flow that does not converge is recorded as a failed run, never written as valid results.
   3. A converged run records, for each contingency, thermal overloads and voltage violations with the element, the limit and the amount exceeded; a voltage-stability margin per city; and per-city dispatched capacity (the lower of the applied DLR rating and the voltage-stability limit, in amps and MW, saying which one set it).
   4. The Mac test suite against a fake `psspy` passes, covering static fallback, the mapping check, a non-converging load flow, and write-back including a failed run.
+
 **Plans**: TBD
 
 ### Phase 3: Laptop Run and Handover
+
 **Goal**: The hourly job runs on the licensed laptop against Power Systems' real case, results can be read back from the database, and someone else can install it.
 **Depends on**: Phase 2. production-pipeline Phase 6 live (read access, result tables and PSS/E write grant applied). Power Systems' case file, mapping and laptop access.
 **Requirements**: DBX-02, TST-02, SCH-01, SCH-02, DOC-01
@@ -69,6 +74,7 @@ the third needs Phase 6 live, Power Systems' case file and the laptop.
   2. The job's credential reads ratings and writes the PSS/E result tables, and an attempt to change `city_rating` with it is rejected.
   3. Windows Task Scheduler runs the job hourly with no overlapping runs, and an hour with no run (laptop off or asleep) shows as a gap in the run records through a stated query or check.
   4. A setup guide for the laptop (PSS/E and Python versions, credentials, Task Scheduler entry) lets someone else install the job and start the hourly runs.
+
 **Plans**: TBD
 
 ## Progress
@@ -78,6 +84,6 @@ Phases execute in numeric order: 1 → 2 → 3
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Result-Table Spec and Rating I/O | 0/5 | Planned | - |
+| 1. Result-Table Spec and Rating I/O | 1/5 | In Progress | - |
 | 2. Study on Power Systems' Case | 0/TBD | Not started | - |
 | 3. Laptop Run and Handover | 0/TBD | Not started | - |
