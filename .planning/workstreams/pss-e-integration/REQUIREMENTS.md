@@ -29,7 +29,7 @@ requirements state what must be true, not how; `psspy` API choices are theirs.
 
 ### Inputs
 
-- [ ] **IN-01**: For each city the job uses the newest `city_rating` row. When that row is
+- [x] **IN-01**: For each city the job uses the newest `city_rating` row. When that row is
   missing, older than 90 minutes, or provisional, the job uses the city's static rating instead
   and records that it did. (Until production-pipeline Phase 7's go lifts the provisional label,
   this means studies run on static ratings.)
@@ -94,7 +94,7 @@ requirements state what must be true, not how; `psspy` API choices are theirs.
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | DBX-01 | Phase 1 | Pending |
-| IN-01 | Phase 1 | Pending |
+| IN-01 | Phase 1 | Complete |
 | WB-01 | Phase 1 | Pending |
 | WB-02 | Phase 1 | Pending |
 | IN-02 | Phase 2 | Pending |

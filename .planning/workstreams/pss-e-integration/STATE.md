@@ -5,16 +5,16 @@ milestone_name: PSS/E Integration
 current_phase: 1
 current_phase_name: Result-Table Spec and Rating I/O
 status: executing
-stopped_at: Completed 01-01-PLAN.md
-last_updated: "2026-10-28T10:31:49.910Z"
+stopped_at: Completed 01-02-PLAN.md
+last_updated: "2026-10-28T10:41:42.982Z"
 last_activity: 2026-10-28
 last_activity_desc: Phase 1 execution started
-state_head: 68b0f43601d04bc31dada54c259f9db4a05c4e6c
+state_head: 390896a1c36fda7890778bcb3b795485cfc56d95
 progress:
   total_phases: 3
   completed_phases: 0
   total_plans: 5
-  completed_plans: 1
+  completed_plans: 2
 ---
 
 # Project State
@@ -31,11 +31,11 @@ higher than the static rating.
 ## Current Position
 
 Phase: 1 (Result-Table Spec and Rating I/O) — EXECUTING
-Plan: 2 of 5
+Plan: 3 of 5
 Status: Ready to execute
 Last activity: 2026-10-28 — Phase 1 execution started
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [████░░░░░░] 40%
 
 ## Performance Metrics
 
@@ -56,6 +56,7 @@ Progress: [░░░░░░░░░░] 0%
 | Plan | Duration | Tasks | Files |
 |------|----------|-------|-------|
 | Phase 1 P01 | 22 min | 2 tasks | 4 files |
+| Phase 1 P02 | 9min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -69,6 +70,8 @@ Recent decisions affecting current work:
 - [Milestone]: Static rating is the fallback when a `city_rating` row is missing, older than 90 minutes or provisional (IN-01).
 - [Phase 1]: 01-01: result-table DDL stays reference-only; dlr_psse_writer holds INSERT and SELECT on the four psse_* tables, applied MVA enforced as sqrt(3) x kV x circuit amps / 1000 (no power factor) — D-01, D-03, D-06; proven on local Postgres 18.6 with Supabase legacy default grants
 - [Phase 1]: 01-01: static-fallback dispatch rows carry NULL city_rating link times (link rule); stale/provisional row link lives only in psse_run.ratings_used — psse_dispatched_capacity_link_rule_ck ties both link columns to rating_source = city_rating
+- [Phase 1]: [Phase 1 P02]: psse_job keeps its own copies of config constants (no import of backend/config.py), pinned by psse_contract_test; rating_amps per conductor converted to MVA with no power factor (D-05, D-06)
+- [Phase 1]: [Phase 1 P02]: a failed latest_rating read is all-static with reason read_failed and a redacted read_error, never an exception (D-02); stale and provisional static choices keep the row link in memory, but the writer must insert NULL link times unless source is city_rating
 
 ### Pending Todos
 
@@ -91,6 +94,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-28T10:31:49.877Z
-Stopped at: Completed 01-01-PLAN.md
+Last session: 2026-10-28T10:41:42.944Z
+Stopped at: Completed 01-02-PLAN.md
 Resume file: None
