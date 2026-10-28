@@ -14,7 +14,7 @@ Pure functions, no psspy. Standard library and psse_job only, Python 3.7 syntax 
 
 import math
 
-from psse_job import constants, units
+from psse_job import constants, run_record, units
 
 # Copy of backend/config.py POWER_FACTOR (the D-05 pattern: job code never imports config); used
 # only for dispatched_mw, the same convention as the city rating's per-conductor MW (research
@@ -83,8 +83,13 @@ def build_dispatch_row(choice, line_voltage_kv, voltage_limit_mva, power_factor=
 
 
 def dispatch_details(city_base, rate_sets, bounded_by):
-    """The details object of a dispatch row (a first version; plan 02-05 task 3 completes it)."""
+    """The details object of a dispatch row: the mapped circuits, the rate sets the rating was
+    written to, the case's own ratings that the DLR or static rating replaced (Power Systems sees
+    what changed, research open question 5; None for a value that is not a finite number) and
+    what bounded the voltage limit."""
     return {
         "branches": [branch.ref.key for branch in city_base.branches],
+        "rate_sets": list(rate_sets),
+        "rate_before_mva": [run_record.finite(value) for value in city_base.rate_before_mva],
         "voltage_limit_bounded_by": bounded_by,
     }
