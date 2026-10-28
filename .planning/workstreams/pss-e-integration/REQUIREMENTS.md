@@ -19,7 +19,7 @@ requirements state what must be true, not how; `psspy` API choices are theirs.
 
 ### Database (via production-pipeline Phase 6)
 
-- [ ] **DBX-01**: A written spec of the four PSS/E result tables (contingency results,
+- [x] **DBX-01**: A written spec of the four PSS/E result tables (contingency results,
   dispatched capacity, voltage margins, run record), with columns, units, keys, and how each
   row links to its run and to the `city_rating` rows it used, is handed to production-pipeline
   Phase 6 so the tables and a PSS/E write grant ship in Phase 6's migration. No standalone
@@ -93,7 +93,7 @@ requirements state what must be true, not how; `psspy` API choices are theirs.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| DBX-01 | Phase 1 | Pending |
+| DBX-01 | Phase 1 | Complete |
 | IN-01 | Phase 1 | Complete |
 | WB-01 | Phase 1 | Pending |
 | WB-02 | Phase 1 | Pending |

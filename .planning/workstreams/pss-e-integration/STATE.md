@@ -5,16 +5,16 @@ milestone_name: PSS/E Integration
 current_phase: 1
 current_phase_name: Result-Table Spec and Rating I/O
 status: executing
-stopped_at: Completed 01-02-PLAN.md
-last_updated: "2026-10-28T10:41:42.982Z"
+stopped_at: Completed 01-03-PLAN.md
+last_updated: "2026-10-28T10:51:31.267Z"
 last_activity: 2026-10-28
 last_activity_desc: Phase 1 execution started
-state_head: 390896a1c36fda7890778bcb3b795485cfc56d95
+state_head: 004875b93fc725be4073807c04113ca7cc10f0bb
 progress:
   total_phases: 3
   completed_phases: 0
   total_plans: 5
-  completed_plans: 2
+  completed_plans: 3
 ---
 
 # Project State
@@ -31,11 +31,11 @@ higher than the static rating.
 ## Current Position
 
 Phase: 1 (Result-Table Spec and Rating I/O) — EXECUTING
-Plan: 3 of 5
+Plan: 4 of 5
 Status: Ready to execute
 Last activity: 2026-10-28 — Phase 1 execution started
 
-Progress: [████░░░░░░] 40%
+Progress: [██████░░░░] 60%
 
 ## Performance Metrics
 
@@ -57,6 +57,7 @@ Progress: [████░░░░░░] 40%
 |------|----------|-------|-------|
 | Phase 1 P01 | 22 min | 2 tasks | 4 files |
 | Phase 1 P02 | 9min | 3 tasks | 8 files |
+| Phase 1 P03 | 8min | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -72,6 +73,7 @@ Recent decisions affecting current work:
 - [Phase 1]: 01-01: static-fallback dispatch rows carry NULL city_rating link times (link rule); stale/provisional row link lives only in psse_run.ratings_used — psse_dispatched_capacity_link_rule_ck ties both link columns to rating_source = city_rating
 - [Phase 1]: [Phase 1 P02]: psse_job keeps its own copies of config constants (no import of backend/config.py), pinned by psse_contract_test; rating_amps per conductor converted to MVA with no power factor (D-05, D-06)
 - [Phase 1]: [Phase 1 P02]: a failed latest_rating read is all-static with reason read_failed and a redacted read_error, never an exception (D-02); stale and provisional static choices keep the row link in memory, but the writer must insert NULL link times unless source is city_rating
+- [Phase 1]: 01-03: spec and hand-off note pin the DDL marked region by an LF-normalised sha256 recomputed by psse_schema_doc_test.py; spec states service_role and the database owner sit outside the only-dlr_psse_writer access claim — Phase 6 copies the region verbatim, and core.autocrlf makes Windows checkouts CRLF; service_role bypasses RLS
 
 ### Pending Todos
 
@@ -94,6 +96,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-28T10:41:42.944Z
-Stopped at: Completed 01-02-PLAN.md
+Last session: 2026-10-28T10:51:31.231Z
+Stopped at: Completed 01-03-PLAN.md
 Resume file: None
