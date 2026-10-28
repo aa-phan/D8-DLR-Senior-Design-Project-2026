@@ -32,10 +32,11 @@ from psse_job import constants  # noqa: E402
 
 _PACKAGE_DIR = os.path.join(_BACKEND, "psse_job")
 
+# tempfile: pss-e-integration plan 02-03; study.py saves the solved base case to a private per-run temporary directory and never over Power Systems' case file
 _STDLIB_ALLOWED = frozenset([
     "__future__", "base64", "binascii", "collections", "contextlib", "datetime", "functools",
     "hashlib", "http", "json", "logging", "math", "numbers", "os", "re", "socket", "subprocess",
-    "sys", "time", "typing", "urllib", "uuid",
+    "sys", "tempfile", "time", "typing", "urllib", "uuid",
 ])
 _NEVER_IMPORTED = frozenset(["config", "supabase_store", "pandas", "numpy", "requests", "psspy"])
 _HEAVY_MODULES = ("pandas", "numpy", "config", "supabase_store", "requests", "psycopg")
