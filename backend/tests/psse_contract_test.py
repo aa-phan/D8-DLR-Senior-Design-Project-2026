@@ -33,9 +33,10 @@ from psse_job import constants  # noqa: E402
 _PACKAGE_DIR = os.path.join(_BACKEND, "psse_job")
 
 # tempfile: pss-e-integration plan 02-03; study.py saves the solved base case to a private per-run temporary directory and never over Power Systems' case file
+# inspect: pss-e-integration plan 02-07; probe.py compares the real psspy's signatures with psse_api.SURFACE on the laptop
 _STDLIB_ALLOWED = frozenset([
     "__future__", "base64", "binascii", "collections", "contextlib", "datetime", "functools",
-    "hashlib", "http", "json", "logging", "math", "numbers", "os", "re", "socket", "subprocess",
+    "hashlib", "http", "inspect", "json", "logging", "math", "numbers", "os", "re", "socket", "subprocess",
     "sys", "tempfile", "time", "typing", "urllib", "uuid",
 ])
 _NEVER_IMPORTED = frozenset(["config", "supabase_store", "pandas", "numpy", "requests", "psspy"])
