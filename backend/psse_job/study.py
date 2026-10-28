@@ -219,8 +219,15 @@ def solve_base(api, settings):
     except (psse_api.PsseCallError, ValueError) as error:
         raise StudyFailed("load_flow", "load flow could not be run: %s" % error)
     if not result.converged:
-        raise StudyFailed("load_flow", "load flow did not converge: ierr=%s solved=%s (%s)" % (
-            result.ierr, result.solved_code, result.meaning))
+        message = "load flow did not converge: ierr=%s solved=%s (%s)" % (
+            result.ierr, result.solved_code, result.meaning)
+        if result.ierr == 2:
+            message += (" - the saved case has converted generators; Power Systems must supply "
+                        "an unconverted case")
+        raise StudyFailed("load_flow", message)
+    if result.mismatch_mva is not None and not result.mismatch_mva <= settings.max_mismatch_mva:
+        raise StudyFailed("load_flow", "load flow mismatch %g MVA exceeds %g MVA" % (
+            result.mismatch_mva, settings.max_mismatch_mva))
     return result
 
 
@@ -272,6 +279,11 @@ def prepare_base(psspy_module, case_path, mapping, selection, budget=None):
         base_flows = api.branch_loading(settings.rate_sets[0], settings.thermal_basis)
     except (psse_api.PsseCallError, ValueError) as error:
         raise StudyFailed("load_flow", "the solved base case could not be read: %s" % error)
+    collapsed = [bus for bus in base_buses.values()
+                 if bus.type_code < 4 and not bus.pu >= settings.collapse_voltage_pu]
+    if collapsed:
+        raise StudyFailed("load_flow", "collapsed solution: %d in-service buses below %g pu" % (
+            len(collapsed), settings.collapse_voltage_pu))
     temp_dir = tempfile.mkdtemp(prefix=_TEMP_PREFIX)
     try:
         saved_path = os.path.join(temp_dir, "base.sav")

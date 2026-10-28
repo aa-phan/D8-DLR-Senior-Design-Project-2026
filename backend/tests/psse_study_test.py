@@ -350,3 +350,208 @@ def test_static_fresh_row_applies_row_amps(prepared):
         assert fake.fake_state.branch(source, sink, "1")["rates"][0] == expected
     writes = [call for call in fake.fake_calls if call[0] == "branch_chng_3"]
     assert len(writes) == 4
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# The base load flow under the strict rule, the study area, the temporary file, the budget
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def _outcome(**fields):
+    """A solver that always gives the same SolveOutcome (fields replace the defaults)."""
+    outcome = fake_module.SolveOutcome(**fields)
+    return lambda case: outcome
+
+
+def _stale_zero_fake(tmp_path, solver):
+    """A fake whose solved() already reads 0 from an earlier converged fnsl, then `solver`."""
+    fake, path = _registered(tmp_path)
+    assert fake.case(path) == 0
+    assert fake.fnsl() == 0 and fake.solved() == 0
+    fake.fake_solver = solver
+    fake.fake_calls = []
+    return fake
+
+
+@pytest.mark.parametrize("behaviour, fragment", [
+    ("solved_1", "iteration limit exceeded"),
+    ("solved_2", "blown up"),
+    ("solved_3", "terminated by non-divergent option"),
+    ("solved_5", "singular Jacobian"),
+    ("fnsl_2_with_stale_zero", "converted generators"),
+    ("fnsl_3_with_stale_zero", "without swing bus"),
+])
+def test_load_flow_not_converged_matrix(tmp_path, behaviour, fragment):
+    solvers = {
+        "solved_1": _outcome(ierr=0, solved=1),
+        "solved_2": _outcome(ierr=0, solved=2),
+        "solved_3": _outcome(ierr=0, solved=3),
+        "solved_5": _outcome(ierr=0, solved=5),
+        "fnsl_2_with_stale_zero": _outcome(ierr=2, solved=None),
+        "fnsl_3_with_stale_zero": _outcome(ierr=3, solved=None),
+    }
+    solver = solvers[behaviour]
+    fake = _stale_zero_fake(tmp_path, solver) if "stale_zero" in behaviour else None
+    fake, failure = _fails(tmp_path, "load_flow", fake=fake, solver=None if fake else solver)
+    assert "did not converge" in failure.message
+    assert fragment in failure.message
+    assert fake.fake_saved_paths == []
+    assert [call for call in fake.fake_calls if call[0] == "save"] == []
+    assert os.listdir(tempfile.gettempdir()) == []
+
+
+def test_load_flow_message_names_meaning_and_converted_generators(tmp_path):
+    _, iteration = _fails(tmp_path, "load_flow", solver=_outcome(ierr=0, solved=1))
+    assert iteration.message == (
+        "load flow did not converge: ierr=0 solved=1 (iteration limit exceeded)")
+    _, converted = _fails(tmp_path, "load_flow", solver=_outcome(ierr=2, solved=None))
+    assert converted.message.startswith("load flow did not converge: ierr=2 solved=")
+    assert "generators are converted" in converted.message
+    assert "converted generators; Power Systems must supply an unconverted case" in converted.message
+    assert "converted generators" not in iteration.message
+
+
+def test_load_flow_mismatch_guard(tmp_path, prepared):
+    _, failure = _fails(tmp_path, "load_flow", solver=_outcome(ierr=0, solved=0, mismatch=5.0))
+    assert failure.message == "load flow mismatch 5 MVA exceeds 1 MVA"
+    # exactly the configured limit is still accepted
+    _, _, base = prepared(solver=_outcome(ierr=0, solved=0, mismatch=1.0))
+    assert base.solve.mismatch_mva == 1.0
+    # and the limit is the configured one
+    _, failure = _fails(tmp_path, "load_flow", solver=_outcome(ierr=0, solved=0, mismatch=0.5),
+                        mapping_=_mapping(max_mismatch_mva=0.25))
+    assert "0.5 MVA exceeds 0.25 MVA" in failure.message
+
+
+def test_load_flow_collapsed_solution_guard(tmp_path):
+    fake, failure = _fails(tmp_path, "load_flow", solver=_outcome(
+        ierr=0, solved=0, voltages={90002: 0.3}))
+    assert failure.message == "collapsed solution: 1 in-service buses below 0.5 pu"
+    assert fake.fake_saved_paths == []
+    # an isolated bus (type 4) at 0 pu is not a collapse
+    case = fake_module.placeholder_case()
+    case.add_bus(90093, type_code=4, pu=0.0)
+    fake, path = _registered(tmp_path, case=case)
+    base = study.prepare_base(fake, path, _mapping(), _selection())
+    study.cleanup_base(base)
+
+
+def _resolved_of(base):
+    return dict((city, base.cities[city].branches) for city in constants.CITIES)
+
+
+def _sinks_of(base):
+    return dict((city, base.cities[city].sink_buses) for city in constants.CITIES)
+
+
+def test_base_area_neighbourhood_hops(prepared):
+    case = fake_module.placeholder_case()
+    case.branch(90001, 90002, "2")["status"] = 0
+    _, _, base = prepared(case=case)
+
+    def area(**changes):
+        return study.study_area(base.lines, base.buses, _resolved_of(base),
+                                base.settings._replace(**changes), _sinks_of(base))
+
+    zero = area(contingency_hops=0)
+    assert zero.by_city["AUSTIN"] == (frozenset(["90001-90002-1"]), frozenset([90001, 90002]))
+    assert zero.branch_keys == frozenset(
+        ["90001-90002-1", "90011-90012-1", "90021-90022-1", "90031-90032-1"])
+    assert len(zero.buses) == 8
+    one = area(contingency_hops=1)
+    assert one.by_city["AUSTIN"] == (
+        frozenset(["90001-90002-1", "90000-90001-1", "90000-90001-2"]),
+        frozenset([90000, 90001, 90002]))
+    two = area(contingency_hops=2)
+    austin_keys, austin_buses = two.by_city["AUSTIN"]
+    assert "90000-90011-1" in austin_keys and "90000-90031-2" in austin_keys
+    assert austin_buses == frozenset([90000, 90001, 90002, 90011, 90021, 90031])
+    assert "90011-90012-1" not in austin_keys
+    everything = area(contingency_scope="all")
+    assert len(everything.branch_keys) == 15  # 16 lines, one of them out of service
+    assert "90001-90002-2" not in everything.branch_keys
+    assert len(everything.buses) == 9
+    assert everything.by_city["AUSTIN"] == area().by_city["AUSTIN"]  # the city's own neighbourhood
+    high = area(contingency_hops=1, min_monitor_kv=400.0)
+    assert high.by_city["AUSTIN"][1] == frozenset([90002])
+
+
+def test_base_area_all_scope_counts_every_line(prepared):
+    _, _, base = prepared()
+    everything = study.study_area(base.lines, base.buses, _resolved_of(base),
+                                  base.settings._replace(contingency_scope="all"), _sinks_of(base))
+    assert len(everything.branch_keys) == 16
+    assert base.area.by_city["AUSTIN"][0] == frozenset(
+        ["90001-90002-1", "90001-90002-2", "90000-90001-1", "90000-90001-2",
+         "90000-90011-1", "90000-90011-2", "90000-90021-1", "90000-90021-2",
+         "90000-90031-1", "90000-90031-2"])
+
+
+def test_base_saved_to_temp_never_case_path(prepared):
+    fake, path, base = prepared()
+    assert os.path.basename(base.temp_dir).startswith("psse_job_")
+    assert os.path.dirname(base.temp_dir) == tempfile.gettempdir()
+    assert os.path.dirname(base.saved_path) == base.temp_dir
+    assert fake.fake_saved_paths == [base.saved_path]
+    for saved in fake.fake_saved_paths:
+        assert os.path.normcase(os.path.abspath(saved)) != os.path.normcase(os.path.abspath(path))
+    with pytest.raises(psse_api.CaseProtected):
+        base.api.save_case(path)
+    assert fake.fake_saved_paths == [base.saved_path]
+    with open(path, "rb") as handle:
+        assert handle.read() == b"MARKER - Power Systems' case"
+
+
+class _SaveFails(fake_module.FakePsspy):
+    def save(self, sfile):
+        return 3
+
+
+def test_base_save_failure_is_stage_contingency_and_cleans_up(tmp_path):
+    fake, failure = _fails(tmp_path, "contingency", fake=_SaveFails())
+    assert "temporary file" in failure.message
+    assert "file error" in failure.message
+    assert os.listdir(tempfile.gettempdir()) == []
+
+
+def test_base_cleanup_removes_temp_dir(prepared):
+    _, path, base = prepared()
+    before = run_record.file_sha256(path)
+    assert os.path.isdir(base.temp_dir)
+    study.cleanup_base(base)
+    assert not os.path.exists(base.temp_dir)
+    study.cleanup_base(base)  # a second call is harmless
+    assert os.path.isfile(path)
+    assert run_record.file_sha256(path) == before
+    assert os.listdir(tempfile.gettempdir()) == []
+
+
+def test_base_budget_exceeded_fails_stage(prepared):
+    now = [100.0]
+    budget = study.Budget(clock=lambda: now[0], max_seconds=10)
+    now[0] = 109.0
+    budget.check("contingency")
+    now[0] = 110.0
+    budget.check("contingency")
+    now[0] = 111.0
+    with pytest.raises(contract.StudyFailed) as caught:
+        budget.check("contingency")
+    assert caught.value.stage == "contingency"
+    assert "run-time budget of 10 s exceeded" in caught.value.message
+    assert budget.elapsed() == 11.0
+    _, _, base = prepared(budget=budget)
+    assert base.budget is budget
+    _, _, default = prepared()
+    assert default.budget.max_seconds == default.settings.max_runtime_seconds == 1500.0
+
+
+def test_base_load_case_failure_names_label_only(tmp_path):
+    fake = fake_module.FakePsspy()
+    path = str(tmp_path / "private_dir" / "case.sav")
+    with pytest.raises(contract.StudyFailed) as caught:
+        study.prepare_base(fake, path, _mapping(), _selection())
+    assert caught.value.stage == "load_case"
+    assert "case.sav" in caught.value.message
+    assert "private_dir" not in caught.value.message
+    assert str(tmp_path) not in caught.value.message
+    assert _writes(fake) == []
