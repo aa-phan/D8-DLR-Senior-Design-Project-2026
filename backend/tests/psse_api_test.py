@@ -9,6 +9,7 @@ asserts, no test classes, no network). Honest scope: the fake proves call shapes
 flow and failure handling, not that real PSS/E accepts these calls (the Phase 3 probe does).
 """
 
+import inspect
 import os
 import sys
 
@@ -371,3 +372,178 @@ def test_io_radial_solver_base_values(tmp_path):
     solved_before = fake.solved()
     assert fake.fnsl() == 3
     assert fake.solved() == solved_before
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# The convergence rule as a matrix (STU-01) and the SURFACE drift guards (TST-01)
+# ──────────────────────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("ierr, solved_code, converged", [
+    (0, 0, True),
+    (0, 1, False), (0, 2, False), (0, 3, False), (0, 4, False), (0, 5, False), (0, 6, False),
+    (0, 7, False), (0, 9, False), (0, 42, False),
+    (1, 0, False), (2, 0, False), (3, 0, False), (4, 0, False), (5, 0, False),
+    (0, None, False), (None, 0, False), (0, True, False), (False, 0, False),
+])
+def test_solve_classification(ierr, solved_code, converged):
+    result = psse_api.classify_solve(ierr, solved_code)
+    assert result.converged is converged
+    assert result.ierr is ierr
+    assert result.solved_code is solved_code
+    assert isinstance(result.meaning, str) and result.meaning
+
+
+def test_solve_meaning_text():
+    assert psse_api.classify_solve(0, 42).meaning == "unknown solved code 42"
+    assert psse_api.classify_solve(0, 0).meaning == "met convergence tolerance"
+    assert psse_api.classify_solve(0, 1).meaning == "iteration limit exceeded"
+    assert psse_api.classify_solve(0, 7).meaning == "OPF solution met convergence tolerance (NOPF)"
+    generators = psse_api.classify_solve(2, 0).meaning
+    assert "generators are converted" in generators and "not trusted" in generators
+    assert "buses in island without swing bus" in psse_api.classify_solve(3, 0).meaning
+    assert "unknown fnsl error" in psse_api.classify_solve(77, 0).meaning
+    assert psse_api.classify_solve(0, 0, 3, 0.02) == psse_api.SolveResult(
+        True, 0, 0, "met convergence tolerance", 3, 0.02)
+    assert set(psse_api.SOLVED_MEANING) == {0, 1, 2, 3, 4, 5, 6, 7, 9}
+
+
+def test_solve_stale_solved_after_failed_fnsl(tmp_path):
+    scripted = [fake_module.radial_solver,
+                lambda case: fake_module.SolveOutcome(ierr=3, solved=None, iterations=0, mismatch=0.0),
+                lambda case: fake_module.SolveOutcome(ierr=2, solved=None, iterations=0, mismatch=0.0)]
+
+    def solver(case):
+        return scripted.pop(0)(case)
+
+    fake, api, _ = _loaded(tmp_path, solver=solver)
+    first = api.solve()
+    assert first.converged is True and first.iterations == 3
+    stale = api.solve()
+    assert fake.solved() == 0
+    assert stale.converged is False
+    assert (stale.ierr, stale.solved_code) == (3, 0)
+    assert "island without swing bus" in stale.meaning
+    assert stale.iterations is None and stale.mismatch_mva is None
+    converted = api.solve()
+    assert fake.solved() == 0
+    assert converted.converged is False
+    assert (converted.ierr, converted.solved_code) == (2, 0)
+    assert "generators are converted" in converted.meaning
+
+
+def test_solve_not_converged_codes_are_results_not_exceptions(tmp_path):
+    outcome = fake_module.SolveOutcome(ierr=0, solved=1, iterations=20, mismatch=50.0)
+    fake, api, _ = _loaded(tmp_path, solver=lambda case: outcome)
+    result = api.solve()
+    assert result.converged is False
+    assert (result.ierr, result.solved_code) == (0, 1)
+    assert result.meaning == "iteration limit exceeded"
+    assert (result.iterations, result.mismatch_mva) == (20, 50.0)
+
+
+def test_solve_options_passed_through(tmp_path):
+    fake, api, _ = _loaded(tmp_path)
+    api.solve()
+    assert _last_call(fake, "fnsl")[1:] == ((), {})
+    assert api.calls[-4] == ("fnsl", 0, ())
+    options = (1, 0, 0, 1, 1, 0, 99, 0)
+    assert api.solve(options=options).converged is True
+    assert _last_call(fake, "fnsl")[1:] == ((), {"options": list(options)})
+    assert api.calls[-4] == ("fnsl", 0, ("options",))
+    calls_before = len(fake.fake_calls)
+    for bad in ((1, 0, 0), (1, 0, 0, 1, 1, 0, 99, True), (1, 0, 0, 1, 1, 0, 99, "0"), ()):
+        with pytest.raises(ValueError):
+            api.solve(options=bad)
+    assert len(fake.fake_calls) == calls_before
+
+
+def _public_fake_names(fake):
+    return {name for name in dir(fake)
+            if not name.startswith("_") and not name.startswith("fake_")
+            and callable(getattr(fake, name))}
+
+
+def test_surface_names_equal_fake_methods():
+    fake = fake_module.FakePsspy()
+    assert _public_fake_names(fake) == set(psse_api.SURFACE_NAMES)
+    assert psse_api.SURFACE_NAMES == frozenset(psse_api.SURFACE_BY_NAME)
+    assert len(psse_api.SURFACE) == len(psse_api.SURFACE_NAMES) == 19
+    for unlisted in ("psseinit", "accc_with_dsp_3", "branch_chng", "brnint", "busdat"):
+        with pytest.raises(AttributeError):
+            getattr(fake, unlisted)
+
+
+def test_surface_parameters_equal_fake_signatures():
+    fake = fake_module.FakePsspy()
+    for row in psse_api.SURFACE:
+        signature = inspect.signature(getattr(fake, row.name))
+        assert tuple(signature.parameters) == tuple(row.parameters), row.name
+        kinds = {parameter.kind for parameter in signature.parameters.values()}
+        assert inspect.Parameter.VAR_KEYWORD not in kinds, row.name
+        assert inspect.Parameter.VAR_POSITIONAL not in kinds, row.name
+    with pytest.raises(TypeError):
+        fake.abrnint(sid=-1, owner=1, ties=1, flag=2, entry=1, strings=["ID"])
+    with pytest.raises(TypeError):
+        fake.case(path="x.sav")
+
+
+def test_surface_rows_have_evidence_and_confidence():
+    assert [row.name for row in psse_api.SURFACE] == [
+        "psseversion", "getdefaultint", "getdefaultreal", "getdefaultchar", "case", "save",
+        "fnsl", "solved", "iterat", "sysmsm", "abrnint", "abrnreal", "abrnchar", "abusint",
+        "abusreal", "brndat", "branch_chng_3", "bsys", "scal_2"]
+    for row in psse_api.SURFACE:
+        assert isinstance(row.evidence, str) and row.evidence.strip(), row.name
+        assert row.confidence in psse_api.CONFIDENCE_LEVELS, row.name
+        assert isinstance(row.returns, str) and row.returns, row.name
+        assert all(isinstance(name, str) for name in row.parameters), row.name
+    assert psse_api.SURFACE_BY_NAME["branch_chng_3"].confidence == "UNVERIFIED"
+    assert [row.name for row in psse_api.SURFACE if row.confidence == "UNVERIFIED"] == ["branch_chng_3"]
+    assert psse_api.SURFACE_BY_NAME["abrnint"].parameters == (
+        "sid", "owner", "ties", "flag", "entry", "string")
+
+
+def test_surface_refuses_unlisted_names_and_keywords(tmp_path):
+    fake, api, path = _loaded(tmp_path)
+    fake_before = len(fake.fake_calls)
+    api_before = list(api.calls)
+    with pytest.raises(ValueError):
+        api._call("accc_with_dsp_3")
+    with pytest.raises(ValueError):
+        api._call("fnsl", option=[1, 0, 0, 1, 1, 0, 99, 0])
+    with pytest.raises(ValueError):
+        api._call("case", "a.sav", "b.sav")
+    with pytest.raises(ValueError):
+        api._call("case", path, sfile=path)
+    with pytest.raises(ValueError):
+        api._call("abrnint", sid=-1, owner=1, ties=1, flag=2, entry=1, string=["ID"], extra=1)
+    assert len(fake.fake_calls) == fake_before
+    assert api.calls == api_before
+
+
+def test_surface_recorded_calls_stay_inside_table(tmp_path):
+    fake, api, path = _loaded(tmp_path)
+    api.solve()
+    api.solve(options=(1, 0, 0, 1, 1, 0, 99, 0))
+    api.branch_table()
+    api.bus_table()
+    api.branch_loading("RATEA", "current")
+    api.branch_loading("RATEB", "mva")
+    api.read_rate(AUSTIN_LINE, "RATEA")
+    api.set_rate(AUSTIN_LINE, "RATEA", 2181.1)
+    api.set_status(AUSTIN_LINE, False)
+    api.define_subsystem(9, [90002])
+    api.scale_load(9, 25.0)
+    api.save_case(str(tmp_path / "base.sav"))
+    api.version()
+    seen = set()
+    for name, args, kwargs in fake.fake_calls:
+        row = psse_api.SURFACE_BY_NAME[name]
+        assert set(kwargs) <= set(row.parameters), name
+        assert len(args) + len(kwargs) <= len(row.parameters), name
+        seen.add(name)
+    assert seen == set(psse_api.SURFACE_NAMES)
+    assert [(name, len(args), tuple(sorted(kwargs))) for name, args, kwargs in fake.fake_calls] == api.calls
+    assert [call for call in fake.fake_calls if call[0] == "save"][0][1] == (str(tmp_path / "base.sav"),)
+    assert not [call for call in fake.fake_calls
+                if call[0] == "save" and call[1] == (path,)]
