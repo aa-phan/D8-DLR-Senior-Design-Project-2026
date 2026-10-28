@@ -162,6 +162,28 @@ def _bound_message(city, bound, city_base, settings):
             city_base.applied_mva))
 
 
+def _check_loads_mapped_branches(city, points, min_rise_fraction):
+    """StudyFailed unless the transfer really loaded the mapped branches (research Pitfall 10).
+
+    `points` is every evaluated (increment, Point) in order, the base point first. The good point
+    with the smallest positive increment must show the mapped branches' summed active power
+    above the base point's by at least min_rise_fraction x that increment; a flat flow (a sink
+    with no scalable load, on the wrong side, or a solver that ignores it) is no limit at all.
+    """
+    base_point = points[0][1]
+    if base_point.p_mapped_mw is None:
+        return
+    candidates = [item for item in points if item[0] > 0 and item[1].ok]
+    if not candidates:
+        return
+    increment, point = min(candidates, key=lambda item: item[0])
+    rise = point.p_mapped_mw - base_point.p_mapped_mw
+    if not rise >= min_rise_fraction * increment:
+        raise StudyFailed(_STAGE, (
+            "%s: the transfer does not load the mapped branches (flow rose %g MW for %g MW of "
+            "extra sink load); check the sink buses") % (city, rise, increment))
+
+
 def city_margin(base, city):
     """The margin row of `city` and what bounded it; StudyFailed("voltage_margin") on any
     failure (no number is ever invented). See the module docstring."""
@@ -235,7 +257,10 @@ def city_margin(base, city):
             evaluate, settings.transfer_step_mw, city_base.transfer_max_mw,
             settings.transfer_tolerance_mw, city_base.applied_mva, settings.transfer_extra_steps)
     except NoTransferBound as bound:
+        # A flat transfer never finds a bound; say so rather than only "no bound found".
+        _check_loads_mapped_branches(city, points, settings.transfer_min_rise_fraction)
         raise StudyFailed(_STAGE, _bound_message(city, bound, city_base, settings))
+    _check_loads_mapped_branches(city, points, settings.transfer_min_rise_fraction)
     try:
         api.load_case(base.saved_path)
     except (psse_api.PsseCallError, ValueError) as error:
