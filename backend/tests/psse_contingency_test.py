@@ -358,3 +358,234 @@ def test_violation_city_maps():
     by_branch, by_bus = violations.city_maps({"AUSTIN": one, "MIDLAND": two})
     assert by_branch == {"1-2-1": "AUSTIN", "1-3-1": "AUSTIN", "3-4-1": "MIDLAND"}
     assert by_bus == {1: "AUSTIN", 2: "AUSTIN", 4: "MIDLAND"}
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# The outage loop: scope, caps, budget, non-convergence and reload discipline
+# ──────────────────────────────────────────────────────────────────────────────
+
+SolveOutcome = fake_module.SolveOutcome
+BranchRef = settings.BranchRef
+MAPPED_KEYS = ["90001-90002-1", "90011-90012-1", "90021-90022-1", "90031-90032-1"]
+
+
+def _tripped(case, from_bus, to_bus, ckt):
+    return case.branch(from_bus, to_bus, ckt)["status"] != 1
+
+
+def _tie_outage_solver(case):
+    """Tie 90000-90001-1 out: no solution at all (ierr 3); the CORPUS_CHRISTI city line 1 out:
+    iteration limit (ierr 0 but solved() 1); everything else as the radial solver."""
+    if _tripped(case, 90000, 90001, "1"):
+        return SolveOutcome(ierr=3, solved=None, iterations=0, mismatch=0.0)
+    if _tripped(case, 90011, 90012, "1"):
+        return SolveOutcome(ierr=0, solved=1, iterations=99, mismatch=40.0)
+    return fake_module.radial_solver(case)
+
+
+def _collapse_solver(case):
+    """AUSTIN city line 1 out: a converged but collapsed 0.3 pu sink."""
+    if _tripped(case, 90001, 90002, "1"):
+        return SolveOutcome(ierr=0, solved=0, voltages={90002: 0.3}, flows={})
+    return fake_module.radial_solver(case)
+
+
+def _loaded_outage_solver(case):
+    """The radial solver, except that every tripped line keeps a heavy loading."""
+    outcome = fake_module.radial_solver(case)
+    flows = dict(outcome.flows or {})
+    for key, branch in case.branches.items():
+        if branch["status"] != 1:
+            flows[key] = {"p_mw": 9000.0, "max_mva": 9000.0, "current_mva": 9000.0}
+    return outcome._replace(flows=flows)
+
+
+class _FailingReload(fake_module.FakePsspy):
+    """A fake whose case() refuses once `fake_fail_reload` is set."""
+
+    fake_fail_reload = False
+
+    def case(self, sfile):
+        if self.fake_fail_reload:
+            return 3
+        return fake_module.FakePsspy.case(self, sfile)
+
+
+def _same_path(left, right):
+    return os.path.normcase(os.path.abspath(left)) == os.path.normcase(os.path.abspath(right))
+
+
+def _screen_fails(base):
+    with pytest.raises(contract.StudyFailed) as caught:
+        contingency.screen(base)
+    assert caught.value.stage == "contingency"
+    return caught.value
+
+
+def test_outage_selection_scope_and_extra(prepared):
+    _, _, base = prepared(mapping_=_mapping(contingency_hops=0))
+    assert [ref.key for ref in contingency.select_outages(base)] == MAPPED_KEYS
+
+    # a tie listed reversed (and twice, and once more in case orientation) is added once
+    extras = (BranchRef(90001, 90000, "1"), BranchRef(90000, 90001, "1"),
+              BranchRef(90001, 90000, "1"))
+    _, _, base = prepared(mapping_=_mapping(contingency_hops=0, contingency_extra=extras))
+    outages = contingency.select_outages(base)
+    assert [ref.key for ref in outages] == ["90000-90001-1"] + MAPPED_KEYS
+    assert outages[0] == BranchRef(90000, 90001, "1")          # the case's orientation
+
+    _, _, base = prepared(mapping_=_mapping(contingency_scope="all"))
+    keys = [ref.key for ref in contingency.select_outages(base)]
+    assert len(keys) == 16 and keys == sorted(set(keys))
+
+    _, _, base = prepared()
+    keys = [ref.key for ref in contingency.select_outages(base)]
+    assert len(keys) == 16 and keys == sorted(set(keys))
+
+
+def test_outage_zero_selected_fails(prepared):
+    fake, _, base = prepared(mapping_=_mapping(contingency_hops=0))
+    nothing = base._replace(area=study.StudyArea(frozenset(), frozenset(), {}))
+    failure = _screen_fails(nothing)
+    assert "no branch outage" in failure.message
+    assert [call for call in fake.fake_calls if call[0] == "branch_chng_3"
+            and call[2].get("intgar", [None])[0] == 0] == []
+
+
+def test_outage_over_max_fails(prepared):
+    fake, _, base = prepared(mapping_=_mapping(contingency_max=3))
+    failure = _screen_fails(base)
+    assert "16" in failure.message and "contingency.max 3" in failure.message
+    solves = len([call for call in fake.fake_calls if call[0] == "fnsl"])
+    assert solves == 1                                          # the base solve only
+
+
+def test_outage_row_cap_fails_never_truncates(prepared, monkeypatch):
+    _, _, base = prepared()
+    monkeypatch.setattr(run_record, "MAX_CONTINGENCY_ROWS", 5)
+    failure = _screen_fails(base)
+    assert "limit of 5" in failure.message
+    monkeypatch.setattr(run_record, "MAX_CONTINGENCY_ROWS", 10)
+    assert len(contingency.screen(base).rows) == 10            # exactly at the cap is fine
+    monkeypatch.setattr(run_record, "MAX_CONTINGENCY_ROWS", 9)
+    _screen_fails(base)
+
+
+def test_outage_budget_exceeded_fails(prepared):
+    readings = []
+
+    def clock():
+        readings.append(None)
+        return 100.0 * len(readings)
+
+    fake, _, base = prepared(budget=study.Budget(clock=clock, max_seconds=150.0))
+    failure = _screen_fails(base)
+    assert "budget" in failure.message
+    solves = len([call for call in fake.fake_calls if call[0] == "fnsl"])
+    assert 1 < solves < 17                                      # stopped before the screen finished
+
+
+def test_outage_non_converged_row(prepared):
+    selection = _selection()
+    fake, _, base = prepared(solver=_tie_outage_solver, selection=selection)
+    result = contingency.screen(base)
+    assert result.n_contingencies == 16
+    assert len([call for call in fake.fake_calls if call[0] == "fnsl"]) == 17
+    by_id = {}
+    for row in result.rows:
+        by_id.setdefault(row["contingency_id"], []).append(row)
+
+    no_solution, = by_id["90000-90001-1"]
+    assert no_solution["violation_kind"] == "non_convergence"
+    assert no_solution["element_type"] == "contingency"
+    assert no_solution["element_id"] == "90000-90001-1"
+    assert no_solution["details"]["ierr"] == 3
+    assert no_solution["details"]["solved"] is None
+
+    # solved() is the only signal when fnsl returned 0: it must still not be called converged
+    limit_hit, = by_id["90011-90012-1"]
+    assert limit_hit["violation_kind"] == "non_convergence"
+    assert limit_hit["details"]["ierr"] == 0 and limit_hit["details"]["solved"] == 1
+    assert limit_hit["details"]["collapsed"] is False
+
+    # the other outages are still screened
+    assert len(by_id["90001-90002-1"]) == 2 and len(by_id["90021-90022-1"]) == 2
+    assert len(result.rows) == 10
+    run_record.validate_results(_results_for(selection, result.rows, result.n_contingencies),
+                                selection)
+
+
+def test_outage_collapsed_is_non_convergence(prepared):
+    fake, _, base = prepared(solver=_collapse_solver)
+    result = contingency.screen(base)
+    austin = [row for row in result.rows if row["contingency_id"] == "90001-90002-1"]
+    assert len(austin) == 1
+    row, = austin
+    assert row["violation_kind"] == "non_convergence"
+    assert row["details"]["collapsed"] is True
+    assert row["details"]["ierr"] == 0
+    assert row["observed_value"] is None and row["unit"] is None
+    assert len([r for r in result.rows if r["contingency_id"] == "90011-90012-1"]) == 2
+    assert result.n_contingencies == 16
+    assert len([call for call in fake.fake_calls if call[0] == "fnsl"]) == 17
+
+
+def test_outage_reload_before_every_outage(prepared):
+    fake, path, base = prepared()
+    before = len(fake.fake_calls)
+    result = contingency.screen(base)
+    calls = fake.fake_calls[before:]
+    trips = [index for index, call in enumerate(calls)
+             if call[0] == "branch_chng_3" and call[2]["intgar"][0] == 0]
+    assert len(trips) == 16 == len(result.outages)
+    for index in trips:
+        # the call right before each trip is a reload of the saved base, nothing in between
+        assert calls[index - 1][0] == "case"
+        assert _same_path(calls[index - 1][1][0], base.saved_path)
+    cases = [call for call in calls if call[0] == "case"]
+    assert len(cases) == 17                                     # one per outage and one at the end
+    assert all(_same_path(call[1][0], base.saved_path) for call in cases)
+    assert not any(_same_path(call[1][0], path) for call in cases)
+    assert calls[-1][0] == "case"
+    saves = [call for call in fake.fake_calls if call[0] == "save"]
+    assert [call[1][0] for call in saves] == [base.saved_path]
+    assert not any(_same_path(call[1][0], path) for call in saves)
+    # the working case is the solved base again: nothing tripped, the DLR rating still in place
+    assert fake.fake_state.branch(90001, 90002, "1")["status"] == 1
+    assert fake.fake_state.branch(90001, 90002, "1")["rates"][0] == base.cities["AUSTIN"].applied_mva
+    assert all(branch["status"] == 1 for branch in fake.fake_state.branches.values())
+
+
+def test_outage_reload_failure_is_stage_contingency(prepared):
+    fake = _FailingReload()
+    _, _, base = prepared(fake=fake)
+    fake.fake_fail_reload = True
+    failure = _screen_fails(base)
+    assert "90000-90001-1" in failure.message
+    assert "outage" in failure.message
+    assert not any(call[0] == "branch_chng_3" and call[2]["intgar"][0] == 0
+                   for call in fake.fake_calls)                 # no outage on an unreloaded case
+
+
+def test_outage_outaged_branch_not_evaluated(prepared):
+    _, _, base = prepared(solver=_loaded_outage_solver)
+    result = contingency.screen(base)
+    assert len(result.rows) == 10
+    for row in result.rows:
+        if row["element_type"] == "branch":
+            assert row["element_id"] != row["contingency_id"]
+
+
+def test_outage_city_attribution(prepared):
+    case = fake_module.placeholder_case()
+    case.loads[90032] = [900.0, 900.0 * 0.3286840914]           # tan(acos(0.95))
+    _, _, base = prepared(case=case)
+    result = contingency.screen(base)
+    mapped = _find(result.rows, "90031-90032-2", "thermal_overload", "90031-90032-1")
+    assert mapped["city"] == "EL_PASO"
+    assert mapped["observed_value"] > mapped["limit_value"] == pytest.approx(
+        base.cities["EL_PASO"].applied_mva)
+    # an unmapped line carries no city; a bus of a mapped branch carries its city
+    other = _find(result.rows, "90001-90002-1", "thermal_overload", "90001-90002-2")
+    assert other["city"] is None
+    assert _find(result.rows, "90001-90002-1", "voltage_low", "90002")["city"] == "AUSTIN"
