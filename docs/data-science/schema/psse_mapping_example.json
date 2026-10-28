@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "placeholder": true,
+  "note": "PLACEHOLDER - not Power Systems data. Fake 9xxxx buses; the real mapping stays on the laptop outside the repository.",
+  "cities": {
+    "AUSTIN": {
+      "branches": [{"from_bus": 90001, "to_bus": 90002, "ckt": "1"}],
+      "sink_buses": [90002]
+    },
+    "CORPUS_CHRISTI": {
+      "branches": [{"from_bus": 90011, "to_bus": 90012, "ckt": "1"}],
+      "sink_buses": [90012]
+    },
+    "MIDLAND": {
+      "branches": [{"from_bus": 90021, "to_bus": 90022, "ckt": "1"}],
+      "sink_buses": [90022]
+    },
+    "EL_PASO": {
+      "branches": [{"from_bus": 90031, "to_bus": 90032, "ckt": "1"}],
+      "sink_buses": [90032]
+    }
+  },
+  "study": {}
+}
