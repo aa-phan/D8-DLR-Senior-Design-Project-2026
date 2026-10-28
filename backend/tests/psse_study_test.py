@@ -10,7 +10,10 @@ asserts, no test classes, no network). Honest scope: the fake proves call order,
 flow and failure handling, not that real PSS/E accepts these calls (the Phase 3 probe does).
 """
 
+import copy
 import datetime
+import json
+import math
 import os
 import sys
 import tempfile
@@ -25,9 +28,12 @@ if _BACKEND not in sys.path:
 
 import psse_fake_psspy as fake_module  # noqa: E402
 import psse_fakes  # noqa: E402
-from psse_job import constants, contract, mapping, psse_api, ratings, run_record, settings, study, units  # noqa: E402
+from psse_job import (  # noqa: E402
+    constants, contract, dispatch, mapping, psse_api, ratings, run_record, settings, study, units,
+)
 
-EXAMPLE = os.path.join(_ROOT, "docs", "data-science", "schema", "psse_mapping_example.json")
+GOLDEN = os.path.join(_HERE, "data", "psse_call_surface.json")
+EXAMPLE =os.path.join(_ROOT, "docs", "data-science", "schema", "psse_mapping_example.json")
 NOW = datetime.datetime(2026, 10, 28, 12, 20, 0, tzinfo=datetime.timezone.utc)
 AUSTIN_REF = settings.BranchRef(90001, 90002, "1")
 
@@ -555,3 +561,230 @@ def test_base_load_case_failure_names_label_only(tmp_path):
     assert "private_dir" not in caught.value.message
     assert str(tmp_path) not in caught.value.message
     assert _writes(fake) == []
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# The whole study (plan 02-06): make_study and prepare_run against the fake psspy, no database
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def _run_study(fake, path, mapping_=None, selection=None):
+    """One call of make_study's callable; returns the StudyResults."""
+    callable_ = study.make_study(fake, path, _mapping() if mapping_ is None else mapping_)
+    return callable_(_selection() if selection is None else selection, None)
+
+
+def _fresh_case_calls(fake, path):
+    """The recorded case() calls that load Power Systems' case file itself."""
+    return [call for call in fake.fake_calls
+            if call[0] == "case" and os.path.normcase(os.path.abspath(call[1][0]))
+            == os.path.normcase(os.path.abspath(path))]
+
+
+def test_full_study_placeholder_results_validate(tmp_path):
+    fake, path = _registered(tmp_path)
+    selection = _selection()
+    results = _run_study(fake, path, selection=selection)
+    run_record.validate_results(results, selection)
+    assert len(results.dispatch) == 4
+    assert len(results.margins) == 4
+    assert len(results.contingencies) == 10
+    assert results.n_contingencies == 16
+    assert results.rate_set == "RATEA"
+    assert results.psse_version == "35.6.0"
+    assert [row["city"] for row in results.dispatch] == list(constants.CITIES)
+    assert [row["city"] for row in results.margins] == list(constants.CITIES)
+    assert os.listdir(tempfile.gettempdir()) == []
+
+
+def test_full_study_calls_stay_inside_surface(tmp_path):
+    fake, path = _registered(tmp_path)
+    _run_study(fake, path)
+    assert fake.fake_calls
+    for name, args, kwargs in fake.fake_calls:
+        assert name in psse_api.SURFACE_BY_NAME, name
+        row = psse_api.SURFACE_BY_NAME[name]
+        assert set(kwargs) <= set(row.parameters), name
+        assert len(args) + len(kwargs) <= len(row.parameters), name
+
+
+def test_full_study_never_saves_or_changes_the_case(tmp_path):
+    fake, path = _registered(tmp_path)
+    before = run_record.file_sha256(path)
+    callable_ = study.make_study(fake, path, _mapping())
+    first = callable_(_selection(), None)
+    assert len(_fresh_case_calls(fake, path)) == 1
+    first_saved = list(fake.fake_saved_paths)
+    assert first_saved
+    for saved in fake.fake_saved_paths:
+        assert os.path.normcase(os.path.abspath(saved)) != os.path.normcase(os.path.abspath(path))
+    assert run_record.file_sha256(path) == before
+
+    calls_before = len(fake.fake_calls)
+    second = callable_(_selection(), None)
+    assert second == first
+    assert len(_fresh_case_calls(fake, path)) == 2
+    later = fake.fake_calls[calls_before:]
+    assert [call for call in later if call[0] == "case"][0][1] == (path,)
+    assert [call for call in later if call[0] == "save"][0][1][0] not in first_saved
+    assert run_record.file_sha256(path) == before
+    with open(path, "rb") as handle:
+        assert handle.read() == b"MARKER - Power Systems' case"
+
+
+def test_full_study_new_adapter_per_run(tmp_path, monkeypatch):
+    made = []
+    real = psse_api.PsseApi
+
+    class Counting(real):
+        def __init__(self, *args, **kwargs):
+            real.__init__(self, *args, **kwargs)
+            made.append(self)
+
+    monkeypatch.setattr(psse_api, "PsseApi", Counting)
+    fake, path = _registered(tmp_path)
+    callable_ = study.make_study(fake, path, _mapping())
+    callable_(_selection(), None)
+    callable_(_selection(), None)
+    assert len(made) == 2
+    assert made[0] is not made[1]
+
+
+def test_full_study_cleans_temp_dir_on_success_and_failure(tmp_path):
+    fake, path = _registered(tmp_path)
+    _run_study(fake, path)
+    assert os.listdir(tempfile.gettempdir()) == []
+    assert fake.fake_saved_paths
+    assert not any(os.path.exists(saved) for saved in fake.fake_saved_paths)
+
+    flat = lambda case: fake_module.radial_solver(_frozen(case))  # noqa: E731
+    fake, path = _registered(tmp_path, solver=flat)
+    with pytest.raises(contract.StudyFailed) as caught:
+        _run_study(fake, path, mapping_=_mapping(transfer_extra_steps=3))
+    assert caught.value.stage == "voltage_margin"
+    assert fake.fake_saved_paths
+    assert os.listdir(tempfile.gettempdir()) == []
+    assert not any(os.path.exists(saved) for saved in fake.fake_saved_paths)
+
+
+def _frozen(case):
+    """A copy of `case` whose sink loads never rise (the transfer then loads nothing)."""
+    frozen = copy.deepcopy(case)
+    for bus in frozen.loads:
+        frozen.loads[bus] = [620.0, 620.0 * math.tan(math.acos(0.95))]
+    return frozen
+
+
+def test_full_study_details_are_json_safe(tmp_path, monkeypatch):
+    real = dispatch.dispatch_details
+
+    def hostile(city_base, rate_sets, bounded_by):
+        details = real(city_base, rate_sets, bounded_by)
+        details["not_a_number"] = float("nan")
+        details["unbounded"] = float("inf")
+        details["when"] = datetime.datetime(2026, 10, 28, 12, 0, tzinfo=datetime.timezone.utc)
+        details["nested"] = {1: (float("-inf"), 2.5)}
+        return details
+
+    monkeypatch.setattr(dispatch, "dispatch_details", hostile)
+    fake, path = _registered(tmp_path)
+    results = _run_study(fake, path)
+    for rows in (results.dispatch, results.margins, results.contingencies):
+        for row in rows:
+            json.dumps(row["details"], allow_nan=False)
+    first = results.dispatch[0]["details"]
+    assert first["not_a_number"] is None
+    assert first["unbounded"] is None
+    assert first["when"] == "2026-10-28T12:00:00+00:00"
+    assert first["nested"] == {"1": [None, 2.5]}
+
+
+def test_full_study_dispatch_failure_is_stage_dispatch(tmp_path, monkeypatch):
+    def refuse(*args, **kwargs):
+        raise ValueError("inconsistent search")
+
+    monkeypatch.setattr(dispatch, "build_dispatch_row", refuse)
+    fake, path = _registered(tmp_path)
+    with pytest.raises(contract.StudyFailed) as caught:
+        _run_study(fake, path)
+    assert caught.value.stage == "dispatch"
+    assert caught.value.message == "AUSTIN: inconsistent search"
+    assert os.listdir(tempfile.gettempdir()) == []
+
+
+def _call_surface(fake):
+    """First-seen ordered [name, sorted keyword names] of every recorded call."""
+    seen = []
+    for name, args, kwargs in fake.fake_calls:
+        item = [name, sorted(kwargs)]
+        if item not in seen:
+            seen.append(item)
+    return seen
+
+
+def test_call_surface_matches_golden(tmp_path):
+    fake, path = _registered(tmp_path)
+    _run_study(fake, path)
+    surface = _call_surface(fake)
+    if os.environ.get("PSSE_UPDATE_CALL_SURFACE") == "1":
+        os.makedirs(os.path.dirname(GOLDEN), exist_ok=True)
+        with open(GOLDEN, "w", encoding="utf-8", newline="\n") as handle:
+            json.dump(surface, handle, indent=2)
+            handle.write("\n")
+        return
+    with open(GOLDEN, encoding="utf-8") as handle:
+        golden = json.load(handle)
+    assert surface == golden, (
+        "the study's psspy call surface changed; if that is intended, regenerate "
+        "backend/tests/data/psse_call_surface.json deliberately with PSSE_UPDATE_CALL_SURFACE=1 "
+        "and review the diff")
+
+
+def test_json_safe_converts_nan_and_datetimes():
+    moment = datetime.datetime(2026, 10, 28, 12, 0, tzinfo=datetime.timezone.utc)
+    safe = study.json_safe({
+        "nan": float("nan"), "inf": float("inf"), "ok": 1.5, "n": 3, "flag": True, "none": None,
+        "text": "x", "when": moment, "day": datetime.date(2026, 10, 28), "tuple": (1, 2),
+        7: [float("-inf")], "object": object,
+    })
+    assert safe["nan"] is None and safe["inf"] is None
+    assert safe["ok"] == 1.5 and safe["n"] == 3 and safe["flag"] is True and safe["none"] is None
+    assert safe["text"] == "x"
+    assert safe["when"] == "2026-10-28T12:00:00+00:00"
+    assert safe["day"] == "2026-10-28"
+    assert safe["tuple"] == [1, 2]
+    assert safe["7"] == [None]
+    assert safe["object"] == str(object)
+    json.dumps(safe, allow_nan=False)
+
+
+def test_prepare_run_hashes_and_labels(tmp_path):
+    fake, path = _registered(tmp_path)
+    prepared = study.prepare_run(fake, path, EXAMPLE, allow_placeholder=True)
+    assert prepared.case_id == "PLACEHOLDER_CASE.sav"
+    assert prepared.case_sha256 == run_record.file_sha256(path)
+    assert prepared.mapping_sha256 == run_record.file_sha256(EXAMPLE)
+    assert prepared.mapping_error is None
+    assert fake.fake_calls == []
+    results = prepared.study(_selection(), None)
+    assert results.n_contingencies == 16
+
+
+def test_prepare_run_bad_mapping_becomes_mapping_failure(tmp_path):
+    fake, path = _registered(tmp_path)
+    bad = str(tmp_path / "bad_mapping.json")
+    with open(bad, "w", encoding="utf-8") as handle:
+        handle.write("{not json")
+    prepared = study.prepare_run(fake, path, bad, allow_placeholder=True)
+    assert prepared.mapping_sha256 is None
+    assert prepared.mapping_error
+    assert prepared.case_id == "PLACEHOLDER_CASE.sav"
+    assert prepared.case_sha256 == run_record.file_sha256(path)
+    with pytest.raises(contract.StudyFailed) as caught:
+        prepared.study(_selection(), None)
+    assert caught.value.stage == "mapping"
+    assert "mapping file not usable" in caught.value.message
+    assert fake.fake_calls == []
+    refused = study.prepare_run(fake, path, EXAMPLE)
+    assert refused.mapping_sha256 is None
+    assert "placeholder" in refused.mapping_error
