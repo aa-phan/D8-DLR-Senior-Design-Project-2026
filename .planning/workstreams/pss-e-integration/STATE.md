@@ -4,17 +4,17 @@ milestone: v1.6
 milestone_name: PSS/E Integration
 current_phase: 1
 current_phase_name: Result-Table Spec and Rating I/O
-status: executing
-stopped_at: Completed 01-04-PLAN.md
-last_updated: "2026-10-28T11:06:08.682Z"
+status: verifying
+stopped_at: Completed 01-05-PLAN.md
+last_updated: "2026-10-28T11:21:39.116Z"
 last_activity: 2026-10-28
 last_activity_desc: Phase 1 execution started
-state_head: 314bea1b8c6f7266e0b0c07d017b65ac68433e74
+state_head: 6b8cc5e88371736055be0a125a4ba86d62f13024
 progress:
   total_phases: 3
   completed_phases: 0
   total_plans: 5
-  completed_plans: 4
+  completed_plans: 5
 ---
 
 # Project State
@@ -32,10 +32,10 @@ higher than the static rating.
 
 Phase: 1 (Result-Table Spec and Rating I/O) — EXECUTING
 Plan: 5 of 5
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-10-28 — Phase 1 execution started
 
-Progress: [████████░░] 80%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -59,6 +59,7 @@ Progress: [████████░░] 80%
 | Phase 1 P02 | 9min | 3 tasks | 8 files |
 | Phase 1 P03 | 8min | 3 tasks | 3 files |
 | Phase 1 P04 | 11min | 3 tasks | 6 files |
+| Phase 1 P05 | 13min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -76,6 +77,7 @@ Recent decisions affecting current work:
 - [Phase 1]: [Phase 1 P02]: a failed latest_rating read is all-static with reason read_failed and a redacted read_error, never an exception (D-02); stale and provisional static choices keep the row link in memory, but the writer must insert NULL link times unless source is city_rating
 - [Phase 1]: 01-03: spec and hand-off note pin the DDL marked region by an LF-normalised sha256 recomputed by psse_schema_doc_test.py; spec states service_role and the database owner sit outside the only-dlr_psse_writer access claim — Phase 6 copies the region verbatim, and core.autocrlf makes Windows checkouts CRLF; service_role bypasses RLS
 - [Phase 1]: 01-04: write_run is one transaction (run row first, then results) as the INSERT-only dlr_psse_writer; any failure rolls back then records failed_stage write in a new transaction (WriteFailed), RecordFailed only when that also fails; validate_results enforces the selected rating, the link rule and the DDL identities before any write — WB-01/WB-02, D-03, D-04; an unrecorded run must never look successful; a retry with the same run_id returns already_recorded and never overwrites
+- [Phase 1]: [Phase 1 P05]: 01-05: run_once connects only after the study and writes once at the end (D-04); exit 0 ok or fallback written, 1 failed run recorded, 3 nothing recorded (an unrecorded run is outcome failed, stage write); a failed ratings read stays a fallback run (D-02); failure text is redacted against the passed-in env as well as os.environ
 
 ### Pending Todos
 
@@ -98,6 +100,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-28T11:06:08.575Z
-Stopped at: Completed 01-04-PLAN.md
+Last session: 2026-10-28T11:21:39.073Z
+Stopped at: Completed 01-05-PLAN.md
 Resume file: None

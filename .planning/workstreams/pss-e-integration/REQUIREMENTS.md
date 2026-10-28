@@ -52,10 +52,10 @@ requirements state what must be true, not how; `psspy` API choices are theirs.
 
 ### Write-back
 
-- [ ] **WB-01**: Every run writes one run record: start and end time, case identifier, per-city
+- [x] **WB-01**: Every run writes one run record: start and end time, case identifier, per-city
   rating used with its source (`city_rating` row or static fallback), outcome (ok, fallback,
   failed), and any error. A run record is written even when the study fails.
-- [ ] **WB-02**: A run's results are either all written or the run is marked failed; no partial
+- [x] **WB-02**: A run's results are either all written or the run is marked failed; no partial
   result set is left looking complete.
 
 ### Scheduling
@@ -95,8 +95,8 @@ requirements state what must be true, not how; `psspy` API choices are theirs.
 |-------------|-------|--------|
 | DBX-01 | Phase 1 | Complete |
 | IN-01 | Phase 1 | Complete |
-| WB-01 | Phase 1 | Pending |
-| WB-02 | Phase 1 | Pending |
+| WB-01 | Phase 1 | Complete |
+| WB-02 | Phase 1 | Complete |
 | IN-02 | Phase 2 | Pending |
 | IN-03 | Phase 2 | Pending |
 | STU-01 | Phase 2 | Pending |
