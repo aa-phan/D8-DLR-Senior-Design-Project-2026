@@ -12,6 +12,7 @@ Follows backend/tests/supabase_schema_doc_test.py's conventions (module-level im
 plain asserts, no test classes).
 """
 
+import hashlib
 import math
 import os
 import re
@@ -49,6 +50,16 @@ REQUIRED_HEADINGS = (
     "## Reading rules",
     "## Open questions for Power Systems and Phase 6",
     "## Versioning",
+)
+
+HANDOFF_HEADINGS = (
+    "## Summary",
+    "## What Phase 6 must add",
+    "## Phase 6 plans this touches",
+    "## Reference DDL identity",
+    "## What is already proven",
+    "## What this workstream does not do",
+    "## Questions for Phase 6's owner",
 )
 
 TABLES = ("psse_run", "psse_dispatched_capacity", "psse_voltage_margin", "psse_contingency_result")
@@ -144,6 +155,19 @@ def _statements(path=None):
 def _comments():
     """{'public.psse_run.run_id': comment text} for every `comment on` entry of the DDL."""
     return {target: text for target, text in _COMMENT_BODY_RE.findall(_read(DDL_PATH))}
+
+
+def _marked_region_sha256():
+    """sha256 of the DDL lines from `-- BEGIN psse_results_v1` through `-- END psse_results_v1`.
+
+    The file is read in text mode (CRLF or LF checkouts both give LF lines) and every line is
+    hashed with a single LF ending, as UTF-8, so the value is the same on every checkout.
+    """
+    lines = _read(DDL_PATH).splitlines()
+    start = lines.index("-- BEGIN psse_results_v1")
+    end = lines.index("-- END psse_results_v1")
+    region = "".join(line + "\n" for line in lines[start:end + 1])
+    return hashlib.sha256(region.encode("utf-8")).hexdigest()
 
 
 def _assert_no_connection_details(text):
@@ -381,3 +405,62 @@ def test_vocabularies_match_psse_job_constants():
             assert values == wanted, f"{table}.{column}: DDL {values} != psse_job {wanted}"
     assert len(found["city"]) == 3 and "psse_run" not in [t for t, _ in found["city"]]
     assert len(found["run_outcome"]) == 3
+
+
+def test_handoff_pins_the_marked_region_sha256():
+    lines = [line for line in _read(HANDOFF_PATH).splitlines() if line.startswith("Marked-region sha256:")]
+    assert len(lines) == 1, "the note needs exactly one 'Marked-region sha256:' line"
+    match = re.fullmatch(r"Marked-region sha256: ([0-9a-f]{64})", lines[0])
+    assert match, f"malformed pin line: {lines[0]!r}"
+    assert match.group(1) == _marked_region_sha256(), (
+        "the marked region of psse_results_v1.sql changed: update the pin in the hand-off note "
+        "(and tell Phase 6's owner, whose migration must carry the same region)"
+    )
+
+
+def test_handoff_has_every_section_once():
+    text = _read(HANDOFF_PATH)
+    headings = [line for line in text.splitlines() if line.startswith("## ")]
+    assert headings == list(HANDOFF_HEADINGS)
+
+
+def test_handoff_names_what_phase6_must_add():
+    text = _read(HANDOFF_PATH)
+    for needle in (
+        "_psse_results.sql", "dlr_psse_writer", "verify_psse_results.sql", "SUPABASE_PSSE_DB_URL",
+        "06-09", "exactly the two Phase 6 files", "exactly four migrations", "06-01",
+        "verify_exposure.sql", "local_pg.py", "06-CONTEXT", "psse_results_v1_checks.sql",
+    ):
+        assert needle in text, f"the hand-off note does not mention {needle!r}"
+
+
+def test_handoff_links_resolve():
+    checked = 0
+    for path in (HANDOFF_PATH, DOC_PATH):
+        for target in re.findall(r"\]\(([^)\s]+)\)", _read(path)):
+            if re.match(r"[a-z]+:", target) or target.startswith("#"):
+                continue
+            resolved = os.path.normpath(os.path.join(os.path.dirname(path), target.split("#", 1)[0]))
+            assert os.path.isfile(resolved), f"{path}: link {target} does not resolve"
+            checked += 1
+    assert "](../decisions/psse_results_phase6_handoff.md)" in _read(DOC_PATH)
+    assert "](../schema/psse_results_v1.md)" in _read(HANDOFF_PATH)
+    assert checked >= 3
+
+
+def test_handoff_contains_no_connection_details():
+    _assert_no_connection_details(_read(HANDOFF_PATH))
+
+
+def test_handoff_lists_what_this_workstream_does_not_do():
+    section = _section(_read(HANDOFF_PATH), "## What this workstream does not do")
+    assert "supabase/migrations" in section
+    assert "production-pipeline" in section
+
+
+def test_docs_describe_no_anon_or_authenticated_grant():
+    for path in (DOC_PATH, HANDOFF_PATH):
+        for sentence in re.split(r"(?<=[.;:])\s+|\n", _read(path)):
+            assert not re.search(r"\bgrant\b[^.;]*\bto\b[^.;]*\b(anon|authenticated)\b", sentence, re.IGNORECASE), (
+                f"{path}: describes a consumer grant: {sentence!r}"
+            )
