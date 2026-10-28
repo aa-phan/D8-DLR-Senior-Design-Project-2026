@@ -106,7 +106,7 @@ coverage:
     requirement: "WB-02"
     verification:
       - kind: unit
-        ref: "backend/tests/psse_run_record_test.py#test_validate_results_rejects (30 cases)"
+        ref: "backend/tests/psse_run_record_test.py#test_validate_results_rejects (31 cases)"
         status: pass
       - kind: unit
         ref: "backend/tests/psse_run_record_test.py#test_contract_columns_match_reference_ddl"
