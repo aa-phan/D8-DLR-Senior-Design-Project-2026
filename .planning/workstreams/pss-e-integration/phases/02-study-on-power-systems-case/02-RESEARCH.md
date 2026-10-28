@@ -576,19 +576,29 @@ See the Mapping section; the bus numbers 9xxxx must also be the buses of the fak
 | A16 | `savnw.sav` ships with PSS/E on the laptop | Mapping | Phase 3 smoke needs another sample case |
 | A17 | A real N-1 over the neighbourhood (tens of outages) fits an hourly budget | N-1 | Needs a smaller neighbourhood or ACCC; measured only in Phase 3 |
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+Resolved for planning on 2026-10-28: each question is answered by the default the plans adopt, implemented as configuration where it can change, and stated as an assumption. Questions 1 to 7 are forwarded, unchanged in substance, to the user and Power Systems in the `## Questions for the user / Power Systems` section of plan 02-07 (the study-definitions note and the 02-07 SUMMARY), where an answer becomes a mapping-file edit, not a code change. Question 8 is deferred to the Phase 3 confirmations (probe and setup guide).
 
 1. **Which rate set receives the DLR value, and does N-1 use B?** (for Power Systems; same as the spec's open question 1)
    - Known: Rate A is continuous, B is two-hour emergency in ERCOT practice (search summaries); DLR is an ampacity.
    - Unclear: their case's convention and whether N-1 limits come from RATEB.
    - Recommendation: default `["RATEA"]` used for every check; make `rate_sets` configuration so `["RATEA","RATEB"]` is a file edit.
+   - **RESOLVED (default adopted):** `study.rate_sets` defaults to `["RATEA"]` and the first listed set is the limit of every check (plans 02-01, 02-03, 02-04); forwarded as question 2 of plan 02-07.
 2. **Which branch(es) per city, and are they all one base kV?** (spec open question 3). Recommendation: the mapping check fails loudly on a mixed-kV city; ask for the mapping early because a placeholder cannot answer it.
+   - **RESOLVED (default adopted):** placeholder mapping with fake 9xxxx buses; a mixed-kV city fails at stage `mapping` (plans 02-01, 02-03); forwarded as question 1 of plan 02-07.
 3. **Case size and N-1 volume / run time** (spec open question 2). Recommendation: neighbourhood scope with caps; measure on the laptop in Phase 3.
+   - **RESOLVED (default adopted):** `contingency.hops` 2, `contingency.max` 200, `max_runtime_seconds` 1500, caps fail the stage (plans 02-01, 02-04); forwarded as question 7 of plan 02-07; the real run time is measured in Phase 3.
 4. **Transfer definition for the voltage margin: which buses are the sink, what supplies the increase?** Recommendation: default sink = the far end of the mapped branch, swing absorbs; Power Systems confirms or replaces per city in the mapping file.
+   - **RESOLVED (default adopted):** `sink_buses` default the first mapped branch's to-bus, the swing bus supplies the increase; per the plan checker's revision, `transfer.max_mw` (1000 MW) is a starting cap only, the search continues for at most `transfer.extra_steps` (80) further steps while no bound is found and fails at `voltage_margin` otherwise, replacing the `max_transfer` outcome above, which could understate a voltage limit (plan 02-05); forwarded, with the cap and the step budget, as question 4 of plan 02-07.
 5. **Should the static rating overwrite the case's own rating on mapped branches?** Recommendation: yes per IN-01, with `rate_before_mva` recorded so the difference is visible.
+   - **RESOLVED (default adopted):** the static rating is written and `rate_before_mva` is kept in the dispatch row's details (plans 02-03, 02-05); forwarded as question 3 of plan 02-07.
 6. **Should base-case violations be written in the N-1 table?** Recommendation: yes, flagged `in_base_case`; a reader filters. Decision is Power Systems'.
+   - **RESOLVED (default adopted):** written and flagged `details.in_base_case`, with `details.base_value` (plan 02-04); forwarded as question 5 of plan 02-07.
 7. **Does the laptop's PSS/E have a PV/QV or ACCC licence, and does Power Systems want those used instead of the native loops?** Recommendation: defer; the `study` seam and the free `method` label allow it.
+   - **RESOLVED (default adopted):** not used; native load-flow loops only (plans 02-04, 02-05); forwarded as question 6 of plan 02-07.
 8. **Which Python version, `psycopg` pin and `psse35`/`psse36` import** (Phase 3; the 01-VERIFICATION human item). Recommendation: probe plus the Phase 3 setup guide.
+   - **RESOLVED (deferred to Phase 3):** not a Phase 2 decision; the probe of plan 02-07 and the Phase 3 setup guide confirm it on the laptop (listed under the note's "Phase 3 confirmations").
 
 ## Environment Availability
 
