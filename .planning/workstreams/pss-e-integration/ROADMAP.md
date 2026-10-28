@@ -42,7 +42,12 @@ the third needs Phase 6 live, Power Systems' case file and the laptop.
   2. For each city the job uses the newest `city_rating` row, and uses the city's static rating, recorded as such, when that row is missing, older than 90 minutes or provisional (today every row is provisional, so all four cities show static).
   3. Every run writes one run record (start and end time, case identifier, per-city rating used and its source, outcome ok, fallback or failed, any error), including a run whose study fails.
   4. A run that fails partway leaves no result set that looks complete: results are all written, or the run is marked failed.
-**Plans**: TBD
+**Plans**: 5 plans
+- [ ] 01-01-PLAN.md — Reference DDL (four tables, `dlr_psse_writer` role, grants, RLS) proven on a local Postgres
+- [ ] 01-02-PLAN.md — Rating selection with static fallback, units, constants copy and drift test
+- [ ] 01-03-PLAN.md — Spec `psse_results_v1.md`, Phase 6 hand-off note, doc/DDL drift test
+- [ ] 01-04-PLAN.md — Run record and atomic writer (one transaction, failed record on rollback)
+- [ ] 01-05-PLAN.md — `run_once`: read ratings, study, validate, single write at the end
 
 ### Phase 2: Study on Power Systems' Case
 **Goal**: Given the ratings, the job applies them to the mapped branches and produces load-flow, N-1, voltage-margin and dispatched-capacity results, proven on the Mac with a fake `psspy`.
@@ -73,6 +78,6 @@ Phases execute in numeric order: 1 → 2 → 3
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Result-Table Spec and Rating I/O | 0/TBD | Not started | - |
+| 1. Result-Table Spec and Rating I/O | 0/5 | Planned | - |
 | 2. Study on Power Systems' Case | 0/TBD | Not started | - |
 | 3. Laptop Run and Handover | 0/TBD | Not started | - |
