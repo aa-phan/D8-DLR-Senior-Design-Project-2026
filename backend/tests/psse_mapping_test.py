@@ -28,7 +28,7 @@ _ROOT = os.path.abspath(os.path.join(_BACKEND, ".."))
 if _BACKEND not in sys.path:
     sys.path.insert(0, _BACKEND)
 
-from psse_job import constants, mapping, run_record  # noqa: E402
+from psse_job import constants, mapping, run_record, settings  # noqa: E402
 
 EXAMPLE = os.path.join(_ROOT, "docs", "data-science", "schema", "psse_mapping_example.json")
 
@@ -367,3 +367,246 @@ def test_rule_bom_is_accepted_and_hashed():
     data = b"\xef\xbb\xbf" + _dump(_base())
     loaded = mapping.parse_mapping(data, allow_placeholder=True)
     assert loaded.sha256 == hashlib.sha256(data).hexdigest()
+
+
+# ---------------------------------------------------------------------------------------
+# Study settings: stated defaults and validated overrides (Task 3)
+# ---------------------------------------------------------------------------------------
+
+
+def test_settings_defaults_pinned():
+    d = settings.DEFAULT_SETTINGS
+    assert len(settings.Settings._fields) == 22
+    assert d.rate_sets == ("RATEA",)
+    assert d.thermal_basis == "current"
+    assert d.thermal_limit_pct == 100.0
+    assert d.voltage_source == "config"
+    assert d.base_low_pu == 0.95
+    assert d.base_high_pu == 1.05
+    assert d.contingency_low_pu == 0.90
+    assert d.contingency_high_pu == 1.05
+    assert d.min_monitor_kv == 100.0
+    assert d.contingency_scope == "neighbourhood"
+    assert d.contingency_hops == 2
+    assert d.contingency_max == 200
+    assert d.contingency_extra == ()
+    assert d.transfer_step_mw == 25.0
+    assert d.transfer_max_mw == 1000.0
+    assert d.transfer_extra_steps == 80
+    assert d.transfer_tolerance_mw == 1.0
+    assert d.transfer_min_rise_fraction == 0.01
+    assert d.solve_options is None
+    assert d.max_mismatch_mva == 1.0
+    assert d.collapse_voltage_pu == 0.5
+    assert d.max_runtime_seconds == 1500.0
+    assert settings.Settings._fields == (
+        "rate_sets", "thermal_basis", "thermal_limit_pct", "voltage_source", "base_low_pu",
+        "base_high_pu", "contingency_low_pu", "contingency_high_pu", "min_monitor_kv",
+        "contingency_scope", "contingency_hops", "contingency_max", "contingency_extra",
+        "transfer_step_mw", "transfer_max_mw", "transfer_extra_steps", "transfer_tolerance_mw",
+        "transfer_min_rise_fraction", "solve_options", "max_mismatch_mva", "collapse_voltage_pu",
+        "max_runtime_seconds",
+    )
+    assert settings.parse_settings(None) == d
+    assert settings.parse_settings({}) == d
+
+
+_FULL_STUDY = {
+    "rate_sets": ["RATEA", "RATEB"],
+    "thermal": {"basis": "mva", "limit_pct": 95},
+    "voltage": {
+        "source": "case",
+        "base_low_pu": 0.96,
+        "base_high_pu": 1.04,
+        "contingency_low_pu": 0.92,
+        "contingency_high_pu": 1.06,
+        "min_monitor_kv": 69,
+    },
+    "contingency": {
+        "scope": "all",
+        "hops": 3,
+        "max": 300,
+        "extra": [{"from_bus": 90001, "to_bus": 90003, "ckt": "2"}],
+    },
+    "transfer": {
+        "step_mw": 50,
+        "max_mw": 2000,
+        "extra_steps": 10,
+        "tolerance_mw": 2,
+        "min_rise_fraction": 0.05,
+    },
+    "solve": {"options": [0, 0, 0, 0, 0, 0, 0, 1], "max_mismatch_mva": 0.5, "collapse_voltage_pu": 0.6},
+    "max_runtime_seconds": 1200,
+}
+
+
+def test_settings_overrides_parse():
+    got = settings.parse_settings(copy.deepcopy(_FULL_STUDY))
+    assert got.rate_sets == ("RATEA", "RATEB")
+    assert got.thermal_basis == "mva"
+    assert got.thermal_limit_pct == 95.0
+    assert got.voltage_source == "case"
+    assert (got.base_low_pu, got.base_high_pu) == (0.96, 1.04)
+    assert (got.contingency_low_pu, got.contingency_high_pu) == (0.92, 1.06)
+    assert got.min_monitor_kv == 69.0
+    assert got.contingency_scope == "all"
+    assert got.contingency_hops == 3
+    assert got.contingency_max == 300
+    assert got.contingency_extra == (settings.BranchRef(90001, 90003, "2"),)
+    assert got.transfer_step_mw == 50.0
+    assert got.transfer_max_mw == 2000.0
+    assert got.transfer_extra_steps == 10
+    assert got.transfer_tolerance_mw == 2.0
+    assert got.transfer_min_rise_fraction == 0.05
+    assert got.solve_options == (0, 0, 0, 0, 0, 0, 0, 1)
+    assert isinstance(got.solve_options, tuple)
+    assert got.max_mismatch_mva == 0.5
+    assert got.collapse_voltage_pu == 0.6
+    assert got.max_runtime_seconds == 1200.0
+    for field in settings.Settings._fields:
+        assert getattr(got, field) != getattr(settings.DEFAULT_SETTINGS, field), field
+
+
+def test_settings_partial_override_keeps_other_defaults():
+    got = settings.parse_settings({"contingency": {"hops": 1}})
+    assert got.contingency_hops == 1
+    assert got._replace(contingency_hops=2) == settings.DEFAULT_SETTINGS
+    explicit_null = settings.parse_settings({"solve": {"options": None}})
+    assert explicit_null == settings.DEFAULT_SETTINGS
+
+
+def test_settings_branchref_key_and_orientation():
+    ref = settings.BranchRef(90002, 90001, "1")
+    assert ref.key == "90002-90001-1"
+    assert ref.normalised() == (90001, 90002, "1")
+    assert settings.BranchRef(90001, 90002, "1").normalised() == ref.normalised()
+
+
+_BAD_OVERRIDES = [
+    ("extra_steps_negative", {"transfer": {"extra_steps": -1}}, "study.transfer.extra_steps"),
+    ("extra_steps_float", {"transfer": {"extra_steps": 1.5}}, "study.transfer.extra_steps"),
+    ("rate_set_unknown", {"rate_sets": ["RATED"]}, "study.rate_sets[0]"),
+    ("rate_set_duplicate", {"rate_sets": ["RATEA", "RATEA"]}, "listed twice"),
+    ("rate_sets_empty", {"rate_sets": []}, "study.rate_sets"),
+    ("rate_sets_text", {"rate_sets": "RATEA"}, "study.rate_sets"),
+    ("thermal_basis_amps", {"thermal": {"basis": "amps"}}, "study.thermal.basis"),
+    ("thermal_limit_zero", {"thermal": {"limit_pct": 0}}, "study.thermal.limit_pct"),
+    ("thermal_limit_250", {"thermal": {"limit_pct": 250}}, "study.thermal.limit_pct"),
+    ("thermal_unknown_key", {"thermal": {"colour": 1}}, "study.thermal.colour: unknown key"),
+    ("voltage_source_bus", {"voltage": {"source": "bus"}}, "study.voltage.source"),
+    ("base_low_above_high", {"voltage": {"base_low_pu": 1.10}}, "base_low_pu: must be below"),
+    (
+        "contingency_low_above_high",
+        {"voltage": {"contingency_low_pu": 1.10}},
+        "contingency_low_pu: must be below",
+    ),
+    ("pu_band_two", {"voltage": {"base_high_pu": 2.0}}, "study.voltage.base_high_pu"),
+    ("pu_bool", {"voltage": {"base_low_pu": True}}, "study.voltage.base_low_pu"),
+    ("min_kv_negative", {"voltage": {"min_monitor_kv": -1}}, "study.voltage.min_monitor_kv"),
+    ("scope_region", {"contingency": {"scope": "region"}}, "study.contingency.scope"),
+    ("hops_six", {"contingency": {"hops": 6}}, "study.contingency.hops"),
+    ("hops_float", {"contingency": {"hops": 1.5}}, "study.contingency.hops"),
+    ("max_zero", {"contingency": {"max": 0}}, "study.contingency.max"),
+    ("max_large", {"contingency": {"max": 1001}}, "study.contingency.max"),
+    (
+        "extra_bad_bus",
+        {"contingency": {"extra": [{"from_bus": 0, "to_bus": 2, "ckt": "1"}]}},
+        "study.contingency.extra[0].from_bus",
+    ),
+    (
+        "extra_duplicate",
+        {
+            "contingency": {
+                "extra": [
+                    {"from_bus": 1, "to_bus": 2, "ckt": "1"},
+                    {"from_bus": 2, "to_bus": 1, "ckt": "1"},
+                ]
+            }
+        },
+        "listed twice",
+    ),
+    ("step_zero", {"transfer": {"step_mw": 0}}, "study.transfer.step_mw"),
+    ("max_below_step", {"transfer": {"max_mw": 10}}, "study.transfer.max_mw"),
+    ("tolerance_not_below_step", {"transfer": {"tolerance_mw": 30}}, "study.transfer.tolerance_mw"),
+    ("min_rise_one", {"transfer": {"min_rise_fraction": 1}}, "study.transfer.min_rise_fraction"),
+    ("options_seven", {"solve": {"options": [1] * 7}}, "study.solve.options"),
+    ("options_bool", {"solve": {"options": [True] * 8}}, "study.solve.options"),
+    ("mismatch_zero", {"solve": {"max_mismatch_mva": 0}}, "study.solve.max_mismatch_mva"),
+    ("collapse_one", {"solve": {"collapse_voltage_pu": 1}}, "study.solve.collapse_voltage_pu"),
+    (
+        "collapse_above_criterion",
+        {"solve": {"collapse_voltage_pu": 0.95}},
+        "collapse_voltage_pu: must be below",
+    ),
+    ("runtime_zero", {"max_runtime_seconds": 0}, "study.max_runtime_seconds"),
+    ("runtime_4000", {"max_runtime_seconds": 4000}, "study.max_runtime_seconds"),
+    ("study_not_object", [], "study: must be an object"),
+    ("top_unknown_key", {"colour": 1}, "study.colour: unknown key"),
+]
+
+
+def test_settings_case_count_is_36():
+    assert len(_BAD_OVERRIDES) == 36
+    assert len(set(item[0] for item in _BAD_OVERRIDES)) == 36
+
+
+@pytest.mark.parametrize(
+    "study,fragment",
+    [(item[1], item[2]) for item in _BAD_OVERRIDES],
+    ids=[item[0] for item in _BAD_OVERRIDES],
+)
+def test_settings_rejects_bad_overrides(study, fragment):
+    with pytest.raises(settings.SettingsError) as caught:
+        settings.parse_settings(copy.deepcopy(study))
+    assert fragment in str(caught.value)
+    assert caught.value.problems
+
+
+def test_settings_reports_every_problem_at_once():
+    with pytest.raises(settings.SettingsError) as caught:
+        settings.parse_settings(
+            {"thermal": {"basis": "amps"}, "voltage": {"source": "bus"}, "colour": 1}
+        )
+    assert len(caught.value.problems) == 3
+
+
+def test_settings_nan_and_infinity_are_refused():
+    for bad in (float("nan"), float("inf"), float("-inf")):
+        with pytest.raises(settings.SettingsError):
+            settings.parse_settings({"thermal": {"limit_pct": bad}})
+        with pytest.raises(settings.SettingsError):
+            settings.parse_settings({"max_runtime_seconds": bad})
+
+
+def test_settings_errors_surface_in_mapping():
+    def bad_study(data):
+        data["study"] = {"thermal": {"colour": 1}}
+
+    with pytest.raises(mapping.MappingError) as caught:
+        mapping.parse_mapping(_edit(bad_study), allow_placeholder=True)
+    assert caught.value.problems
+    assert all(problem.startswith("study: ") for problem in caught.value.problems)
+    assert "study.thermal.colour" in str(caught.value)
+
+    def both(data):
+        data["study"] = {"max_runtime_seconds": 0}
+        data["schema_version"] = 2
+
+    with pytest.raises(mapping.MappingError) as caught:
+        mapping.parse_mapping(_edit(both), allow_placeholder=True)
+    assert len(caught.value.problems) == 2
+
+    def good_study(data):
+        data["study"] = copy.deepcopy(_FULL_STUDY)
+
+    data = _edit(good_study)
+    loaded = mapping.parse_mapping(data, allow_placeholder=True)
+    assert loaded.settings == settings.parse_settings(copy.deepcopy(_FULL_STUDY))
+    assert loaded.sha256 == hashlib.sha256(data).hexdigest()
+    assert loaded.sha256 != mapping.load_mapping(EXAMPLE, allow_placeholder=True).sha256
+
+
+def test_settings_rate_set_label():
+    assert settings.rate_set_label(settings.DEFAULT_SETTINGS) == "RATEA"
+    got = settings.parse_settings({"rate_sets": ["RATEA", "RATEB"]})
+    assert settings.rate_set_label(got) == "RATEA+RATEB"
