@@ -1,7 +1,10 @@
 """
 The real PSS/E study behind Phase 1's study(selection, context) seam (pss-e-integration
-Phase 2). This part is the base of the study (plan 02-03: IN-02, IN-03, STU-01); plan 02-06
-assembles the whole study around it.
+Phase 2). The first part is the base of the study (plan 02-03: IN-02, IN-03, STU-01); the last
+part (plan 02-06) assembles the whole study around it: make_study runs the base, the N-1 screen
+(plan 02-04), the margins and the dispatch rows (plan 02-05) and returns contract.StudyResults,
+and prepare_run is the single entry point Phase 3's launcher calls (the study, the case label,
+the case and mapping hashes).
 
 psspy arrives as an injected module and is reached only through psse_api.PsseApi; this
 package never imports it. Every failure is contract.StudyFailed with a stage from
@@ -16,11 +19,15 @@ Standard library and psse_job only, Python 3.7 syntax (D-05).
 """
 
 import collections
+import datetime
 import os
 import tempfile
 import time
 
-from psse_job import constants, contract, psse_api, run_record, settings as settings_module, units
+from psse_job import (
+    constants, contingency, contract, dispatch, mapping as mapping_module, margin, psse_api,
+    run_record, settings as settings_module, units,
+)
 
 StudyFailed = contract.StudyFailed
 BranchRef = settings_module.BranchRef
@@ -300,3 +307,101 @@ def prepare_base(psspy_module, case_path, mapping, selection, budget=None):
         api, label, case_path, mapping, settings, selection, tuple(lines), tuple(transformers),
         buses, cities, area, result, base_buses, base_flows, saved_path, temp_dir, budget,
         psse_version, settings_module.rate_set_label(settings))
+
+
+# -- the whole study (plan 02-06) -----------------------------------------------------------------
+
+PreparedRun = collections.namedtuple("PreparedRun", [
+    "study", "case_id", "case_sha256", "mapping_sha256", "mapping_error",
+])
+
+
+def failing_study(stage, message):
+    """A study callable that raises StudyFailed(stage, message) without touching psspy."""
+    def failing(selection, context):
+        raise StudyFailed(stage, message)
+    return failing
+
+
+def json_safe(value):
+    """A JSON-safe copy of `value` (research Pitfall 13: the writer dumps details with
+    allow_nan=False): dict keys become text, lists and tuples lists, floats go through
+    run_record.finite (NaN and infinity become None), datetimes ISO text, None, bool, int and str
+    pass through and any other object becomes its text."""
+    if value is None or isinstance(value, (bool, int, str)):
+        return value
+    if isinstance(value, float):
+        return run_record.finite(value)
+    if isinstance(value, dict):
+        return dict((str(key), json_safe(item)) for key, item in value.items())
+    if isinstance(value, (list, tuple)):
+        return [json_safe(item) for item in value]
+    if isinstance(value, (datetime.datetime, datetime.date)):
+        return value.isoformat()
+    return str(value)
+
+
+def _with_safe_details(row):
+    row = dict(row)
+    row["details"] = json_safe(row.get("details"))
+    return row
+
+
+def make_study(psspy_module, case_path, mapping, clock=None):
+    """study(selection, context) for run_once: the base, the N-1 screen, a margin and a dispatch
+    row per city, as contract.StudyResults.
+
+    Every call builds a new PsseApi and loads the case afresh (one study per process, never an
+    adapter reused across runs), and removes its temporary files on every path.
+    """
+    def study(selection, context):
+        budget = Budget(clock, mapping.settings.max_runtime_seconds)
+        base = prepare_base(psspy_module, case_path, mapping, selection, budget)
+        try:
+            screened = contingency.screen(base)
+            margins = [margin.city_margin(base, city) for city in constants.CITIES]
+            dispatch_rows = []
+            for city, result in zip(constants.CITIES, margins):
+                city_base = base.cities[city]
+                try:
+                    dispatch_rows.append(dispatch.build_dispatch_row(
+                        selection.choices[city], city_base.line_voltage_kv,
+                        result.voltage_limit_mva,
+                        details=dispatch.dispatch_details(
+                            city_base, base.settings.rate_sets, result.bounded_by),
+                        bounded_by=result.bounded_by))
+                except ValueError as error:
+                    raise StudyFailed("dispatch", "%s: %s" % (city, error))
+            return contract.StudyResults(
+                dispatch=[_with_safe_details(row) for row in dispatch_rows],
+                margins=[_with_safe_details(result.row) for result in margins],
+                contingencies=[_with_safe_details(row) for row in screened.rows],
+                n_contingencies=screened.n_contingencies,
+                rate_set=base.rate_set,
+                psse_version=base.psse_version)
+        finally:
+            cleanup_base(base)
+    return study
+
+
+def prepare_run(psspy_module, case_path, mapping_path, allow_placeholder=False, clock=None):
+    """Everything Phase 3's launcher passes to job.run_once: the study, the case label, the case
+    file's sha256 and the mapping's sha256.
+
+    A mapping that cannot be read, parsed or validated (a refused placeholder included) gives a
+    study that fails at stage mapping and mapping_sha256 None, "the mapping was not loaded"; a
+    mapping that loads keeps its hash even when it does not match the case (that failure comes
+    from inside the study). The case is hashed from the same path the study loads; the gap
+    between the hash and the load is accepted.
+    """
+    case_id = run_record.case_label(case_path)
+    case_sha256 = run_record.file_sha256(case_path)
+    try:
+        loaded = mapping_module.load_mapping(mapping_path, allow_placeholder)
+    except mapping_module.MappingError as error:
+        text = str(error)
+        return PreparedRun(
+            failing_study("mapping", "mapping file not usable: %s" % text),
+            case_id, case_sha256, None, text)
+    return PreparedRun(make_study(psspy_module, case_path, loaded, clock),
+                       case_id, case_sha256, loaded.sha256, None)
