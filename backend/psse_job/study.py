@@ -38,6 +38,7 @@ BaseCase = collections.namedtuple("BaseCase", [
 ])
 
 _RELATIVE_TOLERANCE = 1e-6
+_KV_TOLERANCE = 1e-6
 _TEMP_PREFIX = "psse_job_"
 
 
@@ -62,24 +63,66 @@ class Budget(object):
 
 def check_mapping(mapping, lines, transformers, buses):
     """(resolved, problems): each city's mapped lines in the case's orientation with their base
-    kV, and every problem found. Pure; no psspy call. Rules are added in the following steps."""
+    kV, and every problem found. Pure; no psspy call.
+
+    A mapped branch must be an in-service line (not a transformer) whose two ends share one
+    base kV, a city's branches must share one base kV (the result tables store one
+    line_voltage_kv per city), each sink bus must be a bus in service, and each extra outage
+    must be a line in the case (research D-08). The reversed orientation is accepted and
+    normalised to the case's, because whether PSS/E accepts reversed ends is unknown.
+    """
     by_key = {}
     for row in lines:
         by_key[(row.from_bus, row.to_bus, row.ckt)] = row
+    transformer_keys = set()
+    for row in transformers:
+        transformer_keys.add((row.from_bus, row.to_bus, row.ckt))
+        transformer_keys.add((row.to_bus, row.from_bus, row.ckt))
+
+    def find_line(ref):
+        row = by_key.get((ref.from_bus, ref.to_bus, ref.ckt))
+        return row if row is not None else by_key.get((ref.to_bus, ref.from_bus, ref.ckt))
+
     problems = []
     resolved = {}
     for city in constants.CITIES:
         branches = []
         for ref in mapping.cities[city].branches:
-            row = by_key.get((ref.from_bus, ref.to_bus, ref.ckt))
+            row = find_line(ref)
             if row is None:
-                row = by_key.get((ref.to_bus, ref.from_bus, ref.ckt))
-            if row is None:
-                problems.append("%s: branch %s is not in the case" % (city, ref.key))
+                if (ref.from_bus, ref.to_bus, ref.ckt) in transformer_keys:
+                    problems.append("%s: branch %s is a two-winding transformer, not a line"
+                                    % (city, ref.key))
+                else:
+                    problems.append("%s: branch %s is not in the case" % (city, ref.key))
                 continue
-            kv = buses[row.from_bus].base_kv
-            branches.append(ResolvedBranch(BranchRef(row.from_bus, row.to_bus, row.ckt), kv))
+            if not row.in_service:
+                problems.append("%s: branch %s is out of service" % (city, ref.key))
+                continue
+            from_end = buses.get(row.from_bus)
+            to_end = buses.get(row.to_bus)
+            if (from_end is None or to_end is None or not from_end.base_kv > 0
+                    or not to_end.base_kv > 0
+                    or abs(from_end.base_kv - to_end.base_kv) > _KV_TOLERANCE):
+                problems.append(
+                    "%s: branch %s has endpoints of different base kV (a transformer or a data "
+                    "error)" % (city, ref.key))
+                continue
+            branches.append(ResolvedBranch(BranchRef(row.from_bus, row.to_bus, row.ckt),
+                                           from_end.base_kv))
+        kv_values = sorted(set(round(branch.base_kv, 6) for branch in branches))
+        if len(kv_values) > 1:
+            problems.append("%s: mapped branches have different base kV %s" % (city, kv_values))
+        for number in mapping.cities[city].sink_buses:
+            sink = buses.get(number)
+            if sink is None:
+                problems.append("%s: sink bus %d is not in the case" % (city, number))
+            elif sink.type_code >= 4:
+                problems.append("%s: sink bus %d is isolated" % (city, number))
         resolved[city] = tuple(branches)
+    for ref in mapping.settings.contingency_extra:
+        if find_line(ref) is None:
+            problems.append("contingency.extra: branch %s is not a line in the case" % ref.key)
     return resolved, problems
 
 
