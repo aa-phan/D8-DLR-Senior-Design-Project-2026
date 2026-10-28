@@ -26,6 +26,7 @@ import urllib.parse
 import urllib.request
 
 from psse_job import constants
+from psse_job.redaction import env_secrets, redact
 
 _LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
 
@@ -86,13 +87,6 @@ def _is_service_role_jwt(key):
     except (ValueError, binascii.Error, UnicodeError):
         return False
     return isinstance(payload, dict) and payload.get("role") == "service_role"
-
-
-def _scrub(text, removals, limit):
-    """Remove every non-empty string in `removals` (longest first), then cut to `limit`."""
-    for item in sorted({r for r in removals if r}, key=len, reverse=True):
-        text = text.replace(item, "REDACTED")
-    return text[:limit]
 
 
 def fetch_latest_rating(env=None, opener=None, timeout=30):
@@ -158,7 +152,11 @@ def fetch_latest_rating(env=None, opener=None, timeout=30):
     except (urllib.error.URLError, OSError, http.client.HTTPException, ValueError) as exc:
         failure = "latest_rating read failed: %s: %s" % (
             type(exc).__name__,
-            _scrub(str(exc), [base, parts.netloc, host, key], constants.LOG_MAX_CHARS),
+            redact(
+                str(exc),
+                secrets=[base, parts.netloc, host, key] + env_secrets(env),
+                limit=constants.LOG_MAX_CHARS,
+            ),
         )
     if failure is not None:
         raise ReadFailed(failure)
@@ -288,7 +286,7 @@ def select_ratings(fetch, now):
     except ReadFailed as exc:
         read_error = str(exc)
     except Exception as exc:  # noqa: BLE001 - a failed read is a fallback, never a crash (D-02)
-        read_error = type(exc).__name__
+        read_error = type(exc).__name__ + ": " + redact(str(exc), limit=constants.ERROR_MAX_CHARS)
     if read_error is None and not isinstance(rows, list):
         read_error = _NOT_A_LIST
     if read_error is not None:
@@ -313,3 +311,40 @@ def select_ratings(fetch, now):
         else:
             choices[city] = choose(city, found[0], now)
     return Selection(choices, None, ignored)
+
+
+def _iso(moment):
+    return None if moment is None else moment.isoformat()
+
+
+def ratings_used(selection):
+    """
+    The `psse_run.ratings_used` object: the four cities in constants.CITIES order, each a dict
+    with exactly constants.RATINGS_USED_KEYS in order. line_voltage_kv and rating_mva are None
+    here (the study fills them from the case's base kV). The row link fields identify the row
+    that was read, including a stale or provisional one that was not used. Every value is
+    JSON-serializable with allow_nan=False.
+    """
+    result = {}
+    for city in constants.CITIES:
+        choice = selection.choices[city]
+        values = {
+            "source": choice.source,
+            "fallback_reason": choice.fallback_reason,
+            "rating_amps_per_conductor": choice.amps_per_conductor,
+            "subconductors_per_phase": choice.subconductors_per_phase,
+            "rating_amps_circuit": choice.amps_circuit,
+            "static_rating_amps_per_conductor": choice.static_amps_per_conductor,
+            "line_voltage_kv": None,
+            "rating_mva": None,
+            "city_rating_valid_time": _iso(choice.row_valid_time),
+            "city_rating_computed_at": _iso(choice.row_computed_at),
+            "city_rating_run_id": choice.row_run_id,
+            "city_rating_status": choice.row_status,
+            "config_fingerprint": choice.row_config_fingerprint,
+            "age_minutes": None if choice.age_minutes is None else round(choice.age_minutes, 2),
+            "server_is_stale": choice.server_is_stale,
+            "server_is_provisional": choice.server_is_provisional,
+        }
+        result[city] = dict((key, values[key]) for key in constants.RATINGS_USED_KEYS)
+    return result
