@@ -7,8 +7,13 @@ that records every request, so a test can prove which columns were selected and 
 headers were sent. `latest_rows` builds rows with exactly the selected columns.
 `fake_publishable_key` returns a key that is not credential-shaped for
 backend/tests/secret_scan_test.py.
+
+Plan 01-04 adds `fake_fetch` (a deep-copying stand-in for the ratings read), `fake_results`
+(a StudyResults whose rows satisfy every DDL CHECK and match a Selection) and `FakeStudy`
+(a callable study that records its calls).
 """
 
+import copy
 import datetime
 import http.server
 import json
@@ -23,7 +28,7 @@ _BACKEND = os.path.abspath(os.path.join(_HERE, ".."))
 if _BACKEND not in sys.path:
     sys.path.insert(0, _BACKEND)
 
-from psse_job import constants  # noqa: E402
+from psse_job import constants, contract, units  # noqa: E402
 
 
 def fake_publishable_key():
@@ -129,3 +134,117 @@ def latest_rows(now, provisional=True, age_minutes=10.0, cities=None, **override
         row.update(overrides)
         rows.append(row)
     return rows
+
+
+def fake_fetch(rows):
+    """A ratings read that returns a deep copy of `rows` on every call."""
+    def fetch():
+        return copy.deepcopy(rows)
+    return fetch
+
+
+def fake_results(selection, violations=2, n_contingencies=3, voltage_limit_factor=1.2,
+                 line_voltage_kv=345.0):
+    """
+    A contract.StudyResults whose rows satisfy every DDL CHECK and match `selection`: one
+    dispatch and one margin row per city, then `violations` (0, 1 or 2) contingency rows.
+    The city_rating link columns are set only for a choice whose source is city_rating.
+    """
+    if violations not in (0, 1, 2):
+        raise ValueError("violations must be 0, 1 or 2")
+    dispatch = []
+    margins = []
+    applied = {}
+    for city in constants.CITIES:
+        choice = selection.choices[city]
+        applied_amps_circuit = units.circuit_amps(choice.amps_per_conductor, choice.subconductors_per_phase)
+        applied_mva = units.circuit_mva(
+            choice.amps_per_conductor, choice.subconductors_per_phase, line_voltage_kv
+        )
+        applied[city] = applied_mva
+        voltage_limit_mva = voltage_limit_factor * applied_mva
+        dispatched_mva = min(applied_mva, voltage_limit_mva)
+        dispatched_amps_circuit = units.mva_to_circuit_amps(dispatched_mva, line_voltage_kv)
+        linked = choice.source == constants.SOURCE_CITY_RATING
+        dispatch.append({
+            "city": city,
+            "rating_source": choice.source,
+            "fallback_reason": choice.fallback_reason,
+            "city_rating_valid_time": choice.row_valid_time if linked else None,
+            "city_rating_computed_at": choice.row_computed_at if linked else None,
+            "applied_amps_per_conductor": choice.amps_per_conductor,
+            "subconductors_per_phase": choice.subconductors_per_phase,
+            "applied_amps_circuit": applied_amps_circuit,
+            "line_voltage_kv": line_voltage_kv,
+            "applied_mva": applied_mva,
+            "voltage_limit_mva": voltage_limit_mva,
+            "dispatched_mva": dispatched_mva,
+            "dispatched_amps_circuit": dispatched_amps_circuit,
+            "dispatched_amps_per_conductor": dispatched_amps_circuit / choice.subconductors_per_phase,
+            "power_factor": 0.95,
+            "dispatched_mw": dispatched_mva * 0.95,
+            "limiting_factor": "dlr_rating" if applied_mva <= voltage_limit_mva else "voltage_stability",
+            "details": None,
+        })
+        margins.append({
+            "city": city,
+            "method": "pv_curve",
+            "base_transfer_mw": 1000.0,
+            "limit_transfer_mw": 1120.0,
+            "margin_mw": 120.0,
+            "margin_pct": 12.0,
+            "voltage_limit_mva": voltage_limit_mva,
+            "critical_bus": "1001",
+            "min_voltage_pu": 0.93,
+            "details": None,
+        })
+    contingencies = []
+    if violations >= 1:
+        limit = applied["AUSTIN"]
+        observed = 1.05 * limit
+        contingencies.append({
+            "contingency_id": "1003-1004-1",
+            "violation_kind": "thermal_overload",
+            "element_type": "branch",
+            "element_id": "1001-1002-1",
+            "city": "AUSTIN",
+            "limit_value": limit,
+            "observed_value": observed,
+            "exceeded_by": observed - limit,
+            "unit": "MVA",
+            "details": None,
+        })
+    if violations >= 2:
+        contingencies.append({
+            "contingency_id": "1005-1006-1",
+            "violation_kind": "voltage_low",
+            "element_type": "bus",
+            "element_id": "2001",
+            "city": None,
+            "limit_value": 0.95,
+            "observed_value": 0.92,
+            "exceeded_by": 0.03,
+            "unit": "pu",
+            "details": None,
+        })
+    return contract.StudyResults(
+        dispatch=dispatch, margins=margins, contingencies=contingencies,
+        n_contingencies=n_contingencies, rate_set="RATEA", psse_version="35.6.0",
+    )
+
+
+class FakeStudy(object):
+    """A callable study `(selection, context)`; records each call, raises or returns results."""
+
+    def __init__(self, results=None, raises=None):
+        self.results = results
+        self.raises = raises
+        self.calls = []
+
+    def __call__(self, selection, context):
+        self.calls.append((selection, context))
+        if self.raises is not None:
+            raise self.raises
+        if self.results is not None:
+            return self.results
+        return fake_results(selection)
