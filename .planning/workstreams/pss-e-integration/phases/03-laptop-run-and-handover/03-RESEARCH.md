@@ -527,21 +527,29 @@ order by slot_time desc, started_at desc, run_id desc limit 3;
 | A17 | A hard kill at the time limit may leave the licence seat held until the server times out | Pitfall 2 | Longer outage after a hang; only matters for network licences |
 | A18 | DST changes cause at most one doubled or missed slot | Pitfall 6 | Cosmetic gap rows around the changeover |
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+Each question below is carried by the Phase 3 plans as a numbered question or a decision, not guessed; the Disposition line names where.
 
 1. **Which PSS/E version, edition, licence type and Python does the laptop have?**
    - Known: teammate says "should be compatible"; 35.x reportedly 3.9, 36.x reportedly 3.11.
    - Unclear: everything on the laptop, including whether Task Scheduler registration works for them without administrator rights and whether wake works.
    - Recommendation: the ask-the-teammate list in the setup guide is plan 03-06's first step; nothing else depends on the answer except the psycopg pin and the XML Python path.
+   - Disposition: RESOLVED as a collected answer, not a guess. Guide questions 1, 2, 6 and 11 (plan 03-06); collected at runbook step 0 by plan 03-07 task 1; the psycopg pin is chosen from the guide's matrix in plan 03-07 task 2 behind the blocking-human legitimacy checkpoint (task 3); selftest (plan 03-04) reads the PSS/E version off the laptop at step 2.
 2. **Is the real case the IEEE 39-bus system, and does it come with a mapping?**
    - Known: only the Prior Art Report wording. Unclear: when the team meets and what arrives.
    - Recommendation: do not wait; smoke on `savnw.sav` in dry-run; treat the real case as Wave 3 item `03-07`.
+   - Disposition: RESOLVED as do-not-wait. Guide questions 3 and 9 (plan 03-06); the smoke runs are dry-runs on a PSS/E example case with a throwaway mapping (plan 03-01 decision D-09, plan 03-07, runbook steps 5 and 6); the real case and mapping are reviewed in runbook step 7 (plan 03-08 task 2) once they exist.
 3. **Does Phase 6 take the migration, and when?**
    - Known: [VERIFIED: `ls supabase`] only `supabase/migrations/` with the two Phase 4 migrations exists and there is no `supabase/ops`; the hand-off note asks Phase 6 for the DDL, the role and a `verify_psse_results.sql`.
    - Recommendation: everything DB-side is proven on local Postgres now; the live legs are one short checklist.
+   - Disposition: RESOLVED as local proof now, live checklist later. Guide question 4 (plan 03-06); the gap check and the credential proof are proved on local Postgres in plans 03-02 and 03-03; the live legs are runbook step 8 (plan 03-08 task 1), behind the precondition that the owner confirms Phase 6 is applied.
 4. **Should a smoke run ever write to the live tables?** Rows are permanent. Recommendation: no; if the owner wants a live DB proof before the real case, accept one row set with a clear `case_id` label and let the owner delete it as the database owner.
+   - Disposition: RESOLVED by the user's instruction: smoke runs never write (dry-run only: plan 03-01 decision D-09, plan 03-06 decision D-06). The live writes are two separate blocking-human decisions in plan 03-08: decision 1 (task 3) authorises exactly one proof write, decision 2 (task 5) authorises the unattended hourly task; guide question 5 carries the `case_id` label question.
 5. **Is a PSS/E licence available to a non-interactive or signed-out session?** Recommendation: assume not; `InteractiveToken` only.
+   - Disposition: RESOLVED as assume-not. Plan 03-05 decision D-02 (interactive token, no password or batch-logon right); guide question 6, collected at runbook step 0 (plan 03-07 task 1); a licence that needs a signed-out session is a stop recorded in the laptop record.
 6. **Does the pooler accept the custom role?** The username form for a custom role through the shared pooler is `[ROLE].[PROJECT-REF]` [CITED: supabase.com/docs/guides/database/connecting-to-postgres]; whether the role needs a Supabase-side setting beyond the migration is UNVERIFIED until Phase 6 applies.
+   - Disposition: RESOLVED as a live check. Guide question 4 and plan 03-03's questions; the first connection through the pooler is runbook step 8 (plan 03-08 task 1, `credcheck`), where a refused role is a stop that goes to the owner.
 
 ## Environment Availability
 

@@ -82,7 +82,7 @@ the third needs Phase 6 live, Power Systems' case file and the laptop.
   3. Windows Task Scheduler runs the job hourly with no overlapping runs, and an hour with no run (laptop off or asleep) shows as a gap in the run records through a stated query or check.
   4. A setup guide for the laptop (PSS/E and Python versions, credentials, Task Scheduler entry) lets someone else install the job and start the hourly runs.
 
-**Plans**: 8 plans (5 waves: 01, 02 and 03 parallel, then 04 and 05 parallel, then 06, then 07, then 08; 01 to 06 are built and tested on the Mac, 07 and 08 are human checklists that need the laptop, then Phase 6, the real case and the mapping)
+**Plans**: 8 plans (6 waves, run one plan after another in one working tree: 01, 02 and 03 in wave 1, then 04, then 05 (it needs 04 committed), then 06, then 07, then 08; 01 to 06 are built and tested on the Mac, 07 and 08 are human checklists that need the laptop, then Phase 6, the real case and the mapping)
 - [ ] 03-01-PLAN.md — Launcher core: configuration file outside the repository, OS-released run lock, database preflight, exit codes, dry-run; the fake `psspy` through `run_once` into local Postgres
 - [ ] 03-02-PLAN.md — Gap check: one SQL statement for the hours with no complete run, a read-only wrapper, tested against an independent reference
 - [ ] 03-03-PLAN.md — Credential proof: the writer role and the publishable key checked from the catalog and by refused statements, planted-fault tests, an opt-in rolled-back write proof
@@ -90,7 +90,7 @@ the third needs Phase 6 live, Power Systems' case file and the laptop.
 - [ ] 03-05-PLAN.md — Task Scheduler XML template (no overlap, 45-minute limit, no secrets) with a safe renderer and structure tests
 - [ ] 03-06-PLAN.md — Setup guide and laptop runbook with drift gates; every runbook command rehearsed on fakes and local Postgres
 - [ ] 03-07-PLAN.md — Laptop session A (human): versions, psycopg wheelhouse after a legitimacy check, selftest, probe, dry-run on an example case, three hourly dry-runs
-- [ ] 03-08-PLAN.md — Live session (human): credential proof, real-case review, one real write with read-back, real hourly task, gap check, final guide edit
+- [ ] 03-08-PLAN.md — Live session (human): credential proof, real-case review, one proof write with read-back behind a decision, the real hourly task behind a second decision, gap check, final guide edit
 
 ## Progress
 
