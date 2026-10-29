@@ -68,6 +68,7 @@ import os
 import re
 import socket
 import sys
+import urllib.parse
 
 from psse_job import constants, job, ratings, run_record, study, writer
 from psse_job.lock import RunLock
@@ -137,6 +138,20 @@ _KEYS_BY_NAME = dict((key.name, key) for key in CONFIG_KEYS)
 
 _LINE_RE = re.compile(r"^([A-Z_][A-Z0-9_]*)[ \t]*=(.*)$")
 _KEY_NAME_MAX = 40
+_DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]")
+_WHOLE_RE = re.compile(r"^[0-9]{1,9}$")
+_MAX_BUSES_LIMIT = 2000000
+_LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+_TLS_MODES = ("require", "verify-ca", "verify-full")
+# A path in an exception text: a drive path (a folder name may hold spaces, but a segment never
+# crosses a colon, semicolon or comma, so the text after the file name survives), a UNC path or a
+# POSIX path with at least one folder.
+_PATH_RE = re.compile(
+    r"[A-Za-z]:[\\/](?:[^\\/'\"<>|:;,\r\n]*[\\/])*[^\\/'\"<>|\s]*"
+    r"|\\\\[^\s'\"<>|]+"
+    r"|/(?:[^/\s'\"<>|]+/)+[^/\s'\"<>|]*"
+)
+_LOAD_FAILURE_MAX_CHARS = 300
 
 
 class ConfigError(Exception):
@@ -216,6 +231,66 @@ def _missing(values, mode):
     return [key.name for key in CONFIG_KEYS if mode in key.required_for and key.name not in values]
 
 
+def _is_absolute(value):
+    """A drive path (either slash), a UNC path, or (off Windows) a rooted POSIX path."""
+    if _DRIVE_RE.match(value) or value.startswith("\\\\") or value.startswith("//"):
+        return True
+    return os.name != "nt" and value.startswith("/")
+
+
+def _db_address(url):
+    """(host, port) of a database URL, or None when it is not a postgres URL with a host and a valid port."""
+    try:
+        parts = urllib.parse.urlsplit(url)
+        host = parts.hostname
+        port = parts.port
+    except ValueError:
+        return None
+    if parts.scheme.lower() not in ("postgres", "postgresql") or not host:
+        return None
+    return host, port or _DEFAULT_PORT
+
+
+def _db_url_problem(url):
+    """Why `url` cannot be the database URL, in words that contain no part of it; None when it can."""
+    address = _db_address(url)
+    if address is None:
+        return "must be a postgres or postgresql URL with a host and a valid port"
+    if address[0] in _LOOPBACK_HOSTS:
+        return None
+    try:
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
+    except ValueError:
+        query = {}
+    if (query.get("sslmode") or [""])[-1] not in _TLS_MODES:
+        return "a non-local host needs sslmode=require, verify-ca or verify-full in the URL"
+    return None
+
+
+def _value_problems(values):
+    """Problems with the values that are present, naming each key and never a value."""
+    problems = []
+    for key in CONFIG_KEYS:
+        value = values.get(key.name)
+        if value is None:
+            continue
+        message = None
+        if key.kind in ("path", "dir"):
+            if not _is_absolute(value):
+                message = "must be an absolute path"
+        elif key.kind == "int":
+            if not _WHOLE_RE.match(value) or not 1 <= int(value) <= _MAX_BUSES_LIMIT:
+                message = "must be a whole number from 1 to %d" % _MAX_BUSES_LIMIT
+        elif key.kind == "flag":
+            if value not in ("0", "1"):
+                message = "must be 0 or 1"
+        elif key.name == "SUPABASE_PSSE_DB_URL":
+            message = _db_url_problem(value)
+        if message:
+            problems.append("key %s: %s" % (key.name, message))
+    return problems
+
+
 def read_config(path, mode=None):
     """
     The resolved configuration of the file at `path`: a dict of text to text holding the known
@@ -224,6 +299,7 @@ def read_config(path, mode=None):
     repeated key and, when `mode` is given, a key that mode requires and the file lacks.
     """
     values, problems = _parse_lines(_read_text(path))
+    problems.extend(_value_problems(values))
     if mode is not None:
         problems.extend("missing key %s" % name for name in _missing(values, mode))
     if problems:
@@ -358,14 +434,49 @@ def add_search_dirs(cfg):
 # --------------------------------------------------------------------------- the run mode
 
 
+def _scrub_paths(text):
+    return _PATH_RE.sub("<path>", text)
+
+
+def _preflight(cfg):
+    """Open and close one TCP connection to the database host (D-05); raises OSError when it fails."""
+    host, port = _db_address(cfg["SUPABASE_PSSE_DB_URL"])
+    socket.create_connection((host, port), timeout=_PREFLIGHT_TIMEOUT_SECONDS).close()
+
+
 def _prepare(deps, cfg, allow_placeholder):
-    """study.PreparedRun for the configured case and mapping, started through the injected loader."""
-    psspy = deps.psspy_loader(cfg)
-    return study.prepare_run(psspy, cfg["PSSE_CASE_PATH"], cfg["PSSE_MAPPING_PATH"], allow_placeholder)
+    """
+    study.PreparedRun for the configured case and mapping, started through the injected loader.
+    A loader that raises (PsseUnavailable or anything else) does not stop the run: it becomes a
+    study that fails at load_case with the exception class and a path-scrubbed text (D-06), the
+    case file's label and sha256, and no mapping hash.
+    """
+    case_path = cfg["PSSE_CASE_PATH"]
+    try:
+        psspy = deps.psspy_loader(cfg)
+    except Exception as exc:  # noqa: BLE001 - recorded as a failed run, never silent
+        text = "%s: %s" % (type(exc).__name__, exc)
+        text = _scrub_paths(redact(text, env_secrets(cfg), constants.ERROR_MAX_CHARS))
+        text = text[:_LOAD_FAILURE_MAX_CHARS]
+        log.warning("PSS/E could not be started: %s", text)
+        return study.PreparedRun(
+            study.failing_study("load_case", "PSS/E could not be started: " + text),
+            run_record.case_label(case_path), run_record.file_sha256(case_path), None, None)
+    return study.prepare_run(psspy, case_path, cfg["PSSE_MAPPING_PATH"], allow_placeholder)
 
 
 def _run_mode(args, cfg, deps):
     secrets = env_secrets(cfg)
+    if cfg["PSSE_PREFLIGHT"] != "0":
+        failure = None
+        try:
+            _preflight(cfg)
+        except Exception as exc:  # noqa: BLE001 - only the class is reported, never the address
+            failure = type(exc).__name__
+        if failure is not None:
+            log.warning("database host did not answer the preflight (%s)", failure)
+            _say(deps.err, "database host did not answer (%s); no run was started" % failure, secrets)
+            return EXIT_NOT_RECORDED
     prepared = _prepare(deps, cfg, False)
     if prepared.mapping_error:
         log.warning("the mapping could not be used: %s", redact(prepared.mapping_error, secrets))
@@ -399,6 +510,9 @@ def _main(argv, psspy_loader, out, err, clock, connect, fetch):
         _say(err, "usage error: %s" % problem.message, [])
         return EXIT_USAGE
     mode = _mode_of(args)
+    if getattr(args, "allow_placeholder", False) and mode != "dry-run":
+        _say(err, "usage error: --allow-placeholder is accepted only together with --dry-run", [])
+        return EXIT_USAGE
 
     try:
         cfg = read_config(args.config, mode)
