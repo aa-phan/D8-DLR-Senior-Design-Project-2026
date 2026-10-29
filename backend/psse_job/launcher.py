@@ -63,6 +63,7 @@ import argparse
 import collections
 import contextlib
 import datetime
+import inspect
 import logging
 import logging.handlers
 import os
@@ -71,7 +72,7 @@ import socket
 import sys
 import urllib.parse
 
-from psse_job import constants, contract, job, ratings, run_record, study, writer
+from psse_job import constants, contract, job, probe, psse_api, ratings, run_record, study, writer
 from psse_job.lock import RunLock
 from psse_job.redaction import env_secrets, redact
 
@@ -350,6 +351,10 @@ def build_parser():
                      help="run the study and its validation, print counts only, never connect")
     run.add_argument("--allow-placeholder", action="store_true", dest="allow_placeholder",
                      help="accept a placeholder mapping (only with --dry-run)")
+    selftest = modes.add_parser(
+        "selftest", allow_abbrev=False,
+        help="start PSS/E from the configured folder and report the interpreter, version and launch functions")
+    selftest.add_argument("--config", required=True, metavar="FILE", help="the configuration file")
     return parser
 
 
@@ -553,9 +558,161 @@ def _dry_run_mode(args, cfg, deps):
     return EXIT_OK
 
 
-RUNNERS = {"run": _run_mode, "dry-run": _dry_run_mode}
-# Modes that start PSS/E hold the run lock (D-04); plan 03-04 adds selftest and probe.
-LOCK_MODES = frozenset(["run", "dry-run"])
+# --------------------------------------------------------------------------- starting PSS/E (plan 03-04)
+
+LaunchRow = collections.namedtuple("LaunchRow", ["name", "parameters", "confidence"])
+
+# The functions the entry script's loader calls to start PSS/E and to move its console output into
+# a file. They are outside psse_api.SURFACE (Phase 2 is frozen), so the launcher checks them here.
+# Every row is UNVERIFIED until runbook step 2: the names and the (2, file, [0, 0]) form come from
+# forum answers and a vendor blog (research assumptions A2 and A3), not from a PSS/E manual.
+LAUNCH_SURFACE = (
+    LaunchRow("psseinit", ("buses",), "UNVERIFIED"),
+    LaunchRow("report_output", ("islct", "filarg", "options"), "UNVERIFIED"),
+    LaunchRow("progress_output", ("islct", "filarg", "options"), "UNVERIFIED"),
+    LaunchRow("alert_output", ("islct", "filarg", "options"), "UNVERIFIED"),
+    LaunchRow("prompt_output", ("islct", "filarg", "options"), "UNVERIFIED"),
+)
+_OUTPUT_FUNCTIONS = ("report_output", "progress_output", "alert_output", "prompt_output")
+_OUTPUT_TO_FILE = 2  # UNVERIFIED (runbook step 2): the "write to a file" selector of the output calls
+_OUTPUT_OPTIONS = (0, 0)
+
+# One short, path-free sentence per output function from the latest start_psspy call, so that
+# selftest can print them although a loader returns only the module. Replaced on every call.
+LAST_START_NOTES = []
+
+
+def check_launch_signatures(psspy_module):
+    """
+    One probe.ProbeRow `launch:NAME` per LAUNCH_SURFACE row, with the rules of probe.check_signatures
+    (probe.py is frozen, so the thirty lines are repeated here on purpose): a missing function is a
+    FAIL, a signature that cannot be read is a SKIP, a missing parameter name is a FAIL, and a
+    signature that takes any keyword with missing names is a SKIP.
+    """
+    rows = []
+    for surface in LAUNCH_SURFACE:
+        check = "launch:" + surface.name
+        try:
+            function = getattr(psspy_module, surface.name, None)
+        except Exception:  # noqa: BLE001 - a module whose attribute access raises has no such function
+            function = None
+        if function is None or not callable(function):
+            rows.append(probe.ProbeRow(check, probe.FAIL, "missing"))
+            continue
+        try:
+            signature = inspect.signature(function)
+        except (TypeError, ValueError):
+            rows.append(probe.ProbeRow(
+                check, probe.SKIP, "signature not inspectable; the start itself exercised the call"))
+            continue
+        except Exception as exc:  # noqa: BLE001
+            rows.append(probe.ProbeRow(
+                check, probe.FAIL, "signature could not be read: %s" % type(exc).__name__))
+            continue
+        names = set(signature.parameters)
+        missing = [name for name in surface.parameters if name not in names]
+        takes_any_keyword = any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in signature.parameters.values())
+        if missing and takes_any_keyword:
+            rows.append(probe.ProbeRow(
+                check, probe.SKIP, "accepts any keyword, so the names %s cannot be confirmed" % ", ".join(missing)))
+        elif missing:
+            rows.append(probe.ProbeRow(check, probe.FAIL, "missing parameter %s" % ", ".join(missing)))
+        else:
+            rows.append(probe.ProbeRow(
+                check, probe.PASS, "all %d parameter name%s present" % (
+                    len(surface.parameters), "" if len(surface.parameters) == 1 else "s")))
+    return rows
+
+
+def start_psspy(psspy_module, max_buses, log_path):
+    """
+    Start PSS/E in `psspy_module` and move its console output into the file `log_path`; returns the
+    notes (one sentence per output function: redirected, missing, or failed with the exception
+    class) and replaces LAST_START_NOTES. `psseinit(max_buses)` failing, or not existing, raises
+    PsseUnavailable naming the exception class only (never its text, which may hold a path or a
+    licence server). A missing or failing output function is a note, never fatal: a console banner
+    is a nuisance, not a failed run. Whether real psspy takes these calls with these names is
+    UNVERIFIED until runbook step 2.
+    """
+    global LAST_START_NOTES
+    LAST_START_NOTES = []
+    init = getattr(psspy_module, "psseinit", None)
+    if init is None or not callable(init):
+        raise PsseUnavailable("psspy has no psseinit function")
+    try:
+        init(max_buses)
+    except Exception as exc:  # noqa: BLE001 - reported as the class only
+        raise PsseUnavailable("psseinit failed (%s)" % type(exc).__name__)
+    notes = []
+    for name in _OUTPUT_FUNCTIONS:
+        function = getattr(psspy_module, name, None)
+        if function is None or not callable(function):
+            notes.append("%s: missing, output not redirected" % name)
+            continue
+        try:
+            function(_OUTPUT_TO_FILE, log_path, list(_OUTPUT_OPTIONS))
+        except Exception as exc:  # noqa: BLE001 - reported as the class only
+            notes.append("%s: failed (%s), output not redirected" % (name, type(exc).__name__))
+            continue
+        notes.append("%s: redirected to the log folder" % name)
+    LAST_START_NOTES = notes
+    return notes
+
+
+def _bits():
+    return 64 if sys.maxsize > 2 ** 32 else 32
+
+
+def _start_report(deps, cfg, secrets):
+    """
+    The module from the loader, or None after printing "PSS/E could not be started: Class: text"
+    with absolute paths scrubbed (the text of a loader error may hold a path or a licence server).
+    """
+    try:
+        return deps.psspy_loader(cfg)
+    except Exception as exc:  # noqa: BLE001 - reported, never a traceback
+        text = "%s: %s" % (type(exc).__name__, exc)
+        text = _scrub_paths(redact(text, secrets, constants.ERROR_MAX_CHARS))[:_LOAD_FAILURE_MAX_CHARS]
+        log.warning("PSS/E could not be started: %s", text)
+        _say(deps.out, "PSS/E could not be started: %s" % text, secrets)
+        return None
+
+
+def _selftest_mode(args, cfg, deps):
+    """
+    D-04: Python line, PSS/E started, the start notes, then exactly six rows (version and the five
+    launch rows) and a count line over them. The first three are printed lines, never rows and never
+    counted. Exit 0 when no row is a FAIL and PSS/E started, else 6.
+    """
+    global LAST_START_NOTES
+    secrets = env_secrets(cfg)
+    _say(deps.out, "Python %s, %d-bit" % (sys.version.split()[0], _bits()), secrets)
+    LAST_START_NOTES = []
+    module = _start_report(deps, cfg, secrets)
+    if module is None:
+        return EXIT_CHECK_FAILED
+    _say(deps.out, "PSS/E started", secrets)
+    for note in list(LAST_START_NOTES):
+        _say(deps.out, note, secrets)
+    try:
+        text = psse_api.PsseApi(module).version()
+        if text == "unknown":
+            version = probe.ProbeRow("version", probe.FAIL, "the version could not be read from psseversion")
+        else:
+            version = probe.ProbeRow("version", probe.PASS, "PSS/E %s" % text)
+    except Exception as exc:  # noqa: BLE001 - a FAIL row, never an exception
+        version = probe.ProbeRow(
+            "version", probe.FAIL, "the PSS/E adapter could not be built (%s)" % type(exc).__name__)
+    rows = [version] + check_launch_signatures(module)
+    for line in probe.format_report(rows).splitlines():
+        _say(deps.out, line, secrets)
+    return EXIT_OK if probe.probe_ok(rows) else EXIT_CHECK_FAILED
+
+
+RUNNERS = {"run": _run_mode, "dry-run": _dry_run_mode, "selftest": _selftest_mode}
+# Modes that start PSS/E hold the run lock (D-04): plan 03-04 adds selftest, probe and hold-lock.
+LOCK_MODES = frozenset(["run", "dry-run", "selftest"])
 
 
 def _mode_of(args):
