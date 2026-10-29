@@ -21,6 +21,7 @@ Follows backend/tests/psse_study_job_test.py (module-level imports, plain assert
 import datetime
 import io
 import os
+import random
 import sys
 
 import pytest
@@ -149,3 +150,146 @@ def test_tracer_gap_check_lists_the_missing_hours(clean_pg):
         (s - 3 * HOUR, "failed_only", 1, 1),
         (s - 1 * HOUR, "no_run", 0, 0),
     ]
+
+
+def reference_gaps(runs, current_slot):
+    """
+    The independent oracle: `runs` is a list of (slot, outcome); returns the gaps as
+    (slot, kind, runs, failed_runs) tuples. Plain loops, no SQL concepts: group the outcomes by
+    slot, walk the hours from the first slot up to the hour before `current_slot`, list a slot
+    with no outcome at all as no_run and a slot whose outcomes are all failed as failed_only.
+    """
+    by_slot = {}
+    for slot, outcome in runs:
+        by_slot.setdefault(slot, []).append(outcome)
+    if not by_slot:
+        return []
+    found = []
+    hour = min(by_slot)
+    while hour < current_slot:
+        outcomes = by_slot.get(hour)
+        if outcomes is None:
+            found.append((hour, "no_run", 0, 0))
+        elif all(outcome == "failed" for outcome in outcomes):
+            found.append((hour, "failed_only", len(outcomes), len(outcomes)))
+        hour += HOUR
+    return found
+
+
+def _as_tuples(rows):
+    return [(r.slot_time.astimezone(UTC), r.gap_kind, r.runs, r.failed_runs) for r in rows]
+
+
+def _random_history(rng):
+    """A history relative to the current hour: a list of (hours back, outcome); 0 is this hour."""
+    while True:
+        closed = rng.randint(3, 40)
+        plan = []
+        for back in range(closed, 0, -1):
+            if rng.random() < 0.25:
+                continue
+            for _ in range(rng.randint(1, 3)):
+                plan.append((back, rng.choice(("ok", "fallback", "failed"))))
+        if rng.random() < 0.4:
+            plan.append((0, rng.choice(("ok", "fallback", "failed"))))
+        if plan:
+            return plan
+
+
+def test_gap_sql_matches_independent_reference_over_random_histories(clean_pg):
+    rng = random.Random(20261103)
+    nonempty = 0
+    for trial_no in range(30):
+        history = _random_history(rng)
+
+        def trial(s, history=history):
+            runs = [(s - back * HOUR, outcome) for back, outcome in history]
+            _seed(clean_pg, runs)
+            return runs, _fetch(clean_pg)
+
+        s, (runs, rows) = _stable(clean_pg, trial)
+        expected = reference_gaps(runs, s)
+        nonempty += 1 if expected else 0
+        assert _as_tuples(rows) == expected, "trial %d: %r" % (trial_no, history)
+    # The seed must exercise the gap path, not only gap-free histories.
+    assert nonempty >= 20
+
+
+def test_gap_empty_table(clean_pg):
+    def trial(s):
+        buffer = io.StringIO()
+        code = gaps.run(_env(clean_pg), out=buffer)
+        strict = gaps.run(_env(clean_pg), fail_on_gaps=True, out=io.StringIO())
+        return _fetch(clean_pg), code, strict, buffer.getvalue()
+
+    _, (rows, code, strict, text) = _stable(clean_pg, trial)
+    assert rows == []
+    assert "no runs recorded" in text
+    assert code == 0
+    assert strict == 5
+
+
+def test_gap_only_current_hour_has_no_gaps(clean_pg):
+    def trial(s):
+        _seed(clean_pg, [(s, "fallback"), (s, "failed")])
+        buffer = io.StringIO()
+        strict = gaps.run(_env(clean_pg), fail_on_gaps=True, out=buffer)
+        return _fetch(clean_pg), strict, buffer.getvalue()
+
+    _, (rows, strict, text) = _stable(clean_pg, trial)
+    assert rows == []
+    assert strict == 0
+    assert "2 runs recorded" in text
+    assert "no gaps" in text
+
+
+def test_gap_single_closed_slot_complete_and_failed_only(clean_pg):
+    def trial_complete(s):
+        _seed(clean_pg, [(s - HOUR, "ok")])
+        return _fetch(clean_pg)
+
+    _, rows = _stable(clean_pg, trial_complete)
+    assert rows == []
+
+    def trial_failed(s):
+        _seed(clean_pg, [(s - HOUR, "failed"), (s - HOUR, "failed")])
+        return _fetch(clean_pg)
+
+    s, rows = _stable(clean_pg, trial_failed)
+    assert _as_tuples(rows) == [(s - HOUR, "failed_only", 2, 2)]
+
+
+def test_gap_duplicates_and_failed_plus_complete_are_not_gaps(clean_pg):
+    def trial(s):
+        _seed(clean_pg, [
+            (s - 3 * HOUR, "ok"), (s - 3 * HOUR, "fallback"), (s - 3 * HOUR, "ok"),
+            (s - 2 * HOUR, "failed"), (s - 2 * HOUR, "fallback"), (s - 2 * HOUR, "failed"),
+            (s - 1 * HOUR, "fallback"),
+        ])
+        return _fetch(clean_pg)
+
+    _, rows = _stable(clean_pg, trial)
+    assert rows == []
+
+
+def test_gap_since_until_filter_and_exit_codes(clean_pg):
+    def trial(s):
+        _seed(clean_pg, [
+            (s - 6 * HOUR, "fallback"), (s - 5 * HOUR, "fallback"),
+            (s - 3 * HOUR, "failed"), (s - 2 * HOUR, "fallback"),
+        ])
+        env = _env(clean_pg)
+        window = io.StringIO()
+        in_window = gaps.run(env, since=s - 3 * HOUR, until=s - 1 * HOUR, fail_on_gaps=True, out=window)
+        none_left = gaps.run(env, since=s - 2 * HOUR, until=s - 1 * HOUR, fail_on_gaps=True, out=io.StringIO())
+        unfiltered = gaps.run(env, fail_on_gaps=True, out=io.StringIO())
+        tolerant = gaps.run(env, out=io.StringIO())
+        return in_window, none_left, unfiltered, tolerant, window.getvalue()
+
+    s, (in_window, none_left, unfiltered, tolerant, text) = _stable(clean_pg, trial)
+    gap_lines = [line for line in text.splitlines() if "no_run" in line or "failed_only" in line]
+    assert [line.split()[:2] for line in gap_lines] == [[_iso(s - 3 * HOUR), "failed_only"]]
+    assert in_window == 5
+    assert none_left == 0
+    assert unfiltered == 5
+    assert tolerant == 0
