@@ -231,7 +231,8 @@ def test_gap_empty_table(clean_pg):
 
 def test_gap_only_current_hour_has_no_gaps(clean_pg):
     def trial(s):
-        _seed(clean_pg, [(s, "fallback"), (s, "failed")])
+        # A failed row in the current hour: were the hour counted, it would be listed failed_only.
+        _seed(clean_pg, [(s, "failed")])
         buffer = io.StringIO()
         strict = gaps.run(_env(clean_pg), fail_on_gaps=True, out=buffer)
         return _fetch(clean_pg), strict, buffer.getvalue()
@@ -239,7 +240,7 @@ def test_gap_only_current_hour_has_no_gaps(clean_pg):
     _, (rows, strict, text) = _stable(clean_pg, trial)
     assert rows == []
     assert strict == 0
-    assert "2 runs recorded" in text
+    assert "1 runs recorded" in text
     assert "no gaps" in text
 
 
@@ -293,3 +294,229 @@ def test_gap_since_until_filter_and_exit_codes(clean_pg):
     assert none_left == 0
     assert unfiltered == 5
     assert tolerant == 0
+
+
+# --- read-only by construction, the writer role, and no secret or identifier in any output ---
+
+_FORBIDDEN_WORDS = (
+    "insert", "update", "delete", "drop", "alter", "create", "truncate", "grant", "revoke", "copy",
+    "call", "do",
+)
+
+
+def _statement_text():
+    """The SQL file with its `--` comment text removed."""
+    with open(gaps.GAP_SQL_PATH, encoding="utf-8") as handle:
+        raw = handle.read()
+    return "\n".join(line.split("--", 1)[0] for line in raw.splitlines())
+
+
+def test_gap_safe_sql_is_one_select_statement():
+    import re
+
+    with open(gaps.GAP_SQL_PATH, encoding="utf-8") as handle:
+        raw = handle.read()
+    assert "%" not in raw
+    statement = _statement_text().strip()
+    assert statement.endswith(";")
+    assert statement.count(";") == 1
+    assert re.match(r"(?i)(with|select)\b", statement)
+    for word in _FORBIDDEN_WORDS:
+        assert not re.search(r"(?i)\b" + word + r"\b", statement), word
+    # The gap logic lives only in the SQL file: the wrapper holds no gap statement of its own.
+    with open(gaps.__file__, encoding="utf-8") as handle:
+        source = handle.read()
+    assert "generate_series" not in source
+    assert gaps.SUMMARY_SQL.lower().startswith("select ")
+
+
+class _Recorder:
+    """A proxy around a real connection that records each statement and the read-only state."""
+
+    def __init__(self, conn):
+        self._conn = conn
+        self.statements = []
+
+    @property
+    def read_only(self):
+        return self._conn.read_only
+
+    @read_only.setter
+    def read_only(self, value):
+        self._conn.read_only = value
+
+    @property
+    def autocommit(self):
+        return self._conn.autocommit
+
+    @autocommit.setter
+    def autocommit(self, value):
+        self._conn.autocommit = value
+
+    def execute(self, sql, *args, **kwargs):
+        # Ask the server, not the flag: the session the statement runs in must really be read-only.
+        in_effect = self._conn.execute("show transaction_read_only").fetchone()[0]
+        self.statements.append((str(sql), self._conn.read_only, in_effect))
+        return self._conn.execute(sql, *args, **kwargs)
+
+    def close(self):
+        self._conn.close()
+
+
+def test_gap_safe_session_is_read_only(clean_pg):
+    import psycopg
+
+    recorders = []
+
+    def connect():
+        recorder = _Recorder(writer.connect(_writer_url(clean_pg)))
+        recorders.append(recorder)
+        return recorder
+
+    s = _current_slot(clean_pg)
+    _seed(clean_pg, [(s - 3 * HOUR, "fallback")])
+    code = gaps.run(_env(clean_pg), out=io.StringIO(), connect=connect)
+    assert code == 0
+    statements = recorders[0].statements
+    assert len(statements) == 2
+    assert all(read_only is True for _, read_only, _ in statements)
+    assert all(in_effect == "on" for _, _, in_effect in statements)
+    for sql, _, _ in statements:
+        # The gap file carries its header comment; the statement itself starts after it.
+        code_lines = [line.split("--", 1)[0] for line in sql.splitlines()]
+        assert "\n".join(code_lines).lstrip().lower().startswith(("with", "select"))
+
+    # A read-only transaction really prevents a write: the writer role may insert, this may not.
+    started = s - 2 * HOUR + datetime.timedelta(minutes=15)
+    row = pg_helper.valid_run_rows(pg_helper.make_run_id(90, started), started)["psse_run"][0]
+    control = writer.connect(_writer_url(clean_pg))
+    try:
+        pg_helper.insert_rows(control, "psse_run", [row])
+    finally:
+        control.close()
+    blocked = writer.connect(_writer_url(clean_pg))
+    try:
+        blocked.autocommit = False
+        blocked.read_only = True
+        row2 = dict(row, run_id=pg_helper.make_run_id(91, started))
+        with pytest.raises(psycopg.errors.ReadOnlySqlTransaction):
+            pg_helper.insert_rows(blocked, "psse_run", [row2])
+    finally:
+        blocked.close()
+    counts = pg_helper.admin_rows(clean_pg, "select count(*) as n from public.psse_run")
+    assert counts[0]["n"] == 2  # the seed row and the control row; the read-only insert left none
+
+
+def test_gap_safe_same_rows_as_writer_and_superuser(clean_pg):
+    import psycopg
+
+    def trial(s):
+        _seed(clean_pg, [
+            (s - 5 * HOUR, "fallback"), (s - 3 * HOUR, "failed"), (s - 3 * HOUR, "failed"),
+            (s - 2 * HOUR, "ok"), (s, "fallback"),
+        ])
+        as_writer = _fetch(clean_pg)
+        with psycopg.connect(clean_pg, autocommit=True) as conn:
+            as_superuser = gaps.fetch_gaps(conn)
+            super_summary = gaps.fetch_summary(conn)
+        writer_conn = writer.connect(_writer_url(clean_pg))
+        try:
+            writer_summary = gaps.fetch_summary(writer_conn)
+        finally:
+            writer_conn.close()
+        return as_writer, as_superuser, writer_summary, super_summary
+
+    s, (as_writer, as_superuser, writer_summary, super_summary) = _stable(clean_pg, trial)
+    assert _as_tuples(as_writer) == _as_tuples(as_superuser)
+    assert _as_tuples(as_writer) == [
+        (s - 4 * HOUR, "no_run", 0, 0),
+        (s - 3 * HOUR, "failed_only", 2, 2),
+        (s - 1 * HOUR, "no_run", 0, 0),
+    ]
+    assert writer_summary == super_summary
+    assert writer_summary[0] == 5
+
+
+def test_gap_safe_connection_failure_names_no_secret():
+    import socket
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    # The port is closed again when the socket is released, so nothing listens on it.
+    user = "gap" + "user" + "_zq"
+    password = "pw" + "-" + "Zk93Xr"
+    url = "postgresql://" + user + ":" + password + "@127.0.0.1:" + str(port) + "/somedb"
+    buffer = io.StringIO()
+    code = gaps.run({"SUPABASE_PSSE_DB_URL": url}, out=buffer)
+    text = buffer.getvalue()
+    assert code == 6
+    lines = [line for line in text.splitlines() if line.strip()]
+    assert len(lines) == 1
+    assert lines[0].startswith("gap check could not run")
+    assert password not in text
+    assert user not in text
+    assert "127.0.0.1" not in text
+    assert "somedb" not in text
+    # A missing URL is a failed check too, and says which setting is missing without a value.
+    blank = io.StringIO()
+    assert gaps.run({}, out=blank) == 6
+    assert blank.getvalue().startswith("gap check could not run")
+
+
+def test_gap_safe_missing_sql_file(clean_pg, monkeypatch, tmp_path):
+    missing = tmp_path / "no_such_folder" / "missing_gap_statement.sql"
+    monkeypatch.setattr(gaps, "GAP_SQL_PATH", str(missing))
+    buffer = io.StringIO()
+    code = gaps.run(_env(clean_pg), out=buffer)
+    text = buffer.getvalue()
+    assert code == 6
+    assert text.startswith("gap check could not run")
+    assert "no_such_folder" not in text
+    assert "missing_gap_statement" not in text
+    assert str(tmp_path) not in text
+
+
+def test_gap_safe_report_holds_only_times_kinds_and_counts(clean_pg):
+    import re
+
+    label = "DISTINCTIVE_CASE_LABEL_7Q"
+    iso = r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z"
+    allowed = [
+        re.compile(r"^gap check \(UTC\): \d+ runs recorded$"),
+        re.compile(r"^first run slot: " + iso + "$"),
+        re.compile(r"^latest run slot: " + iso + "$"),
+        re.compile(r"^(\d+ gaps|no gaps)$"),
+        re.compile(r"^" + iso + r"  (no_run|failed_only)\s+runs=\d+ failed=\d+$"),
+    ]
+
+    def trial(s):
+        import psycopg
+
+        with psycopg.connect(clean_pg, autocommit=True) as conn:
+            for n, (slot, outcome) in enumerate([
+                (s - 5 * HOUR, "fallback"), (s - 3 * HOUR, "failed"), (s - 2 * HOUR, "ok"),
+            ]):
+                started = slot + datetime.timedelta(minutes=15)
+                run_id = pg_helper.make_run_id(n + 1, started)
+                if outcome == "failed":
+                    row = pg_helper.failed_run_row(run_id, started)
+                else:
+                    row = pg_helper.valid_run_rows(run_id, started, outcome=outcome)["psse_run"][0]
+                row["case_id"] = label
+                pg_helper.insert_rows(conn, "psse_run", [row])
+        buffer = io.StringIO()
+        code = gaps.run(_env(clean_pg), out=buffer)
+        return code, buffer.getvalue(), pg_helper.admin_rows(clean_pg, "select run_id from public.psse_run")
+
+    _, (code, text, run_ids) = _stable(clean_pg, trial)
+    assert code == 0
+    assert "failed_only" in text and "no_run" in text
+    assert label not in text
+    assert len(run_ids) == 3
+    for row in run_ids:
+        assert row["run_id"] not in text
+    assert "psse-" not in text
+    assert not re.search(r"[0-9a-f]{32}", text)
+    for line in text.splitlines():
+        assert any(pattern.match(line) for pattern in allowed), line

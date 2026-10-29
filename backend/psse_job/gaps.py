@@ -135,7 +135,11 @@ def run(env, since=None, until=None, fail_on_gaps=False, out=None, connect=None)
     code = EXIT_OK
     try:
         conn = connect()
-        conn.read_only = True  # before any statement: the session cannot change data
+        # Before any statement. psycopg applies `read_only` only to the transactions it opens
+        # itself (BEGIN READ ONLY) and never to autocommit statements, and writer.connect returns an
+        # autocommit connection; so leave autocommit first, or the flag would do nothing.
+        conn.autocommit = False
+        conn.read_only = True
         gap_rows = fetch_gaps(conn)
         summary = fetch_summary(conn)
         shown = [gap for gap in gap_rows if _in_window(gap.slot_time, since, until)]
