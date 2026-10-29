@@ -206,7 +206,7 @@ All three are shown only by the laptop probe and a reviewed run in Phase 3.
 Limits of the checks, stated plainly:
 
 - The golden call-surface file pins the order of the functions and the keyword names, not every argument.
-- Dropping the `bounded_by` argument from the `build_dispatch_row` call in `study.make_study` is an equivalent mutation unless it is combined with a margin plant. No spy test pins that argument, so the fake cannot show that the tripwire is wired in.
+- Dropping the `bounded_by` argument from the `build_dispatch_row` call in `study.make_study` is an equivalent mutation to the end-to-end tests unless it is combined with a margin plant: the fake search never returns a bound that trips the tripwire. A spy test (`test_full_study_passes_the_search_bound_to_the_dispatch_tripwire` in `psse_study_test.py`) pins that the argument is passed, so the tripwire stays wired in.
 - The case is hashed first and loaded later, in a separate step. If the file changed between the two, the stored hash would not describe the case that was studied. The gap is small and accepted.
 
 ## Phase 3 confirmations

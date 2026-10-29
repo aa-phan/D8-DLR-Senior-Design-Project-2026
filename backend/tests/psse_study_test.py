@@ -712,6 +712,26 @@ def test_full_study_dispatch_failure_is_stage_dispatch(tmp_path, monkeypatch):
     assert os.listdir(tempfile.gettempdir()) == []
 
 
+def test_full_study_passes_the_search_bound_to_the_dispatch_tripwire(tmp_path, monkeypatch):
+    """build_dispatch_row's tripwire is off without bounded_by, and no search the fake can run
+    trips it, so only a spy shows make_study keeps passing the margin's own bound."""
+    seen = []
+    real = dispatch.build_dispatch_row
+
+    def spy(*args, **kwargs):
+        seen.append(kwargs.get("bounded_by"))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(dispatch, "build_dispatch_row", spy)
+    fake, path = _registered(tmp_path)
+    results = _run_study(fake, path)
+    assert len(seen) == len(constants.CITIES)
+    assert all(bound in dispatch.BOUNDS for bound in seen)
+    assert seen[constants.CITIES.index("AUSTIN")] == "voltage_criterion"
+    assert seen[constants.CITIES.index("EL_PASO")] == "dlr_rating"
+    assert [row["limiting_factor"] for row in results.dispatch][:1] == ["voltage_stability"]
+
+
 def _call_surface(fake):
     """First-seen ordered [name, sorted keyword names] of every recorded call."""
     seen = []
