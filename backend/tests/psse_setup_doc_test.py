@@ -25,6 +25,7 @@ Follows backend/tests/psse_schema_doc_test.py and psse_study_doc_test.py (module
 asserts, no test classes).
 """
 
+import datetime
 import os
 import re
 import sys
@@ -387,3 +388,255 @@ def test_phase2_note_env_names_match_launcher_keys():
     assert len(superseding) == 1
     assert "psse_study_definitions.md" in superseding[0] and "configuration file" in superseding[0]
     assert "environment variable" in superseding[0]
+
+
+# --------------------------------------------------------------------------- the UNVERIFIED tags
+
+
+# A tag is `[UNVERIFIED until step N]` (written in backticks in the documents) followed by its claim id in
+# parentheses, for example `[UNVERIFIED until step 2]` (U05).
+_TAG = re.compile(r"\[UNVERIFIED until step (\d+)\]`?(?: \((U\d+)\))?")
+_ANY_TAG = re.compile(r"\[UNVERIFIED until step ([^\]]*)\]")
+MIN_GUIDE_TAGS = 12
+MIN_REGISTER_ROWS = 27
+RUN_ID_FOR_SQL = "psse-20261029T101500Z-0000abcd"  # a syntactically valid run id of the DDL's pattern
+
+
+def _step_numbers(runbook):
+    return [int(number) for number in re.findall(r"^### Step (\d+): ", runbook, re.M)]
+
+
+def _register_rows(runbook):
+    """{claim id: (step, evidence)} of the runbook's UNVERIFIED register (one row per distinct claim)."""
+    section = _section(runbook, "## UNVERIFIED register")
+    header, rows = _table(section, "Claim")
+    assert header == ["Claim", "Tag step", "Evidence that clears it"]
+    found = {}
+    for cells in rows:
+        match = re.match(r"(U\d+) \S", cells[0])
+        assert match is not None, "a register row without a claim id: %r" % cells[0]
+        assert match.group(1) not in found, "the claim id %s is used twice" % match.group(1)
+        assert re.fullmatch(r"\d+", cells[1]), cells
+        assert cells[2], cells[0]
+        found[match.group(1)] = (int(cells[1]), cells[2])
+    return found
+
+
+def test_unverified_tags_cite_existing_runbook_steps():
+    guide, runbook = _read(GUIDE), _read(RUNBOOK)
+    steps = _step_numbers(runbook)
+    assert steps == list(range(11))  # "### Step 0:" to "### Step 10:", once each, in order
+    register = _register_rows(runbook)
+    assert len(register) >= MIN_REGISTER_ROWS
+    for claim_id, (step, evidence) in register.items():
+        assert step in steps, (claim_id, step)
+        assert "[UNVERIFIED" not in evidence, claim_id  # the register holds claims, it does not tag itself
+
+    outside_register = runbook.replace(_section(runbook, "## UNVERIFIED register"), "")
+    cited = set()
+    for name, text in (("guide", guide), ("runbook", outside_register)):
+        # one tag format only: a bracket that starts like a tag is a well-formed one or the literal N
+        for body in _ANY_TAG.findall(text):
+            assert re.fullmatch(r"\d+|N", body), (name, "malformed tag: step %s" % body)
+        for match in _TAG.finditer(text):
+            step, claim_id = int(match.group(1)), match.group(2)
+            assert step in steps, (name, "a tag names step %d, which has no heading" % step)
+            assert claim_id is not None, (name, "a tag without its claim id near: %s" % text[match.start() - 40:match.end()])
+            assert claim_id in register, (name, claim_id, "is not in the register")
+            assert register[claim_id][0] == step, (name, claim_id, "the register says step %d" % register[claim_id][0])
+            cited.add(claim_id)
+    assert len(_TAG.findall(guide)) >= MIN_GUIDE_TAGS
+    assert set(register) - cited == set(), "register rows no sentence cites: %s" % sorted(set(register) - cited)
+
+
+# --------------------------------------------------------------------------- the command and SQL blocks
+
+
+def _placeholders():
+    return {
+        "PYTHON": sys.executable, "REPO": _ROOT, "CONFIG": os.path.join(_ROOT, "job.env"),
+        "SITE": os.path.join(_ROOT, "site"), "WORKDIR": _ROOT, "OUT": os.path.join(_ROOT, "task.xml"),
+    }
+
+
+def test_every_command_block_parses_with_the_real_parser(tmp_path):
+    import psse_render_task
+
+    values = _placeholders()
+    seen = {}
+    for path in (GUIDE, RUNBOOK):
+        for name, lines in command_blocks(path):
+            if name == MANUAL:
+                continue
+            assert lines, (path, name)
+            for line in lines:
+                if name in LAUNCHER_NAMES:
+                    parsed = launcher.build_parser().parse_args(launcher_arguments(line, values))
+                    assert SHAPES[name](parsed), "%s does not parse to its own shape: %s" % (name, line)
+                else:
+                    assert name in RENDER_NAMES
+                    parsed = psse_render_task._parser().parse_args(render_arguments(line, values))
+                    assert RENDER_SHAPES[name](parsed), "%s does not parse to its own shape: %s" % (name, line)
+                seen[name] = seen.get(name, 0) + 1
+    assert set(seen) == set(COMMAND_NAMES)  # every documented command name appears somewhere
+
+    # a flag the parser does not know, and a command that is not the launcher's, are both caught
+    bad = '<PYTHON> -X utf8 "<REPO>\\backend\\psse_run_hourly.py" probe --config "<CONFIG>" --write-chek'
+    with pytest.raises(Exception):
+        launcher.build_parser().parse_args(launcher_arguments(bad, values))
+
+    # a tag with a name outside the known set, or one not directly above a fence, fails
+    typo = tmp_path / "typo.md"
+    typo.write_text("<!-- cmd: dry_run_smok -->\n```\nx\n```\n", encoding="utf-8")
+    with pytest.raises(AssertionError):
+        command_blocks(str(typo))
+    detached = tmp_path / "detached.md"
+    detached.write_text("<!-- cmd: selftest -->\n\n```\nx\n```\n", encoding="utf-8")
+    with pytest.raises(AssertionError):
+        command_blocks(str(detached))
+
+
+@pytest.fixture(scope="module")
+def pg(tmp_path_factory):
+    """Admin URL of a database that already carries the Phase 4 migrations and the reference DDL."""
+    with pg_helper.cluster(tmp_path_factory) as admin_url:
+        pg_helper.apply_schema(admin_url)
+        yield admin_url
+
+
+@pytest.fixture
+def clean_pg(pg):
+    """The same database with the four result tables empty."""
+    pg_helper.reset(pg)
+    return pg
+
+
+_WRITING_WORDS = re.compile(r"\b(insert|update|delete|drop|truncate|alter|create|grant|revoke|copy)\b", re.I)
+
+
+def test_every_sql_block_runs_on_local_postgres(clean_pg):
+    import psycopg
+
+    counts = {}
+    conn = psycopg.connect(pg_helper.role_url(clean_pg, WRITER_ROLE), autocommit=True)
+    try:
+        for name, path in (("guide", GUIDE), ("runbook", RUNBOOK)):
+            for info, body in _fenced_blocks(_read(path)):
+                if info != "sql":
+                    continue
+                sql = body.replace("<run_id>", RUN_ID_FOR_SQL)
+                assert re.match(r"\s*(select|with)\b", sql, re.I), (name, "a statement that is not a read: " + body[:40])
+                assert _WRITING_WORDS.search(sql) is None, (name, body)
+                assert "<" not in sql and "%" not in sql, (name, "an unreplaced placeholder or a percent sign: " + body)
+                conn.execute(sql).fetchall()  # runs as the job's own role, on empty tables, without an error
+                counts[name] = counts.get(name, 0) + 1
+    finally:
+        conn.close()
+    assert counts.get("runbook", 0) >= 4 and counts.get("guide", 0) >= 3, counts
+
+
+def test_runbook_steps_table_covers_the_requirements():
+    runbook = _read(RUNBOOK)
+    header, rows = _table(_section(runbook, "## Steps"), "Step")
+    assert header == ["Step", "What", "Needs", "Closes", "Mac-proven", "Laptop-proven"]
+    assert [cells[0] for cells in rows] == [str(number) for number in range(11)]
+    for cells in rows:
+        assert len(cells) == 6 and all(cells), cells  # no empty Mac-proven or Laptop-proven cell
+    closes = dict((int(cells[0]), cells[3]) for cells in rows)
+    closing = {"SCH-01": [6, 10], "DBX-02": [8], "TST-02": [9], "SCH-02": [10]}
+    for requirement, steps in closing.items():
+        assert [step for step, cell in closes.items() if requirement in cell] == steps, requirement
+    assert "confirms SCH-01" in closes[10] and "DOC-01" in closes[10]
+    # step 9 and step 10 each begin with the human decision of plan 03-08
+    details = _section(runbook, "## Step details")
+    step9 = details[details.index("### Step 9:"):details.index("### Step 10:")]
+    step10 = details[details.index("### Step 10:"):]
+    assert "decision 1" in step9 and "exactly one" in step9
+    assert "decision 2" in step10 and "Disable-ScheduledTask" in step10 and "Unregister-ScheduledTask" in step10
+    assert "IgnoreNew" in step10 and "lock" in step10
+    # every step section says what it needs and when to stop
+    for number in range(11):
+        start = details.index("### Step %d:" % number)
+        end = details.find("\n### Step ", start + 5)
+        section = details[start:end if end != -1 else len(details)]
+        assert "**Needs:**" in section and "**Stop if:**" in section, number
+        if number >= 2:
+            assert "**Should show:**" in section, number
+
+
+def test_doc_links_resolve():
+    checked = 0
+    for path in (GUIDE, RUNBOOK):
+        for target in re.findall(r"\]\(([^)\s]+)\)", _read(path)):
+            if re.match(r"[a-z]+:", target) or target.startswith("#"):
+                continue
+            resolved = os.path.normpath(os.path.join(os.path.dirname(path), target.split("#", 1)[0]))
+            assert os.path.isfile(resolved), "%s: link %s does not resolve" % (path, target)
+            checked += 1
+    assert checked >= 10
+    assert "](psse_laptop_setup.md)" in _read(RUNBOOK)
+    assert "](psse_laptop_runbook.md)" in _read(GUIDE)
+    assert "](../schema/psse_results_v1_checks.sql)" in _read(RUNBOOK)
+    assert "](../ops/psse_hourly_task.xml)" in _read(GUIDE)
+
+
+# --------------------------------------------------------------------------- the read-back statement
+
+
+def _newest_per_slot_statement():
+    """The runbook's newest-complete-run-per-hour statement, found by its heading and used unchanged."""
+    runbook = _read(RUNBOOK)
+    start = runbook.index("#### Read back the newest complete run per hour")
+    match = re.search(r"```sql\n(.*?)\n```", runbook[start:], re.S)
+    assert match is not None
+    return match.group(1)
+
+
+def test_read_back_statement_returns_the_newest_complete_run_per_slot(clean_pg):
+    """
+    Research assumption A16 on local Postgres, as the writer role, with run rows seeded in three slots.
+    Slot A (10:00): a failed run started latest (10:50), an ok run started at :40 and a fallback run
+    started at :10 - the ok run started LATER than the fallback, so the ok run is the newest complete
+    run. Slot B (09:00): two complete runs with equal started_at (09:15) and different run ids; the
+    fallback run holds the larger id, so the rule is the run id and not the outcome. Slot C (08:00):
+    one failed run only. Expected: A's ok run and then B's larger id, newest slot first, no row for C,
+    and the planted failed run never returned.
+    """
+    import psycopg
+    from psycopg.rows import dict_row
+
+    utc = datetime.timezone.utc
+    day = datetime.datetime(2026, 10, 20, tzinfo=utc)
+
+    def at(hour, minute):
+        return day + datetime.timedelta(hours=hour, minutes=minute)
+
+    failed_a = pg_helper.make_run_id(1, at(10, 50))
+    ok_a = pg_helper.make_run_id(2, at(10, 40))
+    fallback_a = pg_helper.make_run_id(3, at(10, 10))
+    ok_b = pg_helper.make_run_id(0x10, at(9, 15))
+    fallback_b = pg_helper.make_run_id(0x20, at(9, 15))
+    failed_c = pg_helper.make_run_id(5, at(8, 20))
+    assert ok_b < fallback_b  # the larger id belongs to the fallback run
+
+    runs = [
+        pg_helper.failed_run_row(failed_a, at(10, 50)),
+        pg_helper.valid_run_rows(ok_a, at(10, 40), outcome="ok")["psse_run"][0],
+        pg_helper.valid_run_rows(fallback_a, at(10, 10), outcome="fallback")["psse_run"][0],
+        pg_helper.valid_run_rows(ok_b, at(9, 15), outcome="ok")["psse_run"][0],
+        pg_helper.valid_run_rows(fallback_b, at(9, 15), outcome="fallback")["psse_run"][0],
+        pg_helper.failed_run_row(failed_c, at(8, 20)),
+    ]
+    with psycopg.connect(clean_pg, autocommit=True) as admin:
+        pg_helper.insert_rows(admin, "psse_run", runs)
+
+    statement = _newest_per_slot_statement()
+    with psycopg.connect(pg_helper.role_url(clean_pg, WRITER_ROLE), autocommit=True, row_factory=dict_row) as conn:
+        rows = conn.execute(statement).fetchall()
+    assert [row["run_id"] for row in rows] == [ok_a, fallback_b]
+    assert [row["slot_time"] for row in rows] == [at(10, 0), at(9, 0)]  # newest slot first
+    assert [row["outcome"] for row in rows] == ["ok", "fallback"]
+    assert rows[0]["started_at"] == at(10, 40)
+    returned = {row["run_id"] for row in rows}
+    assert failed_a not in returned and failed_c not in returned and fallback_a not in returned
+    assert at(8, 0) not in [row["slot_time"] for row in rows]  # slot C has no complete run, so no row

@@ -467,3 +467,90 @@ def _render_namespace(arguments):
     """The renderer's own parse of its documented arguments (parse errors would be SystemExit)."""
     import psse_render_task
     return psse_render_task._parser().parse_args(arguments)
+
+
+# --------------------------------------------------------------------------- the induced gap
+
+HOUR = datetime.timedelta(hours=1)
+UTC = datetime.timezone.utc
+
+
+def _database_slot(admin_url):
+    """The database's own current UTC hour, as an aware datetime."""
+    rows = pg_helper.admin_rows(
+        admin_url, "select (date_trunc('hour', now() at time zone 'UTC') at time zone 'UTC') as slot")
+    return rows[0]["slot"].astimezone(UTC)
+
+
+def _seed_complete_runs(admin_url, slots):
+    """One complete (fallback) run row, started 15 minutes into each slot of `slots`, as the superuser."""
+    import psycopg
+
+    with psycopg.connect(admin_url, autocommit=True) as conn:
+        for number, slot in enumerate(slots, 1):
+            started = slot + datetime.timedelta(minutes=15)
+            row = pg_helper.valid_run_rows(
+                pg_helper.make_run_id(number, started), started, outcome="fallback")["psse_run"][0]
+            pg_helper.insert_rows(conn, "psse_run", [row])
+
+
+def _iso(moment):
+    return moment.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def test_rehearsal_gap_check_exit_codes_after_an_induced_missing_hour(clean_pg, tmp_path):
+    """
+    The documented `gaps` commands through launcher.main on a seeded history. Runs sit in the slots
+    s-3h and s-1h, so the hour s-2h is missing: the documented plain command prints a `no_run` line
+    for that hour and exits 0, and the documented `--fail-on-gaps` command exits 5. With no missing hour
+    the same command exits 0 and prints `no gaps`. A history is accepted only if the database's hour
+    did not roll while it was read.
+    """
+    groups = group_by_name(command_blocks(RUNBOOK))
+    plain = [line for line in groups["gaps"] if "--fail-on-gaps" not in line]
+    strict = [line for line in groups["gaps"] if "--fail-on-gaps" in line]
+    assert plain and strict, "the runbook documents the gap check with and without --fail-on-gaps"
+    config = _write_config(tmp_path, "gaps.env", {
+        "SUPABASE_PSSE_DB_URL": pg_helper.role_url(clean_pg, WRITER_ROLE)})
+    values = {
+        "PYTHON": sys.executable, "REPO": _ROOT, "CONFIG": config, "SITE": str(tmp_path / "site"),
+        "WORKDIR": str(tmp_path), "OUT": str(tmp_path / "unused.xml"),
+    }
+
+    def no_loader(cfg):
+        raise AssertionError("the gap check never starts PSS/E")
+
+    def check(slots_of):
+        """(slot, results) for one history; retried when the database's hour rolled while reading it."""
+        for _ in range(3):
+            pg_helper.reset(clean_pg)
+            before = _database_slot(clean_pg)
+            _seed_complete_runs(clean_pg, slots_of(before))
+            results = {}
+            for line in plain + strict:
+                results[line] = _call(launcher_arguments(line, values), no_loader)
+            if _database_slot(clean_pg) == before:
+                return before, results
+        pytest.fail("the database's UTC hour rolled during all three attempts")
+
+    # one missing hour: s-2h
+    slot, results = check(lambda s: [s - 3 * HOUR, s - 1 * HOUR])
+    for line in plain:
+        code, out, err = results[line]
+        assert code == 0 and err == "", (out, err)
+        gap_lines = [text for text in out if "no_run" in text]
+        assert [text.split()[:2] for text in gap_lines] == [[_iso(slot - 2 * HOUR), "no_run"]]
+        assert out[0] == "gap check (UTC): 2 runs recorded" and "1 gaps" in "\n".join(out)
+    for line in strict:
+        code, out, err = results[line]
+        assert code == 5, (out, err)
+        assert [text.split()[:2] for text in out if "no_run" in text] == [[_iso(slot - 2 * HOUR), "no_run"]]
+    assert _counts(clean_pg)[0] == 2  # the gap check wrote nothing
+
+    # no missing hour: the same documented commands exit 0 and report no gaps
+    slot, results = check(lambda s: [s - 3 * HOUR, s - 2 * HOUR, s - 1 * HOUR])
+    for line in plain + strict:
+        code, out, err = results[line]
+        assert code == 0, (out, err)
+        assert out[0] == "gap check (UTC): 3 runs recorded" and "no gaps" in "\n".join(out)
+        assert not [text for text in out if "no_run" in text]
