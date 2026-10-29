@@ -149,6 +149,22 @@ def test_entry_selftest_without_psse_exit6_names_no_path(tmp_path):
         assert _BACKEND not in text
     assert err == ""
 
+    # a psspy that fails at import with something other than ImportError, naming its own file: the
+    # text reaches the start failure line only with the absolute path replaced
+    broken = tmp_path / "broken psspy folder"
+    broken.mkdir()
+    (broken / "psspy.py").write_text(
+        "raise RuntimeError('cannot initialise from ' + __file__ + ' with licence C:\\\\Program Files\\\\PTI\\\\lic.dat')\n",
+        encoding="utf-8")
+    config = _write_config(tmp_path, broken, name="broken.env")
+    code, out, err = _run_entry(["selftest", "--config", config], tmp_path)
+    assert code == 6, out + err
+    assert "PSS/E could not be started: RuntimeError: cannot initialise from <path>" in out
+    for text in (out, err):
+        assert str(tmp_path) not in text and "broken psspy folder" not in text
+        assert "Program Files" not in text and "lic.dat" not in text
+    assert err == ""
+
 
 def _psspy_import_sites(tree):
     """[(line, enclosing function name or None)] of every import of psspy in the syntax tree."""
