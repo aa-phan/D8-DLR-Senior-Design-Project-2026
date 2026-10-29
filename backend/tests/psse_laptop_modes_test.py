@@ -14,6 +14,7 @@ Follows backend/tests/psse_launcher_test.py (module-level imports, plain asserts
 sys.path is restored through monkeypatch because the launcher appends the PSS/E folders to it).
 """
 
+import datetime
 import io
 import os
 import re
@@ -33,6 +34,8 @@ if _BACKEND not in sys.path:
 
 import psse_fake_launch  # noqa: E402
 import psse_fake_psspy as fake_module  # noqa: E402
+import psse_fakes  # noqa: E402
+import psse_local_pg as pg_helper  # noqa: E402
 from psse_lock_test import Holder, probe as lock_probe  # noqa: E402
 from psse_job import launcher, lock, mapping as mapping_module, probe, psse_api, run_record  # noqa: E402
 
@@ -527,3 +530,261 @@ def test_hold_lock_seconds_are_capped(tmp_path, monkeypatch):
     del slept[:]
     code, out, err = _call(["hold-lock", "--config", str(empty), "--seconds", "1"], None)
     assert code == 0 and slept == [1]
+
+
+# --------------------------------------------------------------------------- gaps and credcheck
+
+
+class Recorder(object):
+    """A stand-in for psse_job.gaps or psse_job.credcheck: records the arguments of run, returns `result`."""
+
+    def __init__(self, result):
+        self.result = result
+        self.calls = []
+
+    def run(self, *args, **kwargs):
+        self.calls.append((args, kwargs))
+        return self.result
+
+
+def _modes(gaps_result=0, credcheck_result=0):
+    stubs = {"gaps": Recorder(gaps_result), "credcheck": Recorder(credcheck_result)}
+    return stubs, dict((name, (lambda stub=stub: stub)) for name, stub in stubs.items())
+
+
+def _loader_must_not_run(cfg):
+    raise AssertionError("gaps and credcheck never start PSS/E")
+
+
+def _db_config(tmp_path, values=None, name="job.env"):
+    """A config holding the keys gaps and credcheck need (a local URL without a password)."""
+    merged = {
+        "SUPABASE_PSSE_DB_URL": "postgresql://dlr_psse_writer@127.0.0.1:1/psse_test",
+        "SUPABASE_URL": "http://127.0.0.1:1",
+        "SUPABASE_PUBLISHABLE_KEY": psse_fakes.fake_publishable_key(),
+    }
+    merged.update(values or {})
+    return _config(tmp_path, merged, name=name)
+
+
+def test_modes_gaps_and_credcheck_get_parsed_arguments(tmp_path):
+    """gaps.run and credcheck.run receive the resolved configuration and the parsed arguments; their code is the exit code."""
+    config = _db_config(tmp_path)
+    resolved = launcher.read_config(config)
+    stubs, modes = _modes(gaps_result=5, credcheck_result=6)
+    out, err = io.StringIO(), io.StringIO()
+    code = launcher.main(
+        ["gaps", "--config", config, "--since", "2026-11-02T00:00:00Z",
+         "--until", "2026-11-03T00:00:00+00:00", "--fail-on-gaps"],
+        _loader_must_not_run, out=out, err=err, modes=modes)
+    assert code == 5 and err.getvalue() == ""
+    (args, kwargs), = stubs["gaps"].calls
+    assert kwargs == {}
+    env, since, until, fail_on_gaps, stream = args
+    assert env == resolved
+    assert since == datetime.datetime(2026, 11, 2, tzinfo=datetime.timezone.utc) and since.utcoffset() is not None
+    assert until == datetime.datetime(2026, 11, 3, tzinfo=datetime.timezone.utc) and until.utcoffset() is not None
+    assert fail_on_gaps is True and stream is out
+
+    stubs, modes = _modes(gaps_result=0)
+    code, text, err = _call(["gaps", "--config", config], _loader_must_not_run, modes=modes)
+    assert code == 0
+    (args, kwargs), = stubs["gaps"].calls
+    assert args[1:4] == (None, None, False)
+
+    # a non-UTC offset is converted to the same instant in UTC
+    stubs, modes = _modes()
+    _call(["gaps", "--config", config, "--since", "2026-11-02T01:00:00+01:00"], _loader_must_not_run, modes=modes)
+    assert stubs["gaps"].calls[0][0][1] == datetime.datetime(2026, 11, 2, tzinfo=datetime.timezone.utc)
+
+    stubs, modes = _modes(credcheck_result=6)
+    out = io.StringIO()
+    code = launcher.main(["credcheck", "--config", config, "--skip-rest", "--write-proof"],
+                         _loader_must_not_run, out=out, err=io.StringIO(), modes=modes)
+    assert code == 6
+    (args, kwargs), = stubs["credcheck"].calls
+    assert kwargs == {} and args[0] == resolved and args[1:3] == (True, True) and args[3] is out
+
+    stubs, modes = _modes()
+    code, text, err = _call(["credcheck", "--config", config], _loader_must_not_run, modes=modes)
+    assert code == 0
+    assert stubs["credcheck"].calls[0][0][1:3] == (False, False)
+    assert stubs["gaps"].calls == []
+
+
+def test_modes_since_until_parse_or_exit2(tmp_path):
+    """--since and --until need an offset: a bare date, a bad value or a value that looks like a secret is exit 2, not echoed."""
+    password = "hunter" + "2pw"
+    config = _db_config(tmp_path, {
+        "SUPABASE_PSSE_DB_URL": "postgresql://" + "dlr_psse_writer" + ":" + password + "@127.0.0.1:1/psse_test"})
+    key = psse_fakes.fake_publishable_key()
+    stubs, modes = _modes()
+    for option, value in (("--since", "2027-05-17"), ("--until", "not-a-time"), ("--since", key),
+                          ("--until", "2027-05-17T00:00:00"), ("--since", "")):
+        code, out, err = _call(["gaps", "--config", config, option, value], _loader_must_not_run, modes=modes)
+        assert code == 2, (option, value)
+        assert out == ""
+        assert option in err and "offset" in err
+        for text in (out, err):
+            assert password not in text and key not in text
+            if value:
+                assert value not in text
+    assert stubs["gaps"].calls == []
+    parser = launcher.build_parser()
+    parsed = parser.parse_args(["gaps", "--config", "x", "--since", "2026-11-02T00:00:00Z"])
+    assert parsed.mode == "gaps" and parsed.since.tzinfo is not None and parsed.until is None
+
+
+REQUIRED = {
+    "selftest": (["selftest"], ["PSSE_PSSPY_DIR"]),
+    "probe": (["probe"], ["PSSE_CASE_PATH", "PSSE_PSSPY_DIR"]),
+    "gaps": (["gaps"], ["SUPABASE_PSSE_DB_URL"]),
+    "credcheck --skip-rest": (["credcheck", "--skip-rest"], ["SUPABASE_PSSE_DB_URL"]),
+    "credcheck": (["credcheck"], ["SUPABASE_PSSE_DB_URL", "SUPABASE_URL", "SUPABASE_PUBLISHABLE_KEY"]),
+    "hold-lock": (["hold-lock", "--seconds", "1"], []),
+}
+
+
+def test_modes_required_keys_per_mode(tmp_path, monkeypatch):
+    """Each mode needs exactly the keys CONFIG_KEYS names for it: exit 2 naming them, else the mode is reached."""
+    monkeypatch.setattr(time, "sleep", lambda seconds: None)
+    bare = _config(tmp_path, {"PSSE_PSSPY_DIR": None}, name="bare.env")  # only the log and lock paths
+    for label, (argv, needed) in sorted(REQUIRED.items()):
+        stubs, modes = _modes()
+        code, out, err = _call(argv + ["--config", bare], _loader_must_not_run, modes=modes)
+        if not needed:
+            assert code == 0 and out == "locked\n", label
+            continue
+        assert code == 2, label
+        named = sorted(re.findall(r"missing key (\S+)", err))
+        assert named == sorted(needed), (label, err)
+        assert out == ""
+        assert stubs["gaps"].calls == [] and stubs["credcheck"].calls == []
+
+    # the table above is the CONFIG_KEYS data, not a copy of it
+    for label, (argv, needed) in REQUIRED.items():
+        mode = argv[0]
+        names = [key.name for key in launcher.CONFIG_KEYS if mode in key.required_for]
+        if mode == "credcheck" and "--skip-rest" not in argv:
+            names += [key.name for key in launcher.CONFIG_KEYS if "credcheck-rest" in key.required_for]
+        assert sorted(names) == sorted(needed), label
+
+    # with its keys present each mode is reached (a recording stub, or the fake psspy)
+    full = _db_config(tmp_path, {"PSSE_CASE_PATH": str(tmp_path / "case.sav")}, name="full.env")
+    stubs, modes = _modes()
+    for argv in (["gaps"], ["credcheck"], ["credcheck", "--skip-rest"]):
+        code, out, err = _call(argv + ["--config", full], _loader_must_not_run, modes=modes)
+        assert code == 0 and err == "", argv
+    assert len(stubs["gaps"].calls) == 1 and len(stubs["credcheck"].calls) == 2
+    calls = []
+    code, out, err = _call(["selftest", "--config", full], _loader(psse_fake_launch.FakeLaunchPsspy(), calls))
+    assert code == 0 and len(calls) == 1
+    calls = []
+    code, out, err = _call(["probe", "--config", full], _loader(psse_fake_launch.FakeLaunchPsspy(), calls))
+    assert len(calls) == 1  # the probe started; its rows are not this test's subject
+
+
+def test_modes_gaps_and_credcheck_take_no_lock(tmp_path):
+    """A held lock does not stop gaps or credcheck, and neither starts PSS/E; the other modes are refused with 4."""
+    assert "gaps" not in launcher.LOCK_MODES and "credcheck" not in launcher.LOCK_MODES
+    assert {"run", "dry-run", "selftest", "probe", "hold-lock"} <= set(launcher.LOCK_MODES)
+    config = _db_config(tmp_path)
+    lock_path = str(tmp_path / "locks" / "psse_job.lock")
+    holder = Holder(lock_path)
+    try:
+        assert holder.first_line == "acquired"
+        stubs, modes = _modes(gaps_result=0, credcheck_result=0)
+        code, out, err = _call(["gaps", "--config", config], _loader_must_not_run, modes=modes)
+        assert code == 0 and err == ""
+        code, out, err = _call(["credcheck", "--config", config], _loader_must_not_run, modes=modes)
+        assert code == 0 and err == ""
+        assert len(stubs["gaps"].calls) == 1 and len(stubs["credcheck"].calls) == 1
+        code, out, err = _call(["selftest", "--config", config], _loader_must_not_run, modes=modes)
+        assert code == 4
+    finally:
+        holder.close()
+    # neither mode leaves a lock file behind that was not there: no lock was ever taken for them
+    fresh = tmp_path / "fresh"
+    fresh.mkdir()
+    fresh_config = _db_config(fresh)
+    _call(["gaps", "--config", fresh_config], _loader_must_not_run, modes=_modes()[1])
+    assert not os.path.exists(str(fresh / "locks" / "psse_job.lock"))
+
+
+# --------------------------------------------------------------------------- the real modules (local Postgres)
+
+
+@pytest.fixture(scope="module")
+def pg(tmp_path_factory):
+    """Admin URL of a database that already carries the Phase 4 migrations and the reference DDL."""
+    with pg_helper.cluster(tmp_path_factory) as admin_url:
+        pg_helper.apply_schema(admin_url)
+        yield admin_url
+
+
+@pytest.fixture
+def clean_pg(pg):
+    """The same database with the four result tables empty."""
+    pg_helper.reset(pg)
+    return pg
+
+
+def _writer_config(tmp_path, admin_url, values=None):
+    """A config whose database URL is the writer role's local URL (no password)."""
+    merged = {"SUPABASE_PSSE_DB_URL": pg_helper.role_url(admin_url, "dlr_psse_writer")}
+    merged.update(values or {})
+    return _config(tmp_path, merged)
+
+
+def _seed_history(admin_url):
+    """Complete runs at 3 and 1 hours before the database's current UTC hour: the hour between is missing."""
+    import psycopg
+
+    utc = datetime.timezone.utc
+    slot = pg_helper.admin_rows(
+        admin_url, "select (date_trunc('hour', now() at time zone 'UTC') at time zone 'UTC') as slot"
+    )[0]["slot"].astimezone(utc)
+    hour = datetime.timedelta(hours=1)
+    with psycopg.connect(admin_url, autocommit=True) as conn:
+        for n, when in enumerate((slot - 3 * hour, slot - 1 * hour), 1):
+            started = when + datetime.timedelta(minutes=15)
+            row = pg_helper.valid_run_rows(pg_helper.make_run_id(n, started), started, outcome="fallback")
+            pg_helper.insert_rows(conn, "psse_run", row["psse_run"])
+    return slot - 2 * hour
+
+
+def test_modes_real_gaps_module_through_the_launcher(clean_pg, tmp_path):
+    """gaps through the launcher on real Postgres: exit 5 with --fail-on-gaps and a no_run line, 0 without."""
+    missing = _seed_history(clean_pg)
+    config = _writer_config(tmp_path, clean_pg)
+    code, out, err = _call(["gaps", "--config", config, "--fail-on-gaps"], _loader_must_not_run)
+    assert code == 5, out + err
+    expected = missing.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    assert [line.split()[:2] for line in out.splitlines() if "no_run" in line.split()[1:2]].count(
+        [expected, "no_run"]) == 1, out
+    assert err == ""
+    code, out, err = _call(["gaps", "--config", config], _loader_must_not_run)
+    assert code == 0 and "no_run" in out, out + err
+    # a window that ends before the missing hour holds no gap
+    until = (missing - datetime.timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    code, out, err = _call(["gaps", "--config", config, "--until", until, "--fail-on-gaps"], _loader_must_not_run)
+    assert code == 0, out + err
+    assert "no_run" not in out
+
+
+def test_modes_real_credcheck_module_through_the_launcher(clean_pg, tmp_path):
+    """credcheck --skip-rest as the writer role: every role-leg row PASS, exit 0; the REST key is a required key."""
+    config = _writer_config(tmp_path, clean_pg)
+    code, out, err = _call(["credcheck", "--config", config, "--skip-rest"], _loader_must_not_run)
+    assert code == 0, out + err
+    rows = _rows_of(out)
+    role_rows = [name for name in rows if name != "rest:skipped"]
+    assert len(role_rows) == 13 and all(rows[name][0] == "PASS" for name in role_rows), out
+    assert rows["rest:skipped"][0] == "SKIP"
+    assert out.splitlines()[-1] == "13 PASS, 0 FAIL, 1 SKIP"
+    assert "127.0.0.1" not in out and "dlr_psse_writer@" not in out  # no connection detail in the report
+    # without --skip-rest the REST leg's keys are required: exit 2, and nothing ran
+    bare = _writer_config(tmp_path, clean_pg, {"SUPABASE_URL": None, "SUPABASE_PUBLISHABLE_KEY": None})
+    code, out, err = _call(["credcheck", "--config", bare], _loader_must_not_run)
+    assert code == 2 and out == ""
+    assert sorted(re.findall(r"missing key (\S+)", err)) == ["SUPABASE_PUBLISHABLE_KEY", "SUPABASE_URL"]

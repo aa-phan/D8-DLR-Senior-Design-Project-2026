@@ -232,7 +232,10 @@ def _parse_lines(text):
 
 
 def _missing(values, mode):
-    return [key.name for key in CONFIG_KEYS if mode in key.required_for and key.name not in values]
+    """Names of the keys `mode` (one mode name, or a tuple of them: any of them) requires and `values` lacks."""
+    modes = (mode,) if isinstance(mode, str) else tuple(mode)
+    return [key.name for key in CONFIG_KEYS
+            if any(name in key.required_for for name in modes) and key.name not in values]
 
 
 def _is_absolute(value):
@@ -300,7 +303,8 @@ def read_config(path, mode=None):
     The resolved configuration of the file at `path`: a dict of text to text holding the known
     keys that have a value, plus the defaults of D-01. Raises ConfigError (every problem at once,
     naming keys and line numbers only) for an unreadable file, a malformed line, an unknown or
-    repeated key and, when `mode` is given, a key that mode requires and the file lacks.
+    repeated key and, when `mode` is given (a mode name or a tuple of names), a key that mode
+    requires and the file lacks.
     """
     values, problems = _parse_lines(_read_text(path))
     problems.extend(_value_problems(values))
@@ -352,10 +356,24 @@ def _seconds_argument(text):
     return int(text)
 
 
+def _timestamp_argument(option):
+    """
+    An argparse type for --since and --until: ratings.parse_ts, so an offset is required. A bad
+    value is a usage error that names the option and never echoes the value.
+    """
+    def parse(text):
+        try:
+            return ratings.parse_ts(text)
+        except ValueError:
+            raise argparse.ArgumentTypeError(
+                "%s needs an ISO 8601 time with a UTC offset, for example 2026-11-02T00:00:00Z" % option)
+    return parse
+
+
 def build_parser():
     """
-    The command line: `run`, `selftest`, `probe` and `hold-lock`, each with --config FILE
-    (see the subcommands for their options).
+    The command line: `run`, `selftest`, `probe`, `hold-lock`, `gaps` and `credcheck`, each with
+    --config FILE (see the subcommands for their options).
     """
     parser = _Parser(prog="psse-job", allow_abbrev=False,
                      description="Hourly PSS/E job launcher (settings come from the config file only).")
@@ -388,6 +406,23 @@ def build_parser():
     hold.add_argument("--seconds", type=_seconds_argument, default=DEFAULT_HOLD_SECONDS, metavar="N",
                       help="how long to hold the lock, 1 to %d (default %d)" % (
                           MAX_HOLD_SECONDS, DEFAULT_HOLD_SECONDS))
+    gap_parser = modes.add_parser(
+        "gaps", allow_abbrev=False, help="list the UTC hours with no complete run (reads the database only)")
+    gap_parser.add_argument("--config", required=True, metavar="FILE", help="the configuration file")
+    gap_parser.add_argument("--since", type=_timestamp_argument("--since"), default=None, metavar="TIME",
+                            help="first hour to report, ISO 8601 with an offset (default: the first run)")
+    gap_parser.add_argument("--until", type=_timestamp_argument("--until"), default=None, metavar="TIME",
+                            help="end of the window, exclusive, ISO 8601 with an offset")
+    gap_parser.add_argument("--fail-on-gaps", action="store_true", dest="fail_on_gaps",
+                            help="exit %d when a gap is found" % EXIT_GAPS)
+    cred = modes.add_parser(
+        "credcheck", allow_abbrev=False,
+        help="prove what the job's credentials can and cannot do (changes nothing unless --write-proof)")
+    cred.add_argument("--config", required=True, metavar="FILE", help="the configuration file")
+    cred.add_argument("--skip-rest", action="store_true", dest="skip_rest",
+                      help="check only the database role, not the REST key")
+    cred.add_argument("--write-proof", action="store_true", dest="write_proof",
+                      help="also insert one synthetic run inside a transaction that is rolled back")
     return parser
 
 
@@ -788,12 +823,46 @@ def _hold_lock_mode(args, cfg, deps):
     return EXIT_OK
 
 
+def _load_gaps():
+    from psse_job import gaps
+    return gaps
+
+
+def _load_credcheck():
+    from psse_job import credcheck
+    return credcheck
+
+
+# Mode name to a zero-argument callable returning the module that implements it; loaded inside the
+# call, so a launcher that never runs gaps or credcheck never imports them. main() accepts an
+# override (tests inject recording stubs).
+DEFAULT_MODES = {"gaps": _load_gaps, "credcheck": _load_credcheck}
+
+
+def _gaps_mode(args, cfg, deps):
+    """D-07: gaps.run(cfg, since, until, fail_on_gaps, out); no lock and no PSS/E; its code is the exit code."""
+    return deps.modes["gaps"]().run(cfg, args.since, args.until, args.fail_on_gaps, deps.out)
+
+
+def _credcheck_mode(args, cfg, deps):
+    """D-07: credcheck.run(cfg, skip_rest, write_proof, out); no lock and no PSS/E; its code is the exit code."""
+    return deps.modes["credcheck"]().run(cfg, args.skip_rest, args.write_proof, deps.out)
+
+
 RUNNERS = {
     "run": _run_mode, "dry-run": _dry_run_mode, "selftest": _selftest_mode, "probe": _probe_mode,
-    "hold-lock": _hold_lock_mode,
+    "hold-lock": _hold_lock_mode, "gaps": _gaps_mode, "credcheck": _credcheck_mode,
 }
-# Modes that start PSS/E, and hold-lock, hold the run lock (D-04, D-06).
+# Modes that start PSS/E, and hold-lock, hold the run lock (D-04, D-06); gaps and credcheck read the
+# database and change nothing, so they never wait for or block an hourly run.
 LOCK_MODES = frozenset(["run", "dry-run", "selftest", "probe", "hold-lock"])
+
+
+def _required_modes(args, mode):
+    """The mode names whose required keys the configuration must hold (D-08)."""
+    if mode == "credcheck" and not args.skip_rest:
+        return ("credcheck", "credcheck-rest")
+    return mode
 # Modes that may take --allow-placeholder: a dry run and the probe write nothing (D-09).
 _PLACEHOLDER_MODES = frozenset(["dry-run", "probe"])
 
@@ -804,7 +873,7 @@ def _mode_of(args):
     return args.mode
 
 
-def _main(argv, psspy_loader, out, err, clock, connect, fetch):
+def _main(argv, psspy_loader, out, err, clock, connect, fetch, modes):
     parser = build_parser()
     try:
         with contextlib.redirect_stdout(out):
@@ -821,7 +890,7 @@ def _main(argv, psspy_loader, out, err, clock, connect, fetch):
         return EXIT_USAGE
 
     try:
-        cfg = read_config(args.config, mode)
+        cfg = read_config(args.config, _required_modes(args, mode))
     except ConfigError as problem:
         for text in problem.problems:
             _say(err, "configuration error: %s" % text, [])
@@ -836,7 +905,7 @@ def _main(argv, psspy_loader, out, err, clock, connect, fetch):
         out, err, psspy_loader, clock,
         connect or (lambda: writer.connect(env=cfg)),
         fetch or (lambda: ratings.fetch_latest_rating(cfg)),
-        None)
+        dict(DEFAULT_MODES, **(modes or {})))
     handler, saved = _attach_log(cfg, secrets)
     try:
         try:
@@ -858,16 +927,18 @@ def _main(argv, psspy_loader, out, err, clock, connect, fetch):
         _detach_log(handler, saved)
 
 
-def main(argv, psspy_loader, out=None, err=None, clock=None, connect=None, fetch=None):
+def main(argv, psspy_loader, out=None, err=None, clock=None, connect=None, fetch=None, modes=None):
     """
     Run the launcher and return the exit code (D-03). Never raises except KeyboardInterrupt.
     `psspy_loader(cfg)` returns the psspy module (or a fake) or raises; `connect` and `fetch` are
-    test seams (defaults: writer.connect(env=cfg) and ratings.fetch_latest_rating(cfg)).
+    test seams (defaults: writer.connect(env=cfg) and ratings.fetch_latest_rating(cfg)); `modes`
+    maps "gaps" and "credcheck" to a zero-argument callable returning the module that implements
+    the mode (default: DEFAULT_MODES, which import psse_job.gaps and psse_job.credcheck).
     """
     out = sys.stdout if out is None else out
     err = sys.stderr if err is None else err
     try:
-        return _main(argv, psspy_loader, out, err, clock, connect, fetch)
+        return _main(argv, psspy_loader, out, err, clock, connect, fetch, modes)
     except KeyboardInterrupt:
         raise
     except Exception as exc:  # noqa: BLE001 - nothing may escape to Task Scheduler as a traceback
