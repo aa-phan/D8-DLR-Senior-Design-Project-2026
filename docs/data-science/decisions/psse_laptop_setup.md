@@ -234,7 +234,7 @@ The gap check lists every UTC hour between the first recorded run and the last c
 <PYTHON> -X utf8 "<REPO>\backend\psse_run_hourly.py" gaps --config "<CONFIG>" --since 2026-11-03T00:00:00Z --fail-on-gaps
 ```
 
-`--since` (included) and `--until` (excluded) need an ISO 8601 time with a UTC offset. `--fail-on-gaps` makes the exit code 5 while a gap exists. The output starts with `gap check (UTC): N runs recorded` and then one line per gap with its kind:
+`--since` (included) and `--until` (excluded) need an ISO 8601 time with a UTC offset. `--fail-on-gaps` makes the exit code 5 while a gap exists, and also when no run is recorded at all (the output is then `no runs recorded`). If the check cannot connect it prints one line, `gap check could not run: <reason>`, and exits 6. Otherwise the output starts with `gap check (UTC): N runs recorded` and then one line per gap with its kind:
 
 | gap_kind | Meaning |
 |---|---|
