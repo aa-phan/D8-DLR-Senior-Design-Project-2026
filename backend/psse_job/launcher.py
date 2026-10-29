@@ -62,6 +62,7 @@ anything about real PSS/E.
 import argparse
 import collections
 import contextlib
+import datetime
 import logging
 import logging.handlers
 import os
@@ -70,7 +71,7 @@ import socket
 import sys
 import urllib.parse
 
-from psse_job import constants, job, ratings, run_record, study, writer
+from psse_job import constants, contract, job, ratings, run_record, study, writer
 from psse_job.lock import RunLock
 from psse_job.redaction import env_secrets, redact
 
@@ -488,7 +489,71 @@ def _run_mode(args, cfg, deps):
     return outcome.exit_code
 
 
-RUNNERS = {"run": _run_mode}
+def _dry_fetch(deps, cfg):
+    """The ratings read of a dry run: a missing SUPABASE_URL or key is a failed read, so no credential is needed."""
+    if not cfg.get(constants.ENV_SUPABASE_URL) or not cfg.get(constants.ENV_PUBLISHABLE_KEY):
+        def unconfigured():
+            raise ratings.ReadFailed("the ratings read is not configured")
+        return unconfigured
+    return deps.fetch
+
+
+def _dry_failure_report(deps, secrets, failure):
+    text = _scrub_paths(redact(failure.message, secrets, constants.ERROR_MAX_CHARS))
+    _say(deps.out, "dry run: nothing was written to the database", secrets)
+    _say(deps.out, "study failed at stage %s: %s" % (failure.stage, text), secrets)
+    return EXIT_FAILED_RECORDED
+
+
+def _dry_run_mode(args, cfg, deps):
+    """
+    D-07: the real study, Phase 1's validation and the row building, in the order job.run_once
+    follows up to the connect; never a connect, never a preflight. Prints counts only.
+    """
+    secrets = env_secrets(cfg)
+    prepared = _prepare(deps, cfg, bool(getattr(args, "allow_placeholder", False)))
+    if prepared.mapping_error:
+        log.warning("the mapping could not be used: %s", redact(prepared.mapping_error, secrets))
+    clock = deps.clock or (lambda: datetime.datetime.now(datetime.timezone.utc))
+    started_at = clock()
+    context = contract.RunContext(
+        run_record.new_run_id(started_at), started_at, run_record.case_label(cfg["PSSE_CASE_PATH"]),
+        prepared.case_sha256, prepared.mapping_sha256, run_record.job_version(cfg))
+    selection = ratings.select_ratings(_dry_fetch(deps, cfg), started_at)
+    try:
+        results = prepared.study(selection, context)
+    except Exception as exc:  # noqa: BLE001 - every study failure is reported, never raised
+        return _dry_failure_report(deps, secrets, run_record.failure_from_exception("internal", exc))
+    finished_at = clock()
+    if finished_at.tzinfo is None or finished_at < started_at:
+        finished_at = started_at
+    try:
+        run_record.validate_results(results, selection)
+        record = run_record.build_run_record(context, selection, finished_at, results=results)
+        rows = run_record.result_rows(record, results)
+    except Exception as exc:  # noqa: BLE001 - an invalid set would never be written
+        return _dry_failure_report(
+            deps, secrets, run_record.failure_from_exception("validate_results", exc))
+    from_rows = sum(1 for choice in selection.choices.values() if choice.source == constants.SOURCE_CITY_RATING)
+    for line in (
+        "dry run: nothing was written to the database",
+        "rows: psse_run=1 %s" % " ".join(
+            "%s=%d" % (table.split(".")[-1], len(rows[table]))
+            for table in (contract.DISPATCH_TABLE, contract.MARGIN_TABLE, contract.CONTINGENCY_TABLE)),
+        "contingencies: screened=%s with_results=%s" % (
+            record["n_contingencies"], record["n_contingencies_with_results"]),
+        "ratings: city_rating=%d static=%d" % (from_rows, len(selection.choices) - from_rows),
+        "outcome: %s" % record["outcome"],
+        "rate_set: %s" % record["rate_set"],
+        "psse_version: %s" % record["psse_version"],
+        "study_seconds: %.1f" % (finished_at - started_at).total_seconds(),
+        "validation: ok",
+    ):
+        _say(deps.out, line, secrets)
+    return EXIT_OK
+
+
+RUNNERS = {"run": _run_mode, "dry-run": _dry_run_mode}
 # Modes that start PSS/E hold the run lock (D-04); plan 03-04 adds selftest and probe.
 LOCK_MODES = frozenset(["run", "dry-run"])
 

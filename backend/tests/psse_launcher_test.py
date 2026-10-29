@@ -29,6 +29,7 @@ import logging
 import os
 import re
 import socket
+import subprocess
 import sys
 import tempfile
 
@@ -701,3 +702,151 @@ def test_hygiene_log_handlers_removed(tmp_path):
         assert box.main() == 3
         assert (list(logger.handlers), logger.level, logger.propagate) == before
     assert box.log_text().count("database host") == 3
+
+
+# --------------------------------------------------------------------------- dry-run
+
+_REPORT_PREFIXES = ("dry run:", "rows:", "contingencies:", "ratings:", "outcome:", "rate_set:",
+                    "psse_version:", "study_seconds:", "validation:")
+
+
+def _dry(box, *extra, **kwargs):
+    return box.main(["run", "--dry-run"] + list(extra) + ["--config", box.config], **kwargs)
+
+
+def _report_counts(text):
+    """(psse_run, dispatch, margin, contingency) row counts of a dry-run report."""
+    match = re.search(r"^rows: psse_run=(\d+) psse_dispatched_capacity=(\d+) "
+                      r"psse_voltage_margin=(\d+) psse_contingency_result=(\d+)$", text, re.M)
+    assert match is not None, text
+    return [int(group) for group in match.groups()]
+
+
+def test_dry_run_never_connects_and_prints_counts_only(clean_pg, tmp_path):
+    """A dry run with an unreachable database and no ratings server: counts only, nothing connected."""
+    connected = []
+
+    def connect():
+        connected.append(1)
+        raise AssertionError("a dry run must never connect")
+
+    for ratings_values in (
+            {"SUPABASE_URL": None, "SUPABASE_PUBLISHABLE_KEY": None},
+            {"SUPABASE_URL": "http://127.0.0.1:%d" % _closed_port()}):
+        values = {"SUPABASE_PSSE_DB_URL": _local_url(port=_closed_port())}
+        values.update(ratings_values)
+        box = Sandbox(tmp_path, values=values)
+        case_hash = run_record.file_sha256(box.case_path)
+        mapping_hash = run_record.file_sha256(box.values["PSSE_MAPPING_PATH"])
+        assert _dry(box, connect=connect) == 0, box.err.getvalue()
+        assert connected == []
+        assert box.err.getvalue() == ""
+        out = box.out.getvalue()
+        lines = out.splitlines()
+        assert lines[0].startswith("dry run: nothing was written")
+        assert all(line.startswith(_REPORT_PREFIXES) for line in lines), out
+        assert _report_counts(out) == [1, 4, 4, 10]
+        assert "contingencies: screened=16 with_results=7" in lines
+        assert "outcome: fallback" in lines
+        assert "rate_set: RATEA" in lines
+        assert "psse_version: 35.6.0" in lines
+        assert "validation: ok" in lines
+        assert "ratings: city_rating=0 static=4" in lines
+        # no bus number, branch key, path, case label or hash
+        assert not re.search(r"\d{4,}", out), out
+        for private in (str(tmp_path), "PLACEHOLDER_CASE", case_hash, mapping_hash):
+            assert private not in out
+        assert len(box.loader_calls) == 1
+    assert _counts(clean_pg) == [0, 0, 0, 0]
+
+
+def test_dry_run_counts_equal_a_real_run(clean_pg, tmp_path):
+    """The counts a dry run prints are the rows the real run writes for the same case, mapping and ratings."""
+    rows = psse_fakes.latest_rows(STARTED, provisional=True)
+    with psse_fakes.FakeLatestRatingServer(rows) as server:
+        real = Sandbox(tmp_path, admin_url=clean_pg, server=server)
+        assert real.main() == 0, real.err.getvalue()
+        run_id = SUMMARY_LINE.match(real.out.getvalue()).group(1)
+        written = _counts(clean_pg, run_id)
+        stored = _run_row(clean_pg, run_id)
+
+        dry = Sandbox(tmp_path, server=server, values={
+            "SUPABASE_PSSE_DB_URL": _local_url(port=_closed_port())})
+        assert _dry(dry) == 0, dry.err.getvalue()
+    out = dry.out.getvalue()
+    assert _report_counts(out) == written == [1, 4, 4, 10]
+    assert "outcome: %s" % stored["outcome"] in out
+    assert "contingencies: screened=%d with_results=%d" % (
+        stored["n_contingencies"], stored["n_contingencies_with_results"]) in out
+    assert "rate_set: %s" % stored["rate_set"] in out
+    assert _counts(clean_pg) == written
+
+
+def test_dry_run_failed_study_exit1(tmp_path):
+    """A study that raises StudyFailed is exit 1: the stage and the message are printed, nothing connected."""
+    connected = []
+    fake, path = _registered(
+        tmp_path, solver=lambda case: fake_module.SolveOutcome(ierr=0, solved=1))
+    box = Sandbox(tmp_path, fake=fake, case_path=path)
+    assert _dry(box, connect=lambda: connected.append(1)) == 1
+    out = box.out.getvalue()
+    assert out.splitlines()[0].startswith("dry run: nothing was written")
+    assert "load_flow" in out
+    assert connected == []
+    assert "rows:" not in out
+    assert str(tmp_path) not in out
+
+    # the committed example mapping is marked placeholder: refused by a dry run unless allowed
+    box = Sandbox(tmp_path, values={"PSSE_MAPPING_PATH": EXAMPLE})
+    assert _dry(box) == 1
+    assert "mapping" in box.out.getvalue() and "placeholder" in box.out.getvalue()
+    box = Sandbox(tmp_path, values={"PSSE_MAPPING_PATH": EXAMPLE})
+    assert _dry(box, "--allow-placeholder") == 0, box.out.getvalue()
+    assert "validation: ok" in box.out.getvalue()
+
+
+def test_dry_run_validation_failure_exit1(tmp_path, monkeypatch):
+    """A results object that fails validate_results is exit 1 naming the validation failure."""
+    def bad_study(selection, context):
+        good = psse_fakes.fake_results(selection)
+        return good._replace(dispatch=good.dispatch[:3])  # one city has no dispatch row
+
+    def fake_prepare(psspy, case_path, mapping_path, allow_placeholder=False, clock=None):
+        return launcher.study.PreparedRun(bad_study, "case.sav", None, None, None)
+
+    monkeypatch.setattr(launcher.study, "prepare_run", fake_prepare)
+    connected = []
+    box = Sandbox(tmp_path)
+    assert _dry(box, connect=lambda: connected.append(1)) == 1
+    out = box.out.getvalue()
+    assert "validate_results" in out
+    assert "validation: ok" not in out
+    assert connected == []
+
+
+def test_paths_dirs_appended_never_prepended(tmp_path):
+    """A planted standard-library look-alike in a search folder is never found before the real one."""
+    planted = tmp_path / "planted"
+    planted.mkdir()
+    (planted / "colorsys.py").write_text("raise RuntimeError('planted module imported')\n", encoding="utf-8")
+    (planted / "json.py").write_text("raise RuntimeError('planted module imported')\n", encoding="utf-8")
+    (planted / "harmless_mod.py").write_text("VALUE = 42\n", encoding="utf-8")
+    code = (
+        "import sys\n"
+        "sys.path.insert(0, sys.argv[1])\n"
+        "from psse_job import launcher\n"
+        "before = list(sys.path)\n"
+        "launcher.add_search_dirs({'PSSE_SITE_DIR': sys.argv[2]})\n"
+        "assert sys.path[:len(before)] == before, 'a folder was inserted before the existing ones'\n"
+        "assert sys.path[-1] == sys.argv[2]\n"
+        "import colorsys, json, harmless_mod\n"
+        "assert not colorsys.__file__.startswith(sys.argv[2]), colorsys.__file__\n"
+        "assert not json.__file__.startswith(sys.argv[2]), json.__file__\n"
+        "print('ok', harmless_mod.VALUE)\n"
+    )
+    done = subprocess.run(
+        [sys.executable, "-I", "-B", "-c", code, _BACKEND, str(planted)],
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        timeout=30, universal_newlines=True)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == "ok 42"
