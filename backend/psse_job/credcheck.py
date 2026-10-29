@@ -18,8 +18,10 @@ statement run inside a transaction that is forced to roll back, so a credential 
 powerful still changes no row. Only SQLSTATE 42501 counts as a refusal: any other error (a
 missing relation, a read-only session, a timeout) is a FAIL as inconclusive, and success is a FAIL
 because the statement was allowed. The session is deliberately NOT read-only: PostgreSQL checks
-a read-only transaction before it checks privileges, so every statement would be refused with
-25006 whatever the role may do, and the proof would pass for the wrong reason.
+a read-only transaction before it checks privileges, so every INSERT, UPDATE and DELETE would be
+refused with 25006 (read_only_sql_transaction) whatever the role may do, which is not a refusal
+here and would hide a planted grant (verified on PostgreSQL 18.6 in a scratch run: update and
+delete as the writer gave 25006 in a read-only transaction, not 42501).
 
 The sqlstate attribute of the driver's exception is enough to recognise a refusal, so this
 module imports no psycopg. Details hold relation names, privilege names, SQLSTATE codes and
@@ -33,13 +35,15 @@ the same way there (verified for PostgreSQL 18.6 only).
 """
 
 import collections
+import datetime
 import http.client
 import json
 import os
+import sys
 import urllib.error
 import urllib.request
 
-from psse_job import constants, ratings
+from psse_job import constants, contract, dispatch, ratings, run_record, units, writer
 from psse_job.redaction import env_secrets, redact
 
 PASS = "PASS"
@@ -353,3 +357,197 @@ def rest_checks(env, opener=None):
         status, failed = _send_write(method, base + _ZERO_MATCH, key, body, opener)
         rows.append(_judge_write(check, status, failed))
     return rows
+
+
+# --------------------------------------------------------------------------- write proof
+
+SYNTHETIC_CASE_ID = "credcheck-synthetic"
+SYNTHETIC_JOB_VERSION = "credcheck"
+_SYNTHETIC_KV = 345.0
+_SYNTHETIC_LIMIT_FACTOR = 1.2
+_WRITE_PROOF_INSIDE = "write_proof:insert_and_read_back_inside_rollback"
+_WRITE_PROOF_AFTER = "write_proof:nothing_survives"
+_PROOF_TABLES = (contract.PSSE_RUN_TABLE,) + contract.RESULT_TABLES
+_PROOF_LABELS = ("run", "dispatch", "margin", "contingency")
+
+
+def synthetic_run(now):
+    """
+    A complete synthetic fallback run built only from the job's own functions, needing no
+    database: every city on the static rating (ratings.select_ratings with a read that returns no
+    rows, so reason missing), dispatch rows from dispatch.build_dispatch_row at 345 kV with a voltage
+    limit 1.2 times the applied MVA, four margin rows of method credcheck_synthetic and two
+    contingency rows (one thermal on AUSTIN, one voltage_low), shaped like the study's results.
+    The results pass run_record.validate_results before this returns. Returns (selection, run
+    record, rows keyed by result table): 1, 4, 4 and 2 rows. `now` must be timezone-aware.
+    """
+    selection = ratings.select_ratings(lambda: [], now)
+    dispatch_rows = []
+    margin_rows = []
+    applied = {}
+    for city in constants.CITIES:
+        choice = selection.choices[city]
+        applied[city] = units.circuit_mva(choice.amps_per_conductor, choice.subconductors_per_phase, _SYNTHETIC_KV)
+        limit = _SYNTHETIC_LIMIT_FACTOR * applied[city]
+        dispatch_rows.append(dispatch.build_dispatch_row(choice, _SYNTHETIC_KV, limit))
+        margin_rows.append({
+            "city": city,
+            "method": "credcheck_synthetic",
+            "base_transfer_mw": 1000.0,
+            "limit_transfer_mw": 1120.0,
+            "margin_mw": 120.0,
+            "margin_pct": 12.0,
+            "voltage_limit_mva": limit,
+            "critical_bus": "1001",
+            "min_voltage_pu": 0.93,
+            "details": None,
+        })
+    limit_value = applied["AUSTIN"]
+    observed = 1.05 * limit_value
+    contingency_rows = [
+        {
+            "contingency_id": "1003-1004-1",
+            "violation_kind": "thermal_overload",
+            "element_type": "branch",
+            "element_id": "1001-1002-1",
+            "city": "AUSTIN",
+            "limit_value": limit_value,
+            "observed_value": observed,
+            "exceeded_by": observed - limit_value,
+            "unit": "MVA",
+            "details": None,
+        },
+        {
+            "contingency_id": "1005-1006-1",
+            "violation_kind": "voltage_low",
+            "element_type": "bus",
+            "element_id": "2001",
+            "city": None,
+            "limit_value": 0.95,
+            "observed_value": 0.92,
+            "exceeded_by": 0.03,
+            "unit": "pu",
+            "details": None,
+        },
+    ]
+    results = contract.StudyResults(
+        dispatch=dispatch_rows, margins=margin_rows, contingencies=contingency_rows,
+        n_contingencies=3, rate_set="RATEA", psse_version=SYNTHETIC_JOB_VERSION,
+    )
+    run_record.validate_results(results, selection)
+    context = contract.RunContext(
+        run_id=run_record.new_run_id(now), started_at=now, case_id=SYNTHETIC_CASE_ID,
+        case_sha256=None, mapping_sha256=None, job_version=SYNTHETIC_JOB_VERSION,
+    )
+    record = run_record.build_run_record(context, selection, now + datetime.timedelta(seconds=1), results=results)
+    return selection, record, run_record.result_rows(record, results)
+
+
+def _count_run(conn, run_id):
+    """(rows of the run in psse_run, dispatch, margin, contingency); the table names are constants."""
+    counts = []
+    for table in _PROOF_TABLES:
+        counts.append(conn.execute("select count(*) from %s where run_id = %%s" % table, [run_id]).fetchone()[0])
+    return tuple(counts)
+
+
+def _describe(counts):
+    return ", ".join("%s %d" % (label, count) for label, count in zip(_PROOF_LABELS, counts))
+
+
+def write_proof(conn, now=None, env=None):
+    """
+    The opt-in write proof: write a complete synthetic run (synthetic_run) with writer.write_run
+    inside a transaction forced to roll back, count its rows inside the block, leave the block and
+    count them again. Two rows: the inside counts must equal the run's 1, 4, 4 and 2 rows, and no
+    row may survive. A failure of the write (a redacted message) is a FAIL row, and the count after
+    the block is taken anyway. `env` names the secrets to redact (default: the process environment).
+    """
+    now = datetime.datetime.now(datetime.timezone.utc) if now is None else now
+    _selection, record, rows = synthetic_run(now)
+    run_id = record["run_id"]
+    expected = (1,) + tuple(len(rows[table]) for table in contract.RESULT_TABLES)
+    secrets = None if env is None else env_secrets(env)
+
+    inside = None
+    failure = None
+    try:
+        with conn.transaction(force_rollback=True):
+            writer.write_run(conn, record, rows)
+            inside = _count_run(conn, run_id)
+    except Exception as exc:  # noqa: BLE001 - reported below as redacted text
+        failure = "%s: %s" % (type(exc).__name__, redact(str(exc), secrets, constants.ERROR_MAX_CHARS))
+    result = []
+    if failure is not None:
+        result.append(CheckRow(_WRITE_PROOF_INSIDE, FAIL, "the synthetic run could not be written: " + failure))
+    elif inside == expected:
+        result.append(CheckRow(
+            _WRITE_PROOF_INSIDE, PASS, "inside the rolled-back transaction: " + _describe(inside)))
+    else:
+        result.append(CheckRow(
+            _WRITE_PROOF_INSIDE, FAIL,
+            "inside the transaction: " + _describe(inside) + "; expected: " + _describe(expected)))
+
+    after = None
+    after_failure = None
+    try:
+        after = _count_run(conn, run_id)
+    except Exception as exc:  # noqa: BLE001 - only the class is kept
+        after_failure = type(exc).__name__
+    if after_failure is not None:
+        result.append(CheckRow(_WRITE_PROOF_AFTER, FAIL, "the rows could not be counted after the rollback (%s)" % after_failure))
+    elif any(after):
+        result.append(CheckRow(_WRITE_PROOF_AFTER, FAIL, "rows survived the rollback: " + _describe(after)))
+    else:
+        result.append(CheckRow(_WRITE_PROOF_AFTER, PASS, "after the rollback: " + _describe(after)))
+    return result
+
+
+# Kept under another name because `run` has a parameter called write_proof.
+_run_write_proof = write_proof
+
+
+# --------------------------------------------------------------------------- run
+
+
+def run(env, skip_rest=False, write_proof=False, out=None, connect=None, opener=None):
+    """
+    Run the credential proof and print the report; return 0 when no row is a FAIL, else 6. Order:
+    the role leg on the job's own connection, the REST leg (one `rest:skipped` SKIP row when
+    `skip_rest`; a missing SUPABASE_URL or key is a FAIL, not a skip), and the write proof only when
+    `write_proof` is true. A connection that cannot be made, or an error while running, prints one
+    redacted line ("credential check could not run: ...") and returns 6. `env` is the configuration
+    dict; `connect` and `opener` are test seams (defaults writer.connect(env=env) and urlopen); `out`
+    defaults to sys.stdout. The connection is closed in a finally block.
+    """
+    env = os.environ if env is None else env
+    out = sys.stdout if out is None else out
+    if connect is None:
+        def connect():
+            return writer.connect(env=env)
+
+    conn = None
+    failure = None
+    rows = []
+    try:
+        conn = connect()
+        rows.extend(role_checks(conn))
+        if skip_rest:
+            rows.append(CheckRow("rest:skipped", SKIP, "skip_rest was requested"))
+        else:
+            rows.extend(rest_checks(env, opener=opener))
+        if write_proof:
+            rows.extend(_run_write_proof(conn, env=env))
+    except Exception as exc:  # noqa: BLE001 - reported below as one redacted line
+        failure = redact(str(exc), env_secrets(env), constants.ERROR_MAX_CHARS) or type(exc).__name__
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001
+                pass
+    if failure is not None:
+        out.write("credential check could not run: %s\n" % failure)
+        return EXIT_CHECK_FAILED
+    out.write(format_report(rows) + "\n")
+    return EXIT_OK if checks_ok(rows) else EXIT_CHECK_FAILED

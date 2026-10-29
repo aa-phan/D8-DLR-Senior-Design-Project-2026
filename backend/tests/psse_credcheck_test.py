@@ -504,3 +504,330 @@ def test_rest_requests_are_zero_match_and_apikey_only():
     assert delete["method"] == "DELETE"
     assert delete["body"] == b""
     assert key not in credcheck.format_report(rows)
+
+
+# --------------------------------------------------------------------------- write proof, run, hygiene
+
+WRITE_PROOF_CHECKS = [
+    "write_proof:insert_and_read_back_inside_rollback",
+    "write_proof:nothing_survives",
+]
+RUN_COUNTS = {
+    "psse_run": 1, "psse_dispatched_capacity": 4, "psse_voltage_margin": 4, "psse_contingency_result": 2,
+}
+
+
+def _result_counts(admin_url):
+    return dict(
+        (table, pg_helper.admin_rows(admin_url, "select count(*) as n from public." + table)[0]["n"])
+        for table in pg_helper.RESULT_TABLES)
+
+
+class _RecordingConn(object):
+    """
+    A proxy around the real connection (the connect seam). It delegates every attribute, so the
+    assignments `conn.autocommit = ...` and `conn.read_only = ...` a caller may make reach the real
+    connection, and records, for every statement passed to `execute`: its first word, the depth of
+    open transaction(force_rollback=True) blocks, the server's transaction status before it
+    (psycopg reads it from libpq: 2 is inside a transaction block, 0 is idle) and its text.
+    `cursor` is refused, so no statement can bypass the record.
+    """
+
+    def __init__(self, conn):
+        object.__setattr__(self, "_conn", conn)
+        object.__setattr__(self, "statements", [])
+        object.__setattr__(self, "forced_depth", 0)
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+    def __setattr__(self, name, value):
+        setattr(self._conn, name, value)
+
+    def cursor(self, *args, **kwargs):
+        raise AssertionError("a statement must go through conn.execute so that it is recorded")
+
+    def execute(self, query, *args, **kwargs):
+        text = query if isinstance(query, str) else str(query)
+        self.statements.append({
+            "word": text.split(None, 1)[0].lower(),
+            "forced_depth": self.forced_depth,
+            "status": int(self._conn.info.transaction_status),
+            "text": text,
+        })
+        return self._conn.execute(query, *args, **kwargs)
+
+    @contextlib.contextmanager
+    def transaction(self, *args, **kwargs):
+        forced = bool(kwargs.get("force_rollback"))
+        with self._conn.transaction(*args, **kwargs) as block:
+            if forced:
+                object.__setattr__(self, "forced_depth", self.forced_depth + 1)
+            try:
+                yield block
+            finally:
+                if forced:
+                    object.__setattr__(self, "forced_depth", self.forced_depth - 1)
+
+
+def _recording(admin_url):
+    return _RecordingConn(_writer_conn(admin_url))
+
+
+def _result_inserts(proxy):
+    return [item for item in proxy.statements if item["word"] == "insert" and "public.psse_" in item["text"]]
+
+
+def test_synthetic_run_passes_phase1_validation(monkeypatch):
+    calls = []
+    real = credcheck.run_record.validate_results
+
+    def spy(results, selection):
+        calls.append((results, selection))
+        return real(results, selection)
+
+    monkeypatch.setattr(credcheck.run_record, "validate_results", spy)
+    now = _now()
+    selection, record, rows = credcheck.synthetic_run(now)
+
+    assert len(calls) == 1 and calls[0][1] is selection
+    assert all(selection.choices[city].source == constants.SOURCE_STATIC
+               and selection.choices[city].fallback_reason == "missing" for city in constants.CITIES)
+    assert record["outcome"] == "fallback"
+    assert record["case_id"] == "credcheck-synthetic"
+    assert record["job_version"] == "credcheck"
+    assert record["started_at"] == now
+    assert [len(rows[table]) for table in credcheck.contract.RESULT_TABLES] == [4, 4, 2]
+    assert all(row["run_id"] == record["run_id"] and row["run_outcome"] == "fallback"
+               for table in credcheck.contract.RESULT_TABLES for row in rows[table])
+    assert [row["city"] for row in rows[credcheck.contract.DISPATCH_TABLE]] == list(constants.CITIES)
+    # No database is needed to build it, and a second call is a different run.
+    assert credcheck.synthetic_run(now)[1]["run_id"] != record["run_id"]
+
+
+def test_write_proof_inserts_a_complete_run_and_nothing_survives(clean_pg):
+    # Control first: the very same synthetic run, written as the job writes it, really persists, so
+    # a zero afterwards is the rollback and not an insert that silently did nothing.
+    conn = _writer_conn(clean_pg)
+    try:
+        _, record, rows = credcheck.synthetic_run(_now())
+        assert writer.write_run(conn, record, rows) == writer.WRITTEN
+        assert _result_counts(clean_pg) == RUN_COUNTS
+        pg_helper.reset(clean_pg)
+        assert _result_counts(clean_pg) == dict((table, 0) for table in pg_helper.RESULT_TABLES)
+
+        proof = credcheck.write_proof(conn)
+    finally:
+        conn.close()
+    assert [row.check for row in proof] == WRITE_PROOF_CHECKS
+    assert [row.status for row in proof] == [credcheck.PASS] * 2, [(row.check, row.detail) for row in proof]
+    assert "run 1, dispatch 4, margin 4, contingency 2" in proof[0].detail
+    assert "run 0, dispatch 0, margin 0, contingency 0" in proof[1].detail
+    assert _result_counts(clean_pg) == dict((table, 0) for table in pg_helper.RESULT_TABLES)
+
+
+def test_write_proof_is_off_by_default(clean_pg):
+    env = {"SUPABASE_PSSE_DB_URL": pg_helper.role_url(clean_pg, WRITER_ROLE)}
+
+    # Without the flag: the only insert is the where-false insert into city_rating, none reaches a
+    # result table, and nothing is left in them.
+    proxy = _recording(clean_pg)
+    try:
+        code = credcheck.run(env, skip_rest=True, out=io.StringIO(), connect=lambda: proxy)
+    finally:
+        proxy.close()
+    assert code == 0
+    inserts = [item for item in proxy.statements if item["word"] == "insert"]
+    assert len(inserts) == 1
+    assert "public.city_rating" in inserts[0]["text"] and inserts[0]["text"].endswith("where false")
+    assert _result_inserts(proxy) == []
+    assert _result_counts(clean_pg) == dict((table, 0) for table in pg_helper.RESULT_TABLES)
+
+    # The proxy can tell: outside a transaction block the server reports idle (0), not 2.
+    probe = _recording(clean_pg)
+    try:
+        probe.execute("select 1")
+        with probe.transaction():
+            probe.execute("select 1")
+    finally:
+        probe.close()
+    assert [item["status"] for item in probe.statements] == [0, 2]
+
+    # With the flag: 11 inserts into the result tables (the run row and 4 + 4 + 2), each executed
+    # inside the forced-rollback block and inside a transaction on the server.
+    proxy = _recording(clean_pg)
+    try:
+        code = credcheck.run(env, skip_rest=True, write_proof=True, out=io.StringIO(), connect=lambda: proxy)
+    finally:
+        proxy.close()
+    assert code == 0
+    inserts = _result_inserts(proxy)
+    assert len(inserts) == 11
+    assert all(item["forced_depth"] >= 1 and item["status"] == 2 for item in inserts)
+    assert _result_counts(clean_pg) == dict((table, 0) for table in pg_helper.RESULT_TABLES)
+
+
+def test_write_proof_failure_reported_and_still_rolled_back(clean_pg):
+    with _planted(
+        clean_pg,
+        ["revoke insert on public.psse_voltage_margin from " + WRITER_ROLE],
+        ["grant insert on public.psse_voltage_margin to " + WRITER_ROLE],
+    ):
+        conn = _writer_conn(clean_pg)
+        try:
+            proof = credcheck.write_proof(conn)
+        finally:
+            conn.close()
+        # The failed-run record that write_run writes after its own rollback sat inside the outer
+        # transaction too, so no row of any table exists.
+        assert _result_counts(clean_pg) == dict((table, 0) for table in pg_helper.RESULT_TABLES)
+    named = _by_name(proof)
+    assert [row.check for row in proof] == WRITE_PROOF_CHECKS
+    assert named["write_proof:insert_and_read_back_inside_rollback"].status == credcheck.FAIL
+    assert "psse_voltage_margin" in named["write_proof:insert_and_read_back_inside_rollback"].detail
+    assert "postgresql://" not in named["write_proof:insert_and_read_back_inside_rollback"].detail
+    assert named["write_proof:nothing_survives"].status == credcheck.PASS
+    # Restored: the proof passes again.
+    conn = _writer_conn(clean_pg)
+    try:
+        assert [row.status for row in credcheck.write_proof(conn)] == [credcheck.PASS] * 2
+    finally:
+        conn.close()
+
+
+def _url_with_password(admin_url, user, password):
+    parts = urllib.parse.urlsplit(pg_helper.role_url(admin_url, user))
+    return parts._replace(netloc="%s:%s@%s:%d" % (user, password, parts.hostname, parts.port)).geturl()
+
+
+def test_run_exit_codes_and_skip_rest(clean_pg):
+    db_url = pg_helper.role_url(clean_pg, WRITER_ROLE)
+    with RestStandIn(rows=psse_fakes.latest_rows(_now())) as server:
+        env = dict(_rest_env(server), SUPABASE_PSSE_DB_URL=db_url)
+        buffer = io.StringIO()
+        assert credcheck.run(env, out=buffer) == 0
+        assert buffer.getvalue().splitlines()[-1] == "16 PASS, 0 FAIL, 0 SKIP"
+
+        buffer = io.StringIO()
+        assert credcheck.run(env, write_proof=True, out=buffer) == 0
+        assert buffer.getvalue().splitlines()[-1] == "18 PASS, 0 FAIL, 0 SKIP"
+
+        # Any FAIL gives 6: here the credential under test is the superuser.
+        buffer = io.StringIO()
+        admin_env = dict(env, SUPABASE_PSSE_DB_URL=clean_pg)
+        assert credcheck.run(admin_env, out=buffer) == 6
+        assert "FAIL  role_attributes" in buffer.getvalue()
+
+    # REST configured-missing is a FAIL unless skip_rest was asked for.
+    db_only = {"SUPABASE_PSSE_DB_URL": db_url}
+    buffer = io.StringIO()
+    assert credcheck.run(db_only, out=buffer) == 6
+    assert buffer.getvalue().splitlines()[-1] == "13 PASS, 1 FAIL, 2 SKIP"
+    assert "FAIL  rest:read_ratings" in buffer.getvalue()
+
+    buffer = io.StringIO()
+    assert credcheck.run(db_only, skip_rest=True, out=buffer) == 0
+    lines = buffer.getvalue().splitlines()
+    assert lines[-1] == "13 PASS, 0 FAIL, 1 SKIP"
+    assert len([line for line in lines if line.startswith("SKIP")]) == 1
+    assert [line for line in lines if "rest:" in line][0].startswith("SKIP  rest:skipped")
+
+
+def test_run_output_names_no_secret(clean_pg):
+    password = "pw" + "-credcheck-" + "7391"
+    key = psse_fakes.fake_publishable_key()
+    db_url = _url_with_password(clean_pg, WRITER_ROLE, password)
+    with RestStandIn(rows=psse_fakes.latest_rows(_now())) as server:
+        env = dict(_rest_env(server, key), SUPABASE_PSSE_DB_URL=db_url)
+        buffer = io.StringIO()
+        assert credcheck.run(env, write_proof=True, out=buffer) == 0
+        text = buffer.getvalue()
+        port = str(urllib.parse.urlsplit(clean_pg).port)
+        for secret in (password, key, db_url, server.url, "127.0.0.1", WRITER_ROLE, "postgresql://",
+                       "localhost", "apikey", port):
+            assert secret not in text, secret
+        # A failing report is as clean: the credential under test is the superuser, with a password.
+        admin_env = dict(env, SUPABASE_PSSE_DB_URL=_url_with_password(clean_pg, "postgres", password))
+        buffer = io.StringIO()
+        assert credcheck.run(admin_env, out=buffer) == 6
+        for secret in (password, key, server.url, "127.0.0.1", "postgres@", "postgresql://", port):
+            assert secret not in buffer.getvalue(), secret
+
+
+def test_run_connection_failure_exit_6():
+    import socket
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    password = "pw" + "-credcheck-" + "5512"
+    user = "cc" + "user"
+    url = "postgresql://" + user + ":" + password + "@127.0.0.1:" + str(port) + "/nodb"
+    buffer = io.StringIO()
+    assert credcheck.run({"SUPABASE_PSSE_DB_URL": url}, skip_rest=True, out=buffer) == 6
+    text = buffer.getvalue()
+    assert len(text.splitlines()) == 1
+    assert text.startswith("credential check could not run: ")
+    for secret in (password, user, "127.0.0.1", url):
+        assert secret not in text, secret
+    # No URL at all is the same one clean line.
+    buffer = io.StringIO()
+    assert credcheck.run({}, skip_rest=True, out=buffer) == 6
+    assert buffer.getvalue() == "credential check could not run: SUPABASE_PSSE_DB_URL is not set\n"
+
+
+def test_run_active_statements_all_run_in_a_forced_rollback_transaction(clean_pg):
+    env = {"SUPABASE_PSSE_DB_URL": pg_helper.role_url(clean_pg, WRITER_ROLE)}
+    proxy = _recording(clean_pg)
+    try:
+        assert credcheck.run(env, skip_rest=True, out=io.StringIO(), connect=lambda: proxy) == 0
+    finally:
+        proxy.close()
+    active = [item for item in proxy.statements if "where false" in item["text"]]
+    assert len(active) == 7
+    assert all(item["forced_depth"] == 1 and item["status"] == 2 for item in active), active
+    # Every other statement is a catalog read.
+    others = [item for item in proxy.statements if "where false" not in item["text"]]
+    assert others and all(item["word"] == "select" for item in others)
+
+
+def test_run_inconclusive_error_names_no_text(clean_pg):
+    with _planted(
+        clean_pg,
+        ["alter table public.pipeline_run rename to pipeline_run_renamed"],
+        ["alter table public.pipeline_run_renamed rename to pipeline_run"],
+    ):
+        rows = _writer_role_checks(clean_pg)
+    named = _by_name(rows)
+    assert _failing(rows) == set(["refused:select_pipeline_run"])
+    assert named["refused:select_pipeline_run"].detail == "inconclusive: SQLSTATE 42P01"
+    for row in rows:
+        assert "does not exist" not in row.detail and "pipeline_run" not in row.detail
+
+
+def test_run_session_is_not_read_only_because_that_would_hide_the_proof(clean_pg):
+    # Control for the lesson of plan 03-02: a really read-only session (autocommit off, then
+    # read_only on) is refused with 25006 before privileges are looked at, so the five write
+    # statements would be "inconclusive" and a planted write grant could never be seen. credcheck.run
+    # therefore never sets read_only, and its proxy never sees the flag change.
+    conn = _writer_conn(clean_pg)
+    try:
+        conn.autocommit = False
+        conn.read_only = True
+        rows = credcheck.role_checks(conn)
+    finally:
+        conn.close()
+    named = _by_name(rows)
+    assert _failing(rows) == set([
+        "refused:insert_city_rating", "refused:update_city_rating", "refused:delete_city_rating",
+        "refused:update_psse_run", "refused:delete_psse_run"])
+    assert named["refused:update_city_rating"].detail == "inconclusive: SQLSTATE 25006"
+    assert named["refused:select_city_rating"].status == credcheck.PASS
+
+    env = {"SUPABASE_PSSE_DB_URL": pg_helper.role_url(clean_pg, WRITER_ROLE)}
+    proxy = _recording(clean_pg)
+    try:
+        assert credcheck.run(env, skip_rest=True, write_proof=True, out=io.StringIO(), connect=lambda: proxy) == 0
+        assert not proxy.read_only
+    finally:
+        proxy.close()
