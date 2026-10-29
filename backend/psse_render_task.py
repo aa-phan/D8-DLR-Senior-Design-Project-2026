@@ -51,21 +51,49 @@ def _parser():
     return parser
 
 
+_OPTIONS = {
+    "python_exe": "--python", "entry_script": "--entry", "config_file": "--config", "work_dir": "--work-dir",
+    "start_boundary": "--start", "minute": "--minute", "allow_placeholder": "--allow-placeholder",
+    "template": "--template",
+}
+
+
+def _refuse(text):
+    """One line on stderr and exit code 2; the text never holds a refused value."""
+    sys.stderr.write("psse_render_task: %s\n" % text)
+    return 2
+
+
 def main(argv=None):
+    """Write the filled XML. Exit 0 on success; exit 2 on a refused value, an unreadable template or an output that cannot be written."""
     args = _parser().parse_args(argv)
-    with open(args.template or _DEFAULT_TEMPLATE, "rb") as handle:
-        template_text = handle.read().decode("utf-8")
-    text = taskxml.render(
-        template_text,
-        args.python or sys.executable,
-        args.entry or os.path.join(_HERE, "psse_run_hourly.py"),
-        args.config,
-        args.work_dir,
-        args.start or taskxml.next_start_boundary(datetime.datetime.now(), args.minute),
-        dry_run=args.dry_run,
-        allow_placeholder=args.allow_placeholder)
-    with open(args.out, "w", encoding="utf-8", newline="\n") as handle:
-        handle.write(text)
+    try:
+        with open(args.template or _DEFAULT_TEMPLATE, "rb") as handle:
+            template_text = handle.read().decode("utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        return _refuse("refused --template: the template cannot be read (%s)" % type(exc).__name__)
+    try:
+        start = args.start if args.start is not None else taskxml.next_start_boundary(
+            datetime.datetime.now(), args.minute)
+        text = taskxml.render(
+            template_text,
+            args.python or sys.executable,
+            args.entry or os.path.join(_HERE, "psse_run_hourly.py"),
+            args.config,
+            args.work_dir,
+            start,
+            dry_run=args.dry_run,
+            allow_placeholder=args.allow_placeholder)
+    except taskxml.TaskXmlError as exc:
+        return _refuse("refused %s: %s" % (_OPTIONS.get(exc.argument, "an option"), exc))
+    try:
+        # "x" fails when the file exists, so a file made after any earlier look is never overwritten without --force.
+        with open(args.out, "w" if args.force else "x", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
+    except FileExistsError:
+        return _refuse("refused --out: the output file already exists (use --force to overwrite it)")
+    except OSError as exc:
+        return _refuse("refused --out: the output file cannot be written (%s)" % type(exc).__name__)
     print("wrote %s" % args.out)
     return 0
 

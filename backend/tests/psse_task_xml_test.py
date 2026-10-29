@@ -15,10 +15,15 @@ Every path used here is a pytest tmp path or a placeholder; test strings that lo
 credentials are assembled from pieces because secret_scan_test scans tracked files.
 """
 
+import datetime
+import io
 import os
 import re
+import subprocess
 import sys
 import xml.etree.ElementTree as ET
+
+import pytest
 
 _HERE = os.path.dirname(__file__)
 _BACKEND = os.path.abspath(os.path.join(_HERE, ".."))
@@ -31,6 +36,9 @@ from psse_job import launcher, taskxml  # noqa: E402
 _REPO_ROOT = os.path.abspath(os.path.join(_BACKEND, ".."))
 TEMPLATE = os.path.join(_REPO_ROOT, "docs", "data-science", "ops", "psse_hourly_task.xml")
 NS = "http://schemas.microsoft.com/windows/2004/02/mit/task"
+RENDER_SCRIPT = os.path.join(_BACKEND, "psse_render_task.py")
+TIMEOUT = 60
+START = "2026-11-02T10:15:00"
 
 
 def _ns(name):
@@ -39,8 +47,9 @@ def _ns(name):
 
 
 def _template_text():
+    # A Windows checkout may hold the file with CRLF line ends; the checks below work on LF text.
     with open(TEMPLATE, "rb") as handle:
-        return handle.read().decode("utf-8")
+        return handle.read().decode("utf-8").replace("\r\n", "\n")
 
 
 def _split_arguments(text):
@@ -399,3 +408,236 @@ def test_template_secret_scan_is_clean(tmp_path):
     planted_file = tmp_path / "planted.xml"
     planted_file.write_text(_template_text().replace("@@ARGUMENTS@@", url), encoding="utf-8")
     assert [name for _, _, name in secret_scan_test._scan([str(planted_file)])] == ["pg_url_credential"]
+
+
+# ---------------------------------------------------------------------------
+# Renderer tests
+# ---------------------------------------------------------------------------
+
+def _inputs(base, entry="entry.py", config="job.conf", work="work", python="python.exe"):
+    """Existing tmp files and a folder for the four path arguments; names may hold spaces and an ampersand."""
+    base.mkdir(parents=True, exist_ok=True)
+    paths = {"entry_script": base / entry, "config_file": base / config, "python_exe": base / python}
+    for key in ("entry_script", "config_file", "python_exe"):
+        paths[key].write_text("placeholder\n", encoding="utf-8")
+    paths["work_dir"] = base / work
+    paths["work_dir"].mkdir(exist_ok=True)
+    return dict((key, str(value)) for key, value in paths.items())
+
+
+def _render(values, **flags):
+    return taskxml.render(
+        _template_text(), values["python_exe"], values["entry_script"], values["config_file"],
+        values["work_dir"], flags.pop("start", START), **flags)
+
+
+def test_render_escapes_xml_and_quotes_paths_with_spaces_and_ampersand(tmp_path):
+    """A folder named with a space and an ampersand renders to well-formed XML; the parsed values equal the originals."""
+    values = _inputs(tmp_path / "my dir & co", entry="run entry.py", config="job file.conf",
+                     work="work dir", python="py thon.exe")
+    text = _render(values)
+    assert re.findall(r"&(?!amp;|lt;|gt;|quot;)", text) == []
+    assert "&amp;" in text
+    root = ET.fromstring(text)
+    action = _child_texts(root.find(_ns("Actions") + "/" + _ns("Exec")))
+    assert action["Command"] == '"%s"' % values["python_exe"]
+    assert action["WorkingDirectory"] == values["work_dir"]
+    assert action["Arguments"] == '-X utf8 "%s" run --config "%s"' % (values["entry_script"], values["config_file"])
+    tokens = _split_arguments(action["Arguments"])
+    assert tokens[:4] == ["-X", "utf8", values["entry_script"], "run"]
+    parsed = launcher.build_parser().parse_args(tokens[3:])
+    assert (parsed.mode, parsed.config) == ("run", values["config_file"])
+    # An interpreter path without a space is not quoted.
+    plain = _inputs(tmp_path / "plain")
+    action = _child_texts(ET.fromstring(_render(plain)).find(_ns("Actions") + "/" + _ns("Exec")))
+    assert action["Command"] == plain["python_exe"]
+
+
+def test_render_refuses_unsafe_or_unquotable_values(tmp_path):
+    """Relative, missing, unquotable, URL-shaped and badly timed values and a lone --allow-placeholder are refused."""
+    good = _inputs(tmp_path / "zq_marker_dir")
+    marker = "zq_marker_dir"
+    arguments = ("python_exe", "entry_script", "config_file", "work_dir")
+
+    def refused(bad, argument, word, **flags):
+        values = dict(good, **bad)
+        with pytest.raises(taskxml.TaskXmlError) as info:
+            _render(values, **flags)
+        message = str(info.value)
+        assert info.value.argument == argument, (bad, message)
+        assert word in message, (bad, message)
+        assert marker not in message, "the message must not repeat the value"
+        return message
+
+    # Relative paths (also with check_exists False), and a missing or empty value.
+    for argument in arguments:
+        refused({argument: "rel/path"}, argument, "absolute", check_exists=False)
+        refused({argument: "rel/path"}, argument, "absolute")
+        refused({argument: ""}, argument, "empty")
+        refused({argument: None}, argument, "empty")
+        missing = os.path.join(good[argument], "nothing_here") if argument == "work_dir" else good[argument] + ".missing"
+        refused({argument: missing}, argument, "exist")
+        with_flag_off = _render(dict(good, **{argument: missing}), check_exists=False)
+        assert "@@" not in with_flag_off
+
+    # Characters that cannot be quoted safely or that the scheduler might expand.
+    characters = [('"', "double quote"), ("\n", "line break"), ("\r", "line break"), ("<", "angle bracket"),
+                  (">", "angle bracket"), ("%", "percent sign"), ("\t", "control character"),
+                  ("@@", "at-sign pair")]
+    for argument in arguments:
+        for char, word in characters:
+            refused({argument: good[argument] + char + "x"}, argument, word, check_exists=False)
+        refused({argument: good[argument] + "x://y"}, argument, "URL", check_exists=False)
+        refused({argument: "https://example.invalid/c.conf"}, argument, "URL")
+    for argument in ("python_exe", "entry_script", "config_file"):
+        refused({argument: good[argument] + "\\"}, argument, "backslash", check_exists=False)
+    # A real file whose name holds a percent sign is refused with the file existing.
+    pct = _inputs(tmp_path / "pct", config="a%b.conf")
+    refused(dict(pct, work_dir=good["work_dir"]), "config_file", "percent sign")
+    # An ampersand is allowed.
+    assert "&amp;" in _render(_inputs(tmp_path / "x & y"))
+
+    # Start boundary: exactly YYYY-MM-DDTHH:MM:SS and a real date.
+    for bad in ("2026-11-02 10:15:00", "2026-11-02T10:15", "2026-13-02T10:15:00", "2026-11-02T25:15:00",
+                "2026-11-02T10:15:00Z", "tomorrow", "", "2026-11-02T10:15:00<"):
+        with pytest.raises(taskxml.TaskXmlError) as info:
+            _render(good, start=bad)
+        assert info.value.argument == "start_boundary" and "YYYY" in str(info.value)
+
+    # --allow-placeholder only together with --dry-run, in the renderer and in build_arguments.
+    with pytest.raises(taskxml.TaskXmlError) as info:
+        _render(good, allow_placeholder=True)
+    assert info.value.argument == "allow_placeholder" and "dry_run" in str(info.value)
+    with pytest.raises(taskxml.TaskXmlError):
+        taskxml.build_arguments(good["entry_script"], good["config_file"], allow_placeholder=True)
+    assert "--allow-placeholder" in _render(good, dry_run=True, allow_placeholder=True)
+
+
+def test_render_dry_run_arguments_parse_with_the_launcher(tmp_path):
+    """--dry-run and --allow-placeholder reach the launcher's parser; a lone --allow-placeholder is refused at run time, not at parse time."""
+    values = _inputs(tmp_path / "dry")
+    for flags, expected in (({"dry_run": True}, (True, False)),
+                            ({"dry_run": True, "allow_placeholder": True}, (True, True)),
+                            ({}, (False, False))):
+        root = ET.fromstring(_render(values, **flags))
+        arguments = root.find(_ns("Actions") + "/" + _ns("Exec") + "/" + _ns("Arguments")).text
+        tokens = _split_arguments(arguments)
+        assert tokens[:3] == ["-X", "utf8", values["entry_script"]]
+        parsed = launcher.build_parser().parse_args(tokens[3:])
+        assert (parsed.mode, parsed.config) == ("run", values["config_file"])
+        assert (parsed.dry_run, parsed.allow_placeholder) == expected
+    assert taskxml.build_arguments(values["entry_script"], values["config_file"], True, True).endswith(
+        " --dry-run --allow-placeholder")
+
+    # The parser takes --allow-placeholder alone; the run refuses it with exit 2 before reading any config or loading psspy.
+    parsed = launcher.build_parser().parse_args(["run", "--config", values["config_file"], "--allow-placeholder"])
+    assert parsed.allow_placeholder is True and parsed.dry_run is False
+    loaded = []
+    err = io.StringIO()
+    code = launcher.main(["run", "--config", values["config_file"], "--allow-placeholder"],
+                         lambda cfg: loaded.append(cfg), out=io.StringIO(), err=err)
+    assert code == 2 and loaded == []
+    assert "--allow-placeholder" in err.getvalue()
+
+
+def test_render_leaves_no_placeholder_and_is_deterministic(tmp_path):
+    """No token is left, the same inputs give the same text, and a backslash in a value is copied literally."""
+    values = _inputs(tmp_path / "det")
+    first = _render(values)
+    assert first == _render(values)
+    assert "@@" not in first
+    assert first != _render(values, start="2026-11-02T11:15:00")
+    odd = os.path.join(str(tmp_path), "w\\1\\x41\\k")
+    crlf = _template_text().replace("\n", "\r\n")
+    assert taskxml.render(crlf, values["python_exe"], values["entry_script"], values["config_file"],
+                          values["work_dir"], START) == first
+    text = taskxml.render(_template_text(), values["python_exe"], values["entry_script"], values["config_file"],
+                          odd, START, check_exists=False)
+    assert "<WorkingDirectory>%s</WorkingDirectory>" % odd in text
+    assert ET.fromstring(text) is not None
+    assert not text.encode("utf-8").startswith(b"\xef\xbb\xbf")
+    with pytest.raises(taskxml.TaskXmlError):
+        taskxml.render("<Task>@@NOT_A_PLACEHOLDER@@</Task>", values["python_exe"], values["entry_script"],
+                       values["config_file"], values["work_dir"], START)
+    with pytest.raises(taskxml.TaskXmlError):
+        taskxml.render("<Task>@@PYTHON_EXE@@</Task>", values["python_exe"], values["entry_script"],
+                       values["config_file"], values["work_dir"], START)
+
+
+def test_next_start_boundary_is_the_next_quarter_past():
+    """The default start is the next time the local clock reads the minute, strictly after now; the minute is 0 to 59."""
+    at = datetime.datetime
+    assert taskxml.next_start_boundary(at(2026, 11, 2, 10, 20), 15) == "2026-11-02T11:15:00"
+    assert taskxml.next_start_boundary(at(2026, 11, 2, 10, 10), 15) == "2026-11-02T10:15:00"
+    assert taskxml.next_start_boundary(at(2026, 11, 2, 10, 15), 15) == "2026-11-02T11:15:00"
+    assert taskxml.next_start_boundary(at(2026, 11, 2, 10, 14, 59), 15) == "2026-11-02T10:15:00"
+    assert taskxml.next_start_boundary(at(2026, 11, 2, 10, 15, 0, 1), 15) == "2026-11-02T11:15:00"
+    assert taskxml.next_start_boundary(at(2026, 11, 2, 23, 30), 15) == "2026-11-03T00:15:00"
+    assert taskxml.next_start_boundary(at(2026, 12, 31, 23, 30), 15) == "2027-01-01T00:15:00"
+    assert taskxml.next_start_boundary(at(2026, 11, 2, 10, 20), 0) == "2026-11-02T11:00:00"
+    assert taskxml.next_start_boundary(at(2026, 11, 2, 10, 20), 59) == "2026-11-02T10:59:00"
+    assert taskxml.next_start_boundary(at(2026, 11, 2, 10, 20)) == "2026-11-02T11:15:00"
+    for bad in (-1, 60, 99, "15", None, 15.5, True):
+        with pytest.raises(taskxml.TaskXmlError):
+            taskxml.next_start_boundary(at(2026, 11, 2, 10, 20), bad)
+
+
+def _run_script(arguments, cwd):
+    return subprocess.run([sys.executable, "-I", "-B", RENDER_SCRIPT] + arguments, cwd=str(cwd),
+                          stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=TIMEOUT)
+
+
+def test_render_script_writes_utf8_and_refuses_overwrite(tmp_path):
+    """The install command writes UTF-8 without a byte-order mark, refuses to overwrite without --force and names a refused option."""
+    values = _inputs(tmp_path / "zq_marker_dir")
+    out = tmp_path / "filled.xml"
+    base = ["--config", values["config_file"], "--work-dir", values["work_dir"], "--entry", values["entry_script"],
+            "--out", str(out), "--python", values["python_exe"]]
+
+    done = _run_script(base + ["--start", START], tmp_path)
+    assert done.returncode == 0, done.stderr
+    data = out.read_bytes()
+    assert data.startswith(b"<?xml") and not data.startswith(b"\xef\xbb\xbf")
+    assert b"\r" not in data
+    text = data.decode("utf-8")
+    assert "@@" not in text
+    root = ET.fromstring(text)
+    assert root.find(_ns("Triggers") + "/" + _ns("TimeTrigger") + "/" + _ns("StartBoundary")).text == START
+    arguments = root.find(_ns("Actions") + "/" + _ns("Exec") + "/" + _ns("Arguments")).text
+    assert arguments == '-X utf8 "%s" run --config "%s"' % (values["entry_script"], values["config_file"])
+
+    # An existing output file is not overwritten without --force.
+    again = _run_script(base + ["--start", "2026-11-03T10:15:00"], tmp_path)
+    assert again.returncode == 2
+    assert out.read_bytes() == data
+    lines = [line for line in again.stderr.decode("utf-8").splitlines() if line.strip()]
+    assert len(lines) == 1 and "--force" in lines[0]
+    forced = _run_script(base + ["--start", "2026-11-03T10:15:00", "--force"], tmp_path)
+    assert forced.returncode == 0, forced.stderr
+    assert b"2026-11-03T10:15:00" in out.read_bytes() and out.read_bytes() != data
+
+    # The smoke task: --dry-run with --allow-placeholder; the second flag alone is refused.
+    smoke = _run_script(base[:-2] + ["--python", values["python_exe"], "--dry-run", "--allow-placeholder", "--force"],
+                        tmp_path)
+    assert smoke.returncode == 0, smoke.stderr
+    assert out.read_text(encoding="utf-8").count("--allow-placeholder") == 1
+    lone = _run_script(base + ["--allow-placeholder", "--force"], tmp_path)
+    assert lone.returncode == 2 and "--allow-placeholder" in lone.stderr.decode("utf-8")
+
+    # A relative path exits 2 with one line that names the option and not the value.
+    fresh = tmp_path / "fresh.xml"
+    relative = _run_script(["--config", "rel_marker.conf", "--work-dir", values["work_dir"], "--out", str(fresh),
+                            "--entry", values["entry_script"], "--python", values["python_exe"]], tmp_path)
+    assert relative.returncode == 2 and not fresh.exists()
+    lines = [line for line in relative.stderr.decode("utf-8").splitlines() if line.strip()]
+    assert len(lines) == 1 and "--config" in lines[0] and "rel_marker" not in lines[0]
+
+    # The default interpreter and entry script are this one and the committed script; --start and --minute exclude each other.
+    default = _run_script(["--config", values["config_file"], "--work-dir", values["work_dir"],
+                           "--out", str(tmp_path / "default.xml"), "--minute", "30"], tmp_path)
+    assert default.returncode == 0, default.stderr
+    default_text = (tmp_path / "default.xml").read_text(encoding="utf-8")
+    assert os.path.join(_BACKEND, "psse_run_hourly.py") in default_text.replace("&amp;", "&")
+    assert re.search(r"<StartBoundary>\d{4}-\d\d-\d\dT\d\d:30:00</StartBoundary>", default_text)
+    both = _run_script(base + ["--start", START, "--minute", "5", "--force"], tmp_path)
+    assert both.returncode == 2
