@@ -83,12 +83,12 @@ the third needs Phase 6 live, Power Systems' case file and the laptop.
   4. A setup guide for the laptop (PSS/E and Python versions, credentials, Task Scheduler entry) lets someone else install the job and start the hourly runs.
 
 **Plans**: 8 plans (6 waves, run one plan after another in one working tree: 01, 02 and 03 in wave 1, then 04, then 05 (it needs 04 committed), then 06, then 07, then 08; 01 to 06 are built and tested on the Mac, 07 and 08 are human checklists that need the laptop, then Phase 6, the real case and the mapping)
-- [ ] 03-01-PLAN.md — Launcher core: configuration file outside the repository, OS-released run lock, database preflight, exit codes, dry-run; the fake `psspy` through `run_once` into local Postgres
-- [ ] 03-02-PLAN.md — Gap check: one SQL statement for the hours with no complete run, a read-only wrapper, tested against an independent reference
-- [ ] 03-03-PLAN.md — Credential proof: the writer role and the publishable key checked from the catalog and by refused statements, planted-fault tests, an opt-in rolled-back write proof
-- [ ] 03-04-PLAN.md — Entry script that alone imports `psspy`, selftest, probe, hold-lock, and the gaps and credcheck commands
-- [ ] 03-05-PLAN.md — Task Scheduler XML template (no overlap, 45-minute limit, no secrets) with a safe renderer and structure tests
-- [ ] 03-06-PLAN.md — Setup guide and laptop runbook with drift gates; every runbook command rehearsed on fakes and local Postgres
+- [x] 03-01-PLAN.md — Launcher core: configuration file outside the repository, OS-released run lock, database preflight, exit codes, dry-run; the fake `psspy` through `run_once` into local Postgres
+- [x] 03-02-PLAN.md — Gap check: one SQL statement for the hours with no complete run, a read-only wrapper, tested against an independent reference
+- [x] 03-03-PLAN.md — Credential proof: the writer role and the publishable key checked from the catalog and by refused statements, planted-fault tests, an opt-in rolled-back write proof
+- [x] 03-04-PLAN.md — Entry script that alone imports `psspy`, selftest, probe, hold-lock, and the gaps and credcheck commands
+- [x] 03-05-PLAN.md — Task Scheduler XML template (no overlap, 45-minute limit, no secrets) with a safe renderer and structure tests
+- [x] 03-06-PLAN.md — Setup guide and laptop runbook with drift gates; every runbook command rehearsed on fakes and local Postgres
 - [ ] 03-07-PLAN.md — Laptop session A (human): versions, psycopg wheelhouse after a legitimacy check, selftest, probe, dry-run on an example case, three hourly dry-runs
 - [ ] 03-08-PLAN.md — Live session (human): credential proof, real-case review, one proof write with read-back behind a decision, the real hourly task behind a second decision, gap check, final guide edit
 
@@ -101,4 +101,4 @@ Phases execute in numeric order: 1 → 2 → 3
 |-------|----------------|--------|-----------|
 | 1. Result-Table Spec and Rating I/O | 5/5 | In Progress | - |
 | 2. Study on Power Systems' Case | 7/7 | In Progress | - |
-| 3. Laptop Run and Handover | 0/8 | Not started | - |
+| 3. Laptop Run and Handover | 6/8 | In Progress | - |
