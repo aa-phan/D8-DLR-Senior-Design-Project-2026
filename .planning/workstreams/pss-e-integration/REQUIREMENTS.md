@@ -33,21 +33,21 @@ requirements state what must be true, not how; `psspy` API choices are theirs.
   missing, older than 90 minutes, or provisional, the job uses the city's static rating instead
   and records that it did. (Until production-pipeline Phase 7's go lifts the provisional label,
   this means studies run on static ratings.)
-- [ ] **IN-02**: The city-to-branch mapping supplied by Power Systems is stored as
+- [x] **IN-02**: The city-to-branch mapping supplied by Power Systems is stored as
   configuration. If any mapped branch is missing from the case, the run is recorded as failed
   and no study results are written.
-- [ ] **IN-03**: Ratings are converted to the units PSS/E's branch rating expects with the
+- [x] **IN-03**: Ratings are converted to the units PSS/E's branch rating expects with the
   conversion stated and tested (amps to MVA at the branch's voltage).
 
 ### Study
 
-- [ ] **STU-01**: A load flow runs on Power Systems' case with the ratings applied. A load flow
+- [x] **STU-01**: A load flow runs on Power Systems' case with the ratings applied. A load flow
   that does not converge is recorded as a failed run, never written as valid results.
-- [ ] **STU-02**: N-1 contingency screening runs; for each contingency, thermal overloads and
+- [x] **STU-02**: N-1 contingency screening runs; for each contingency, thermal overloads and
   voltage violations are recorded with the element, the limit, and the amount by which it was
   exceeded.
-- [ ] **STU-03**: A voltage-stability margin is computed for each city.
-- [ ] **STU-04**: Dispatched capacity per city is recorded as the lower of the applied DLR
+- [x] **STU-03**: A voltage-stability margin is computed for each city.
+- [x] **STU-04**: Dispatched capacity per city is recorded as the lower of the applied DLR
   rating and the voltage-stability limit, in amps and MW, with which of the two set it.
 
 ### Write-back
@@ -67,7 +67,7 @@ requirements state what must be true, not how; `psspy` API choices are theirs.
 
 ### Verification
 
-- [ ] **TST-01**: Tests on the Mac against a fake `psspy` cover static fallback, the mapping
+- [x] **TST-01**: Tests on the Mac against a fake `psspy` cover static fallback, the mapping
   check, a non-converging load flow, and write-back (including a failed run).
 - [ ] **TST-02**: One real end-to-end run on the laptop against Power Systems' case writes a
   run record and results that can be read back from the database.
@@ -97,13 +97,13 @@ requirements state what must be true, not how; `psspy` API choices are theirs.
 | IN-01 | Phase 1 | Complete |
 | WB-01 | Phase 1 | Complete |
 | WB-02 | Phase 1 | Complete |
-| IN-02 | Phase 2 | Pending |
-| IN-03 | Phase 2 | Pending |
-| STU-01 | Phase 2 | Pending |
-| STU-02 | Phase 2 | Pending |
-| STU-03 | Phase 2 | Pending |
-| STU-04 | Phase 2 | Pending |
-| TST-01 | Phase 2 | Pending |
+| IN-02 | Phase 2 | Complete |
+| IN-03 | Phase 2 | Complete |
+| STU-01 | Phase 2 | Complete |
+| STU-02 | Phase 2 | Complete |
+| STU-03 | Phase 2 | Complete |
+| STU-04 | Phase 2 | Complete |
+| TST-01 | Phase 2 | Complete |
 | DBX-02 | Phase 3 | Pending |
 | TST-02 | Phase 3 | Pending |
 | SCH-01 | Phase 3 | Pending |

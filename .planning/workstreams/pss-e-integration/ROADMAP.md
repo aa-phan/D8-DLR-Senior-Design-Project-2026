@@ -62,14 +62,14 @@ the third needs Phase 6 live, Power Systems' case file and the laptop.
   3. A converged run records, for each contingency, thermal overloads and voltage violations with the element, the limit and the amount exceeded; a voltage-stability margin per city; and per-city dispatched capacity (the lower of the applied DLR rating and the voltage-stability limit, in amps and MW, saying which one set it).
   4. The Mac test suite against a fake `psspy` passes, covering static fallback, the mapping check, a non-converging load flow, and write-back including a failed run.
 
-**Plans**: 7 plans (5 waves: 01 and 02 parallel, then 03, then 04 and 05 parallel, then 06, then 07)
-- [ ] 02-01-PLAN.md — Mapping file and study settings: validated JSON configuration, placeholder example with fake 9xxxx buses, real files git-ignored
-- [ ] 02-02-PLAN.md — `psspy` adapter with the SURFACE table, the convergence rule and the case-file guard; fake `psspy` and placeholder case
-- [ ] 02-03-PLAN.md — Study base: mapping check before any write, ratings in MVA at the case's kV with read-back, base load flow, private temp copy
-- [ ] 02-04-PLAN.md — N-1 branch-outage screen: thermal and voltage violations with element, limit and amount exceeded
-- [ ] 02-05-PLAN.md — Voltage-stability margin per city and dispatched capacity (lower of DLR rating and voltage limit, amps and MW)
-- [ ] 02-06-PLAN.md — Whole study through `run_once` into local Postgres with the fake `psspy`: complete runs and recorded failed runs
-- [ ] 02-07-PLAN.md — Laptop probe for Phase 3, study-definitions note, questions for the user and Power Systems
+**Plans**: 7/7 plans executed (5 waves: 01 and 02 parallel, then 03, then 04 and 05 parallel, then 06, then 07)
+- [x] 02-01-PLAN.md — Mapping file and study settings: validated JSON configuration, placeholder example with fake 9xxxx buses, real files git-ignored
+- [x] 02-02-PLAN.md — `psspy` adapter with the SURFACE table, the convergence rule and the case-file guard; fake `psspy` and placeholder case
+- [x] 02-03-PLAN.md — Study base: mapping check before any write, ratings in MVA at the case's kV with read-back, base load flow, private temp copy
+- [x] 02-04-PLAN.md — N-1 branch-outage screen: thermal and voltage violations with element, limit and amount exceeded
+- [x] 02-05-PLAN.md — Voltage-stability margin per city and dispatched capacity (lower of DLR rating and voltage limit, amps and MW)
+- [x] 02-06-PLAN.md — Whole study through `run_once` into local Postgres with the fake `psspy`: complete runs and recorded failed runs
+- [x] 02-07-PLAN.md — Laptop probe for Phase 3, study-definitions note, questions for the user and Power Systems
 
 ### Phase 3: Laptop Run and Handover
 
@@ -92,5 +92,5 @@ Phases execute in numeric order: 1 → 2 → 3
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Result-Table Spec and Rating I/O | 5/5 | In Progress | - |
-| 2. Study on Power Systems' Case | 0/7 | Not started | - |
+| 2. Study on Power Systems' Case | 7/7 | In Progress | - |
 | 3. Laptop Run and Handover | 0/TBD | Not started | - |
