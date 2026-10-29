@@ -8,6 +8,11 @@ insert into and select from the four result tables and holds nothing else: six c
 nothing on any other relation of schema public, no executable SECURITY DEFINER function in
 public) and seven statements that must be refused with SQLSTATE 42501.
 
+The REST leg, `rest_checks`, is the other half of DBX-02: the publishable key reads ratings through
+the job's own fetch_latest_rating, and a PATCH and a DELETE of city_rating with a filter that
+matches no row are refused with 401 or 403 (a 2xx fails, any other status fails as inconclusive,
+and no write attempt is sent unless the read succeeded).
+
 Safe by construction. The catalog checks only read. Every active statement is a where-false
 statement run inside a transaction that is forced to roll back, so a credential that is too
 powerful still changes no row. Only SQLSTATE 42501 counts as a refusal: any other error (a
@@ -28,6 +33,14 @@ the same way there (verified for PostgreSQL 18.6 only).
 """
 
 import collections
+import http.client
+import json
+import os
+import urllib.error
+import urllib.request
+
+from psse_job import constants, ratings
+from psse_job.redaction import env_secrets, redact
 
 PASS = "PASS"
 FAIL = "FAIL"
@@ -94,15 +107,17 @@ _DEFINER_SQL = (
 _VERSION_SQL = "select current_setting('server_version_num')::int"
 
 # Statement checks: each must be refused with 42501. All are where-false, so even a credential that
-# is allowed to run them changes no row, and each runs in a transaction forced to roll back.
+# is allowed to run them changes no row, and each runs in a transaction forced to roll back. Each
+# statement needs exactly ONE privilege: an UPDATE that read a column (`set c = c`) or an
+# insert-select would also need SELECT, and a role lacking that SELECT would be refused with 42501
+# for the wrong reason, hiding a planted UPDATE or INSERT grant.
 REFUSED_STATEMENTS = (
-    ("refused:select_city_rating", "select * from public.city_rating where false"),
-    ("refused:insert_city_rating",
-     "insert into public.city_rating (city) select city from public.city_rating where false"),
-    ("refused:update_city_rating", "update public.city_rating set rating_amps = rating_amps where false"),
+    ("refused:select_city_rating", "select 1 from public.city_rating where false"),
+    ("refused:insert_city_rating", "insert into public.city_rating (city) select 'AUSTIN' where false"),
+    ("refused:update_city_rating", "update public.city_rating set rating_amps = 1 where false"),
     ("refused:delete_city_rating", "delete from public.city_rating where false"),
-    ("refused:select_pipeline_run", "select * from public.pipeline_run where false"),
-    ("refused:update_psse_run", "update public.psse_run set job_version = job_version where false"),
+    ("refused:select_pipeline_run", "select 1 from public.pipeline_run where false"),
+    ("refused:update_psse_run", "update public.psse_run set job_version = 'credcheck' where false"),
     ("refused:delete_psse_run", "delete from public.psse_run where false"),
 )
 
@@ -251,4 +266,90 @@ def role_checks(conn):
     ]
     for check, statement in REFUSED_STATEMENTS:
         rows.append(_refusal(conn, check, statement))
+    return rows
+
+
+# --------------------------------------------------------------------------- REST leg
+
+# A filter no row matches (city_rating.city has a CHECK that allows four values only), so even a key
+# that is wrongly allowed to write changes no row.
+_ZERO_MATCH = "/rest/v1/city_rating?city=eq.__no_such_city__"
+_ZERO_MATCH_BODY = {"rating_amps": 1}
+_WRITE_CHECKS = (
+    ("rest:patch_city_rating_refused", "PATCH", _ZERO_MATCH_BODY),
+    ("rest:delete_city_rating_refused", "DELETE", None),
+)
+_REST_TIMEOUT = 30
+
+
+def _send_write(method, url, key, body, opener):
+    """
+    Send one write attempt with the publishable key in the apikey header only. Returns
+    (HTTP status, None), or (None, exception class name) when no status came back.
+    """
+    headers = {"apikey": key, "Accept": "application/json", "User-Agent": constants.USER_AGENT}
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(url, data=data, headers=headers, method=method)
+    opener = urllib.request.urlopen if opener is None else opener
+    status = None
+    failure = None
+    try:
+        response = opener(request, timeout=_REST_TIMEOUT)
+        try:
+            status = getattr(response, "status", None)
+            if status is None:
+                status = response.getcode()
+        finally:
+            closer = getattr(response, "close", None)
+            if closer is not None:
+                closer()
+    except urllib.error.HTTPError as exc:
+        status = exc.code
+    except (urllib.error.URLError, OSError, http.client.HTTPException, ValueError) as exc:
+        failure = type(exc).__name__
+    return status, failure
+
+
+def _judge_write(check, status, failure):
+    """401 or 403 passes; a 2xx means the key may write; anything else proves nothing."""
+    if status in (401, 403):
+        return CheckRow(check, PASS, "refused with HTTP %d" % status)
+    if status is not None and 200 <= status < 300:
+        return CheckRow(check, FAIL, "the key was allowed to change city_rating (HTTP %d)" % status)
+    if status is not None:
+        return CheckRow(check, FAIL, "inconclusive: HTTP %d" % status)
+    return CheckRow(check, FAIL, "inconclusive: no HTTP status (%s)" % failure)
+
+
+def rest_checks(env, opener=None):
+    """
+    The REST leg: the publishable key reads ratings through the job's own fetch_latest_rating (so its
+    key and URL guards apply: no secret or service_role key, https or loopback), then a PATCH and a
+    DELETE of city_rating with a filter that matches no row must be refused with 401 or 403. No write
+    attempt is sent unless the read succeeded. Returns three CheckRow: rest:read_ratings and the two
+    write checks (SKIP when not sent). `env` holds SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY; `opener`
+    is the urlopen seam. Neither value is ever returned.
+    """
+    env = os.environ if env is None else env
+    count = None
+    failure = None
+    try:
+        count = len(ratings.fetch_latest_rating(env, opener=opener))
+    except Exception as exc:  # noqa: BLE001 - reported below as redacted text
+        failure = redact(str(exc), env_secrets(env), constants.ERROR_MAX_CHARS) or type(exc).__name__
+    if failure is not None:
+        rows = [CheckRow("rest:read_ratings", FAIL, failure)]
+        for check, _method, _body in _WRITE_CHECKS:
+            rows.append(CheckRow(check, SKIP, "not sent: the ratings read did not succeed"))
+        return rows
+
+    rows = [CheckRow("rest:read_ratings", PASS, "%d rows read through latest_rating" % count)]
+    base = str(env.get(constants.ENV_SUPABASE_URL)).strip().rstrip("/")
+    key = str(env.get(constants.ENV_PUBLISHABLE_KEY)).strip()
+    for check, method, body in _WRITE_CHECKS:
+        status, failed = _send_write(method, base + _ZERO_MATCH, key, body, opener)
+        rows.append(_judge_write(check, status, failed))
     return rows
