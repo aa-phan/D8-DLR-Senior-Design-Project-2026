@@ -1,7 +1,6 @@
-# Ampacity Sensitivity Findings (Phase 2, PROV-05) — draft
+# Ampacity Sensitivity Findings (Phase 2, PROV-05)
 
-**Run:** 2026-10-29, `phase2/ieee_sensitivity.py` (output in `phase2/out/`). **Status:** draft for owner review. This note
-reports measurements. It does not record the freeze decision and does not yet say whether any model artifact must be
+**Run:** 2026-10-29, `phase2/ieee_sensitivity.py` (output in `phase2/out/` ). **Status:** This note reports measurements. It does not record the freeze decision and does not yet say whether any model artifact must be
 refit (see "What this does not settle").
 
 ## 1. What was measured
@@ -15,8 +14,7 @@ per-city config from `config.conductor_kwargs_for`, solar altitude 45° as `DLRS
 | Bearing | Line azimuth 0–175° in 5° steps, against the assigned placeholder (`CITY_LINE_BEARING_DEG`: Austin and Corpus Christi 173.15°, Midland and El Paso 267.54°), at 75 °C | Same 100 hours | `sensitivity_bearing_75C.csv` |
 | Bounds and static ratings | Current G4 bounds vs the old Project Definition ranges vs subconductor count ±1, at 75 and 100 °C | Full 2025 year, 8,760 hours per city | `sensitivity_bounds_2025.csv` |
 
-**Data.** Open-Meteo archive hourly values for 2025 at each city's coordinates (`phase2/fetch_dev_weather.py`). This is
-development data, before the 2026-09-29 anti-peeking cutoff; no FRESH outcome data was read. Sample hours were chosen by
+**Data.** Open-Meteo archive hourly values for 2025 at each city's coordinates (`phase2/fetch_dev_weather.py`). Sample hours were chosen by
 `phase2/pick_samples.py` into five cases (hot calm, median day, breezy cool, perpendicular wind, parallel wind), five hours
 per case per city, at least 14 days apart, listed in `phase2/samples_5_per_case.csv`.
 
@@ -153,10 +151,7 @@ Share of 2025 hours in which the computed rating falls outside the G4 band and w
    in the same message.
 4. **Treat the static ratings and G4 bounds as the biggest driver of fallback behaviour**, and keep them labelled provisional wherever
    they appear until the counts are confirmed.
-5. **The current Austin and Midland fallback rates (32% and 17% at 75 °C) are a consequence of the bounds, not of weather data
-   quality.** Whether to widen the bounds, change the count, or accept them is an owner decision; the old Project Definition ranges
-   would keep both under 1%.
-6. **Add elevation to the list of inputs to confirm.** `elevation_m` is 900 m for every city, but the station metadata
+5. **Add elevation to the list of inputs to confirm.** `elevation_m` is 900 m for every city, but the station metadata
    implies roughly 80–140 m for Austin and near sea level for Corpus Christi. It was not swept here, but it affects air density.
 
 ## 5. What this does not settle
