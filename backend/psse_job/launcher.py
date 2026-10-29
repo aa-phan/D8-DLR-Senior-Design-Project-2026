@@ -70,9 +70,11 @@ import os
 import re
 import socket
 import sys
+import time
 import urllib.parse
 
-from psse_job import constants, contract, job, probe, psse_api, ratings, run_record, study, writer
+from psse_job import (
+    constants, contract, job, mapping, probe, psse_api, ratings, run_record, study, writer)
 from psse_job.lock import RunLock
 from psse_job.redaction import env_secrets, redact
 
@@ -339,8 +341,22 @@ class _Parser(argparse.ArgumentParser):
         raise _UsageExit(status)
 
 
+DEFAULT_HOLD_SECONDS = 60
+MAX_HOLD_SECONDS = 600
+
+
+def _seconds_argument(text):
+    """A whole number of seconds from 1 to MAX_HOLD_SECONDS (an argparse type; never echoes the value)."""
+    if not _WHOLE_RE.match(text) or not 1 <= int(text) <= MAX_HOLD_SECONDS:
+        raise argparse.ArgumentTypeError("must be a whole number from 1 to %d" % MAX_HOLD_SECONDS)
+    return int(text)
+
+
 def build_parser():
-    """The command line: `run --config FILE [--dry-run] [--allow-placeholder]` (more modes: plan 03-04)."""
+    """
+    The command line: `run`, `selftest`, `probe` and `hold-lock`, each with --config FILE
+    (see the subcommands for their options).
+    """
     parser = _Parser(prog="psse-job", allow_abbrev=False,
                      description="Hourly PSS/E job launcher (settings come from the config file only).")
     modes = parser.add_subparsers(dest="mode", metavar="mode")
@@ -355,6 +371,23 @@ def build_parser():
         "selftest", allow_abbrev=False,
         help="start PSS/E from the configured folder and report the interpreter, version and launch functions")
     selftest.add_argument("--config", required=True, metavar="FILE", help="the configuration file")
+    probe_parser = modes.add_parser(
+        "probe", allow_abbrev=False,
+        help="check the real psspy against the adapter's surface on the configured case (read only)")
+    probe_parser.add_argument("--config", required=True, metavar="FILE", help="the configuration file")
+    probe_parser.add_argument("--write-check", action="store_true", dest="write_check",
+                              help="also change a rating and a load in memory and reload the case (use a copy)")
+    probe_parser.add_argument("--show-identifiers", action="store_true", dest="show_identifiers",
+                              help="show bus numbers, circuit ids and error texts (never paste the output)")
+    probe_parser.add_argument("--allow-placeholder", action="store_true", dest="allow_placeholder",
+                              help="accept a placeholder mapping")
+    hold = modes.add_parser(
+        "hold-lock", allow_abbrev=False,
+        help="hold the run lock for a while, to show that an overlapping start exits 4")
+    hold.add_argument("--config", required=True, metavar="FILE", help="the configuration file")
+    hold.add_argument("--seconds", type=_seconds_argument, default=DEFAULT_HOLD_SECONDS, metavar="N",
+                      help="how long to hold the lock, 1 to %d (default %d)" % (
+                          MAX_HOLD_SECONDS, DEFAULT_HOLD_SECONDS))
     return parser
 
 
@@ -710,9 +743,59 @@ def _selftest_mode(args, cfg, deps):
     return EXIT_OK if probe.probe_ok(rows) else EXIT_CHECK_FAILED
 
 
-RUNNERS = {"run": _run_mode, "dry-run": _dry_run_mode, "selftest": _selftest_mode}
-# Modes that start PSS/E hold the run lock (D-04): plan 03-04 adds selftest, probe and hold-lock.
-LOCK_MODES = frozenset(["run", "dry-run", "selftest"])
+def _probe_mode(args, cfg, deps):
+    """
+    D-05: Phase 2's probe on the configured case (and mapping when PSSE_MAPPING_PATH is set). The
+    default report is probe.format_report unchanged, free of identifiers; --show-identifiers and
+    --write-check are explicit and each prints a notice first. Exit 0 when no row is a FAIL, else 6.
+    """
+    secrets = env_secrets(cfg)
+    if args.show_identifiers:
+        _say(deps.out, "notice: identifiers are shown below; this output may hold bus numbers, circuit "
+             "ids and error texts and must not be pasted into the repository, a chat or an issue", secrets)
+    if args.write_check:
+        _say(deps.out, "notice: the write check changes the loaded case in memory only and reloads it "
+             "from disk; the file is never saved. Use a copy of the case, not Power Systems' own file", secrets)
+    mapping_loaded = None
+    mapping_path = cfg.get("PSSE_MAPPING_PATH")
+    if mapping_path:
+        try:
+            mapping_loaded = mapping.load_mapping(mapping_path, args.allow_placeholder)
+        except mapping.MappingError as problem:
+            _say(deps.out, "mapping file not usable", secrets)
+            if args.show_identifiers:
+                _say(deps.out, "; ".join(problem.problems), secrets)
+            return EXIT_CHECK_FAILED
+    module = _start_report(deps, cfg, secrets)
+    if module is None:
+        return EXIT_CHECK_FAILED
+    rows = probe.run_probe(
+        module, cfg["PSSE_CASE_PATH"], mapping_loaded, args.write_check, args.show_identifiers)
+    for line in probe.format_report(rows).splitlines():
+        _say(deps.out, line, secrets)
+    return EXIT_OK if probe.probe_ok(rows) else EXIT_CHECK_FAILED
+
+
+def _hold_lock_mode(args, cfg, deps):
+    """
+    D-06: print `locked`, sleep one second at a time for --seconds (the lock is taken by main and
+    released by the operating system when this returns or the process dies), then exit 0. It lets
+    the laptop show that a start made meanwhile exits 4 (runbook step 6).
+    """
+    _say(deps.out, "locked", env_secrets(cfg))
+    for _ in range(args.seconds):
+        time.sleep(1)
+    return EXIT_OK
+
+
+RUNNERS = {
+    "run": _run_mode, "dry-run": _dry_run_mode, "selftest": _selftest_mode, "probe": _probe_mode,
+    "hold-lock": _hold_lock_mode,
+}
+# Modes that start PSS/E, and hold-lock, hold the run lock (D-04, D-06).
+LOCK_MODES = frozenset(["run", "dry-run", "selftest", "probe", "hold-lock"])
+# Modes that may take --allow-placeholder: a dry run and the probe write nothing (D-09).
+_PLACEHOLDER_MODES = frozenset(["dry-run", "probe"])
 
 
 def _mode_of(args):
@@ -732,8 +815,9 @@ def _main(argv, psspy_loader, out, err, clock, connect, fetch):
         _say(err, "usage error: %s" % problem.message, [])
         return EXIT_USAGE
     mode = _mode_of(args)
-    if getattr(args, "allow_placeholder", False) and mode != "dry-run":
-        _say(err, "usage error: --allow-placeholder is accepted only together with --dry-run", [])
+    if getattr(args, "allow_placeholder", False) and mode not in _PLACEHOLDER_MODES:
+        _say(err, "usage error: --allow-placeholder is accepted only together with --dry-run "
+             "(or with the probe command)", [])
         return EXIT_USAGE
 
     try:
