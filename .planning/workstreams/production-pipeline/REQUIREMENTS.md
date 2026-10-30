@@ -124,7 +124,7 @@ proposals.
   third-party packages).
 - [x] **E2E-01**: End to end, a cron-job.org trigger produces a workflow run, which produces new
   rows, which are visible through the REST API with matching values, for all four cities.
-- [ ] **E2E-02**: Live at any time: over a soak window of at least 72 h, querying `latest_rating`
+- [x] **E2E-02**: Live at any time: over a soak window of at least 72 h, querying `latest_rating`
   at any moment returns, for every city, a row whose `valid_time` is no older than one cadence
   interval plus a stated grace period. Every breach is explained.
 - [ ] **E2E-03**: Write protection: an anon-key request that tries to insert, update or delete is
@@ -225,7 +225,7 @@ proposals.
 | API-01 | Phase 6 | Pending |
 | API-02 | Phase 6 | Complete |
 | E2E-01 | Phase 6 | Complete |
-| E2E-02 | Phase 6 | Pending |
+| E2E-02 | Phase 6 | Complete |
 | E2E-03 | Phase 6 | Pending |
 | COND-01 | Phase 7 | Pending |
 | COND-02 | Phase 7 | Pending |

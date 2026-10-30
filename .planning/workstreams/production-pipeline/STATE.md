@@ -1,19 +1,19 @@
 ---
 gsd_state_version: "1.0"
 current_phase: 06
-current_plan: 12
+current_plan: 13
 status: executing
-stopped_at: Completed 06-11-PLAN.md
-last_updated: "2026-10-27T04:15:41.715Z"
+stopped_at: Completed 06-12-PLAN.md
+last_updated: "2026-10-30T07:16:33.216Z"
 last_activity: 2026-10-26
 last_activity_desc: Phase 06 execution started
-state_head: dd9fa40de956a7f80f17ecf15ad205647f830f27
+state_head: 632ed2ee7a15edb48357fcccc4b426e8385708a9
 progress:
   total_phases: 7
   completed_phases: 5
   total_plans: 66
-  completed_plans: 45
-  percent: 68
+  completed_plans: 46
+  percent: 70
 milestone_name: Production Pipeline (Supabase + live ratings)
 workstream: production-pipeline
 created: 2026-10-18
@@ -37,7 +37,7 @@ whoever owns that analysis; they are not work items here.
 
 **Status:** Ready to execute
 **Current Phase:** 06
-**Current Plan:** 12
+**Current Plan:** 13
 **Total Plans in Phase:** 13
 **Last Activity:** 2026-10-26 — Phase 06 execution started
 **Last Activity Description:** Phase 06 execution started
@@ -190,6 +190,7 @@ These block or affect stringing the system together and belong to the phases nam
 - [Phase 06]: 06-10: owner go; 72 h soak window G=2026-10-27T03:35:00Z, planned end 2026-10-30T03:35:00Z (after the D-09 2026-10-30T00:00Z target; not lengthened; 06-13 follows the window)
 - [Phase 06]: 06-10: alarm recovery (success-after-failure) email unproven; failure email proven; owner to check the notification setting
 - [Phase 06]: 06-11: supabase-js approved and installed at exactly 2.117.3 (scratch folder, --ignore-scripts); PSS/E interpreter question non-blocking, owner has not yet confirmed sending (follow-up, date TBD)
+- [Phase 06]: 06-12: soak accepted (72 h, 0 breaches, 864/864 probes); sign-off signalled by running the accept-only teardown; soak cron job removed, permanent freshness alarm stays on (D-13)
 
 ## Open Decisions
 
@@ -213,9 +214,9 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 
 ## Session Continuity
 
-**Last session:** 2026-10-27T04:15:41.382Z
+**Last session:** 2026-10-30T07:16:32.952Z
 
-**Stopped At:** Completed 06-11-PLAN.md
+**Stopped At:** Completed 06-12-PLAN.md
 **Resume File:** None
 
 ## Performance Metrics
@@ -264,6 +265,7 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 | Phase 06 P09 | owner-gated, ~15min executor | 3 tasks | 3 files |
 | Phase 06 P10 | 1 session | 3 tasks | 7 files |
 | Phase 06 P11 | 1 session | 3 tasks | 3 files |
+| Phase 06 P12 | 1 session | 3 tasks | 12 files |
 
 ## Accumulated Context
 
