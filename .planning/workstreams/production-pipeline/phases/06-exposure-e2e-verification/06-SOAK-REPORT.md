@@ -264,3 +264,11 @@ Discrepancies: **none in any write verdict.** The only two differences between t
 ## For the owner
 
 No unexplained breaches and no unexplained probe gaps. There is nothing to annotate. The only item for the owner in Task 3 is the sign-off ("accept" or "re-soak") and removing the 5-minute `dlr-soak-freshness` pg_cron job; the permanent cron-job.org alarm stays on.
+
+## Sign-off
+
+- **Owner decision:** accept. The owner signalled it by running the accept-only teardown `supabase/ops/soak_cron_unschedule.sql`; they did not type the word "accept" separately. The relayed decision is recorded as "accept, signalled by the owner running the accept-only teardown".
+- **Date:** 2026-10-30 (about 06:2xZ, after the final export and end-of-soak checks).
+- **Annotated run:** no breach and no probe gap exists, so there is nothing to annotate and no `annotations.json` was written (T-06-41: the executor writes no explanation). The report re-run without `--annotations` exits 0 with verdict pass and a `report.json` byte-identical to the committed one.
+- **Unschedule result:** the job `dlr-soak-freshness` was removed. The owner's output was `['unschedule'] (True,)` then `['remaining_jobs'] (0,)`, so 0 jobs remain.
+- **Kept on purpose (D-13):** `ops.freshness_log` keeps its rows as the frozen record with no new probes, and the permanent cron-job.org "DLR freshness alarm" was not touched. **The freshness alarm stays on permanently (D-13).**
