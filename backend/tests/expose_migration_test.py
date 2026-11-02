@@ -337,7 +337,8 @@ def test_live_label_is_provisional_offline():
         "would tell consumers that provisional rows are final")
     # Either label alone is enough, and a lifted pair is final.
     assert contract.is_provisional(config.RATING_BASIS, "v2-2026-11-01")
-    assert contract.is_provisional("Per-conductor amperes.", config.RATING_CONFIG_VERSION)
+    # (since v3 the live version label no longer carries the word; the live basis above still does)
+    assert contract.is_provisional("Per-conductor amperes.", "v2-provisional-2026-11-02")
     assert contract.is_provisional("PROVISIONAL (OD-5). Phase 3 backfill", "v2")
     assert not contract.is_provisional("Per-conductor amperes; values confirmed by Phase 7 re-validation.", "v2-2026-11-01")
     assert not contract.is_provisional(None, None)

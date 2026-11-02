@@ -1347,6 +1347,11 @@ def test_port_second_fresh_run_is_refused_even_after_a_first_run_that_crashed(mo
 
 
 def test_port_nondefault_block_lengths_in_a_fresh_run_are_refused_and_no_override_helps(monkeypatch, evidence_root, capsys, tmp_path):
+    # Isolate the block-length refusal from the conductor-basis pre-check: every city at the Drake point (AUSTIN's 100 C
+    # since v3 would otherwise be refused first for lacking refit artifacts in this synthetic world).
+    table = {c: dict(v) for c, v in config.PRODUCTION_CONDUCTORS.items()}
+    table["AUSTIN"]["max_temp_c"] = 75.0
+    monkeypatch.setattr(config, "PRODUCTION_CONDUCTORS", table)
     monkeypatch.setattr(core, "utcnow", lambda: pd.Timestamp(INSTANT))
     deciding = ["--vetoes", write_veto_file(tmp_path), "--protocol-status", "signed"]
     assert conf.main(["--evidence-root", evidence_root, *deciding, "--block-lengths", "1", "2"]) == 2

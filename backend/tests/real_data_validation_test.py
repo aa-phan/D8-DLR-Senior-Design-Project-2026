@@ -330,7 +330,7 @@ def test_computed_amps_expectation_follows_production_table(monkeypatch):
     before = float(real_data_validation.computed_amps("AUSTIN", 15.0, 3.0, 300.0))
 
     monkeypatch.setitem(
-        config.PRODUCTION_CONDUCTORS, "AUSTIN", {**config.PRODUCTION_CONDUCTORS["AUSTIN"], "max_temp_c": 100.0})
+        config.PRODUCTION_CONDUCTORS, "AUSTIN", {**config.PRODUCTION_CONDUCTORS["AUSTIN"], "max_temp_c": 125.0})   # AUSTIN holds 100 C since v3
     after_record = _record("AUSTIN", 0)
     after = float(real_data_validation.computed_amps("AUSTIN", 15.0, 3.0, 300.0))
 
@@ -530,7 +530,11 @@ def test_missing_input_exits_two_naming_the_path(tmp_path, capsys):
     assert not (tmp_path / "out").exists()
 
 
-def test_amps_round_to_one_decimal_and_rates_to_four(tmp_path):
+def test_amps_round_to_one_decimal_and_rates_to_four(tmp_path, monkeypatch):
+    # The expected figures are for AUSTIN at the model-default Drake 75 C; pin that point so this rounding test
+    # does not move with the live production table (AUSTIN holds 100 C since v3, which rates 1880.3 A here).
+    monkeypatch.setitem(
+        config.PRODUCTION_CONDUCTORS, "AUSTIN", {**config.PRODUCTION_CONDUCTORS["AUSTIN"], "max_temp_c": 75.0})
     # Three scored steps (hours 2-4): two ok (1614.9 A, below the 1825 A static) and one G4
     # fallback that reports exactly the static rating.
     records = [_record("AUSTIN", 0), _record("AUSTIN", 1), _record("AUSTIN", 2),

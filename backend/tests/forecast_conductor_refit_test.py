@@ -132,7 +132,8 @@ def _exact_count(frame: pd.DataFrame, upto=None) -> int:
 
 
 def _drake_point(city="AUSTIN"):
-    return city_point.production_city_point(city)
+    """The frozen Drake point (not the production point, which differs for AUSTIN since v3)."""
+    return city_point.city_point(city)
 
 
 # --------------------------------------------------------------------------
@@ -513,9 +514,24 @@ def test_headline_loader_checks_the_real_frozen_manifest_by_default_without_load
 # production_differs and the CLI
 # --------------------------------------------------------------------------
 
+@pytest.fixture
+def drake_parity_table(monkeypatch):
+    """Every city at the model-default Drake point (AUSTIN's max_temp_c back at 75 C), patched and never edited in
+    config.py: the table as it stood before the v3 Power Systems switch, for tests of the no-differing-city path."""
+    table = {c: dict(v) for c, v in config.PRODUCTION_CONDUCTORS.items()}
+    table["AUSTIN"]["max_temp_c"] = 75.0
+    monkeypatch.setattr(config, "PRODUCTION_CONDUCTORS", table)
+    return table
+
+
 @pytest.mark.parametrize("city", sorted(config.LOCATIONS))
-def test_production_differs_is_false_at_drake_parity(city):
+def test_production_differs_is_false_at_drake_parity(city, drake_parity_table):
     assert refit.production_differs(city) is False
+
+
+@pytest.mark.parametrize("city", sorted(config.LOCATIONS))
+def test_production_differs_only_for_austin_in_the_live_table(city):
+    assert refit.production_differs(city) is (city == "AUSTIN")
 
 
 def test_production_differs_sees_a_conductor_or_bearing_change(monkeypatch):
@@ -530,7 +546,7 @@ def test_production_differs_sees_a_conductor_or_bearing_change(monkeypatch):
         refit.production_differs("NOWHERE")
 
 
-def test_cli_refuses_a_parity_city_with_the_d10_message_and_makes_no_file(tmp_path, capsys):
+def test_cli_refuses_a_parity_city_with_the_d10_message_and_makes_no_file(tmp_path, capsys, drake_parity_table):
     rc = refit.main(["--cities", "AUSTIN", "--root", str(tmp_path)])
     captured = capsys.readouterr()
     assert rc == 2
@@ -540,7 +556,7 @@ def test_cli_refuses_a_parity_city_with_the_d10_message_and_makes_no_file(tmp_pa
     assert os.listdir(tmp_path) == []
 
 
-def test_cli_with_the_production_diff_flag_and_no_differing_city_exits_zero(tmp_path, capsys):
+def test_cli_with_the_production_diff_flag_and_no_differing_city_exits_zero(tmp_path, capsys, drake_parity_table):
     rc = refit.main(["--cities-from-production-diff", "--root", str(tmp_path)])
     assert rc == 0
     assert "no city differs from the frozen Drake configuration; nothing to refit (D-10)" in capsys.readouterr().out

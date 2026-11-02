@@ -1431,6 +1431,16 @@ def austin_100c(monkeypatch):
     return table
 
 
+@pytest.fixture
+def drake_parity_table(monkeypatch):
+    """Every city at the model-default Drake point (AUSTIN's max_temp_c back at 75 C), patched and never edited in
+    config.py: the table as it stood before the v3 Power Systems switch, for tests of the no-differing-city path."""
+    table = {c: dict(v) for c, v in config.PRODUCTION_CONDUCTORS.items()}
+    table["AUSTIN"]["max_temp_c"] = 75.0
+    monkeypatch.setattr(config, "PRODUCTION_CONDUCTORS", table)
+    return table
+
+
 def dev_run(evidence_root, stub_models, *, cities=None, loader=None, **kwargs):
     kwargs.setdefault("frame_provider", dev_provider)
     kwargs.setdefault("window", DEV_WINDOW)
@@ -1739,7 +1749,7 @@ def _vetoes_path(tmp_path):
 
 # --- conductor_basis ---
 
-def test_conductor_basis_at_parity_says_production_equals_drake_and_the_secondary_is_not_computed_twice():
+def test_conductor_basis_at_parity_says_production_equals_drake_and_the_secondary_is_not_computed_twice(drake_parity_table):
     basis = conf.conductor_basis(CITIES)
     assert basis["differing"] == [] and basis["config_version"] == config.RATING_CONFIG_VERSION
     assert "Drake" in basis["headline"] and "production" in basis["headline"]
@@ -1837,7 +1847,7 @@ def test_main_refuses_with_exit_2_before_any_request_when_the_refit_or_frozen_ar
 
 
 def test_main_at_parity_runs_the_default_path_with_no_secondary_and_records_the_statement(
-        monkeypatch, evidence_root, tmp_path):
+        monkeypatch, evidence_root, tmp_path, drake_parity_table):
     code, seen = capture_main(monkeypatch, [*SIGNED_ARGS, "--vetoes", _vetoes_path(tmp_path), "--evidence-root", evidence_root])
     assert code == 0
     assert seen.get("point_resolver") is None and seen.get("secondary") is None and seen.get("model_loader") is None
@@ -1927,12 +1937,12 @@ def test_after_the_gate_the_late_round_still_meets_the_instant_and_one_shot_guar
 
 # --- dry run ---
 
-def test_dry_run_reports_the_conductor_basis_and_the_rating_config_version_at_parity(tmp_path, evidence_root):
+def test_dry_run_reports_the_conductor_basis_and_the_rating_config_version_at_parity(tmp_path, evidence_root, drake_parity_table):
     out = str(tmp_path / "dry.json")
     assert conf.main(["--dry-run", "--round", "v4-read1", "--out", out, "--evidence-root", evidence_root]) == 0
     result = json.load(open(out, encoding="utf-8"))
     assert result["conductor_basis"]["differing"] == [] and result["conductor_basis"]["secondary"] == PARITY_SECONDARY
-    assert result["rating_config_version"] == config.RATING_CONFIG_VERSION and result["rating_config_version"][:3] == "v2-"
+    assert result["rating_config_version"] == config.RATING_CONFIG_VERSION and result["rating_config_version"][:3] == "v3-"
     assert not os.path.exists(evidence_root)
 
 

@@ -30,7 +30,7 @@ import protocol_v4_registry as reg
 
 # Shared synthetic world and fixtures of the headline-port tests (fixtures are re-exported by import).
 from forecast_shadow_confirm_test import (  # noqa: F401
-    CITIES, austin_100c, fit_stub_models, loader_for, make_frame, refit_world, stub_models,
+    CITIES, austin_100c, drake_parity_table, fit_stub_models, loader_for, make_frame, refit_world, stub_models,
 )
 
 REPO_ROOT = reg.REPO_ROOT
@@ -362,7 +362,7 @@ def test_a_whole_run_through_the_cached_provider_reads_only_the_tmp_cache(eviden
 
 # --- production basis ---
 
-def test_production_basis_with_every_city_at_parity_is_refused_with_no_city_differs(evidence_root, stub_models):
+def test_production_basis_with_every_city_at_parity_is_refused_with_no_city_differs(evidence_root, stub_models, drake_parity_table):
     with pytest.raises(ValueError, match="no city differs"):
         run(evidence_root, stub_models, conductor_basis="production")
     assert not os.path.exists(evidence_root)
@@ -563,7 +563,7 @@ def test_default_out_dir_is_a_stamped_report_directory_beside_the_evidence_runs(
     assert out == os.path.join("data", "shadow", "evaluation", "v4-test", "report_20261103T040506Z")
 
 
-def test_cli_with_production_at_parity_exits_2_with_no_city_differs(tmp_path, capsys, evidence_root):
+def test_cli_with_production_at_parity_exits_2_with_no_city_differs(tmp_path, capsys, evidence_root, drake_parity_table):
     code = tss.main(["--conductor-basis", "production", "--evidence-root", evidence_root,
                      "--out-dir", str(tmp_path / "rep")])
     assert code == 2
