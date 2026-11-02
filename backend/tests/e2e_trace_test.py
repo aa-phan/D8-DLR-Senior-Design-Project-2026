@@ -129,12 +129,16 @@ class FakeConn:
         self.pipeline = pipeline
         self.calls = []
         self.closed = False
+        self.autocommit = True  # what supabase_store.connect() opens; begin_read_only turns it off
+        self.read_only = None
+        self.rollbacks = 0
+
+    def rollback(self):
+        self.rollbacks += 1
 
     def execute(self, sql, params=None):
         self.calls.append((sql, params))
         text = " ".join(sql.lower().split())
-        if text.startswith("set "):
-            return _Cursor()
         if "from public.pipeline_run" in text:
             rows = [self.pipeline] if self.pipeline and self.pipeline["run_id"] == params["run_id"] else []
             return _Cursor(PIPELINE_COLUMNS, [tuple(r[c] for c in PIPELINE_COLUMNS) for r in rows])
@@ -598,18 +602,17 @@ def test_sql_read_is_read_only_and_bound(served, tmp_path):
     assert run_main(world, tmp_path) == 0
 
     assert world.connects == 1 and world.conn.closed
-    first_sql, first_params = world.conn.calls[0]
-    assert first_sql.strip().lower() == "set default_transaction_read_only = on"
-    assert first_params is None
-    assert len(world.conn.calls) == 3
-    for sql, params in world.conn.calls[1:]:
+    # a read-only transaction (it holds behind a transaction pooler), not a session-level SET (review WR-04)
+    assert world.conn.autocommit is False and world.conn.read_only is True and world.conn.rollbacks == 1
+    assert len(world.conn.calls) == 2
+    for sql, params in world.conn.calls:
         assert sql.lstrip().lower().startswith("select")
         assert set(sql.lower().split()).isdisjoint({"insert", "update", "delete", "drop", "alter", "truncate", "grant"})
         assert params == {"run_id": str(RUN_ID)}
         assert str(RUN_ID) not in sql and "%(run_id)s" in sql  # a bound parameter, never formatted in
     for column in contract.STORED_COLUMNS:
-        assert column in world.conn.calls[1][0]
-    assert "age_minutes" not in world.conn.calls[1][0] and "is_stale" not in world.conn.calls[1][0]
+        assert column in world.conn.calls[0][0]
+    assert "age_minutes" not in world.conn.calls[0][0] and "is_stale" not in world.conn.calls[0][0]
     # REST: GET only
     assert {r["method"] for r in world.fake.requests} == {"GET"}
 

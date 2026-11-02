@@ -12,7 +12,7 @@ Two subcommands:
         and `gh run list` for dlr_live.yml, and writes writes.csv, runs.csv, gh_runs.json and
         export_meta.json into DIR. It runs from the owner's main checkout (Phase 4's
         `supabase_store.connect()` reads SUPABASE_DB_URL; `gh` must be authenticated). The
-        session is set read-only before the first query, every SELECT binds its parameters,
+        reads run in one read-only transaction, every SELECT binds its parameters,
         and no URL, host or credential is written to any file or stream.
 
     report  --mode dry --in-dir DIR [--min-hours 12] [--max-age-min 90] --out FILE.md [--json-out FILE]
@@ -127,7 +127,6 @@ PROBES_SQL = (
     "where probed_at >= %(since)s and probed_at < %(until)s "
     "order by probed_at, city"
 )
-READ_ONLY_SQL = "set default_transaction_read_only = on"
 
 CITY_INDEX = {city: i for i, city in enumerate(config.LOCATIONS)}
 
@@ -243,11 +242,12 @@ def export_window(since, until, out_dir, mode="dry", connect_fn=None, fetch_runs
     writes = run_rows = gh_runs = probes = None
     try:
         conn = connect_fn()
-        conn.execute(READ_ONLY_SQL)  # before the first query: this session can no longer write
+        supabase_store.begin_read_only(conn)  # a read-only transaction: it holds behind a pooler too
         writes = _rows(conn, WRITES_SQL, params)
         run_rows = _rows(conn, RUNS_SQL, params)
         if mode == "soak":
             probes = _rows(conn, PROBES_SQL, params)
+        conn.rollback()  # end the transaction before the (slow) GitHub call
         gh_runs = fetch_runs_fn(slot_start, gh_hours)
     except supabase_store.StoreError:
         raise

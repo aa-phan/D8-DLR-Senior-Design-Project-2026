@@ -267,6 +267,21 @@ def test_alerts_are_redacted_and_capped_before_they_are_stored():
     assert row["fallback_gates"] == ["G4", "G6"]
 
 
+def test_begin_read_only_pins_a_transaction_not_the_session():
+    class Conn:
+        autocommit = True
+        read_only = None
+        statements = []
+
+        def execute(self, sql, params=None):
+            self.statements.append(sql)
+
+    conn = Conn()
+    supabase_store.begin_read_only(conn)
+    assert conn.autocommit is False and conn.read_only is True
+    assert conn.statements == []  # no session-level SET, which a transaction pooler would not keep
+
+
 def test_probe_trail_is_json_text_without_numpy_or_nan():
     trail = [
         {"stid": "A", "lat": np.float64(30.1), "lon": -97.7, "distance_km": np.float64("nan"),

@@ -194,6 +194,12 @@ class FakeConn:
         self.probes = probes or []
         self.calls = []
         self.closed = False
+        self.autocommit = True  # what supabase_store.connect() opens; begin_read_only turns it off
+        self.read_only = None
+        self.rollbacks = 0
+
+    def rollback(self):
+        self.rollbacks += 1
 
     def execute(self, sql, params=None):
         self.calls.append((sql, params))
@@ -263,11 +269,10 @@ def test_export_is_read_only_and_bound(tmp_path):
 
     assert export(tmp_path / "dry", conn, runs) == 0
 
-    assert len(conn.calls) == 3
-    first_sql, first_params = conn.calls[0]
-    assert first_sql.strip().lower() == "set default_transaction_read_only = on"
-    assert first_params is None
-    for sql, params in conn.calls[1:]:
+    # a read-only transaction (it holds behind a transaction pooler), not a session-level SET (review WR-04)
+    assert conn.autocommit is False and conn.read_only is True and conn.rollbacks == 1
+    assert len(conn.calls) == 2
+    for sql, params in conn.calls:
         assert sql.lstrip().lower().startswith("select")
         for word in ("insert", "update", "delete", "drop", "alter", "truncate"):
             assert word not in sql.lower().split()
@@ -623,7 +628,7 @@ def test_tracer_soak_export_then_report(tmp_path, capsys):
     assert meta["mode"] == "soak"
     assert meta["rows"]["probes"] == len(probes)
     assert conn.closed is True
-    assert len(conn.calls) == 4  # read-only setting, writes, runs, probes
+    assert len(conn.calls) == 3  # writes, runs, probes (inside one read-only transaction)
 
     code, markdown, result = soak_report(directory)
 
@@ -649,8 +654,9 @@ def test_soak_export_reads_probes_read_only_and_bound(tmp_path):
             "--out-dir", str(tmp_path / "soak")]
     assert soak.main(argv, connect_fn=lambda: conn, fetch_runs_fn=lambda start, n: runs) == 0
 
-    assert conn.calls[0][0].strip().lower() == "set default_transaction_read_only = on"
-    sql, params = conn.calls[3]
+    assert conn.autocommit is False and conn.read_only is True and conn.rollbacks == 1
+    assert len(conn.calls) == 3
+    sql, params = conn.calls[2]
     assert "ops.freshness_log" in sql
     assert sql.lstrip().lower().startswith("select")
     assert "%(since)s" in sql and "%(until)s" in sql and "2026" not in sql

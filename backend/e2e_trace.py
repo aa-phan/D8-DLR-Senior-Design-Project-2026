@@ -19,8 +19,8 @@ The chain, and what each link means:
                              correlation is the only link between the console and GitHub.
     SQL rows                 `city_rating` holds one row per city for that run id, and
                              `pipeline_run.cities_ok` lists all four cities. Read through Phase 4's
-                             connection, in a session set read-only before the first statement,
-                             with bound parameters.
+                             connection, in one read-only transaction started before the first
+                             statement, with bound parameters.
     REST rows                `city_rating?run_id=eq.<id>` answered through the publishable key
                              returns the same four rows. The trace reads by run id, not from
                              `latest_rating` alone, so an hourly run landing during the trace
@@ -79,7 +79,6 @@ GH_VIEW_FIELDS = "databaseId,event,status,conclusion,createdAt,startedAt,updated
 GH_TIMEOUT_S = 120
 REPO_ROOT = dlr_live_window_check.REPO_ROOT
 
-READ_ONLY_SQL = "set default_transaction_read_only = on"
 CITY_RATING_SQL = (
     "select " + ", ".join(latest_rating_contract.STORED_COLUMNS) + " "
     "from public.city_rating "
@@ -286,9 +285,9 @@ def sql_rows(run_id, connect_fn=None) -> dict:
     `{"rows": [...], "pipeline_run": dict or None, "slot": datetime or None, "slot_holders": {city: run_id}}`:
     the run's city_rating rows (the stored columns, ordered by city), its pipeline_run row and, only when
     fewer than four cities came back, who holds the run's hourly slot now (a later run in the same slot
-    rewrites run_id, OD-7), which names the run that overwrote the missing rows. The session is set
-    read-only before the first statement and every SELECT binds its parameters (`run_id`, `valid_time`);
-    no value is formatted into SQL text. `connect_fn`
+    rewrites run_id, OD-7), which names the run that overwrote the missing rows. The reads run in one
+    read-only transaction started before the first statement, and every SELECT binds its
+    parameters (`run_id`, `valid_time`); no value is formatted into SQL text. `connect_fn`
     defaults to Phase 4's `supabase_store.connect`. Any failure other than a StoreError is re-raised as
     a StoreError carrying the exception type and redacted text, with no exception chained.
     """
@@ -300,7 +299,7 @@ def sql_rows(run_id, connect_fn=None) -> dict:
     out = None
     try:
         conn = connect_fn()
-        conn.execute(READ_ONLY_SQL)  # before the first query: this session can no longer write
+        supabase_store.begin_read_only(conn)  # a read-only transaction: it holds behind a pooler too
         rows = _query(conn, CITY_RATING_SQL, params)
         pipeline = _query(conn, PIPELINE_RUN_SQL, params)
         pipeline_row = pipeline[0] if pipeline else None
@@ -310,6 +309,7 @@ def sql_rows(run_id, connect_fn=None) -> dict:
             if slot is not None:
                 holders = {r["city"]: str(r["run_id"]) for r in _query(conn, SLOT_SQL, {"valid_time": slot})}
         out = {"rows": rows, "pipeline_run": pipeline_row, "slot": slot, "slot_holders": holders}
+        conn.rollback()
     except supabase_store.StoreError:
         raise
     except Exception as exc:  # noqa: BLE001 - re-raised below as a redacted StoreError

@@ -343,6 +343,18 @@ def connect(url=None):
     return conn
 
 
+def begin_read_only(conn):
+    """
+    Make everything `conn` runs from here one read-only transaction (BEGIN READ ONLY on the first
+    statement). `connect()` opens an autocommit connection, so a session-level
+    `set default_transaction_read_only` would not be tied to the client connection behind a
+    transaction pooler (the next statement can land on another backend); a transaction is pinned
+    to one backend, so the guard holds there. End it with `conn.rollback()`.
+    """
+    conn.autocommit = False
+    conn.read_only = True
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Run slot and run context
 # ──────────────────────────────────────────────────────────────────────────────
