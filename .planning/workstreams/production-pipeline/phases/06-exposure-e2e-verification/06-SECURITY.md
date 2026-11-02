@@ -102,7 +102,7 @@ Register built from the `<threat_model>` blocks of 06-01 through 06-13 (authored
 
 | Risk ID | Threat Ref | Rationale | Accepted By | Date |
 |---------|------------|-----------|-------------|------|
-| AR-06-01 | T-06-06 | Full rating history readable by any publishable-key holder is intended (OD-6); `city_rating` stores no paths, credentials or error text | Owner (OD-6), recorded in 06-01-PLAN | 2026-10-26 |
+| AR-06-01 | T-06-06 | Full rating history readable by any publishable-key holder is intended (OD-6). **Caveat (code review WR-03):** the "no error text" premise was false: G6 detector alerts carried raw exception text into the public `alerts` column. Fixed for new rows in `29aa85c` (redact + 300-char cap); credentials/URLs are removed but a file path in an exception message can still pass. Rows already stored need a one-off owner check. Acceptance stands for the history itself; the residual alert-text exposure is low severity and tracked in 06-REVIEW-DISPOSITION (WR-03) | Owner (OD-6), recorded in 06-01-PLAN; caveat added by audit | 2026-10-26 / 2026-11-01 |
 | AR-06-02 | T-06-34 | cron-job.org alarm holds only the publishable key (documented by Supabase as safe to expose), in the owner's account; emails go to the owner only (D-15) | Owner (D-15), recorded in 06-10-PLAN | 2026-10-27 |
 | AR-06-03 | T-06-SC (all plans except 06-11) | No package installed; psycopg, pytest, python-dotenv already pinned; Supabase CLI vetted in Phase 4 | Plan-time disposition | 2026-10-26 |
 
