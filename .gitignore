@@ -27,6 +27,10 @@
 !/data/models/anomaly_MIDLAND.joblib
 !/data/models/anomaly_EL_PASO.joblib
 !/data/models/LIVE_ARTIFACT_HASHES.sha256
+# Phase 7 SEL-02 refit artifacts and their manifest are tracked like the live models (OD-10 precedent):
+# only backend/forecast_conductor_refit.py writes data/models/conductor_refit/<config_version>/, it never
+# overwrites a file there, and every load checks that directory's ARTIFACT_HASHES.sha256 first.
+!/data/models/conductor_refit/
 # Generated experiment caches and reports (v1.3 Phase 3) -- like
 # /data/models/, not source; regenerable via forecast_leadtime_calibration.py
 # and forecast_experiment.py.

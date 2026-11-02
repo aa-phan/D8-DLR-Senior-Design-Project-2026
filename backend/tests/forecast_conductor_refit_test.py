@@ -590,13 +590,27 @@ def test_cli_checks_every_city_before_fitting_any(tmp_path, dev_frame, monkeypat
     assert calls == [] and os.listdir(tmp_path) == []
 
 
-def test_cli_does_not_overwrite_an_existing_refit(tmp_path, dev_frame, monkeypatch):
+def test_cli_does_not_overwrite_an_existing_refit(tmp_path, dev_frame, monkeypatch, capsys):
     _differing_table(monkeypatch, "AUSTIN")
     monkeypatch.setattr(fm, "load_city_frame", lambda city: _shifted(dev_frame, city))
     args = ["--cities", "AUSTIN", "--config-version", "v-test", "--root", str(tmp_path)]
     assert refit.main(args) == 0
-    with pytest.raises(FileExistsError):
-        refit.main(args)
+    capsys.readouterr()
+    path = tmp_path / "v-test" / f"{_COOLING}_AUSTIN.joblib"
+    before = live_check.sha256_file(str(path))
+    assert refit.main(args) == 2
+    assert "refusing to overwrite" in capsys.readouterr().err
+    assert live_check.sha256_file(str(path)) == before
+
+
+def test_cli_refuses_an_unsafe_version_and_the_frozen_directory(tmp_path, monkeypatch, capsys):
+    _differing_table(monkeypatch, "AUSTIN")
+    assert refit.main(["--cities", "AUSTIN", "--config-version", "../x", "--root", str(tmp_path)]) == 2
+    frozen = tmp_path / "shadow_models"
+    frozen.mkdir()
+    monkeypatch.setattr(shadow, "SHADOW_MODEL_DIR", str(frozen))
+    assert refit.main(["--cities", "AUSTIN", "--config-version", "v1", "--root", str(frozen)]) == 2
+    assert os.listdir(frozen) == []
 
 
 def test_cli_default_version_is_the_rating_config_version(tmp_path, dev_frame, monkeypatch):
