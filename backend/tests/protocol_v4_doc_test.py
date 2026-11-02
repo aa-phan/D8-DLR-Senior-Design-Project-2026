@@ -248,6 +248,22 @@ def test_registered_rule_values(registry):
     assert registry["read2.runs_only_if"] == "read1_no_pick"
 
 
+def test_registry_encodes_the_owner_o4_choice(registry):
+    # Signed O4 (custom): AUSTIN only switches, to Drake ACSR at 100 C; elevation and azimuth stay at
+    # the model defaults. The rows must agree with each other and with the Drake-100 ablation variant.
+    assert registry["power_systems.partial_answers"] == "custom_switch_austin_drake_100c"
+    assert reg.as_list(registry["power_systems.switch_cities"]) == ["AUSTIN"]
+    assert reg.as_list(registry["refit.cities"]) == ["AUSTIN"]
+    assert registry["test.rescore_gate"] == "before_read1_run"
+    austin = dict(part.split("=", 1) for part in registry["power_systems.austin_config"].split(";"))
+    assert set(austin) == {"diameter_m", "resistance_ac", "max_temp_c", "elevation_m", "line_azimuth", "cities"}
+    assert austin["cities"] == "AUSTIN"
+    assert float(austin["max_temp_c"]) == 100.0
+    drake_100 = dict(part.split("=", 1) for part in registry["ablation.variant.Drake-100"].split(";"))
+    for field in ("diameter_m", "resistance_ac", "max_temp_c", "elevation_m"):
+        assert float(austin[field]) == float(drake_100[field]), field
+
+
 def test_registry_rejects_a_duplicate_key(tmp_path):
     doc = tmp_path / "dup.md"
     doc.write_text(
@@ -274,3 +290,88 @@ def test_signature_parser_reads_filled_and_blank_blocks(tmp_path):
     assert reg.signature(filled)["date"] == "2026-11-02"
     assert reg.is_signed(filled)
     assert not reg.is_signed(tmp_path / "missing.md")
+
+
+# ---------------------------------------------------------------- signing copy
+
+
+@pytest.fixture(scope="module")
+def signing_text() -> str:
+    return reg.SIGNING_COPY_PATH.read_text(encoding="utf-8")
+
+
+def _sign_off_rows(signing_text: str) -> dict[int, str]:
+    rows: dict[int, str] = {}
+    for line in _section(signing_text, "Sign-off").splitlines():
+        match = re.match(r"^\| O(\d+) \| (?:[^|]+) \| (.*) \|$", line)
+        if match:
+            rows[int(match.group(1))] = match.group(2).strip()
+    return rows
+
+
+def test_signing_copy_exists_and_is_signed():
+    assert reg.SIGNING_COPY_PATH.exists()
+    assert reg.is_signed(reg.SIGNING_COPY_PATH)
+    parsed = reg.signature(reg.SIGNING_COPY_PATH)
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", parsed["date"]), parsed
+    assert parsed["name"] == parsed["signature"]
+
+
+def test_signing_copy_registry_equals_the_drafts(registry):
+    assert reg.parse_registry(reg.SIGNING_COPY_PATH) == registry
+
+
+def test_signing_copy_banner_says_signed_and_names_the_signer(signing_text):
+    parsed = reg.signature(reg.SIGNING_COPY_PATH)
+    banner = signing_text.split("## In plain English")[0]
+    assert f"Signed {parsed['date']} by the project owner (`{parsed['name']}`" in banner
+    assert "SIGNING COPY" in banner
+
+
+def test_every_signing_copy_sign_off_row_has_a_chosen_option(signing_text):
+    rows = _sign_off_rows(signing_text)
+    assert sorted(rows) == list(range(1, OWNER_ITEM_COUNT + 1))
+    date = reg.signature(reg.SIGNING_COPY_PATH)["date"]
+    for number, chosen in rows.items():
+        assert chosen, f"O{number} has no option chosen"
+        assert f"(selected {date})" in chosen, f"O{number} lacks its selection date"
+
+
+def test_signing_copy_o4_row_records_the_custom_austin_choice(signing_text):
+    o4 = _sign_off_rows(signing_text)[4]
+    assert "AUSTIN" in o4 and "100 degrees C" in o4 and "Drake" in o4
+    assert "before read 1 is run" in o4
+    assert not o4.startswith(("A:", "B:", "C:")), "O4 is the owner's custom choice, not A, B or C"
+
+
+def test_signing_copy_text_matches_the_draft_apart_from_the_signing_edits(text, signing_text):
+    # Same body from "In plain English" through the Sign-off table: the signing copy is the final draft text.
+    def body(doc: str) -> str:
+        start = doc.index("## In plain English")
+        end = doc.index("## Sign-off")
+        return doc[start:end]
+
+    assert body(text) == body(signing_text)
+
+
+def test_draft_points_at_the_signing_copy_and_says_signed(text):
+    banner = text.split("## In plain English")[0]
+    assert "confirmation_protocol_v4_early_selection_SIGNING_COPY.md" in banner
+    parsed = reg.signature(reg.SIGNING_COPY_PATH)
+    assert f"Signed {parsed['date']} by the project owner (`{parsed['name']}`" in banner
+    assert f"| {parsed['date']} (signed) |" in _section(text, "Change log")
+
+
+def test_o4_block_records_the_owner_selection_and_the_read1_wording(text):
+    o4 = re.split(r"(?m)^### ", _section(text, "Owner items"))[4]
+    assert "Owner's selection" in o4
+    assert "04=switch austin based on given answers" in o4
+    assert "before read 1 is run" in o4
+    assert "900 m and 173.15 degrees" in o4
+    assert "CORPUS_CHRISTI, MIDLAND and EL_PASO stay on the model-default Drake 75 degrees C" in o4
+
+
+def test_test_section_says_before_read_1_is_run(text):
+    section = _section(text, "TEST design and veto criterion")
+    assert "before read 1 is run" in section
+    assert "re-scored under them before the instant" not in section

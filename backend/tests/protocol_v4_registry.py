@@ -93,10 +93,14 @@ REQUIRED_KEYS = (
     "test.window_end_exclusive",
     "test.slots_per_city",
     "test.veto_min_cities",
+    "test.rescore_gate",
     "refit.methods",
     "refit.root",
     "refit.fit_end_exclusive",
+    "refit.cities",
     "power_systems.partial_answers",
+    "power_systems.switch_cities",
+    "power_systems.austin_config",
     "live_check.runs_at_each_read",
 )
 
