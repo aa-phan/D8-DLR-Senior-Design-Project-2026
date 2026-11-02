@@ -50,6 +50,7 @@ infrastructure was replaced on 2026-10-21; see "Re-sequencing" above.)
 - [x] **Phase 5: Scheduled Live Runs** — new workflow, cron-job.org trigger, failure isolation, runbook (completed 2026-10-26)
 - [x] **Phase 6: Exposure & E2E Verification** — REST via RLS, `latest_rating` view, soak test (completed 2026-11-01)
 - [ ] **Phase 7: Per-City Conductors, Shadow Refit and Early Model Selection** — protocol v4, per-city conductor configs, cooling/reference refit, selection by 2026-11-01, re-validation and go/no-go (parallel with 4-6)
+- [ ] **Phase 8: Day-Ahead Cooling Forecast Alongside 60-Minute G6** — serve `ml_cooling_corrected` as a labelled higher-error day-ahead forecast alongside the 60-minute G6 `ml` forecast
 
 ## Phase Details
 
@@ -365,6 +366,29 @@ instant and 07-14 waits for 07-12.
 - [ ] 07-16-PLAN.md — Read-2 results (or not-run note) and the owner's final SEL-04 decision (SEL-04)
 - [ ] 07-18-PLAN.md — Owner-approved promotion push, first live run verified, optional owner-run relabel of stored rows (REVAL-01)
 
+### Phase 8: Day-Ahead Cooling Forecast Alongside 60-Minute G6
+
+**Goal**: Production serves a day-ahead (24 h) ampacity forecast per city from `ml_cooling_corrected`
+as an additional output alongside the 60-minute G6 forecast, which stays `ml` and keeps gating G6.
+The day-ahead value is labelled as a higher-error future forecast (it carries more error because it
+is further ahead, like any forecast), with its own uncertainty band, and never replaces or gates the
+live rating.
+**Depends on**: Phase 7 (SEL-04 decision record; read 2 outcome reported)
+**Requirements**: TBD
+**Context**: owner selection recorded 2026-11-02 in
+`docs/data-science/decisions/v4_selection/decision_record.md` (engineering choice, not a rule pick
+under signed v4; read 2 still runs and a rule pick there would supersede the label). Evidence,
+exploratory and non-FRESH: `docs/data-science/exploratory/2026-11-02_horizon_comparison/REPORT.md`
+(cooling beats the live-ml design at 24 h and the plain forecast in all 4 cities on TEST; best
+day-ahead costs about +23 A MAE, ~1.7% of rating, vs the 60-minute ml) and
+`docs/data-science/exploratory/2026-11-02_ml_vs_naive/REPORT.md`. Open questions for planning: issue
+times (the shadow method exists at 00/06/12/18 UTC), how the band is built and calibrated, storage
+and API exposure, and which conductor-dependent artifacts are served (AUSTIN refit under v3).
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 8 to break down)
+
 ## Progress
 
 | Phase | Plans Complete | Status | Completed |
@@ -376,3 +400,4 @@ instant and 07-14 waits for 07-12.
 | 5. Scheduled Live Runs | 8/8 | Complete    | 2026-10-26 |
 | 6. Exposure & E2E Verification | 13/13 | Complete    | 2026-11-01 |
 | 7. Per-City Conductors, Shadow Refit and Early Model Selection | 15/19 | In Progress | - |
+| 8. Day-Ahead Cooling Forecast Alongside 60-Minute G6 | 0/0 | Not started | - |
