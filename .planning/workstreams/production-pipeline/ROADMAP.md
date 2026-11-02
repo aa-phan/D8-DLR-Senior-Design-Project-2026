@@ -318,7 +318,7 @@ ml-modeling workstream's evaluation; record it in that workstream's STATE.md as 
 
      After that decision, B1, B2, B4 and B5 are closed, the Phase 3 validation is re-run on the same
      non-FRESH window, and a new go/no-go is signed. A GO lifts the provisional label on stored rows.
-**Plans**: 7/19 plans executed
+**Plans**: 8/19 plans executed
 
 Plans:
 *Waiting on owner gates:* while the v4 signature (07-02) is pending, 07-01, 07-03, 07-04, 07-08 and
@@ -338,7 +338,7 @@ instant and 07-14 waits for 07-12.
 
 **Wave 3** *(07-07 after 07-05 and 07-06; 07-08, 07-19 after 07-04)*
 - [x] 07-07-PLAN.md — Headline port on signed rounds with a required, hash-checked veto record; v4 rule in both evaluators (SEL-04, SEL-03)
-- [ ] 07-08-PLAN.md — B5: naive band for G6 when the ml lookback withholds the forecast; `g6_forecast_method` in trace and the band-engagement table (REVAL-01)
+- [x] 07-08-PLAN.md — B5: naive band for G6 when the ml lookback withholds the forecast; `g6_forecast_method` in trace and the band-engagement table (REVAL-01)
 - [ ] 07-19-PLAN.md — B2 projected-wind training feature; v2 rating config label and schema-doc conductor-basis paragraph (split from 07-04) (REVAL-01, COND-01)
 
 **Wave 4**
@@ -375,4 +375,4 @@ instant and 07-14 waits for 07-12.
 | 4. Supabase Store & Writer | 12/12 | Complete    | 2026-10-24 |
 | 5. Scheduled Live Runs | 8/8 | Complete    | 2026-10-26 |
 | 6. Exposure & E2E Verification | 13/13 | Complete    | 2026-11-01 |
-| 7. Per-City Conductors, Shadow Refit and Early Model Selection | 7/19 | In Progress | - |
+| 7. Per-City Conductors, Shadow Refit and Early Model Selection | 8/19 | In Progress | - |

@@ -1,19 +1,19 @@
 ---
 gsd_state_version: "1.0"
 current_phase: 07
-current_plan: 8
+current_plan: 9
 status: executing
-stopped_at: Completed 07-07-PLAN.md
-last_updated: "2026-11-02T07:49:56.389Z"
+stopped_at: Completed 07-08-PLAN.md
+last_updated: "2026-11-02T08:00:37.170Z"
 last_activity: 2026-11-01
 last_activity_desc: Phase 07 execution started
-state_head: 47bd95733151394ce4d70553c0f477dddcb9abf4
+state_head: 03188a48a5bf161985d95b462cb836cdcd0bc92f
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 66
-  completed_plans: 54
-  percent: 82
+  completed_plans: 55
+  percent: 83
 milestone_name: Production Pipeline (Supabase + live ratings)
 workstream: production-pipeline
 created: 2026-10-18
@@ -37,7 +37,7 @@ whoever owns that analysis; they are not work items here.
 
 **Status:** Ready to execute
 **Current Phase:** 07
-**Current Plan:** 8
+**Current Plan:** 9
 **Total Plans in Phase:** 19
 **Last Activity:** 2026-11-01 — Phase 07 execution started
 **Last Activity Description:** Phase 07 execution started
@@ -203,6 +203,8 @@ These block or affect stringing the system together and belong to the phases nam
 - [Phase 07]: 07-07: deciding rounds (v4-read1, v4-read2) refuse at the CLI unless --vetoes loads (both source-report sha256 values match disk) and --protocol-status is signed; run_confirmation also refuses a FRESH decision scope with no veto record before the guard — SEL-03: the ABLATION and TEST vetoes must exist before the one-shot FRESH read; a crash after the guard would spend it
 - [Phase 07]: 07-07: load_vetoes requires all three real candidates in both veto sections with real-bool flags; round_name defaults to the guard's round and a disagreement is refused — an edited or truncated record must not un-veto by omission (T-07-15); a read-2 guard must not yield a read-1 decision
 - [Phase 07]: 07-07: the shadow-log scorer applies apply_ship_rule_v4 with the live label (pick always None); only the headline port decides; --decision-margin-amps stays registered but unused — D-01/D-02: live-system check never decides; PD-15 still refuses a non-default value in a FRESH run
+- [Phase 07]: 07-08: forecast_used_by_g6 is an explicit primary_fed_g6 flag; the naive G6 fallback (D-17) never reads as the stored ml forecast, g6_forecast_method/g6_forecast are trace-only
+- [Phase 07]: 07-08: g6_method_recorded is column presence in the trace; pre-B5 traces report NA counts, not zeros (a mixed trace counts pre-B5 hours as no band)
 
 ## Open Decisions
 
@@ -226,9 +228,9 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 
 ## Session Continuity
 
-**Last session:** 2026-11-02T07:49:56.036Z
+**Last session:** 2026-11-02T08:00:36.830Z
 
-**Stopped At:** Completed 07-07-PLAN.md
+**Stopped At:** Completed 07-08-PLAN.md
 **Resume File:** None
 
 ## Performance Metrics
@@ -285,6 +287,7 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 | Phase 07 P05 | 6 min | 2 tasks | 2 files |
 | Phase 07 P06 | 22 min | 2 tasks | 6 files |
 | Phase 07 P07 | 22 min | 2 tasks | 6 files |
+| Phase 07 P08 | 10 min | 2 tasks | 9 files |
 
 ## Accumulated Context
 
