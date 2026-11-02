@@ -1,18 +1,18 @@
 ---
 gsd_state_version: "1.0"
 current_phase: 07
-current_plan: 13
+current_plan: 14
 status: executing
-stopped_at: Completed 07-11-PLAN.md
-last_updated: "2026-11-02T17:47:39.179Z"
+stopped_at: Completed 07-12-PLAN.md
+last_updated: "2026-11-02T17:53:12.363Z"
 last_activity: 2026-11-01
 last_activity_desc: Phase 07 execution started
-state_head: e7d1b21834aff064c7fb8e4cb0a970751a8cb012
+state_head: 2115cfdb618cad319762e7fd2c213e2ac0084f3c
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 66
-  completed_plans: 59
+  completed_plans: 60
   percent: 86
 milestone_name: Production Pipeline (Supabase + live ratings)
 workstream: production-pipeline
@@ -37,7 +37,7 @@ whoever owns that analysis; they are not work items here.
 
 **Status:** Ready to execute
 **Current Phase:** 07
-**Current Plan:** 13
+**Current Plan:** 14
 **Total Plans in Phase:** 19
 **Last Activity:** 2026-11-01 — Phase 07 execution started
 **Last Activity Description:** Phase 07 execution started
@@ -212,6 +212,7 @@ These block or affect stringing the system together and belong to the phases nam
 - [Phase 07]: 07-10: the TEST scorer refuses any window outside [2026-03-18, 2026-09-30) and a missing cache before an evidence directory exists, and loads frozen artifacts through the hash-verified headline loader
 - [Phase 07]: 07-10: registry parity test pins all 58 signed v4 keys (47 code constants, 3 state-aware O4 checks against the production table that tighten when RATING_CONFIG_VERSION leaves v2-provisional, 8 DOC_ONLY); no constant differed from the signature
 - [Phase 07]: 07-11: Power Systems gate applied for AUSTIN only (795 kcmil ACSR Drake, 100 C) under signed v4 O4; RATING_CONFIG_VERSION v3-powersystems-2026-11-02; AUSTIN cooling and reference refit; TEST re-scored under production with no veto; Task 3 precondition (before 2026-11-01) superseded by test.rescore_gate=before_read1_run
+- [Phase 07]: 07-12: v4 read 1 ran once per row source after owner go (2026-11-02T17:51Z); no candidate qualifies, v4-read2 due at or after 2026-11-08T00:00:00Z
 
 ## Open Decisions
 
@@ -235,9 +236,9 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 
 ## Session Continuity
 
-**Last session:** 2026-11-02T17:47:38.856Z
+**Last session:** 2026-11-02T17:53:11.998Z
 
-**Stopped At:** Completed 07-11-PLAN.md
+**Stopped At:** Completed 07-12-PLAN.md
 **Resume File:** None
 
 ## Performance Metrics
@@ -299,6 +300,7 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 | Phase 07 P09 | 22 min | 2 tasks | 2 files |
 | Phase 07 P10 | 13 min | 2 tasks | 3 files |
 | Phase 07 P11 | 15min | 3 tasks | 28 files |
+| Phase 07 P12 | 5min | 2 tasks | 34 files |
 
 ## Accumulated Context
 
