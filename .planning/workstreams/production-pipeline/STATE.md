@@ -213,6 +213,7 @@ These block or affect stringing the system together and belong to the phases nam
 - [Phase 07]: 07-10: registry parity test pins all 58 signed v4 keys (47 code constants, 3 state-aware O4 checks against the production table that tighten when RATING_CONFIG_VERSION leaves v2-provisional, 8 DOC_ONLY); no constant differed from the signature
 - [Phase 07]: 07-11: Power Systems gate applied for AUSTIN only (795 kcmil ACSR Drake, 100 C) under signed v4 O4; RATING_CONFIG_VERSION v3-powersystems-2026-11-02; AUSTIN cooling and reference refit; TEST re-scored under production with no veto; Task 3 precondition (before 2026-11-01) superseded by test.rescore_gate=before_read1_run
 - [Phase 07]: 07-12: v4 read 1 ran once per row source after owner go (2026-11-02T17:51Z); no candidate qualifies, v4-read2 due at or after 2026-11-08T00:00:00Z
+- 2026-11-02: 07-13 SEL-04 read 1 owner decision (aaphan; decision_record.md): rule's outcome accepted (no pick under signed v4); interim G6 = ml retrained on projected wind (B2, D-14, models commit e0a00a9), checked under D-15 at the go/no-go (07-17). Owner also selects `ml_cooling_corrected` for day-ahead as a labelled engineering choice, NOT a rule pick (best read-1 benefit 11.89 A vs 27.86 A bar, Holm p 0.36; departure recorded), as an additional output alongside the 60-minute forecast with the understanding it carries more error; serving it is a new phase after Phase 7. Read 2 (D-08) still runs at or after 2026-11-08T00:00:00Z (07-15). Nothing in live ratings changes now. SEL-04 stays open until read 2.
 
 ## Open Decisions
 

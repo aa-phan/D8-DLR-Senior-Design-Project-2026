@@ -111,6 +111,7 @@ Progress: [██████████] 100%
   `docs/data-science/decisions/confirmation_protocol_v4_early_selection_SIGNING_COPY.md`). Owner item
   O4 set to a custom choice: AUSTIN switches to Drake ACSR at 100 C (cooling and reference refit for
   AUSTIN, TEST veto re-scored under production conductors before read 1 is run; no registered date moves).
+- 2026-11-02: SEL-04 owner decision after read 1 (aaphan; `docs/data-science/decisions/v4_selection/decision_record.md`): the rule's outcome (no pick) is accepted, so no model replaces ml under the signed rule; read 2 (pre-registered, D-08) still runs at or after 2026-11-08T00:00:00Z (plan 07-15) and is reported. Separately, the owner selects `ml_cooling_corrected` for day-ahead as a labelled engineering choice (not a rule pick; best read-1 benefit 11.89 A vs the 27.86 A bar, Holm p 0.36), supported by exploratory non-FRESH results; serving it is a new phase after Phase 7. Interim G6 stays ml (B2-fixed, 60-minute) under D-15.
 - [Phase 05]: collect_once wired to run_once_all_methods for every corridor (05-03); real two-corridor live cycle exits 0 in ~32s, well under the 15-minute workflow budget
 - [Phase 05]: reference_ml_refit_24h's real artifact fit via fit_fitted_arms's exact arm-5 recipe on the pinned train-plus-validation window (18834 rows/corridor); real live truth-proxy predict path replaces 05-02's honest unavailable stub
 
