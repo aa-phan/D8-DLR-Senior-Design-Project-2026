@@ -94,12 +94,28 @@ def _jwt_role(token):
     return None
 
 
+_LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")  # the offline tests' fake server
+
+
+def _url_scheme_ok(url):
+    """https for any host; plain http only for a loopback host, so the key never travels in clear text."""
+    if not re.match(r"^https?://[^/\s]+", url, re.IGNORECASE):
+        return False
+    try:
+        parts = urllib.parse.urlsplit(url)
+    except ValueError:
+        return False
+    if parts.scheme.lower() == "https":
+        return True
+    return parts.hostname in _LOCAL_HOSTS
+
+
 def config_from_env(env=None):
     """
     Read the project URL and the publishable key. Values are stripped of whitespace (a
     pasted trailing newline must work) and the URL of a trailing slash. Raises ConfigError
     naming the variable, never a value, when one is missing or blank, when the URL is not
-    http(s), when the key is a secret key (`sb_secret_...`), or when it is a JWT whose role
+    https (plain http is accepted for a loopback host only), when the key is a secret key (`sb_secret_...`), or when it is a JWT whose role
     is service_role. The refusal happens before any request.
     """
     env = os.environ if env is None else env
@@ -111,7 +127,7 @@ def config_from_env(env=None):
         values[name] = str(raw).strip()
     base_url = values[ENV_URL].rstrip("/")
     key = values[ENV_KEY]
-    if not re.match(r"^https?://[^/\s]+", base_url, re.IGNORECASE):
+    if not _url_scheme_ok(base_url):
         raise ConfigError("%s must start with https://" % ENV_URL)
     if key.startswith(SECRET_KEY_PREFIX):
         raise ConfigError("%s holds a secret key; use the publishable key (a check run with a secret key proves nothing)" % ENV_KEY)
@@ -204,6 +220,21 @@ def _decode(data):
     return "" if data is None else str(data)
 
 
+class _SameHostRedirects(urllib.request.HTTPRedirectHandler):
+    """Follow a redirect only within the same scheme and host: urllib copies every request header,
+    `apikey` included, to the new location, and the key goes to the project and nowhere else.
+    A refused redirect comes back as the 3xx answer itself."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        old, new = urllib.parse.urlsplit(req.full_url), urllib.parse.urlsplit(newurl)
+        if (new.scheme.lower(), new.hostname, new.port) != (old.scheme.lower(), old.hostname, old.port):
+            return None
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_DEFAULT_OPENER = urllib.request.build_opener(_SameHostRedirects)
+
+
 def request(cfg, method, path, params=None, headers=None, body=None, profile=None, timeout=30,
             opener=None, send_key=True):
     """
@@ -213,7 +244,7 @@ def request(cfg, method, path, params=None, headers=None, body=None, profile=Non
     `profile` selects a non-default schema (Accept-Profile for reads, Content-Profile for writes).
     A dict or list `body` is sent as JSON. An HTTP error status is returned as a Response; a
     network failure or timeout raises RestError with redacted text and no chained exception.
-    `opener` defaults to urllib.request.urlopen (tests pass a stub).
+    `opener` defaults to an opener that refuses redirects to another host (tests pass a stub).
     """
     method = method.upper()
     query = ""
@@ -235,7 +266,7 @@ def request(cfg, method, path, params=None, headers=None, body=None, profile=Non
         data = json.dumps(body).encode("utf-8")
         sent.setdefault("Content-Type", "application/json")
     req = urllib.request.Request(url, data=data, headers=sent, method=method)
-    open_url = opener if opener is not None else urllib.request.urlopen
+    open_url = opener if opener is not None else _DEFAULT_OPENER.open
 
     failure = None
     response = None

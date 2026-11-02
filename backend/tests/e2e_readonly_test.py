@@ -202,6 +202,66 @@ def test_config_from_env_strips_the_value_and_a_trailing_slash():
     assert cfg.key == KEY
 
 
+@pytest.mark.parametrize("url", [
+    "http://" + HOST, "http://example.invalid", "http://127.0.0.1.example.invalid", "ftp://" + HOST])
+def test_plain_http_is_refused_for_a_remote_host(url):
+    # A mistyped http:// project URL must not send the key in clear text (review WR-06).
+    with pytest.raises(rest.ConfigError) as excinfo:
+        rest.config_from_env({rest.ENV_URL: url, rest.ENV_KEY: KEY})
+    assert rest.ENV_URL in str(excinfo.value) and "https://" in str(excinfo.value)
+    assert url not in str(excinfo.value) and KEY not in str(excinfo.value)
+
+
+@pytest.mark.parametrize("url", ["https://" + HOST, "http://localhost:54321", "http://127.0.0.1:1", "http://[::1]:1"])
+def test_https_or_a_loopback_http_url_is_accepted(url):
+    assert rest.config_from_env({rest.ENV_URL: url, rest.ENV_KEY: KEY}).base_url == url
+
+
+def test_the_key_is_not_sent_to_another_host_on_a_redirect():
+    import http.server
+    import threading
+
+    seen = []
+
+    class Target(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            seen.append(dict(self.headers))
+            self.send_response(200)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"[]")
+
+        def log_message(self, *args):
+            pass
+
+    target = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Target)
+
+    class Mover(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            # the same machine under another host name: a different host as far as the key is concerned
+            self.send_response(302)
+            self.send_header("Location", "http://localhost:%d/rest/v1/latest_rating" % target.server_port)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    mover = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Mover)
+    threads = [threading.Thread(target=server.serve_forever, daemon=True) for server in (target, mover)]
+    for thread in threads:
+        thread.start()
+    try:
+        cfg = rest.config_from_env({rest.ENV_URL: "http://127.0.0.1:%d" % mover.server_port, rest.ENV_KEY: KEY})
+        response = rest.request(cfg, "GET", "latest_rating")
+    finally:
+        for server in (target, mover):
+            server.shutdown()
+            server.server_close()
+    assert response.status == 302
+    assert seen == []  # the other host never received a request, so it never saw the key
+
+
 def test_missing_env_names_the_variable_not_a_value(monkeypatch, capsys):
     url_only = {rest.ENV_URL: URL}
     with pytest.raises(rest.ConfigError) as excinfo:
