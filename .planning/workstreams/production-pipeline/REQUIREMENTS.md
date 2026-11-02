@@ -117,7 +117,7 @@ proposals.
 
 ### Exposure and end-to-end verification (Phase 6)
 
-- [ ] **API-01**: The consumer tables or views are exposed through Supabase's REST API, read-only
+- [x] **API-01**: The consumer tables or views are exposed through Supabase's REST API, read-only
   for the anon role under RLS. A `latest_rating` view returns one current row per city.
 - [x] **API-02**: Documented example requests that work as written: `curl` for any consumer,
   `supabase-js` for the frontend, and Python stdlib `urllib` for the PSS/E environment (no
@@ -222,7 +222,7 @@ proposals.
 | PIPE-02 | Phase 5 | Complete |
 | SCHED-01 | Phase 5 | Complete |
 | SCHED-02 | Phase 5 | Complete |
-| API-01 | Phase 6 | Pending |
+| API-01 | Phase 6 | Complete |
 | API-02 | Phase 6 | Complete |
 | E2E-01 | Phase 6 | Complete |
 | E2E-02 | Phase 6 | Complete |
