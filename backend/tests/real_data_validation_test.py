@@ -203,7 +203,7 @@ def _record(city, hour, temp=15.0, wind=3.0, solar=300.0, wind_raw=4.0, **overri
     safety monitor the way `rate_city` does (G5 off, the city's own bounds), so
     the rating, fallback flag and gate come from the production gates.
     """
-    point = city_point.city_point(city)
+    point = city_point.production_city_point(city)
     monitor = DLRSafetyMonitor(
         static_rating=point.static_rating, conductor=point.conductor,
         rating_bounds=point.rating_bounds, delta_fraction=float("inf"), logger=lambda msg: None)
@@ -230,7 +230,7 @@ def _record(city, hour, temp=15.0, wind=3.0, solar=300.0, wind_raw=4.0, **overri
 
 
 def _exhausted_record(city, hour):
-    point = city_point.city_point(city)
+    point = city_point.production_city_point(city)
     record = _record(city, hour, observation=None, observation_hour=None, sources=None,
                      rating_a=point.static_rating, status="fallback", fallback=True,
                      exhausted=True, archived=False, fallback_gates=["EXHAUSTED"],
@@ -319,6 +319,25 @@ def test_computed_amps_matches_the_safety_monitor(city):
     assert record["status"] == "ok"  # the observation passes every gate for every city
     computed = real_data_validation.computed_amps(city, 15.0, 3.0, 300.0)
     assert abs(float(computed) - record["rating_a"]) < 1e-6
+
+
+def test_computed_amps_expectation_follows_production_table(monkeypatch):
+    """
+    The expected rating in `_record` and `computed_amps` both read the per-city production table, so a
+    change to the table moves both together (they no longer silently track the shadow Drake resolver).
+    """
+    before_record = _record("AUSTIN", 0)
+    before = float(real_data_validation.computed_amps("AUSTIN", 15.0, 3.0, 300.0))
+
+    monkeypatch.setitem(
+        config.PRODUCTION_CONDUCTORS, "AUSTIN", {**config.PRODUCTION_CONDUCTORS["AUSTIN"], "max_temp_c": 100.0})
+    after_record = _record("AUSTIN", 0)
+    after = float(real_data_validation.computed_amps("AUSTIN", 15.0, 3.0, 300.0))
+
+    assert after > before
+    assert after_record["status"] == "ok"  # still inside AUSTIN's plausibility bounds
+    assert after_record["rating_a"] > before_record["rating_a"]
+    assert abs(after - after_record["rating_a"]) < 1e-6
 
 
 def test_classify_steps_counts_every_expected_step_once(tmp_path):

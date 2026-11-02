@@ -273,7 +273,7 @@ class _RaisingDetector:
 
 
 def _monitor(detector=None):
-    point = city_point.city_point(_CITY)
+    point = city_point.production_city_point(_CITY)
     return DLRSafetyMonitor(
         static_rating=point.static_rating, conductor=point.conductor,
         rating_bounds=point.rating_bounds, delta_fraction=float("inf"),
@@ -407,7 +407,7 @@ def _ts(hour):
 
 
 def _trace_record(hour, temp=15.0, g6_trip=False):
-    point = city_point.city_point(_CITY)
+    point = city_point.production_city_point(_CITY)
     wind, solar = 3.0, 300.0
     computed = float(rdv.computed_amps(_CITY, temp, wind, solar))
     centre = computed + (50.0 if hour == 4 else 20.0 * (hour % 3 - 1))  # hour 4 misses the +-30 band
