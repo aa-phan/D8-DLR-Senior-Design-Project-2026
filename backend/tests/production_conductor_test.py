@@ -9,14 +9,24 @@ cond02_shadow_golden_test.py). Covered here: table completeness and sources for 
 `config.LOCATIONS` city, the resolver's closed-set and range contract (boundary, empty and
 missing-field edges), and the provisional parity with the Drake default.
 
+The caller split (COND-02, T-07-09) is pinned by an AST test over the module files: production
+callers resolve through `production_city_point`, the three static-only callers use
+`city_point.city_point` only for `.static_rating`, and no shadow or frozen-evaluation module names
+`production_city_point`.
+
 Follows backend/tests/city_point_test.py's conventions (module-level imports, plain asserts, no test
 classes, no network, no conftest).
 """
 
+import ast
+from pathlib import Path
+
+import pandas as pd
 import pytest
 import requests
 
 import city_point
+import city_rating
 import config
 import thermal_model
 
@@ -171,3 +181,132 @@ def test_a_non_numeric_or_non_finite_value_raises_valueerror(monkeypatch, bad_va
     monkeypatch.setitem(config.PRODUCTION_CONDUCTORS, _CITY, _entry(diameter_m=bad_value))
     with pytest.raises(ValueError, match="diameter_m"):
         config.production_conductor_kwargs_for(_CITY)
+
+
+# --------------------------------------------------------------------------------------------------
+# COND-02 caller split (production-pipeline Phase 7, plan 07-04)
+# --------------------------------------------------------------------------------------------------
+
+_BACKEND = Path(__file__).resolve().parent.parent
+
+# Resolve the conductor from the per-city table (rating, training, validation).
+PRODUCTION_CALLERS = (
+    "city_rating", "anomaly_training", "forecast_training", "real_data_validation",
+)
+# Read `city_point.city_point(...)` only for `.static_rating`, the same config value on both resolvers.
+STATIC_ONLY_CALLERS = ("dlr_orchestrator", "supabase_store", "supabase_smoke")
+# The frozen shadow path, collector, legacy corridor, experiment and evaluation core.
+SHADOW_MODULES = (
+    "forecast_shadow_pipeline", "forecast_shadow_fit_models", "forecast_shadow_fit_reference_refit",
+    "forecast_shadow_demo", "forecast_shadow_collect", "forecast_shadow_check_models",
+    "forecast_shadow_healthcheck", "legacy_corridor", "forecast_experiment",
+    "forecast_shadow_eval_core", "forecast_shadow_score",
+)
+
+
+def _tree(module: str) -> ast.Module:
+    return ast.parse((_BACKEND / f"{module}.py").read_text(encoding="utf-8"), filename=module)
+
+
+def _calls_named(tree: ast.AST, name: str) -> list[ast.Call]:
+    """Calls whose function is the attribute `<x>.name(...)` or the bare name `name(...)`."""
+    return [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and (
+            (isinstance(node.func, ast.Attribute) and node.func.attr == name)
+            or (isinstance(node.func, ast.Name) and node.func.id == name)
+        )
+    ]
+
+
+def _names_in(tree: ast.AST, name: str) -> list[ast.AST]:
+    """Every Name, attribute, import alias or definition that spells `name`."""
+    hits = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id == name:
+            hits.append(node)
+        elif isinstance(node, ast.Attribute) and node.attr == name:
+            hits.append(node)
+        elif isinstance(node, ast.alias) and name in (node.name, node.asname):
+            hits.append(node)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name == name:
+            hits.append(node)
+    return hits
+
+
+def test_caller_split():
+    # the three module lists exist as files and do not overlap
+    groups = (PRODUCTION_CALLERS, STATIC_ONLY_CALLERS, SHADOW_MODULES)
+    assert len({m for group in groups for m in group}) == sum(len(group) for group in groups)
+    for group in groups:
+        for module in group:
+            assert (_BACKEND / f"{module}.py").is_file(), module
+
+    # production callers: resolve through the per-city table, never through the shadow resolver
+    for module in PRODUCTION_CALLERS:
+        tree = _tree(module)
+        assert _calls_named(tree, "production_city_point"), f"{module} does not call production_city_point"
+        shadow_calls = [c for c in _calls_named(tree, "city_point") if isinstance(c.func, ast.Attribute)]
+        assert not shadow_calls, f"{module} still calls <module>.city_point() at line {shadow_calls[0].lineno}"
+
+    # static-only callers: every city_point.city_point(...) is immediately read for `.static_rating`
+    for module in STATIC_ONLY_CALLERS:
+        tree = _tree(module)
+        static_reads = {
+            id(node.value) for node in ast.walk(tree)
+            if isinstance(node, ast.Attribute) and node.attr == "static_rating"
+        }
+        calls = _calls_named(tree, "city_point")
+        assert calls, f"{module} no longer calls city_point.city_point (update STATIC_ONLY_CALLERS)"
+        for call in calls:
+            assert id(call) in static_reads, f"{module}:{call.lineno} uses city_point() for more than .static_rating"
+        assert not _names_in(tree, "production_city_point"), module
+
+    # shadow and frozen-evaluation modules never name the production resolver (T-07-09)
+    for module in SHADOW_MODULES:
+        assert not _names_in(_tree(module), "production_city_point"), module
+
+    # city_point.py is the only module that defines it
+    definers = sorted(
+        path.stem for path in _BACKEND.glob("*.py")
+        if any(
+            isinstance(node, ast.FunctionDef) and node.name == "production_city_point"
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+        )
+    )
+    assert definers == ["city_point"]
+
+
+def _austin_observation_frame(wind: float = 4.0):
+    """One in-band AUSTIN observation: the computed ampacity at wind 4 m/s sits inside the G4 bounds."""
+    def fetch(stids, start, end, provider="synoptic"):
+        return pd.DataFrame([{
+            "stid": stids[0], "air_temp": 20.0, "wind_speed": wind, "wind_direction": 0.0,
+            "solar_radiation": 300.0,
+        }])
+
+    lat, lon = config.CITY_COORDINATES["AUSTIN"]
+    stations = pd.DataFrame([{"stid": "S0", "name": "s0", "lat": lat, "lon": lon}])
+    return fetch, stations
+
+
+def test_production_follows_the_table_and_shadow_does_not(monkeypatch):
+    fetch, stations = _austin_observation_frame()
+
+    def rate():
+        return city_rating.rate_city(
+            "AUSTIN", "2025-01-01", "2025-01-02", stations, fetch_weather=fetch, archive=False,
+        )
+
+    baseline = rate()
+    assert baseline["fallback"] is False
+    shadow_before = vars(city_point.city_point("AUSTIN").conductor).copy()
+
+    monkeypatch.setitem(config.PRODUCTION_CONDUCTORS, "AUSTIN", _entry("AUSTIN", max_temp_c=100.0))
+    hotter = rate()
+    assert hotter["fallback"] is False
+    # a hotter allowed conductor temperature carries more current for the same observation
+    assert hotter["rating"] > baseline["rating"]
+    # the shadow resolver (and its Drake 75 C conductor) did not move
+    assert vars(city_point.city_point("AUSTIN").conductor) == shadow_before
+    assert city_point.city_point("AUSTIN").conductor.T_max == 75.0
