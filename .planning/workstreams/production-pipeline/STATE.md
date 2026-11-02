@@ -1,19 +1,19 @@
 ---
 gsd_state_version: "1.0"
 current_phase: 07
-current_plan: 4
+current_plan: 6
 status: executing
-stopped_at: Completed 07-04-PLAN.md
-last_updated: "2026-11-02T06:54:18.397Z"
+stopped_at: Completed 07-05-PLAN.md
+last_updated: "2026-11-02T07:01:21.376Z"
 last_activity: 2026-11-01
 last_activity_desc: Phase 07 execution started
-state_head: 2ca918c81d171dd70c26573b441ffcbbc463a287
+state_head: 769889af3edbc5b3417a76c0e4da32d04a6c1249
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 66
-  completed_plans: 51
-  percent: 77
+  completed_plans: 52
+  percent: 79
 milestone_name: Production Pipeline (Supabase + live ratings)
 workstream: production-pipeline
 created: 2026-10-18
@@ -37,7 +37,7 @@ whoever owns that analysis; they are not work items here.
 
 **Status:** Ready to execute
 **Current Phase:** 07
-**Current Plan:** 4
+**Current Plan:** 6
 **Total Plans in Phase:** 19
 **Last Activity:** 2026-11-01 — Phase 07 execution started
 **Last Activity Description:** Phase 07 execution started
@@ -196,6 +196,7 @@ These block or affect stringing the system together and belong to the phases nam
 - [Phase 07]: 07-01: RATING_CONFIG_VERSION not bumped; fingerprint changes automatically (schema 2 plus PRODUCTION_CONDUCTORS); bump together with the city_rating_v1.md edit in a later plan — Label is pinned to the schema doc by supabase_schema_doc_test; plan did not list the bump
 - [Phase 07]: 07-02: owner signed protocol v4 on 2026-11-02 as aaphan (sign-with-changes: O4 = switch AUSTIN to Drake ACSR at 100 C; elevation/azimuth at model defaults; other cities Drake 75 C; O1-O3, O5-O11 at option A). AUSTIN headline is scored under Drake 100 C, its cooling and reference are refit on rows before 2026-03-17, and the TEST veto is re-scored under the production conductors before read 1 is run; no registered date moves. The actual config change lands in plan 07-11's apply-answers path (backend/config.py not edited here)
 - [Phase 07]: 07-04: production rating, training and validation resolve through city_point.production_city_point; dlr_orchestrator, supabase_store and supabase_smoke keep city_point.city_point for .static_rating only; test_caller_split (AST) pins the split and shadow modules never name the production resolver — COND-02 production half; the golden and the AST test keep the frozen shadow path on the Drake resolver. No config value changed (AUSTIN 100 C lands in 07-11); forecast_training_test:287 and the v2 label stay with 07-19
+- [Phase 07]: 07-05: v4 ship rule implemented exactly as signed in backend/forecast_shadow_decision_v4.py (2% of mean truth pooled bar, 3-of-4 consistency, ABLATION/TEST vetoes, TIE_ORDER, explicit no pick); constants pinned to the signing copy registry; v3 decision module untouched — Signed protocol v4 (2026-11-02) replaces v3 decision 8; headline refuses a missing veto record (SEL-03); non-headline labels never pick
 
 ## Open Decisions
 
@@ -219,9 +220,9 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 
 ## Session Continuity
 
-**Last session:** 2026-11-02T06:54:18.085Z
+**Last session:** 2026-11-02T07:01:17.297Z
 
-**Stopped At:** Completed 07-04-PLAN.md
+**Stopped At:** Completed 07-05-PLAN.md
 **Resume File:** None
 
 ## Performance Metrics
@@ -275,6 +276,7 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 | Phase 07 P01 | 25 min | 2 tasks | 8 files |
 | Phase 07 P02 | ~25min (this session; owner-gated) | 3 tasks | 6 files |
 | Phase 07 P04 | 8 min | 2 tasks | 9 files |
+| Phase 07 P05 | 6 min | 2 tasks | 2 files |
 
 ## Accumulated Context
 

@@ -318,7 +318,7 @@ ml-modeling workstream's evaluation; record it in that workstream's STATE.md as 
 
      After that decision, B1, B2, B4 and B5 are closed, the Phase 3 validation is re-run on the same
      non-FRESH window, and a new go/no-go is signed. A GO lifts the provisional label on stored rows.
-**Plans**: 4/19 plans executed
+**Plans**: 5/19 plans executed
 
 Plans:
 *Waiting on owner gates:* while the v4 signature (07-02) is pending, 07-01, 07-03, 07-04, 07-08 and
@@ -333,7 +333,7 @@ instant and 07-14 waits for 07-12.
 **Wave 2** *(07-03, 07-04 after 07-01; 07-05, 07-06 after the v4 signature)*
 - [x] 07-03-PLAN.md — Conductor refit tooling (new hashed location, verify-before-load, headline loader) and the ABLATION conductor-invariance driver (SEL-02, SEL-03)
 - [x] 07-04-PLAN.md — Production callers on the per-city resolver, caller-split guard, production expectations in tests (COND-02, COND-01)
-- [ ] 07-05-PLAN.md — v4 ship rule (relative 2% bar, 3-of-4 cities, vetoes, no pick) in a new decision module (SEL-01, SEL-04)
+- [x] 07-05-PLAN.md — v4 ship rule (relative 2% bar, 3-of-4 cities, vetoes, no pick) in a new decision module (SEL-01, SEL-04)
 - [ ] 07-06-PLAN.md — Signed round registry (v4-read1, v4-read2, v4-late-descriptive) and an armed guard with no override in the evaluation core; `--round` for the live-system check (SEL-01, SEL-04)
 
 **Wave 3** *(07-07 after 07-05 and 07-06; 07-08, 07-19 after 07-04)*
@@ -375,4 +375,4 @@ instant and 07-14 waits for 07-12.
 | 4. Supabase Store & Writer | 12/12 | Complete    | 2026-10-24 |
 | 5. Scheduled Live Runs | 8/8 | Complete    | 2026-10-26 |
 | 6. Exposure & E2E Verification | 13/13 | Complete    | 2026-11-01 |
-| 7. Per-City Conductors, Shadow Refit and Early Model Selection | 4/19 | In Progress | - |
+| 7. Per-City Conductors, Shadow Refit and Early Model Selection | 5/19 | In Progress | - |
