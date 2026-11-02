@@ -293,6 +293,27 @@ def redact(text, secrets=None, limit=_MAX_MESSAGE_CHARS) -> str:
     return text[:limit]
 
 
+_ALERT_SUFFIX_SEP = " — "
+_ALERT_SUFFIX_PREFIX = "fallback rating "
+
+
+def _safe_alert(alert, limit=_MAX_MESSAGE_CHARS) -> str:
+    """
+    One stored alert: redacted first (uncapped, so no secret survives a cut), then shortened to
+    `limit` characters. An alert ends in `— fallback rating N A` (`DLRSafetyMonitor._fallback`), the
+    part a consumer needs to read; when the text is too long the middle (the reason, which can carry
+    a raw detector exception) is cut with an ellipsis and that suffix is kept whole.
+    """
+    text = redact(str(alert), limit=10 ** 9)
+    if len(text) <= limit:
+        return text
+    head, sep, tail = text.rpartition(_ALERT_SUFFIX_SEP)
+    room = limit - len(sep) - len(tail) - 1
+    if not sep or not tail.startswith(_ALERT_SUFFIX_PREFIX) or room <= 0:
+        return text[:limit]
+    return head[:room] + "…" + sep + tail
+
+
 def connect(url=None):
     """
     Open the writer connection. `url` defaults to the SUPABASE_DB_URL secret.
@@ -561,8 +582,8 @@ def build_rating_row(result: dict, end, run_ctx: dict, provenance=None) -> dict:
     power_factor = float(config.POWER_FACTOR)
 
     # The alerts land in a publicly readable column (a G6 alert carries a raw detector exception), so
-    # each one is redacted and cut like every other stored error text.
-    alerts = [redact(str(a)) for a in (result.get("alerts") or [])]
+    # each one is redacted and cut like every other stored error text; the cut keeps the fallback rating.
+    alerts = [_safe_alert(a) for a in (result.get("alerts") or [])]
     gates = sorted({a.split(" ")[0] for a in alerts})
 
     observation = result.get("observation")

@@ -263,8 +263,26 @@ def test_alerts_are_redacted_and_capped_before_they_are_stored():
     row = supabase_store.build_rating_row(_result(alerts=[leaky, long_alert]), _END, _RUN_CTX)
     assert "hunter2" not in repr(row) and "postgresql://user" not in repr(row)
     assert "REDACTED" in row["alerts"][0]
-    assert len(row["alerts"][1]) == 300
+    assert len(row["alerts"][1]) == 300  # no fallback suffix: cut at the cap
     assert row["fallback_gates"] == ["G4", "G6"]
+
+
+def test_a_long_alert_keeps_its_fallback_rating_suffix_when_it_is_shortened():
+    # The G6 reason embeds the raw detector exception; the cut must take the reason, not the rating.
+    url = "postgres" + "ql://user:hunter2@db.example.invalid/x"  # built from pieces for secret_scan_test
+    suffix = " — fallback rating 1825 A"
+    alert = "G6 FAIL (detector error (" + "boom " * 120 + "connect %s password=hunter2))" % url + suffix
+    assert len(alert) > 300
+    row = supabase_store.build_rating_row(_result(alerts=[alert]), _END, _RUN_CTX)
+    stored = row["alerts"][0]
+    assert len(stored) <= 300
+    assert stored.startswith("G6 FAIL (detector error (boom") and "…" in stored
+    assert stored.endswith(suffix)
+    assert row["fallback_gates"] == ["G6"]
+    # redaction happens before the cut, so a secret near the cut can never survive half-matched
+    secret_near_cut = "G6 FAIL (" + "x" * 280 + " password=hunter2 tail)" + suffix
+    stored = supabase_store.build_rating_row(_result(alerts=[secret_near_cut]), _END, _RUN_CTX)["alerts"][0]
+    assert "hunter2" not in stored and stored.endswith(suffix) and len(stored) <= 300
 
 
 def test_begin_read_only_pins_a_transaction_not_the_session():
