@@ -6,6 +6,7 @@ fix_report: 06-REVIEW-FIX.md
 counts: {critical: 0, warning: 6, info: 6, total: 12}
 open: 6
 round_2: {review_commit: 2eb2f8c, fix_report: 100b37d, critical: 0, warning: 2, info: 3, total: 5, open: 3}
+round_3: {review_commit: 367beaf, critical: 0, warning: 2, info: 2, total: 4, open: 4}
 ---
 
 # Phase 06 code review disposition
@@ -39,4 +40,15 @@ Round 2 reuses the ids WR-01.., IN-01..; they are different findings from round 
 | IN-01 | info | `begin_read_only` never confirms the transaction is read-only | open | live trace on 2026-11-02 worked; no committed real-Postgres test |
 | IN-02 | info | New privilege check in `verify_exposure.sql` skips sequences | open | |
 | IN-03 | info | 404 PGRST205 passes on a renamed table; default opener reads proxy env at import | open | |
+
+## Round 3 (review of the round-2 fix commits efca90c, 6d2dafc, 4e9b2d0; 06-REVIEW.md at 367beaf)
+
+Ids are reused again; these are new findings. Round 2's report is 06-REVIEW.md at 2eb2f8c.
+
+| ID | Severity | Finding | Disposition | Note |
+|---|---|---|---|---|
+| WR-01 | warning | View-write 42501 passes without checking the message; an RLS-only refusal would pass | open | live answers are 500/55000, so no current verdict changes |
+| WR-02 | warning | Live-answer replay test skips when `.planning` evidence JSONs are absent | open | `.planning` is stripped on PR branches; keep a fixture under backend/tests |
+| IN-01 | info | 55000 accepted on code alone; message not checked | open | confirm live message text before tightening |
+| IN-02 | info | Shortened alert can leave unbalanced parentheses | open | cosmetic |
 
