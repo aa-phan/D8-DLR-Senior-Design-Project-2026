@@ -54,8 +54,8 @@ def test_city_bars_are_two_percent_of_mean_truth():
 
 
 def test_city_bars_are_unrounded_float64():
-    bars = dec.city_bars(TRUTH)
-    assert bars["AUSTIN"] == dec.RELATIVE_MARGIN_FRACTION * 1257.8
+    bars = dec.city_bars({"AUSTIN": {"mean_truth_amps": 1257.837, "n_truth_rows": 100}})
+    assert bars["AUSTIN"] == dec.RELATIVE_MARGIN_FRACTION * 1257.837
     assert bars["AUSTIN"] != round(bars["AUSTIN"], 3)
 
 
