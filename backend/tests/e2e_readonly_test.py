@@ -234,6 +234,11 @@ HIDDEN_CASES = [
     (200, [{"id": 1, "breach": False}], False),
     (200, [], False),
     (500, {"message": "boom"}, False),
+    # Refusals that do not name their cause prove nothing about the table (review WR-02).
+    (401, {"message": "Invalid API key"}, False),
+    (403, {"message": "forbidden"}, False),
+    (404, {"message": "not found"}, False),
+    (406, {"code": "PGRST999", "message": "something else"}, False),
 ]
 
 
@@ -246,6 +251,15 @@ def test_check_hidden_verdicts(status, body, expect_ok):
     assert all(r.ok is expect_ok for r in results), results
     if not expect_ok and status == 200:
         assert all("readable by the public key" in r.detail for r in results)
+
+
+def test_check_hidden_with_an_invalid_key_is_not_a_pass():
+    # The gateway refuses every request when the key is wrong; that must not read as "table hidden".
+    with _fake() as fake:
+        results = ev.check_hidden(_cfg(fake, key=OTHER_KEY))
+    assert [r.name for r in results] == ["key_sanity"]
+    assert not results[0].ok and "no refusal is trusted" in results[0].detail
+    assert OTHER_KEY not in results[0].detail
 
 
 def test_check_hidden_default_fake_hides_both_tables():
@@ -499,14 +513,18 @@ def test_403_permission_denied_passes_like_401():
     assert all(r.ok for r in results), results
 
 
-@pytest.mark.parametrize("status,expect_ok", [(401, True), (500, True), (405, True), (200, False), (201, False)])
-def test_view_write_verdicts(status, expect_ok):
-    with _fake(rows=_write_rows(), view_write_response=(status, {"message": "x"} if status >= 400 else [])) as fake:
+@pytest.mark.parametrize("status,body,expect_ok", [
+    (401, {"message": "x"}, True), (405, {"message": "x"}, True),
+    (500, {"code": "55000", "message": "cannot change view"}, True),  # what the live service answers
+    (500, {"message": "x"}, False), (504, {"message": "x"}, False),   # a 5xx with no database code proves nothing
+    (200, [], False), (201, [], False)])
+def test_view_write_verdicts(status, body, expect_ok):
+    with _fake(rows=_write_rows(), view_write_response=(status, body)) as fake:
         results = _by_name(ev.check_writes(_cfg(fake), now=NOW))
     for name in VIEW_ATTEMPTS:
         assert results[name].ok is expect_ok, results[name]
         if not expect_ok:
-            assert "write accepted" in results[name].detail
+            assert ("write accepted" if status < 300 else "inconclusive") in results[name].detail
     assert all(results[name].ok for name in TABLE_ATTEMPTS)
 
 

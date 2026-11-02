@@ -23,7 +23,10 @@ sees exactly one current rating per city, with the documented columns."
 
 --check-hidden (on by default) proves: "the private run log and the soak log cannot be read
 with the public key." public.pipeline_run and ops.freshness_log (Accept-Profile: ops) must
-answer 401, 403, 404 or 406. Any 2xx, even an empty list, fails as "readable by the public key".
+answer 401 or 403 with code 42501, or 404 or 406 with PGRST205, PGRST106 or PGRST202. Any 2xx, even an
+empty list, fails as "readable by the public key"; a refusal that names no cause (a bare 401 "Invalid
+API key", a 5xx) is inconclusive and fails. First, one read of latest_rating with the same key must
+answer 200, or the result is a single `key_sanity` failure and no refusal is trusted.
 
 The per-city lines (city, valid_time, age_minutes, is_stale, status, rating_amps,
 is_provisional) are printed so the owner can read the answer, not just the verdict.
@@ -45,7 +48,8 @@ with the public key is refused, and the data afterwards is identical."
                                  else fails as inconclusive
   write:view_insert          \
   write:view_patch            |  the same three writes against public.latest_rating pass on any
-  write:view_delete          /   non-2xx answer and fail on any 2xx
+  write:view_delete          /   4xx answer (or HTTP 500 with the database's 55000 "cannot change
+                                 view") and fail on any 2xx; any other 5xx is inconclusive
   snapshot_unchanged         the snapshot is read again; the row count and the SHA-256 must be
                              identical, because a status code alone can pass on a project that
                              silently changed data
@@ -90,8 +94,14 @@ CheckResult = namedtuple("CheckResult", ["name", "ok", "detail"])
 
 EXPECTED_CITIES = config.LOCATIONS
 HIDDEN_TARGETS = (("public", "pipeline_run"), ("ops", "freshness_log"))
-HIDDEN_OK_STATUSES = (401, 403, 404, 406)
+# A hidden answer only counts when it names the cause: a privilege refusal (42501) or PostgREST
+# saying the schema or relation is not in its cache. A bare 401 "Invalid API key" from the gateway,
+# or any 5xx, proves nothing about the table.
+HIDDEN_REFUSED_PRIVILEGE = (401, 403)
+HIDDEN_NOT_EXPOSED = (404, 406)
+HIDDEN_NOT_EXPOSED_CODES = ("PGRST205", "PGRST106", "PGRST202")
 KEYLESS_OK_STATUSES = (401, 403)
+VIEW_WRITE_DB_REFUSAL_CODES = ("55000", "42501")
 
 # E2E-03: the sentinel key sits in the year 2000, never the latest slot of any city.
 SENTINEL_CITY = "AUSTIN"
@@ -307,9 +317,30 @@ def check_read(cfg, opener=None, now=None, lines=None, attempts=None):
 # ---------------------------------------------------------------------------
 
 
+def _hidden_cause(response):
+    """A short cause when the answer proves the table is unreadable, else None (inconclusive)."""
+    code = (_body_of(response) or {}).get("code")
+    if response.status in HIDDEN_REFUSED_PRIVILEGE and code == "42501":
+        return "HTTP %d %s" % (response.status, code)
+    if response.status in HIDDEN_NOT_EXPOSED and code in HIDDEN_NOT_EXPOSED_CODES:
+        return "HTTP %d %s" % (response.status, code)
+    return None
+
+
 def check_hidden(cfg, opener=None, now=None, lines=None, attempts=None):
     """The private tables are not readable with the public key (API-01, OD-6)."""
     results = []
+    # A refusal is only evidence when the key itself works: with an invalid or revoked key the
+    # gateway refuses every request, so the private tables would look hidden for the wrong reason.
+    try:
+        sanity = supabase_rest.request(
+            cfg, "GET", "latest_rating", [("select", "city"), ("limit", "1")], opener=opener)
+    except supabase_rest.RestError as exc:
+        return [CheckResult("key_sanity", False, "the key could not be checked, so no refusal is trusted: %s"
+                            % _fail_text(exc, cfg))]
+    if sanity.status != 200:
+        return [CheckResult("key_sanity", False, "latest_rating answered %s with the key, so no refusal is trusted"
+                            % supabase_rest.brief(sanity, cfg))]
     for schema, table in HIDDEN_TARGETS:
         name = "hidden:%s.%s" % (schema, table)
         profile = None if schema == "public" else schema
@@ -322,8 +353,8 @@ def check_hidden(cfg, opener=None, now=None, lines=None, attempts=None):
         if 200 <= response.status < 300:
             results.append(CheckResult(name, False, "%s.%s is readable by the public key (HTTP %d)"
                                        % (schema, table, response.status)))
-        elif response.status in HIDDEN_OK_STATUSES:
-            results.append(CheckResult(name, True, "not readable (HTTP %d)" % response.status))
+        elif _hidden_cause(response):
+            results.append(CheckResult(name, True, "not readable (%s)" % _hidden_cause(response)))
         else:
             results.append(CheckResult(name, False, "inconclusive: %s" % supabase_rest.brief(response, cfg)))
     return results
@@ -392,7 +423,14 @@ def _classify_view_write(response):
     code = body.get("code") if isinstance(body.get("code"), str) else None
     if 200 <= status < 300:
         return False, "write accepted (HTTP %d)" % status, code
-    return True, "refused (HTTP %d)" % status, code
+    if 400 <= status < 500:
+        return True, "refused (HTTP %d)" % status, code
+    # The live service answers a write to the (not updatable) view with HTTP 500 and the database's own
+    # 55000 "cannot change view", which is a real refusal. Any other 5xx (a gateway timeout after a
+    # committed write, say) says nothing about the outcome.
+    if status >= 500 and code in VIEW_WRITE_DB_REFUSAL_CODES:
+        return True, "refused by the database (HTTP %d, code %s)" % (status, code), code
+    return False, "inconclusive: HTTP %d, code %s" % (status, code), code
 
 
 def _sql_literal(value):
