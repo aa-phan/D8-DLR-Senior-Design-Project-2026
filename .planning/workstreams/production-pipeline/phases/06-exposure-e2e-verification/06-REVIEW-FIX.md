@@ -3,89 +3,78 @@ phase: 06-exposure-e2e-verification
 fixed_at: 2026-11-01T00:00:00Z
 review_path: .planning/workstreams/production-pipeline/phases/06-exposure-e2e-verification/06-REVIEW.md
 iteration: 1
-findings_in_scope: 6
-fixed: 6
+findings_in_scope: 2
+fixed: 2
 skipped: 0
 status: all_fixed
 ---
 
-# Phase 6: Code Review Fix Report
+# Phase 6: Code Review Fix Report (round 2)
 
 **Fixed at:** 2026-11-01
 **Source review:** .planning/workstreams/production-pipeline/phases/06-exposure-e2e-verification/06-REVIEW.md
 **Iteration:** 1
 
-**Summary:**
-- Findings in scope: 6 (critical 0, warning 6; the 6 Info findings are out of scope for `critical_warning`)
-- Fixed: 6
-- Skipped: 0
+This report replaces the round-1 report, which is preserved in git at 3764910.
 
-Neither applied migration was touched (their SHA-256 pins in `expose_migration_test.py` still pass). No new migration was added. Nothing was applied to or run against the live project, no `.env` was read, and nothing was pushed. Commits are local on `main`.
+**Summary:**
+- Findings in scope: 2 (WR-01, WR-02; scope is critical and warning only)
+- Fixed: 2
+- Skipped: 0
+- Not in scope: IN-01, IN-02, IN-03 (info findings)
 
 ## Fixed Issues
 
-### WR-01: `verify_exposure.sql` cannot see column-level grants or inherited privileges
-
-**Files modified:** `supabase/ops/verify_exposure.sql`, `backend/tests/expose_migration_test.py`
-**Commit:** d5bddba
-**Applied fix:** Added a CTE `public_role_privileges` and a new check row `anon_authenticated_hold_no_write_or_column_privilege_in_public`. It asks `has_table_privilege` and `has_any_column_privilege` for `anon` and `authenticated` on every relation in `public`, so column-level grants and privileges inherited through role membership are caught. Write, truncate, references and trigger are refused everywhere. Column-level SELECT is refused on everything except the two published objects. The file is still one read-only SELECT. A new test plants a column-level update, a column-level insert, a column-level select on `pipeline_run` and a write privilege inherited through a role. In each case exactly the new check goes false while the old grants check stays true. The two existing "checks can fail" expectations now include the new check name.
-
-Owner note: `verify_exposure.sql` now returns 18 rows, not 17. The phase 06-09 and 06-13 docs say "17 checks"; those are history and were not edited. On the live database the new check should come back `ok = true` if the privilege list is as pinned. The owner should confirm that on the next run.
-
-### WR-02: Refusal checks can pass for the wrong reason (invalid key, missing table, 5xx)
+### WR-02: Any 4xx on a view write counts as a refusal (fixed: requires human verification)
 
 **Files modified:** `backend/e2e_verify_readonly.py`, `backend/tests/e2e_readonly_test.py`
-**Commit:** 99674cd
-**Status:** fixed: requires human verification (logic change in a verification tool)
-**Applied fix:**
-- `check_hidden` first reads `latest_rating` (limit 1) with the same key. If that is not a 200, it returns one `key_sanity` failure and trusts no refusal.
-- A hidden answer now passes only as 401 or 403 with code `42501`, or as 404 or 406 with `PGRST205`, `PGRST106` or `PGRST202`. A bare 401 "Invalid API key", a code-less 404 and any 5xx are inconclusive and fail. The detail now shows the status and code.
-- `_classify_view_write` passes only on a 4xx, and also on HTTP 500 carrying the database's own `55000` or `42501`. Any other 5xx (a gateway timeout, say) is inconclusive and fails.
-- `--check-writes` needed no extra sanity read: its `snapshot_before` already fails on a bad key.
-- The module docstring is updated and the tests are extended. The old `500 -> pass` expectation is replaced.
+**Commit:** efca90c
+**Applied fix:** `_classify_view_write` no longer passes every 4xx. A view write counts as refused only when the answer names the cause:
+- code `55000` at any status of 400 or above. This is the live answer (HTTP 500, `55000`).
+- code `42501` with HTTP 401 or 403, or a 5xx.
+- code `PGRST117` or `42809` with a 4xx. Either code proves the view is not writable.
 
-Deviation from the review's suggested fix: the review said "only a 4xx refuses" a view write. The live evidence in `06-13-SUMMARY.md` and `06-SOAK-REPORT.md` shows the real service refuses `view_insert` and `view_patch` with HTTP 500 and code `55000` (the view is not updatable). A pure 4xx rule would turn every live run red, so a 5xx is accepted only when it carries `55000` or `42501`. Please confirm that reading of the live behaviour.
+Every other answer is inconclusive: a bare 401 or 403, a 400 (including PGRST102), a 404 (including PGRST125), 408, 429, and a 5xx with no code. A 2xx is still "write accepted".
 
-### WR-03: Detector exception text is published to `anon`, and the docs say none is stored
+`VIEW_WRITE_DB_REFUSAL_CODES` is now `("55000",)`, with two new constants for the privilege and not-writable codes.
 
-**Files modified:** `backend/supabase_store.py`, `backend/tests/supabase_store_test.py`, `docs/integration/rest-api.md`, `docs/data-science/schema/city_rating_v1.md`
-**Commit:** 29aa85c
-**Applied fix:** Kept minimal, as instructed. `build_rating_row` (the review calls it `build_city_row`) now runs each alert through `supabase_store.redact` (the default 300-character cap) before it is stored. Gate names are taken from the redacted list, and the first token of an alert is unchanged. `DLRSafetyMonitor.py` was NOT changed, so a G6 alert can still carry a short raw exception message, minus credentials and URLs. Redaction removes credentials, `postgres://` URLs and `key=value` secrets. It does not remove file paths. Because of that, the two doc sentences claiming "no file path, no credential, no error text" were softened to say what is true: no credential, each `alerts` entry redacted and cut to 300 characters, and a detector failure can still carry a short error message. A new test plants a URL and a password in an alert and checks they are removed, that a long alert is cut to 300, and that the gates are still correct. The planted URL is built from pieces so `secret_scan_test.py` passes.
+I did not add `PGRST205` for views, unlike the review's example. A "not in the schema cache" answer for the view would pass vacuously if the view were ever renamed, which is the same weakness IN-03 describes for the hidden table.
 
-**Owner follow-up (not done here):** rows already stored in `public.city_rating.alerts` may still contain unredacted text. They need a one-off owner check, for example `alerts::text like '%detector error%'`, and an owner UPDATE if anything turns up. The reviewer's other suggestion, reporting only the exception type in `DLRSafetyMonitor.py` (`detector error (<TypeName>)`), was left out to keep the production change minimal. It is the only change that would also keep file paths out of the column.
+Tests, in `backend/tests/e2e_readonly_test.py`:
+- `test_view_write_verdicts` is rewritten. It passes 55000/500, 42501/401, 42501/403, PGRST117/405 and 42809/404. It requires inconclusive for a bare 401 "Invalid API key", a bare 403, a bare 405, a 400 PGRST102, a 404 PGRST125, a bare 404, 408, 429, a codeless 500, 504, and 2xx. The old case `(401, {"message": "x"}) -> True` and `(405, ...) -> True` were the loose behaviour and now expect inconclusive.
+- New test `test_committed_live_view_answers_are_still_classified_as_refused` replays the `view_insert`, `view_patch` and `view_delete` attempts recorded in `06-09-live-checks.json`, `06-12-live-checks.json` and `06-13-live-checks.json`. All nine are HTTP 500 with code 55000 and still classify as refused, so a live run stays green.
 
-### WR-04: The read-only session guard does not hold on a transaction-pooler URL
+Because this is classifier logic, a human should confirm the accepted code and status pairs match what the live project returns for other cases. The recorded live answers are covered.
 
-**Files modified:** `backend/supabase_store.py`, `backend/e2e_trace.py`, `backend/e2e_soak_report.py`, `backend/tests/supabase_store_test.py`, `backend/tests/e2e_trace_test.py`, `backend/tests/e2e_soak_report_test.py`
-**Commit:** e8ab256
-**Applied fix:** Added `supabase_store.begin_read_only(conn)` (sets `autocommit = False` and `read_only = True`, so every statement runs in `BEGIN READ ONLY`). Both tools call it instead of `set default_transaction_read_only = on`, run all their reads in that one transaction and `rollback()` afterwards. The soak export rolls back before the slow `gh` call so no transaction sits idle during it. The docstrings and comments now say "read-only transaction". The fake connections in the tests gained `autocommit`, `read_only` and `rollback`, and the tests assert those instead of a first `SET` statement. I also checked against a real local Postgres, with a throwaway test that was not committed: a `create table` inside `begin_read_only` raised `ReadOnlySqlTransaction`. The `set statement_timeout` and `set timezone` in `connect()` are session-level and were left alone, as the review noted they share the pooler issue.
+### WR-01: The 300-character cap on stored alerts cuts off the fallback rating (fixed: requires human verification)
 
-### WR-05: The soak "late run" rule explains exactly the breach it detects
+**Files modified:** `backend/supabase_store.py`, `backend/tests/supabase_store_test.py`
+**Commit:** 6d2dafc
+**Applied fix:** A new `_safe_alert` helper redacts the whole alert uncapped, then shortens it to 300 characters. If the text is too long and ends in ` — fallback rating N A`, it cuts the middle (the reason) with an ellipsis and keeps that suffix whole. Without such a suffix it cuts at the cap as before. Redaction still runs first, so a secret near the cut cannot survive. `build_rating_row` uses `_safe_alert`. `fallback_gates` is still derived from the first token of each alert.
 
-**Files modified:** `backend/e2e_soak_report.py`, `backend/tests/e2e_soak_report_test.py`, `docs/data-science/decisions/dlr_live_runbook.md`
-**Commit:** f65062c
-**Status:** fixed: requires human verification (changes a pass/fail rule)
-**Applied fix:** A cause that starts with `late run:` is still computed and shown, but it no longer satisfies the pass condition. A new `_needs_annotation(b)` treats a breach as unexplained when it has no owner annotation and either no cause or a lateness-only cause. The failure line reads "explained only by lateness (...), which is the breach itself, so it needs an owner annotation". The report table marks such a breach "lateness only: needs an owner annotation". When the owner annotates it, the annotation counts and the cause stays visible beside it. The module docstring and the runbook "Reading the report" paragraph were updated. Tests: the 90 min + 2 s and 90 min + 6 s cases now exit 1 (they exited 0 before). The late-run case was removed from the "cause explains the breach" test and a new test covers both the failure and the annotated pass. The 72 h soak that already ran had 0 breaches, so its verdict is unaffected.
-
-### WR-06: `http://` accepted for any host, the error message says https, and `apikey` follows redirects
-
-**Files modified:** `backend/supabase_rest.py`, `backend/tests/e2e_readonly_test.py`
-**Commit:** efe3fbd
-**Applied fix:** `config_from_env` now accepts `https://` for any host and `http://` only for `127.0.0.1`, `localhost` or `::1` (the fake server the tests use), so the "must start with https://" message is now true. The default opener is built with a redirect handler that follows a redirect only within the same scheme, host and port. A refused redirect comes back as the 3xx answer itself, so the key never reaches another host. A caller-supplied `opener` is unchanged. New tests cover plain http to a remote host (including a look-alike `127.0.0.1.example.invalid`), accepted https and loopback URLs, and a real redirect to a different host name, which received zero requests.
+Tests, in `backend/tests/supabase_store_test.py`:
+- The existing `len == 300` assertion is kept for an alert with no fallback suffix.
+- New `test_a_long_alert_keeps_its_fallback_rating_suffix_when_it_is_shortened`. A long G6 alert with an embedded connection URL and `password=` must end in `— fallback rating 1825 A`, be at most 300 characters long, contain an ellipsis, and carry no secret. A second case puts a `password=` secret near the cut and requires the suffix to survive and the secret to be gone.
 
 ## Verification
 
-Ran in the isolated worktree under `.claude/worktrees/`, not the main checkout, with `/Users/aphan/Senior_Design/.venv/bin/python` from `backend/` and `DLR_TEST_PG_AUTOSTART=1` (a local throwaway Postgres; nothing live). After the fast-forward the commits are on `main` and the worktree was removed, so the figures can be reproduced from the main checkout.
+Run from the repo root `/Users/aphan/Senior_Design`, on main, after both commits:
 
-Full Phase 6 set (`secret_scan_test`, `e2e_readonly_test`, `e2e_trace_test`, `e2e_soak_report_test`, `example_read_ratings_test`, `rest_api_doc_test`, `monitoring_runbook_test`, `expose_migration_test`, `soak_log_migration_test`, `supabase_smoke_test`) plus `supabase_store_test`: **285 passed, 1 skipped, 0 failed**. The one skip was not investigated; it is most likely a test that needs a live setting. Each finding's own tests were also run after its fix. Tier 1 (re-read) and the tests were the verification; no separate syntax checker was needed.
+```
+DLR_TEST_PG_AUTOSTART=1 .venv/bin/python -m pytest -q -p no:cacheprovider \
+  backend/tests/e2e_readonly_test.py backend/tests/supabase_store_test.py \
+  backend/tests/secret_scan_test.py backend/tests/expose_migration_test.py \
+  backend/tests/e2e_soak_report_test.py backend/tests/e2e_trace_test.py
+=> 234 passed, 1 skipped
+```
 
-## Skipped Issues
+The one skip is the owner-local check in `secret_scan_test.py:316`, which needs live environment variables. The same run in the isolated worktree gave the same result (234 passed, 1 skipped). The secret scan passes, so the committed text carries no project URL, reference or key.
 
-None.
+## Not addressed (out of scope for `critical_warning`)
 
-## Not in scope (Info findings, `fix_scope=critical_warning`)
-
-IN-01 to IN-06 were not attempted. IN-01 would need a new additive migration or a runbook note. The `06-REVIEW-DISPOSITION.md` rows for WR-01 to WR-06 are still `open`; the orchestrator should move them to `fixed` with the commits above.
+- IN-01 (`begin_read_only` cannot prove the guard took effect)
+- IN-02 (`public_role_privileges` ignores sequences)
+- IN-03 (vacuous PGRST205 pass if `pipeline_run` is renamed; import-time opener ignores `.env` proxy settings)
 
 ---
 
