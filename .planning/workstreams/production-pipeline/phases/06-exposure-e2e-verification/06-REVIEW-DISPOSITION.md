@@ -5,7 +5,7 @@ recorded: 2026-11-01
 fix_report: 06-REVIEW-FIX.md
 counts: {critical: 0, warning: 6, info: 6, total: 12}
 open: 6
-round_2: {review_commit: 2eb2f8c, critical: 0, warning: 2, info: 3, total: 5, open: 5}
+round_2: {review_commit: 2eb2f8c, fix_report: 100b37d, critical: 0, warning: 2, info: 3, total: 5, open: 3}
 ---
 
 # Phase 06 code review disposition
@@ -34,8 +34,8 @@ Round 2 reuses the ids WR-01.., IN-01..; they are different findings from round 
 
 | ID | Severity | Finding | Disposition | Note |
 |---|---|---|---|---|
-| WR-01 | warning | 300-char alert cap cuts the `— fallback rating N A` suffix on long G6 exceptions | open | test asserts the cut, not that the suffix survives |
-| WR-02 | warning | Any 4xx on a view write counts as a refusal (400/404/429/bare 401 would pass) | open | same false-pass class as round-1 WR-02; live verdicts unaffected (live answer is 500/55000) |
+| WR-01 | warning | 300-char alert cap cuts the `— fallback rating N A` suffix on long G6 exceptions | fixed (6d2dafc) | needs human check: `_safe_alert` shortens the middle, keeps the suffix; redaction before the cut |
+| WR-02 | warning | Any 4xx on a view write counts as a refusal (400/404/429/bare 401 would pass) | fixed (efca90c, 4e9b2d0) | needs human check: refused only on 55000 (any >=400), 42501 (401/403/5xx), PGRST117/42809 (4xx); committed live answers replayed and still refused |
 | IN-01 | info | `begin_read_only` never confirms the transaction is read-only | open | live trace on 2026-11-02 worked; no committed real-Postgres test |
 | IN-02 | info | New privilege check in `verify_exposure.sql` skips sequences | open | |
 | IN-03 | info | 404 PGRST205 passes on a renamed table; default opener reads proxy env at import | open | |
