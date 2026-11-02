@@ -220,6 +220,163 @@ CITY_LINE_BEARING_DEG: dict[str, float] = {
     "EL_PASO": 267.54,
 }
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Production per-city conductor table (production-pipeline Phase 7, COND-01)
+# ──────────────────────────────────────────────────────────────────────────────
+# Production rating, training and validation read ONLY this table, through
+# `city_point.production_city_point`. The shadow collector and the frozen
+# evaluation keep DEFAULT_CONDUCTOR_CONFIG_KWARGS through `city_point.city_point`
+# (COND-02), so the table must never be read from a shadow module.
+#
+# Per D-09 every city starts on the model default (795 kcmil Drake ACSR, 75 C,
+# 900 m, the carried-over line bearing above) until Power Systems answers; each
+# value carries a source string below. Replacing a value is an edit here plus a
+# RATING_CONFIG_VERSION bump, never a code change: the table is fingerprinted
+# per city (rating_identity.FINGERPRINTED_CONFIG_NAMES), so a changed value
+# changes that city's `config_fingerprint` and no other city's. The sources are
+# not fingerprinted.
+#
+# Field order is documentation only; the fingerprint canonicalizes key order.
+PRODUCTION_CONDUCTOR_FIELDS: tuple[str, ...] = (
+    "conductor_type",
+    "diameter_m",
+    "resistance_ac",
+    "resist_temp_coef",
+    "emissivity",
+    "absorptivity",
+    "max_temp_c",
+    "elevation_m",
+    "line_azimuth",
+)
+
+# One key per line so a reviewer (and the backfill identity test, which rewrites
+# the max_temp_c line of every entry) sees every value on its own line.
+PRODUCTION_CONDUCTORS: dict[str, dict] = {
+    "AUSTIN": {
+        "conductor_type": "795 kcmil ACSR Drake (model default)",
+        "diameter_m": 0.02814,
+        "resistance_ac": 0.0726,
+        "resist_temp_coef": 0.00404,
+        "emissivity": 0.8,
+        "absorptivity": 0.8,
+        "max_temp_c": 75.0,
+        "elevation_m": 900.0,
+        "line_azimuth": 173.15,
+    },
+    "CORPUS_CHRISTI": {
+        "conductor_type": "795 kcmil ACSR Drake (model default)",
+        "diameter_m": 0.02814,
+        "resistance_ac": 0.0726,
+        "resist_temp_coef": 0.00404,
+        "emissivity": 0.8,
+        "absorptivity": 0.8,
+        "max_temp_c": 75.0,
+        "elevation_m": 900.0,
+        "line_azimuth": 173.15,
+    },
+    "MIDLAND": {
+        "conductor_type": "795 kcmil ACSR Drake (model default)",
+        "diameter_m": 0.02814,
+        "resistance_ac": 0.0726,
+        "resist_temp_coef": 0.00404,
+        "emissivity": 0.8,
+        "absorptivity": 0.8,
+        "max_temp_c": 75.0,
+        "elevation_m": 900.0,
+        "line_azimuth": 267.54,
+    },
+    "EL_PASO": {
+        "conductor_type": "795 kcmil ACSR Drake (model default)",
+        "diameter_m": 0.02814,
+        "resistance_ac": 0.0726,
+        "resist_temp_coef": 0.00404,
+        "emissivity": 0.8,
+        "absorptivity": 0.8,
+        "max_temp_c": 75.0,
+        "elevation_m": 900.0,
+        "line_azimuth": 267.54,
+    },
+}
+
+PRODUCTION_CONDUCTOR_SOURCE_PROVISIONAL: str = "current model default, provisional; Power Systems pending"
+
+# A source string for every value of every city (a test asserts completeness).
+# Overwrite a city's entries with the document or person that supplied the value.
+PRODUCTION_CONDUCTOR_SOURCES: dict[str, dict[str, str]] = {
+    city: {
+        field: (
+            "carried-over corridor bearing (CITY_LINE_BEARING_DEG), provisional; Power Systems pending"
+            if field == "line_azimuth"
+            else "thermal_model.ConductorConfig default, provisional; Power Systems pending"
+            if field == "resist_temp_coef"
+            else PRODUCTION_CONDUCTOR_SOURCE_PROVISIONAL
+        )
+        for field in PRODUCTION_CONDUCTOR_FIELDS
+    }
+    for city in PRODUCTION_CONDUCTORS
+}
+
+# Inclusive plausibility ranges for the numeric fields (units as in the table).
+# A guard against a typo or a unit slip, not an engineering limit.
+PRODUCTION_CONDUCTOR_RANGES: dict[str, tuple[float, float]] = {
+    "diameter_m": (0.005, 0.1),
+    "resistance_ac": (0.005, 1.0),       # ohm/km at 25 C
+    "resist_temp_coef": (0.0, 0.01),     # per C
+    "emissivity": (0.0, 1.0),
+    "absorptivity": (0.0, 1.0),
+    "max_temp_c": (50.0, 250.0),
+    "elevation_m": (-100.0, 4000.0),
+    "line_azimuth": (0.0, 360.0),
+}
+
+
+def production_conductor_kwargs_for(city: str) -> dict:
+    """
+    `thermal_model.ConductorConfig` kwargs for `city` from PRODUCTION_CONDUCTORS: the
+    eight numeric fields as floats (`conductor_type` is descriptive and dropped).
+    Consumed by `city_point.production_city_point`.
+
+    Raises:
+        KeyError: `city` is not in LOCATIONS (naming the sorted valid cities), has no
+            table entry, or its entry lacks a field (naming the city and the field).
+        ValueError: the entry has an unknown key, an empty `conductor_type`, or a value
+            that is not a finite number inside its inclusive PRODUCTION_CONDUCTOR_RANGES
+            interval (naming the city, field, value and range).
+    """
+    if city not in LOCATIONS:
+        raise KeyError(f"Unknown city {city!r}. Valid cities: {sorted(LOCATIONS)}")
+    if city not in PRODUCTION_CONDUCTORS:
+        raise KeyError(
+            f"No production conductor entry for {city!r}; entries exist for {sorted(PRODUCTION_CONDUCTORS)}"
+        )
+    entry = PRODUCTION_CONDUCTORS[city]
+    for field in PRODUCTION_CONDUCTOR_FIELDS:
+        if field not in entry:
+            raise KeyError(f"Production conductor entry for {city!r} lacks the field {field!r}")
+    extra = sorted(set(entry) - set(PRODUCTION_CONDUCTOR_FIELDS))
+    if extra:
+        raise ValueError(
+            f"Production conductor entry for {city!r} has unknown key(s) {extra}; "
+            f"allowed fields: {list(PRODUCTION_CONDUCTOR_FIELDS)}"
+        )
+    conductor_type = entry["conductor_type"]
+    if not isinstance(conductor_type, str) or not conductor_type.strip():
+        raise ValueError(
+            f"Production conductor entry for {city!r}: field 'conductor_type' must be a non-empty string, "
+            f"got {conductor_type!r}"
+        )
+    kwargs = {}
+    for field, (lo, hi) in PRODUCTION_CONDUCTOR_RANGES.items():
+        value = entry[field]
+        # bool is an int subclass; NaN fails the comparison below
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not (lo <= value <= hi):
+            raise ValueError(
+                f"Production conductor entry for {city!r}: field {field!r} value {value!r} is not a finite "
+                f"number inside the allowed range [{lo!r}, {hi!r}]"
+            )
+        kwargs[field] = float(value)
+    return kwargs
+
 # Retired corridor pairing, retained ONLY for the frozen 2026-09/10
 # forecast-correction experiment modules (forecast_experiment*.py,
 # legacy_corridor.py), which reproduce a completed study. No production,

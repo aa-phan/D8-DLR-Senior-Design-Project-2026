@@ -11,6 +11,11 @@ and no min()-reduction across points -- see
 `city_point(city)` replaces the retired `corridor_discretization.
 corridor_geometry(corridor)` for every production, shadow and training
 caller. Importing this module has no side effects.
+
+Phase 7 (COND-01/COND-02) splits the resolver: `production_city_point(city)`
+reads the per-city conductor table (`config.PRODUCTION_CONDUCTORS`) and is for
+production rating, training and validation only; `city_point(city)` keeps the
+shared Drake configuration for the shadow collector and the frozen evaluation.
 """
 
 import config
@@ -64,6 +69,39 @@ def city_point(city: str) -> CityPoint:
         coord=config.CITY_COORDINATES[city],
         bearing_deg=bearing_deg,
         conductor=conductor,
+        static_rating=config.STATIC_RATINGS[city],
+        rating_bounds=config.RATING_BOUNDS_BY_LOCATION[city],
+    )
+
+
+def production_city_point(city: str) -> CityPoint:
+    """
+    Resolve a city into its production `CityPoint`: the conductor and the line
+    bearing come from the per-city table (`config.PRODUCTION_CONDUCTORS`, read
+    through `config.production_conductor_kwargs_for`); the coordinate, static
+    rating and bounds are the same shared tables `city_point` uses.
+
+    For production callers only (rating, training, validation, rating
+    identity). The shadow path and the frozen evaluation call `city_point()`
+    (COND-02, proven by cond02_shadow_golden_test.py).
+
+    Raises:
+        KeyError: if `city` is not in `config.LOCATIONS` (naming the valid
+            cities) or the table has no usable entry for it.
+        ValueError: if the table entry fails its range checks.
+    """
+    if city not in config.LOCATIONS:
+        raise KeyError(
+            f"Unknown city {city!r}. Valid cities: {sorted(config.LOCATIONS)}"
+        )
+
+    kwargs = config.production_conductor_kwargs_for(city)
+
+    return CityPoint(
+        name=city,
+        coord=config.CITY_COORDINATES[city],
+        bearing_deg=kwargs["line_azimuth"],
+        conductor=thermal_model.ConductorConfig(**kwargs),
         static_rating=config.STATIC_RATINGS[city],
         rating_bounds=config.RATING_BOUNDS_BY_LOCATION[city],
     )

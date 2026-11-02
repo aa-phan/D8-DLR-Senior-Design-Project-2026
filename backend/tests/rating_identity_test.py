@@ -224,6 +224,9 @@ def test_identity_falls_back_to_the_drake_resolver_when_the_production_resolver_
     drake = city_point.city_point("AUSTIN")
     assert snapshot["conductor"] == {name: value for name, value in sorted(vars(drake.conductor).items())}
     assert snapshot["point"]["line_bearing_deg"] == drake.bearing_deg
+    # and the schema-1 recipe, so the Phase 3 backfill fingerprints still reproduce
+    assert snapshot["snapshot_schema"] == 1
+    assert "PRODUCTION_CONDUCTORS" not in snapshot["config"]
 
 
 def test_the_identity_module_resolves_the_point_at_call_time_with_a_getattr_fallback():
