@@ -16,6 +16,9 @@
 --   anon_authenticated_grants_are_select_on_two_objects_only
 --                                           the database's own permission list gives the public roles
 --                                           read access to exactly the ratings table and the view, nothing else
+--   anon_authenticated_hold_no_write_or_column_privilege_in_public
+--                                           asks the database's privilege functions directly, so column-level
+--                                           grants and privileges inherited through role membership show up too
 --   anon_can_select_city_rating             the public key can read the full rating history
 --   anon_can_select_latest_rating           the public key can read the current rating per city
 --   pipeline_run_not_readable_by_anon       the private run log cannot be read with the public key
@@ -52,6 +55,20 @@ select_grants as (
     select * from grants
      where privilege = 'SELECT' and relation in ('city_rating', 'latest_rating')
        and grantee in ('anon', 'authenticated')
+),
+-- Relations in public where anon or authenticated hold a write, trigger or column-level privilege
+-- (reading is allowed only on the two published objects).
+public_role_privileges as (
+    select c.relname::text as relation, r.rolname
+      from pg_class c
+      join pg_namespace n on n.oid = c.relnamespace
+     cross join (values ('anon'), ('authenticated')) as r(rolname)
+     where n.nspname = 'public'
+       and c.relkind in ('r', 'p', 'v', 'm', 'f')
+       and (has_table_privilege(r.rolname, c.oid, 'insert, update, delete, truncate, references, trigger')
+            or has_any_column_privilege(r.rolname, c.oid, 'insert, update, references')
+            or (c.relname not in ('city_rating', 'latest_rating')
+                and has_any_column_privilege(r.rolname, c.oid, 'select')))
 ),
 other_functions as (
     select p.proname::text as function_name
@@ -108,6 +125,15 @@ select check_name, ok, detail
                                                            order by relation, grantee, privilege)
                                            from extra_grants), 'none') ||
                '; select grants on the two objects: ' || (select count(*) from select_grants)::text || ' of 4'
+    union all
+    -- The grants CTE above reads only pg_class.relacl, which never lists column-level grants
+    -- (pg_attribute.attacl) or privileges inherited through role membership. The has_*_privilege
+    -- functions see both.
+    select 'anon_authenticated_hold_no_write_or_column_privilege_in_public',
+           not exists (select 1 from public_role_privileges),
+           'write, trigger or column-level privileges held by anon or authenticated (directly or inherited): ' ||
+               coalesce((select string_agg(relation || ' ' || rolname, ', ' order by relation, rolname)
+                           from public_role_privileges), 'none')
     union all
     select 'anon_can_select_city_rating',
            coalesce(has_table_privilege('anon', 'public.city_rating', 'select'), false),

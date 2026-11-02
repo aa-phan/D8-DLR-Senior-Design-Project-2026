@@ -299,6 +299,7 @@ _MANIFEST = os.path.join(local_pg.REPO_ROOT, "docs", "data-science", "decisions"
 
 _VERIFY_CHECKS = (
     "anon_authenticated_grants_are_select_on_two_objects_only",
+    "anon_authenticated_hold_no_write_or_column_privilege_in_public",
     "anon_can_select_city_rating",
     "anon_can_select_latest_rating",
     "anon_executable_public_functions_are_assert_fresh_only",
@@ -646,6 +647,7 @@ def test_verify_exposure_sql_reports_every_check_ok(pg_url):
         conn.execute("create function public.sneaky() returns integer language sql as 'select 1'")
         bad = {r["check_name"] for r in local_pg.run_select_file(conn, _VERIFY_SQL) if r["ok"] is not True}
     assert bad == {"anon_authenticated_grants_are_select_on_two_objects_only",
+                   "anon_authenticated_hold_no_write_or_column_privilege_in_public",
                    "anon_executable_public_functions_are_assert_fresh_only",
                    "pipeline_run_not_readable_by_anon"}
     with _session(pg_url) as conn:
@@ -653,6 +655,27 @@ def test_verify_exposure_sql_reports_every_check_ok(pg_url):
         conn.execute("create policy sneaky_write on public.city_rating for insert to anon with check (true)")
         bad = {r["check_name"] for r in local_pg.run_select_file(conn, _VERIFY_SQL) if r["ok"] is not True}
     assert {"read_policy_city_rating_public_read", "no_write_policy_for_anon_or_authenticated"} <= bad
+
+
+def test_verify_exposure_sql_sees_column_level_and_inherited_privileges(pg_url):
+    # relacl never lists column-level grants, so the grants check alone stays green for these.
+    # Only the has_*_privilege check can see them (review WR-01).
+    only_hold_check = {"anon_authenticated_hold_no_write_or_column_privilege_in_public"}
+    for statement in ("grant update (rating_amps) on public.city_rating to anon",
+                      "grant insert (city) on public.city_rating to authenticated",
+                      "grant select (run_id) on public.pipeline_run to anon"):
+        with _session(pg_url) as conn:
+            conn.execute(statement)
+            bad = {r["check_name"] for r in local_pg.run_select_file(conn, _VERIFY_SQL) if r["ok"] is not True}
+        assert bad == only_hold_check, statement
+
+    # A write privilege inherited through role membership is seen too.
+    with _session(pg_url) as conn:
+        conn.execute("create role verify_writer nologin")
+        conn.execute("grant insert on public.city_rating to verify_writer")
+        conn.execute("grant verify_writer to anon")
+        bad = {r["check_name"] for r in local_pg.run_select_file(conn, _VERIFY_SQL) if r["ok"] is not True}
+    assert bad == only_hold_check
 
 
 def test_phase6_migrations_are_unchanged_after_apply():
