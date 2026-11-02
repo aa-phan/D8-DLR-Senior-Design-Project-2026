@@ -420,7 +420,9 @@ def test_report_is_byte_identical_across_runs_and_ordered_by_locations(tmp_path)
         "val01_outliers.csv", "val01_ratings_by_city.csv",
         # added by plan 03-03 (VAL-02)
         "val02_coverage_by_residuals.csv", "val02_detector_by_city.csv",
-        "val02_forecast_by_city.csv", "val02_g6_trips.csv"])
+        "val02_forecast_by_city.csv", "val02_g6_trips.csv",
+        # added by plan 07-08 (B5, D-18)
+        "val02_g6_band_by_city.csv"])
     for name in names:
         assert (first / name).read_bytes() == (second / name).read_bytes(), name
     cities = list(pd.read_csv(first / "val01_ratings_by_city.csv")["city"])
