@@ -62,6 +62,10 @@ TEST_SLOTS_PER_CITY = 784
 VETO_MIN_CITIES = 3
 EVIDENCE_SUBDIR = "v4-test"
 CONDUCTOR_BASES = ("frozen-drake", "production")
+# Signed registry `test.rescore_gate` (O4): when Power Systems values are adopted, TEST is re-scored under the production
+# conductors (`--conductor-basis production`) before read 1 is RUN. It is a process gate, recorded here and in the
+# runbook; this module cannot enforce it.
+RESCORE_GATE = "before_read1_run"
 
 # The only cache the TEST provider may open: the frozen window, never a FRESH-dated file.
 CACHE_START = forecast_experiment_audit.FROZEN_WINDOW_START
