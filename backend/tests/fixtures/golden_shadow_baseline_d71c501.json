@@ -1,0 +1,958 @@
+{
+ "captured_from_head": "7336d70a28334aa7d9cdc6b4c3fbfefb77c70110",
+ "fixture_sha256": "a397c82d5d541ee0941204a6c64c53782529b4a6593ed9bf83a9d22cdae26250",
+ "payload": {
+  "arms": {
+   "AUSTIN": {
+    "n_prepared": 244,
+    "n_scored_slots": 244,
+    "persistence_24h": {
+     "first": "1256.995281790828",
+     "last": "1241.1500571087636",
+     "n": 244,
+     "sha256": "e39d0fc23b7a4c5d7cb8a98d0c2363166df45195377c160fb1933de00fb9471a"
+    },
+    "persistence_24h_failed": 0,
+    "raw_forecast": {
+     "first": "1302.571921102648",
+     "last": "1109.434999452618",
+     "n": 244,
+     "sha256": "5cfdc113a1c5c6b150efe4324b25be0799948c3524984e54ddf9d77561238b59"
+    },
+    "raw_forecast_failed": 0,
+    "truth_dlr_amps": {
+     "first": "1317.443807289805",
+     "last": "1100.1820517208557",
+     "n": 244,
+     "sha256": "22662500f55b53fbe90367b212611b09a71fc9fcd826e82d52181e1bf508a3e3"
+    }
+   },
+   "CORPUS_CHRISTI": {
+    "n_prepared": 244,
+    "n_scored_slots": 244,
+    "persistence_24h": {
+     "first": "1653.5322222453535",
+     "last": "1053.1805909818465",
+     "n": 244,
+     "sha256": "f46979786904f5b76edf11b76508b4777ab1263ac1b75aa2bfac87962cb8a075"
+    },
+    "persistence_24h_failed": 0,
+    "raw_forecast": {
+     "first": "1618.7344143823425",
+     "last": "1446.8458901294798",
+     "n": 244,
+     "sha256": "fa1839bec5dbf98250cdab84b472d80977878fe72bb5f302561c7ab661f394aa"
+    },
+    "raw_forecast_failed": 0,
+    "truth_dlr_amps": {
+     "first": "1586.2379230412141",
+     "last": "1333.1218121428979",
+     "n": 244,
+     "sha256": "43f82a93b1d836b961acc7801d8ec480b7ec1c619ba3c1049b320857ff269c82"
+    }
+   },
+   "EL_PASO": {
+    "n_prepared": 244,
+    "n_scored_slots": 244,
+    "persistence_24h": {
+     "first": "1001.4579717252677",
+     "last": "1154.5466642134304",
+     "n": 244,
+     "sha256": "a0b7b98d81ab02322cc1215406582a53a701b01ac49f3df82ab4eb570287bf38"
+    },
+    "persistence_24h_failed": 0,
+    "raw_forecast": {
+     "first": "1230.224209412798",
+     "last": "885.8614271170724",
+     "n": 244,
+     "sha256": "7cf424f86600ac337dd867e7d9df00e932e93ddd92372b4dda3c5b090bf5bb8e"
+    },
+    "raw_forecast_failed": 0,
+    "truth_dlr_amps": {
+     "first": "1204.1923564560223",
+     "last": "822.7655908122478",
+     "n": 244,
+     "sha256": "82e23b8c473fb46220f12a30b2f1d8ce0cf6c48b4f6defbe211fcf516f81e7c4"
+    }
+   },
+   "MIDLAND": {
+    "n_prepared": 244,
+    "n_scored_slots": 244,
+    "persistence_24h": {
+     "first": "1636.082621316832",
+     "last": "1108.0296183240182",
+     "n": 244,
+     "sha256": "40f1c8e00bffb4cc7c7f168bda51d626b959caaa119601cebc492b1a0788ac27"
+    },
+    "persistence_24h_failed": 0,
+    "raw_forecast": {
+     "first": "1262.2417507530504",
+     "last": "1294.137834715164",
+     "n": 244,
+     "sha256": "65ed0a58b3fa115671c9a77f2d29b41bf5c9e47dbe634e81acc3d9669234e398"
+    },
+    "raw_forecast_failed": 0,
+    "truth_dlr_amps": {
+     "first": "1385.1827496666133",
+     "last": "1376.5218839806237",
+     "n": 244,
+     "sha256": "940333895bfaec2b48dfb501e8f21366d94bb9da61beb861ff6d8e3ab4cdb11b"
+    }
+   }
+  },
+  "artifacts": {
+   "data/shadow/models/ml_cooling_corrected_AUSTIN.joblib": "5026d01fb430016b23f1823fa58f74996b999e0b9a85d321a79ddbae5f384f5b",
+   "data/shadow/models/ml_cooling_corrected_CORPUS_CHRISTI.joblib": "8f50c799f6e282f48e2e51738da44896d0893125fdb27eda0a488ae70419a7cc",
+   "data/shadow/models/ml_cooling_corrected_EL_PASO.joblib": "f64f9872883164e89979536cbc5c5338195f2b84929b30ca6e3dde7e24610fb2",
+   "data/shadow/models/ml_cooling_corrected_MIDLAND.joblib": "cdd0a2c9187560d04921647c59bcaf99577fd6e9d94c92a10b59958a5c63a5ee",
+   "data/shadow/models/ml_wind_corrected_AUSTIN.joblib": "b19039c2d3e8bf7688c92d9946eb64fc118994f587ee42fb619349862b21f9a0",
+   "data/shadow/models/ml_wind_corrected_CORPUS_CHRISTI.joblib": "f81f0d5e3371e14e4bf3e31dfd9261a28ac09024e4cd25c451d4691f6f9d53f1",
+   "data/shadow/models/ml_wind_corrected_EL_PASO.joblib": "7494e91d218651c8640ddb156ee0d16db34af0ea1f296c65f40c06c2403530ae",
+   "data/shadow/models/ml_wind_corrected_MIDLAND.joblib": "79c8bd5ac6bebf5e3dfcd4c32bffc9356349c2b77a7c0acc395c41b3bd57f544",
+   "data/shadow/models/reference_ml_refit_24h_AUSTIN.joblib": "f348ba6d9fcda92888c49f0308123ba647a98c60a6029b89b8a3614ef506d5ee",
+   "data/shadow/models/reference_ml_refit_24h_CORPUS_CHRISTI.joblib": "c3f998af8b8b4058dc4e74281500b5e47ed579274f288bdf99bd847ccdbbe11f",
+   "data/shadow/models/reference_ml_refit_24h_EL_PASO.joblib": "46b3e09b44638557998c7b96d366fd3b59c47b3b03414443e485af574e83e580",
+   "data/shadow/models/reference_ml_refit_24h_MIDLAND.joblib": "ba4eff0ed8b902eb05b26b8df883c881bd2862c095f1b9cfe037ab7cf024bea9"
+  },
+  "collector": {
+   "AUSTIN": [
+    {
+     "ml_cooling_corrected": "1265.4155324196715",
+     "ml_wind_corrected": "1243.8459015064236",
+     "raw_forecast": "1302.571921102648",
+     "valid_time": "2026-04-01T00:00:00+00:00"
+    },
+    {
+     "ml_cooling_corrected": "1304.0595885647176",
+     "ml_wind_corrected": "1290.6715861538655",
+     "raw_forecast": "1330.728363158805",
+     "valid_time": "2026-04-01T06:00:00+00:00"
+    },
+    {
+     "ml_cooling_corrected": "1252.0432638909406",
+     "ml_wind_corrected": "1229.0704597333454",
+     "raw_forecast": "1245.5396726383026",
+     "valid_time": "2026-04-01T12:00:00+00:00"
+    },
+    {
+     "ml_cooling_corrected": "1205.2646058171008",
+     "ml_wind_corrected": "1217.4754042416894",
+     "raw_forecast": "1253.037764796876",
+     "valid_time": "2026-04-01T18:00:00+00:00"
+    },
+    {
+     "ml_cooling_corrected": "1293.1823170627274",
+     "ml_wind_corrected": "1291.1341554124397",
+     "raw_forecast": "1345.9562486560326",
+     "valid_time": "2026-04-02T00:00:00+00:00"
+    },
+    {
+     "ml_cooling_corrected": "1306.7563065100837",
+     "ml_wind_corrected": "1300.3423321723583",
+     "raw_forecast": "1342.248785809546",
+     "valid_time": "2026-04-02T06:00:00+00:00"
+    },
+    {
+     "ml_cooling_corrected": "1223.5401768803056",
+     "ml_wind_corrected": "925.913023292412",
+     "raw_forecast": "1200.4177089495602",
+     "valid_time": "2026-04-02T12:00:00+00:00"
+    },
+    {
+     "ml_cooling_corrected": "1231.880169790481",
+     "ml_wind_corrected": "1230.3503955788335",
+     "raw_forecast": "1278.7297321849326",
+     "valid_time": "2026-04-02T18:00:00+00:00"
+    }
+   ],
+   "CORPUS_CHRISTI": [
+    {
+     "ml_cooling_corrected": "1598.7228445941803",
+     "ml_wind_corrected": "1604.2565539498548",
+     "raw_forecast": "1618.7344143823425",
+     "valid_time": "2026-04-01T00:00:00+00:00"
+    },
+    {
+     "ml_cooling_corrected": "1443.3499237103129",
+     "ml_wind_corrected": "1479.1667636226555",
+     "raw_forecast": "1379.058815272698",
+     "valid_time": "2026-04-01T06:00:00+00:00"
+    },
+    {
+     "ml_cooling_corrected": "1343.326417915244",
+     "ml_wind_corrected": "1290.2050600079046",
+     "raw_forecast": "1216.5853740354187",
+     "valid_time": "2026-04-01T12:00:00+00:00"
+    },
+    {
+     "ml_cooling_corrected": "1429.9424586793273",
+     "ml_wind_corrected": "1431.193377184971",
+     "raw_forecast": "1397.1987484682545",
+     "valid_time": "2026-04-01T18:00:00+00:00"
+    },
+    {
+     "ml_cooling_corrected": "1596.0855962664805",
+     "ml_wind_corrected": "1611.741295470924",
+     "raw_forecast": "1618.6810208253107",
+     "valid_time": "2026-04-02T00:00:00+00:00"
+    },
+    {
+     "ml_cooling_corrected": "1444.882779657037",
+     "ml_wind_corrected": "1476.9376700730775",
+     "raw_forecast": "1398.9961173517786",
+     "valid_time": "2026-04-02T06:00:00+00:00"
+    },
+    {
+     "ml_cooling_corrected": "1406.0704090755853",
+     "ml_wind_corrected": "1394.5795988618445",
+     "raw_forecast": "1356.8984910395905",
+     "valid_time": "2026-04-02T12:00:00+00:00"
+    },
+    {
+     "ml_cooling_corrected": "1506.453651483853",
+     "ml_wind_corrected": "1531.7904211298364",
+     "raw_forecast": "1515.7691400434312",
+     "valid_time": "2026-04-02T18:00:00+00:00"
+    }
+   ],
+   "EL_PASO": [
+    {
+     "ml_cooling_corrected": "1213.3748540726865",
+     "ml_wind_corrected": "1155.091963642387",
+     "raw_forecast": "1230.224209412798",
+     "valid_time": "2026-04-01T00:00:00+00:00"
+    },
+    {
+     "ml_cooling_corrected": "1235.0837027400357",
+     "ml_wind_corrected": "1134.8734096979365",
+     "raw_forecast": "1423.1478853954347",
+     "valid_time": "2026-04-01T06:00:00+00:00"
+    },
+    {
+     "ml_cooling_corrected": "1228.169247008354",
+     "ml_wind_corrected": "1259.3947810470736",
+     "raw_forecast": "1332.6898157852181",
+     "valid_time": "2026-04-01T12:00:00+00:00"
+    },
+    {
+     "ml_cooling_corrected": "1303.1293344861385",
+     "ml_wind_corrected": "1276.1751722743486",
+     "raw_forecast": "1436.3731995447265",
+     "valid_time": "2026-04-01T18:00:00+00:00"
+    },
+    {
+     "ml_cooling_corrected": "1347.0530784976772",
+     "ml_wind_corrected": "1314.9573034121097",
+     "raw_forecast": "1411.283594463016",
+     "valid_time": "2026-04-02T00:00:00+00:00"
+    },
+    {
+     "ml_cooling_corrected": "1272.3136821969777",
+     "ml_wind_corrected": "1120.5961226933568",
+     "raw_forecast": "1293.9274906919256",
+     "valid_time": "2026-04-02T06:00:00+00:00"
+    },
+    {
+     "ml_cooling_corrected": "1317.4353678882903",
+     "ml_wind_corrected": "1011.5416886082284",
+     "raw_forecast": "1307.4231956637088",
+     "valid_time": "2026-04-02T12:00:00+00:00"
+    },
+    {
+     "ml_cooling_corrected": "1181.8753326513836",
+     "ml_wind_corrected": "1121.7147452395675",
+     "raw_forecast": "1091.1546818316726",
+     "valid_time": "2026-04-02T18:00:00+00:00"
+    }
+   ],
+   "MIDLAND": [
+    {
+     "ml_cooling_corrected": "1359.1747687724821",
+     "ml_wind_corrected": "1434.206159537736",
+     "raw_forecast": "1262.2417507530504",
+     "valid_time": "2026-04-01T00:00:00+00:00"
+    },
+    {
+     "ml_cooling_corrected": "1824.550913230627",
+     "ml_wind_corrected": "1829.9466431626718",
+     "raw_forecast": "1893.8702020726266",
+     "valid_time": "2026-04-01T06:00:00+00:00"
+    },
+    {
+     "ml_cooling_corrected": "1677.85371405224",
+     "ml_wind_corrected": "1772.5645046059974",
+     "raw_forecast": "1690.1883389087257",
+     "valid_time": "2026-04-01T12:00:00+00:00"
+    },
+    {
+     "ml_cooling_corrected": "1647.8293852567415",
+     "ml_wind_corrected": "1643.016611174635",
+     "raw_forecast": "1467.1557136459105",
+     "valid_time": "2026-04-01T18:00:00+00:00"
+    },
+    {
+     "ml_cooling_corrected": "1481.2711127906941",
+     "ml_wind_corrected": "1427.1316981847863",
+     "raw_forecast": "1365.133725782401",
+     "valid_time": "2026-04-02T00:00:00+00:00"
+    },
+    {
+     "ml_cooling_corrected": "1669.3405499794733",
+     "ml_wind_corrected": "1662.1288208277704",
+     "raw_forecast": "1677.9049069867556",
+     "valid_time": "2026-04-02T06:00:00+00:00"
+    },
+    {
+     "ml_cooling_corrected": "1532.0330619565552",
+     "ml_wind_corrected": "1597.691857640275",
+     "raw_forecast": "1506.1004281309579",
+     "valid_time": "2026-04-02T12:00:00+00:00"
+    },
+    {
+     "ml_cooling_corrected": "1402.1396274040824",
+     "ml_wind_corrected": "1344.2850412110972",
+     "raw_forecast": "1313.8151711132255",
+     "valid_time": "2026-04-02T18:00:00+00:00"
+    }
+   ]
+  },
+  "family": {
+   "comparisons": [
+    {
+     "a": "ml_wind_corrected",
+     "b": "ml_cooling_corrected",
+     "mae_a": 122.85902184928581,
+     "mae_b": 117.68976351889265,
+     "n_paired": 976,
+     "p_headline": 0.292358803986711,
+     "p_holm_adjusted": 0.5182724252491694,
+     "per_city_margins": {
+      "AUSTIN": -15.985204934153414,
+      "CORPUS_CHRISTI": 0.7972075629574878,
+      "EL_PASO": -7.723624839312845,
+      "MIDLAND": 2.2345888889360714
+     },
+     "point_margin": -5.169258330393175
+    },
+    {
+     "a": "ml_wind_corrected",
+     "b": "reference_ml_refit_24h",
+     "mae_a": 122.85902184928581,
+     "mae_b": 161.45987227435873,
+     "n_paired": 976,
+     "p_headline": 0.019933554817275746,
+     "p_holm_adjusted": 0.09966777408637872,
+     "per_city_margins": {
+      "AUSTIN": 0.09553180098061387,
+      "CORPUS_CHRISTI": 31.606234326845495,
+      "EL_PASO": 34.486780890267624,
+      "MIDLAND": 88.21485468219792
+     },
+     "point_margin": 38.60085042507291
+    },
+    {
+     "a": "ml_cooling_corrected",
+     "b": "reference_ml_refit_24h",
+     "mae_a": 117.68976351889265,
+     "mae_b": 161.45987227435873,
+     "n_paired": 976,
+     "p_headline": 0.006644518272425249,
+     "p_holm_adjusted": 0.059800664451827246,
+     "per_city_margins": {
+      "AUSTIN": 16.08073673513403,
+      "CORPUS_CHRISTI": 30.809026763888006,
+      "EL_PASO": 42.21040572958048,
+      "MIDLAND": 85.98026579326185
+     },
+     "point_margin": 43.77010875546609
+    },
+    {
+     "a": "ml_wind_corrected",
+     "b": "raw_forecast",
+     "mae_a": 122.85902184928581,
+     "mae_b": 132.68410497051497,
+     "n_paired": 976,
+     "p_headline": 0.19269102990033224,
+     "p_holm_adjusted": 0.5182724252491694,
+     "per_city_margins": {
+      "AUSTIN": 2.097426228157923,
+      "CORPUS_CHRISTI": 18.93832028102707,
+      "EL_PASO": 21.927731780240492,
+      "MIDLAND": -3.663145804508832
+     },
+     "point_margin": 9.825083121229161
+    },
+    {
+     "a": "ml_cooling_corrected",
+     "b": "raw_forecast",
+     "mae_a": 117.68976351889265,
+     "mae_b": 132.68410497051497,
+     "n_paired": 976,
+     "p_headline": 0.09966777408637874,
+     "p_holm_adjusted": 0.39867109634551495,
+     "per_city_margins": {
+      "AUSTIN": 18.08263116231134,
+      "CORPUS_CHRISTI": 18.141112718069582,
+      "EL_PASO": 29.651356619553336,
+      "MIDLAND": -5.897734693444904
+     },
+     "point_margin": 14.994341451622336
+    },
+    {
+     "a": "reference_ml_refit_24h",
+     "b": "raw_forecast",
+     "mae_a": 161.45987227435873,
+     "mae_b": 132.68410497051497,
+     "n_paired": 976,
+     "p_headline": 0.17275747508305647,
+     "p_holm_adjusted": 0.5182724252491694,
+     "per_city_margins": {
+      "AUSTIN": 2.0018944271773074,
+      "CORPUS_CHRISTI": -12.66791404581843,
+      "EL_PASO": -12.559049110027143,
+      "MIDLAND": -91.87800048670677
+     },
+     "point_margin": -28.77576730384376
+    },
+    {
+     "a": "ml_wind_corrected",
+     "b": "persistence_24h",
+     "mae_a": 122.85902184928581,
+     "mae_b": 182.46631612197854,
+     "n_paired": 976,
+     "p_headline": 0.006644518272425249,
+     "p_holm_adjusted": 0.059800664451827246,
+     "per_city_margins": {
+      "AUSTIN": 31.16010322676514,
+      "CORPUS_CHRISTI": 44.295345541967905,
+      "EL_PASO": 50.7186956531023,
+      "MIDLAND": 112.25503266893548
+     },
+     "point_margin": 59.607294272692705
+    },
+    {
+     "a": "ml_cooling_corrected",
+     "b": "persistence_24h",
+     "mae_a": 117.68976351889265,
+     "mae_b": 182.46631612197854,
+     "n_paired": 976,
+     "p_headline": 0.006644518272425249,
+     "p_holm_adjusted": 0.059800664451827246,
+     "per_city_margins": {
+      "AUSTIN": 47.14530816091856,
+      "CORPUS_CHRISTI": 43.49813797901042,
+      "EL_PASO": 58.44232049241515,
+      "MIDLAND": 110.02044377999941
+     },
+     "point_margin": 64.77655260308589
+    },
+    {
+     "a": "reference_ml_refit_24h",
+     "b": "persistence_24h",
+     "mae_a": 161.45987227435873,
+     "mae_b": 182.46631612197854,
+     "n_paired": 976,
+     "p_headline": 0.013289036544850499,
+     "p_holm_adjusted": 0.07973421926910298,
+     "per_city_margins": {
+      "AUSTIN": 31.06457142578453,
+      "CORPUS_CHRISTI": 12.689111215122413,
+      "EL_PASO": 16.231914762834673,
+      "MIDLAND": 24.040177986737543
+     },
+     "point_margin": 21.00644384761979
+    }
+   ],
+   "per_city_metrics": {
+    "AUSTIN": {
+     "ml_cooling_corrected": {
+      "bias": -9.671031074261565,
+      "mae": 111.400682784916,
+      "median_abs_error": 82.33674739628975,
+      "n": 244,
+      "overprediction_label": "descriptive; not the calibrated 5%-target rate; not compared with 8%",
+      "overprediction_rate": 0.48770491803278687,
+      "overshoot_max": 432.34760155691276,
+      "overshoot_mean": 104.29426477899027,
+      "overshoot_p95": 295.5599887693018,
+      "rmse": 147.81482857136368
+     },
+     "ml_wind_corrected": {
+      "bias": -72.01830241350044,
+      "mae": 127.38588771906942,
+      "median_abs_error": 101.42802213148298,
+      "n": 244,
+      "overprediction_label": "descriptive; not the calibrated 5%-target rate; not compared with 8%",
+      "overprediction_rate": 0.319672131147541,
+      "overshoot_max": 425.13779118344985,
+      "overshoot_mean": 86.60058214460791,
+      "overshoot_p95": 237.86926792692987,
+      "rmse": 169.9250269695174
+     },
+     "persistence_24h": {
+      "bias": 2.042330024306298,
+      "mae": 158.54599094583457,
+      "median_abs_error": 131.10307406982383,
+      "n": 244,
+      "overprediction_label": "descriptive; not the calibrated 5%-target rate; not compared with 8%",
+      "overprediction_rate": 0.48770491803278687,
+      "overshoot_max": 923.328280755238,
+      "overshoot_mean": 164.636766036615,
+      "overshoot_p95": 432.45265333279343,
+      "rmse": 211.04593127112926
+     },
+     "raw_forecast": {
+      "bias": 0.8990814877716654,
+      "mae": 129.48331394722734,
+      "median_abs_error": 95.2320403951295,
+      "n": 244,
+      "overprediction_label": "descriptive; not the calibrated 5%-target rate; not compared with 8%",
+      "overprediction_rate": 0.5450819672131147,
+      "overshoot_max": 666.9880189498133,
+      "overshoot_mean": 119.59888904563819,
+      "overshoot_p95": 428.48270551033517,
+      "rmse": 177.0488532239677
+     },
+     "reference_ml_refit_24h": {
+      "bias": 39.276368994303205,
+      "mae": 127.48141952005005,
+      "median_abs_error": 100.14752837925698,
+      "n": 244,
+      "overprediction_label": "descriptive; not the calibrated 5%-target rate; not compared with 8%",
+      "overprediction_rate": 0.6311475409836066,
+      "overshoot_max": 458.2781313358247,
+      "overshoot_mean": 132.1068194724097,
+      "overshoot_p95": 321.8990927061673,
+      "rmse": 166.80975864992664
+     }
+    },
+    "CORPUS_CHRISTI": {
+     "ml_cooling_corrected": {
+      "bias": 28.116457632181675,
+      "mae": 106.79008920315697,
+      "median_abs_error": 79.7195047595601,
+      "n": 244,
+      "overprediction_label": "descriptive; not the calibrated 5%-target rate; not compared with 8%",
+      "overprediction_rate": 0.5819672131147541,
+      "overshoot_max": 578.3981026174425,
+      "overshoot_mean": 115.90562474585431,
+      "overshoot_p95": 350.71623099756454,
+      "rmse": 147.03637169709012
+     },
+     "ml_wind_corrected": {
+      "bias": -15.821275270946545,
+      "mae": 105.99288164019947,
+      "median_abs_error": 73.94754283280906,
+      "n": 244,
+      "overprediction_label": "descriptive; not the calibrated 5%-target rate; not compared with 8%",
+      "overprediction_rate": 0.48770491803278687,
+      "overshoot_max": 538.4431304818205,
+      "overshoot_mean": 92.44484014326771,
+      "overshoot_p95": 252.96379822995704,
+      "rmse": 153.7300214320383
+     },
+     "persistence_24h": {
+      "bias": 1.8457910792457417,
+      "mae": 150.2882271821674,
+      "median_abs_error": 111.73245667256083,
+      "n": 244,
+      "overprediction_label": "descriptive; not the calibrated 5%-target rate; not compared with 8%",
+      "overprediction_rate": 0.44672131147540983,
+      "overshoot_max": 680.9861678740936,
+      "overshoot_mean": 170.27844245772846,
+      "overshoot_p95": 400.5239320156971,
+      "rmse": 203.1750664765931
+     },
+     "raw_forecast": {
+      "bias": -22.091078822227335,
+      "mae": 124.93120192122655,
+      "median_abs_error": 86.85687570942935,
+      "n": 244,
+      "overprediction_label": "descriptive; not the calibrated 5%-target rate; not compared with 8%",
+      "overprediction_rate": 0.3975409836065574,
+      "overshoot_max": 592.508207880754,
+      "overshoot_mean": 129.34530946472069,
+      "overshoot_p95": 359.7418950700035,
+      "rmse": 169.55131366215792
+     },
+     "reference_ml_refit_24h": {
+      "bias": 70.72190525239385,
+      "mae": 137.59911596704495,
+      "median_abs_error": 101.52943031895347,
+      "n": 244,
+      "overprediction_label": "descriptive; not the calibrated 5%-target rate; not compared with 8%",
+      "overprediction_rate": 0.7008196721311475,
+      "overshoot_max": 644.8792104515599,
+      "overshoot_mean": 148.62669350158794,
+      "overshoot_p95": 384.42998860218984,
+      "rmse": 180.0467334239966
+     }
+    },
+    "EL_PASO": {
+     "ml_cooling_corrected": {
+      "bias": 6.140356979958947,
+      "mae": 114.66159751990045,
+      "median_abs_error": 80.93774551944227,
+      "n": 244,
+      "overprediction_label": "descriptive; not the calibrated 5%-target rate; not compared with 8%",
+      "overprediction_rate": 0.48360655737704916,
+      "overshoot_max": 749.2843213801129,
+      "overshoot_mean": 124.8969360083292,
+      "overshoot_p95": 340.0962026751844,
+      "rmse": 158.65268651036598
+     },
+     "ml_wind_corrected": {
+      "bias": -19.296593125513542,
+      "mae": 122.38522235921329,
+      "median_abs_error": 86.03956813301863,
+      "n": 244,
+      "overprediction_label": "descriptive; not the calibrated 5%-target rate; not compared with 8%",
+      "overprediction_rate": 0.46311475409836067,
+      "overshoot_max": 443.1244136017208,
+      "overshoot_mean": 111.2992280222245,
+      "overshoot_p95": 326.5182881021949,
+      "rmse": 166.23744810858787
+     },
+     "persistence_24h": {
+      "bias": 2.278568676737729,
+      "mae": 173.1039180123156,
+      "median_abs_error": 140.48686943935968,
+      "n": 244,
+      "overprediction_label": "descriptive; not the calibrated 5%-target rate; not compared with 8%",
+      "overprediction_rate": 0.45901639344262296,
+      "overshoot_max": 661.5305699645279,
+      "overshoot_mean": 191.04163728629024,
+      "overshoot_p95": 459.4728628789664,
+      "rmse": 219.151021851457
+     },
+     "raw_forecast": {
+      "bias": 69.34353924753731,
+      "mae": 144.31295413945375,
+      "median_abs_error": 104.59525840593199,
+      "n": 244,
+      "overprediction_label": "descriptive; not the calibrated 5%-target rate; not compared with 8%",
+      "overprediction_rate": 0.6967213114754098,
+      "overshoot_max": 724.5333311983055,
+      "overshoot_mean": 153.32995407772302,
+      "overshoot_p95": 408.90334637552746,
+      "rmse": 194.96334609173388
+     },
+     "reference_ml_refit_24h": {
+      "bias": 85.8359837259371,
+      "mae": 156.8720032494809,
+      "median_abs_error": 125.70687774740225,
+      "n": 244,
+      "overprediction_label": "descriptive; not the calibrated 5%-target rate; not compared with 8%",
+      "overprediction_rate": 0.6680327868852459,
+      "overshoot_max": 542.1321557772783,
+      "overshoot_mean": 181.65873871779752,
+      "overshoot_p95": 441.5885364792836,
+      "rmse": 202.36398644341878
+     }
+    },
+    "MIDLAND": {
+     "ml_cooling_corrected": {
+      "bias": 18.678395163630203,
+      "mae": 137.90668456759718,
+      "median_abs_error": 100.48693907808854,
+      "n": 244,
+      "overprediction_label": "descriptive; not the calibrated 5%-target rate; not compared with 8%",
+      "overprediction_rate": 0.5409836065573771,
+      "overshoot_max": 778.5507542843181,
+      "overshoot_mean": 144.7225736909829,
+      "overshoot_p95": 382.00921200200384,
+      "rmse": 182.54425080538616
+     },
+     "ml_wind_corrected": {
+      "bias": -7.67887034974239,
+      "mae": 135.67209567866112,
+      "median_abs_error": 95.18777663248034,
+      "n": 244,
+      "overprediction_label": "descriptive; not the calibrated 5%-target rate; not compared with 8%",
+      "overprediction_rate": 0.47540983606557374,
+      "overshoot_max": 838.7939555646124,
+      "overshoot_mean": 134.6135645700697,
+      "overshoot_p95": 382.76408729506034,
+      "rmse": 185.66550035269458
+     },
+     "persistence_24h": {
+      "bias": 1.9535258668638897,
+      "mae": 247.9271283475966,
+      "median_abs_error": 206.21900423160923,
+      "n": 244,
+      "overprediction_label": "descriptive; not the calibrated 5%-target rate; not compared with 8%",
+      "overprediction_rate": 0.5040983606557377,
+      "overshoot_max": 1037.1354384407991,
+      "overshoot_mean": 247.84910418019658,
+      "overshoot_p95": 558.4151852187734,
+      "rmse": 308.40494689716144
+     },
+     "raw_forecast": {
+      "bias": -42.26261338236167,
+      "mae": 132.00894987415228,
+      "median_abs_error": 95.30568326286539,
+      "n": 244,
+      "overprediction_label": "descriptive; not the calibrated 5%-target rate; not compared with 8%",
+      "overprediction_rate": 0.38114754098360654,
+      "overshoot_max": 778.8866673748998,
+      "overshoot_mean": 117.73175324729522,
+      "overshoot_p95": 332.86016198029296,
+      "rmse": 181.71317904234505
+     },
+     "reference_ml_refit_24h": {
+      "bias": 89.36394783619951,
+      "mae": 223.88695036085903,
+      "median_abs_error": 198.64902576170186,
+      "n": 244,
+      "overprediction_label": "descriptive; not the calibrated 5%-target rate; not compared with 8%",
+      "overprediction_rate": 0.6024590163934426,
+      "overshoot_max": 844.9588761224759,
+      "overshoot_mean": 259.9769359186472,
+      "overshoot_p95": 571.7531472692472,
+      "rmse": 271.33157924291316
+     }
+    }
+   }
+  },
+  "fits": {
+   "AUSTIN": {
+    "cooling_corrected_ampacity": {
+     "first": "1156.5827224919112",
+     "last": "1085.8564477230839",
+     "n": 252,
+     "sha256": "41573db8f1ef9e0769329eed40bdcd7b00b1824e0989de01db3491e586c23f7c"
+    },
+    "n_exact_rows": 252,
+    "n_rows_fit": {
+     "ml_cooling_corrected": 252,
+     "ml_wind_corrected": 252,
+     "reference_ml_refit_24h": 1482
+    },
+    "reference_predictions": {
+     "first": "1295.7247246474167",
+     "last": "1217.1085313667204",
+     "n": 1482,
+     "sha256": "d438c386a659ac24ff61c71c06e95f1011797769605ac7e20140f7e9e566d5e3"
+    },
+    "wind_corrected_ampacity": {
+     "first": "1151.2434400907428",
+     "last": "1077.5820184639815",
+     "n": 252,
+     "sha256": "bfa3eac29e8c611f2164e1248cee6ff9b137b05d466e809feb1583d46bf69a58"
+    }
+   },
+   "CORPUS_CHRISTI": {
+    "cooling_corrected_ampacity": {
+     "first": "1586.1906031925776",
+     "last": "1328.0766909542085",
+     "n": 252,
+     "sha256": "4a88f9ecab987452c2e46396467536982d21d9f4cd090e52ee6f3696ef6a4900"
+    },
+    "n_exact_rows": 252,
+    "n_rows_fit": {
+     "ml_cooling_corrected": 252,
+     "ml_wind_corrected": 252,
+     "reference_ml_refit_24h": 1482
+    },
+    "reference_predictions": {
+     "first": "1408.8819915508118",
+     "last": "1529.1648367038563",
+     "n": 1482,
+     "sha256": "218f53f39d3accd8833399e2be5351dec1dd2927b1a62220f8b0e0e3b31975c6"
+    },
+    "wind_corrected_ampacity": {
+     "first": "1624.7137831712034",
+     "last": "1392.1144008540007",
+     "n": 252,
+     "sha256": "549a165154874c51f28f80dd9dc070673561f664d64d4fba1d94ec71ce5a8693"
+    }
+   },
+   "EL_PASO": {
+    "cooling_corrected_ampacity": {
+     "first": "966.0297356327025",
+     "last": "838.0379960813426",
+     "n": 252,
+     "sha256": "9e7b0ce5548d077b5cd50b27c2d20367f4138b2685452763947581d5da0b9f01"
+    },
+    "n_exact_rows": 252,
+    "n_rows_fit": {
+     "ml_cooling_corrected": 252,
+     "ml_wind_corrected": 252,
+     "reference_ml_refit_24h": 1482
+    },
+    "reference_predictions": {
+     "first": "1202.2453469273821",
+     "last": "1253.515147801867",
+     "n": 1482,
+     "sha256": "65a4686c6bab458d79f085d85141b0dfc64bf58d59b931bc13853673add661e2"
+    },
+    "wind_corrected_ampacity": {
+     "first": "913.9030360378484",
+     "last": "891.1907661030253",
+     "n": 252,
+     "sha256": "a47c5ed398ccb62ab6e217b9334ea4055bc9ac99458d435c78cf2e5e4b3c5705"
+    }
+   },
+   "MIDLAND": {
+    "cooling_corrected_ampacity": {
+     "first": "1719.2047616136324",
+     "last": "1347.9647223717018",
+     "n": 252,
+     "sha256": "b7e3a0506d618c3b2da7ece14d2a2c88d7b4284d22da9da20d0d06dbc0419a74"
+    },
+    "n_exact_rows": 252,
+    "n_rows_fit": {
+     "ml_cooling_corrected": 252,
+     "ml_wind_corrected": 252,
+     "reference_ml_refit_24h": 1482
+    },
+    "reference_predictions": {
+     "first": "1706.5771937161776",
+     "last": "1448.6964382312826",
+     "n": 1482,
+     "sha256": "5409df05e1b4b00bbd04c6ac8168f09f715191e756621086b501a7131c5d9294"
+    },
+    "wind_corrected_ampacity": {
+     "first": "1729.042802720266",
+     "last": "1293.0650715758388",
+     "n": 252,
+     "sha256": "644202b05e1bfc747b5732dc3ee8fde0a6040c528daf857439a8cb5e994e88e8"
+    }
+   }
+  },
+  "geometry": {
+   "AUSTIN": {
+    "bearing_deg": 173.15,
+    "conductor": {
+     "D": 0.02814,
+     "R25": 7.26e-05,
+     "T_max": 75.0,
+     "alpha_r": 0.00404,
+     "alpha_s": 0.8,
+     "elev": 900.0,
+     "eps": 0.8,
+     "line_az": 173.15
+    },
+    "conductor_kwargs_for_bearing": {
+     "absorptivity": 0.8,
+     "diameter_m": 0.02814,
+     "elevation_m": 900.0,
+     "emissivity": 0.8,
+     "line_azimuth": 173.15,
+     "max_temp_c": 75.0,
+     "resistance_ac": 0.0726
+    },
+    "coord": [
+     30.2711,
+     -97.7437
+    ],
+    "rating_bounds": [
+     1150.0,
+     2500.0
+    ],
+    "static_rating": 1825.0
+   },
+   "CORPUS_CHRISTI": {
+    "bearing_deg": 173.15,
+    "conductor": {
+     "D": 0.02814,
+     "R25": 7.26e-05,
+     "T_max": 75.0,
+     "alpha_r": 0.00404,
+     "alpha_s": 0.8,
+     "elev": 900.0,
+     "eps": 0.8,
+     "line_az": 173.15
+    },
+    "conductor_kwargs_for_bearing": {
+     "absorptivity": 0.8,
+     "diameter_m": 0.02814,
+     "elevation_m": 900.0,
+     "emissivity": 0.8,
+     "line_azimuth": 173.15,
+     "max_temp_c": 75.0,
+     "resistance_ac": 0.0726
+    },
+    "coord": [
+     27.7635,
+     -97.4033
+    ],
+    "rating_bounds": [
+     800.0,
+     2200.0
+    ],
+    "static_rating": 1500.0
+   },
+   "EL_PASO": {
+    "bearing_deg": 267.54,
+    "conductor": {
+     "D": 0.02814,
+     "R25": 7.26e-05,
+     "T_max": 75.0,
+     "alpha_r": 0.00404,
+     "alpha_s": 0.8,
+     "elev": 900.0,
+     "eps": 0.8,
+     "line_az": 267.54
+    },
+    "conductor_kwargs_for_bearing": {
+     "absorptivity": 0.8,
+     "diameter_m": 0.02814,
+     "elevation_m": 900.0,
+     "emissivity": 0.8,
+     "line_azimuth": 267.54,
+     "max_temp_c": 75.0,
+     "resistance_ac": 0.0726
+    },
+    "coord": [
+     31.7601,
+     -106.487
+    ],
+    "rating_bounds": [
+     640.0,
+     2000.0
+    ],
+    "static_rating": 1320.0
+   },
+   "MIDLAND": {
+    "bearing_deg": 267.54,
+    "conductor": {
+     "D": 0.02814,
+     "R25": 7.26e-05,
+     "T_max": 75.0,
+     "alpha_r": 0.00404,
+     "alpha_s": 0.8,
+     "elev": 900.0,
+     "eps": 0.8,
+     "line_az": 267.54
+    },
+    "conductor_kwargs_for_bearing": {
+     "absorptivity": 0.8,
+     "diameter_m": 0.02814,
+     "elevation_m": 900.0,
+     "emissivity": 0.8,
+     "line_azimuth": 267.54,
+     "max_temp_c": 75.0,
+     "resistance_ac": 0.0726
+    },
+    "coord": [
+     31.9974,
+     -102.0779
+    ],
+    "rating_bounds": [
+     1250.0,
+     2500.0
+    ],
+    "static_rating": 1875.0
+   }
+  }
+ },
+ "source_commit": "d71c501109549ba6e5b283b0131f7a15b5b46d2e",
+ "versions": {
+  "numpy": "2.4.3",
+  "pandas": "2.3.3",
+  "python": "3.12.13",
+  "scipy": "1.17.1",
+  "sklearn": "1.9.1"
+ }
+}
