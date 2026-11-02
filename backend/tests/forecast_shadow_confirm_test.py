@@ -1076,6 +1076,8 @@ def test_a_valid_veto_record_and_a_signed_status_reach_run_confirmation_in_the_r
 
 
 def test_the_descriptive_round_needs_no_veto_record_and_still_uses_its_own_subroot(monkeypatch, evidence_root):
+    # D-03 gate (07-09): the late re-score needs a read-1 report recorded under an older rating config version
+    write_read1_report(evidence_root, "v1-older-than-the-current-config")
     code, seen = capture_main(monkeypatch, ["--round", "v4-late-descriptive", "--evidence-root", evidence_root])
     assert code == 0 and seen["round_name"] == "v4-late-descriptive" and seen["vetoes"] is None
     assert seen["evidence_root"] == os.path.join(evidence_root, "v4-late-descriptive")
@@ -1689,3 +1691,270 @@ def test_the_recording_loader_returns_the_model_and_records_each_served_artifact
     assert entry["source"] == "frozen" and entry["sha256"] == core.sha256_file(entry["path"])
     with pytest.raises(FileNotFoundError):
         wrapped("AUSTIN", "no_such_method")
+
+
+# --------------------------------------------------------------------------
+# 07-09 Task 2: CLI conductor-basis selection, the refit pre-check, the D-03 descriptive gate, dry-run reporting
+# --------------------------------------------------------------------------
+
+import joblib  # noqa: E402
+
+PARITY_SECONDARY = "identical to the headline by construction; not computed separately"
+NOTHING_TO_RESCORE = "nothing to re-score descriptively (D-03)"
+SIGNED_ARGS = ["--round", "v4-read1", "--protocol-status", "signed"]
+
+
+def write_read1_report(evidence_root, version, *, stamp="20261101T000500Z"):
+    """A synthetic read-1 headline report on disk (only its rating_config_version matters to the D-03 gate)."""
+    directory = os.path.join(evidence_root, "v4-read1", f"reconstructed_frames_{stamp}")
+    os.makedirs(directory, exist_ok=True)
+    body = {"round": "v4-read1", "synthetic": True}
+    if version is not None:
+        body["rating_config_version"] = version
+    with open(os.path.join(directory, "report.json"), "w", encoding="utf-8") as fh:
+        json.dump(body, fh)
+    return directory
+
+
+@pytest.fixture
+def refit_world(tmp_path, monkeypatch, stub_models, austin_100c):
+    """AUSTIN differs from Drake (100 C); its refit cooling and reference for the CURRENT RATING_CONFIG_VERSION sit in a
+    tmp root with a manifest; the frozen stubs sit in a tmp SHADOW_MODEL_DIR with their own manifest."""
+    manifest = _frozen_world(tmp_path, monkeypatch, stub_models)
+    root = tmp_path / "refit"
+    refit.write_refit("AUSTIN", {conf.COOLING: stub_models["AUSTIN"][conf.COOLING],
+                                 conf.REFERENCE: stub_models["AUSTIN"][conf.REFERENCE]},
+                      config.RATING_CONFIG_VERSION, root=str(root))
+    monkeypatch.setattr(refit, "REFIT_ROOT", str(root))
+    monkeypatch.setattr(refit, "FROZEN_MANIFEST", manifest)
+
+    def no_load(*a, **k):
+        raise AssertionError("joblib.load must not be called by a pre-check")
+    return {"root": root, "manifest": manifest, "dir": root / config.RATING_CONFIG_VERSION, "no_load": no_load}
+
+
+def _vetoes_path(tmp_path):
+    return write_veto_files(tmp_path)[0]
+
+
+# --- conductor_basis ---
+
+def test_conductor_basis_at_parity_says_production_equals_drake_and_the_secondary_is_not_computed_twice():
+    basis = conf.conductor_basis(CITIES)
+    assert basis["differing"] == [] and basis["config_version"] == config.RATING_CONFIG_VERSION
+    assert "Drake" in basis["headline"] and "production" in basis["headline"]
+    assert basis["secondary"] == PARITY_SECONDARY
+    assert basis["refit_artifacts"] == [] and basis["problems"] == []
+
+
+def test_conductor_basis_with_a_differing_city_lists_its_verified_refit_artifacts_without_loading_them(refit_world, monkeypatch):
+    monkeypatch.setattr(joblib, "load", refit_world["no_load"])
+    basis = conf.conductor_basis(CITIES)
+    assert basis["differing"] == ["AUSTIN"] and basis["problems"] == []
+    arts = {(a["city"], a["method"]): a for a in basis["refit_artifacts"]}
+    assert set(arts) == {("AUSTIN", conf.COOLING), ("AUSTIN", conf.REFERENCE)}
+    for a in arts.values():
+        assert a["status"] == "verified" and a["verified"] is True and a["expected_sha256"] == a["actual_sha256"]
+        assert a["path"].startswith(str(refit_world["root"]).replace(os.sep, "/"))
+    assert "AUSTIN" in basis["headline"] and "refit" in basis["headline"]
+    assert PARITY_SECONDARY not in basis["secondary"] and "frozen Drake" in basis["secondary"]
+
+
+def test_conductor_basis_flags_a_missing_and_a_tampered_refit_artifact(refit_world):
+    (refit_world["dir"] / f"{conf.COOLING}_AUSTIN.joblib").unlink()
+    ref = refit_world["dir"] / f"{conf.REFERENCE}_AUSTIN.joblib"
+    ref.write_bytes(ref.read_bytes() + b"x")
+    basis = conf.conductor_basis(CITIES)
+    status = {a["method"]: a["status"] for a in basis["refit_artifacts"]}
+    assert status == {conf.COOLING: "missing_file", conf.REFERENCE: "hash_mismatch"}
+    assert len(basis["problems"]) == 2 and basis["refit_verified"] is False
+
+
+def test_conductor_basis_flags_a_missing_manifest_and_an_unlisted_artifact(refit_world):
+    manifest = refit_world["dir"] / refit.MANIFEST_NAME
+    manifest.write_text("# no entries\n", encoding="utf-8")
+    assert {a["status"] for a in conf.conductor_basis(CITIES)["refit_artifacts"]} == {"not_in_manifest"}
+    manifest.unlink()
+    basis = conf.conductor_basis(CITIES)
+    assert {a["status"] for a in basis["refit_artifacts"]} == {"manifest_unreadable"} and basis["problems"]
+
+
+def test_conductor_basis_flags_a_tampered_frozen_artifact_but_not_an_absent_one(refit_world):
+    frozen = pipeline._model_path_for("MIDLAND", conf.WIND)
+    with open(frozen, "ab") as fh:
+        fh.write(b"x")
+    problems = conf.conductor_basis(CITIES)["problems"]
+    assert len(problems) == 1 and "hash_mismatch" in problems[0] and "MIDLAND" in problems[0]
+    with open(frozen, "wb"):
+        pass
+    os.remove(frozen)
+    assert conf.conductor_basis(CITIES)["problems"] == []          # a missing frozen file stays candidate_unavailable
+
+
+def test_conductor_basis_considers_only_the_cities_asked_for(refit_world):
+    assert conf.conductor_basis(["MIDLAND", "EL_PASO"])["differing"] == []
+    assert conf.conductor_basis(["AUSTIN"])["differing"] == ["AUSTIN"]
+
+
+# --- main: the basis picks the run ---
+
+def test_main_with_a_differing_city_builds_the_production_resolver_the_headline_loader_and_a_secondary(
+        monkeypatch, evidence_root, tmp_path, refit_world):
+    code, seen = capture_main(monkeypatch, [*SIGNED_ARGS, "--vetoes", _vetoes_path(tmp_path), "--evidence-root", evidence_root])
+    assert code == 0
+    assert seen["point_resolver"] is city_point.production_city_point
+    head = seen["model_loader"]
+    assert head("AUSTIN", conf.COOLING) is not None and head("MIDLAND", conf.COOLING) is not None
+    sources = {(s["city"], s["method"]): s["source"] for s in head.served}
+    assert sources == {("AUSTIN", conf.COOLING): "refit", ("MIDLAND", conf.COOLING): "frozen"}
+    sec = seen["secondary"]
+    assert sec["label"] == "secondary" and sec["point_resolver"] is None
+    sec["model_loader"]("AUSTIN", conf.COOLING)
+    assert [(s["city"], s["source"]) for s in sec["model_loader"].served] == [("AUSTIN", "frozen")]
+    assert seen["conductor_basis"]["differing"] == ["AUSTIN"]
+    assert seen["conductor_basis"]["config_version"] == config.RATING_CONFIG_VERSION
+
+
+@pytest.mark.parametrize("damage", ["missing", "tampered", "no_manifest", "frozen_tampered"])
+def test_main_refuses_with_exit_2_before_any_request_when_the_refit_or_frozen_artifacts_are_not_sound(
+        monkeypatch, evidence_root, tmp_path, capsys, refit_world, damage):
+    vetoes = _vetoes_path(tmp_path)
+    art = refit_world["dir"] / f"{conf.COOLING}_AUSTIN.joblib"
+    if damage == "missing":
+        art.unlink()
+    elif damage == "tampered":
+        art.write_bytes(art.read_bytes() + b"x")
+    elif damage == "no_manifest":
+        (refit_world["dir"] / refit.MANIFEST_NAME).unlink()
+    else:
+        with open(pipeline._model_path_for("EL_PASO", conf.REFERENCE), "ab") as fh:
+            fh.write(b"x")
+    code, seen = capture_main(monkeypatch, [*SIGNED_ARGS, "--vetoes", vetoes, "--evidence-root", evidence_root])
+    assert code == 2 and seen == {}                       # run_confirmation never reached; requests.get is a bomb
+    err = capsys.readouterr().err
+    assert err.startswith("refused:") and "conductor" in err.lower()
+    assert not os.path.exists(evidence_root)
+
+
+def test_main_at_parity_runs_the_default_path_with_no_secondary_and_records_the_statement(
+        monkeypatch, evidence_root, tmp_path):
+    code, seen = capture_main(monkeypatch, [*SIGNED_ARGS, "--vetoes", _vetoes_path(tmp_path), "--evidence-root", evidence_root])
+    assert code == 0
+    assert seen.get("point_resolver") is None and seen.get("secondary") is None and seen.get("model_loader") is None
+    assert seen["conductor_basis"]["differing"] == [] and seen["conductor_basis"]["secondary"] == PARITY_SECONDARY
+
+
+def test_a_missing_production_entry_is_refused_not_a_traceback(monkeypatch, evidence_root, capsys):
+    table = {c: dict(v) for c, v in config.PRODUCTION_CONDUCTORS.items()}
+    del table["MIDLAND"]
+    monkeypatch.setattr(config, "PRODUCTION_CONDUCTORS", table)
+    code, seen = capture_main(monkeypatch, ["--dry-run", "--round", "v4-read1", "--evidence-root", evidence_root])
+    assert code == 2 and seen == {} and capsys.readouterr().err.startswith("refused:")
+
+
+# --- rating_config_version and the basis in every report ---
+
+def test_every_report_and_its_run_started_marker_record_the_rating_config_version(evidence_root, stub_models):
+    report = injected_run(evidence_root, stub_models, protocol_status="signed")
+    assert report["rating_config_version"] == config.RATING_CONFIG_VERSION
+    assert report["config"]["rating_config_version"] == config.RATING_CONFIG_VERSION
+    marker = json.load(open(os.path.join(report["evidence_dir"], "run_started.json"), encoding="utf-8"))
+    assert marker["config"]["rating_config_version"] == config.RATING_CONFIG_VERSION
+    assert report["conductor_basis"] is None and report["config"]["conductor_basis"] is None
+    on_disk = json.load(open(os.path.join(report["evidence_dir"], "report.json"), encoding="utf-8"))
+    assert on_disk["rating_config_version"] == config.RATING_CONFIG_VERSION
+
+
+def test_a_given_conductor_basis_is_recorded_in_the_report_and_the_config(evidence_root, stub_models):
+    basis = conf.conductor_basis(CITIES)
+    report = injected_run(evidence_root, stub_models, conductor_basis=basis)
+    assert report["conductor_basis"] == basis and report["config"]["conductor_basis"] == basis
+    assert report["secondary"] is None
+
+
+# --- D-03: the late descriptive round ---
+
+def test_the_late_descriptive_round_is_refused_without_any_read_1_report(monkeypatch, evidence_root, capsys):
+    code, seen = capture_main(monkeypatch, ["--round", "v4-late-descriptive", "--evidence-root", evidence_root])
+    assert code == 2 and seen == {}
+    err = capsys.readouterr().err
+    assert err.startswith("refused:") and NOTHING_TO_RESCORE in err and "v4-read1" in err
+    assert not os.path.exists(os.path.join(evidence_root, "v4-late-descriptive"))
+
+
+def test_the_late_descriptive_round_is_refused_when_the_rating_config_version_is_unchanged(monkeypatch, evidence_root, capsys):
+    write_read1_report(evidence_root, config.RATING_CONFIG_VERSION)
+    code, seen = capture_main(monkeypatch, ["--round", "v4-late-descriptive", "--evidence-root", evidence_root])
+    assert code == 2 and seen == {} and NOTHING_TO_RESCORE in capsys.readouterr().err
+
+
+def test_the_late_descriptive_round_is_refused_when_the_read_1_report_records_no_version(monkeypatch, evidence_root, capsys):
+    write_read1_report(evidence_root, None)
+    code, seen = capture_main(monkeypatch, ["--round", "v4-late-descriptive", "--evidence-root", evidence_root])
+    assert code == 2 and seen == {} and NOTHING_TO_RESCORE in capsys.readouterr().err
+
+
+def test_the_late_descriptive_round_proceeds_when_the_version_differs_and_uses_the_newest_read_1_report(
+        monkeypatch, evidence_root):
+    write_read1_report(evidence_root, "v1-older", stamp="20261101T000100Z")
+    write_read1_report(evidence_root, config.RATING_CONFIG_VERSION, stamp="20261101T000000Z")   # older directory
+    code, seen = capture_main(monkeypatch, ["--round", "v4-late-descriptive", "--evidence-root", evidence_root])
+    assert code == 0 and seen["round_name"] == "v4-late-descriptive"
+    # newest directory name wins: flip the order and the same run is refused
+    write_read1_report(evidence_root, config.RATING_CONFIG_VERSION, stamp="20261101T000900Z")
+    code, seen = capture_main(monkeypatch, ["--round", "v4-late-descriptive", "--evidence-root", evidence_root])
+    assert code == 2 and seen == {}
+
+
+def test_the_late_gate_does_not_apply_to_the_deciding_rounds(monkeypatch, evidence_root, tmp_path):
+    code, seen = capture_main(monkeypatch, [*SIGNED_ARGS, "--vetoes", _vetoes_path(tmp_path), "--evidence-root", evidence_root])
+    assert code == 0 and seen["round_name"] == "v4-read1"
+
+
+def test_after_the_gate_the_late_round_still_meets_the_instant_and_one_shot_guards(monkeypatch, evidence_root, capsys):
+    write_read1_report(evidence_root, "v1-older")
+    monkeypatch.setattr(core, "utcnow", lambda: pd.Timestamp(BEFORE_INSTANT))
+    assert conf.main(["--round", "v4-late-descriptive", "--evidence-root", evidence_root]) == 2
+    assert "evaluation instant" in capsys.readouterr().err
+    late_root = os.path.join(evidence_root, "v4-late-descriptive", "reconstructed_frames_20261101T000000Z")
+    os.makedirs(late_root)
+    with open(os.path.join(late_root, "run_started.json"), "w", encoding="utf-8") as fh:
+        json.dump({"basis": "FRESH", "row_source": "reconstructed_frames"}, fh)
+    monkeypatch.setattr(core, "utcnow", lambda: pd.Timestamp(AT_INSTANT))
+    assert conf.main(["--round", "v4-late-descriptive", "--evidence-root", evidence_root]) == 2
+    assert "second FRESH run" in capsys.readouterr().err
+
+
+# --- dry run ---
+
+def test_dry_run_reports_the_conductor_basis_and_the_rating_config_version_at_parity(tmp_path, evidence_root):
+    out = str(tmp_path / "dry.json")
+    assert conf.main(["--dry-run", "--round", "v4-read1", "--out", out, "--evidence-root", evidence_root]) == 0
+    result = json.load(open(out, encoding="utf-8"))
+    assert result["conductor_basis"]["differing"] == [] and result["conductor_basis"]["secondary"] == PARITY_SECONDARY
+    assert result["rating_config_version"] == config.RATING_CONFIG_VERSION and result["rating_config_version"][:3] == "v2-"
+    assert not os.path.exists(evidence_root)
+
+
+def test_dry_run_with_a_differing_city_lists_the_refit_artifacts_and_their_hash_status_without_network_or_load(
+        monkeypatch, tmp_path, evidence_root, refit_world):
+    monkeypatch.setattr(joblib, "load", refit_world["no_load"])
+    (refit_world["dir"] / f"{conf.REFERENCE}_AUSTIN.joblib").write_bytes(b"tampered")
+    out = str(tmp_path / "dry.json")
+    assert conf.main(["--dry-run", "--round", "v4-read1", "--out", out, "--evidence-root", evidence_root]) == 0
+    basis = json.load(open(out, encoding="utf-8"))["conductor_basis"]
+    assert basis["differing"] == ["AUSTIN"]
+    assert {a["method"]: a["status"] for a in basis["refit_artifacts"]} == {conf.COOLING: "verified", conf.REFERENCE: "hash_mismatch"}
+    assert basis["problems"] and not os.path.exists(evidence_root)
+
+
+def test_dry_run_for_the_late_round_reports_the_gate_and_does_not_refuse(tmp_path, evidence_root):
+    out = str(tmp_path / "dry.json")
+    assert conf.main(["--dry-run", "--round", "v4-late-descriptive", "--out", out, "--evidence-root", evidence_root]) == 0
+    gate = json.load(open(out, encoding="utf-8"))["late_descriptive_gate"]
+    assert gate["allowed"] is False and NOTHING_TO_RESCORE in gate["reason"]
+    write_read1_report(evidence_root, "v1-older")
+    assert conf.main(["--dry-run", "--round", "v4-late-descriptive", "--out", out, "--evidence-root", evidence_root]) == 0
+    gate = json.load(open(out, encoding="utf-8"))["late_descriptive_gate"]
+    assert gate["allowed"] is True and gate["read1_rating_config_version"] == "v1-older"
+    assert not os.path.exists(os.path.join(evidence_root, "v4-late-descriptive"))

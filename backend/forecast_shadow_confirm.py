@@ -53,6 +53,18 @@ a FRESH decision read without a record before its guard, so the one-shot read
 is never spent on a run that could not decide. The record's path and hash are
 written into the report and `run_started.json`.
 
+Conductor basis (D-01, D-03, D-10; 07-09). `conductor_basis()` decides, per run, which configuration the headline is
+scored under. While every city's production point equals the frozen Drake point the run is the default path above and the
+secondary is "identical to the headline by construction; not computed separately". When a city differs (the signed O4 case:
+AUSTIN at Drake 100 C), the CLI refuses with exit 2, before any network call, unless that city's refit cooling and
+reference artifacts for the current RATING_CONFIG_VERSION verify against their manifest (and the frozen artifacts verify
+against theirs); it then scores the headline under `city_point.production_city_point` with the refit models for those
+cities and, in the same read, the frozen Drake artifacts under the Drake configuration as a labelled secondary that never
+decides (`report["secondary"]`). Every artifact either loaded is listed in `report["scored_artifacts"]`; every report and
+dry run records `rating_config_version` and `conductor_basis`. The round `v4-late-descriptive` is accepted only when the
+current RATING_CONFIG_VERSION differs from the one recorded in the newest v4-read1 headline report ("nothing to re-score
+descriptively (D-03)" otherwise); the instant and one-shot guards still apply after that.
+
 Operator commands (one shot per round; evidence lands in
 data/shadow/evaluation/<round>)::
 
@@ -77,6 +89,7 @@ from __future__ import annotations
 
 import argparse
 import functools
+import glob
 import json
 import os
 import sys
@@ -628,6 +641,149 @@ def _recording_loader(loader: Callable[[str, str], object], source: str, records
 
 
 # --------------------------------------------------------------------------
+# Conductor basis (D-01, D-10) and the D-03 late-descriptive gate
+# --------------------------------------------------------------------------
+
+PARITY_HEADLINE_TEXT = (
+    "production configuration equals the frozen Drake configuration for every city asked for; the 12 frozen "
+    "artifacts are the production-conductor models (D-10) and the default headline path is used"
+)
+PARITY_SECONDARY_TEXT = "identical to the headline by construction; not computed separately"
+NOTHING_TO_RESCORE = "nothing to re-score descriptively (D-03)"
+LATE_ROUND = "v4-late-descriptive"
+_FROZEN_REFUSED_STATUSES = ("hash_mismatch", "not_in_manifest", "manifest_unreadable")
+
+
+def _artifact_status(path: str, manifest_path: str, entries: dict, manifest_error: Optional[str]) -> dict:
+    """Status of one model file against a sha256 manifest, without deserializing it (the pickle is never loaded)."""
+    key = forecast_conductor_refit._manifest_key(path)
+    out = {"path": path.replace(os.sep, "/"), "manifest": manifest_path.replace(os.sep, "/"), "manifest_key": key,
+           "exists": os.path.isfile(path), "expected_sha256": None, "actual_sha256": None}
+    if manifest_error is not None:
+        out.update(status="manifest_unreadable", error=manifest_error)
+    elif key not in entries:
+        out["status"] = "not_in_manifest"
+    else:
+        out["expected_sha256"] = entries[key]
+        if not out["exists"]:
+            out["status"] = "missing_file"
+        else:
+            out["actual_sha256"] = core.sha256_file(path)
+            out["status"] = "verified" if out["actual_sha256"] == out["expected_sha256"] else "hash_mismatch"
+    out["verified"] = out["status"] == "verified"
+    return out
+
+
+def _manifest_entries(manifest_path: str):
+    try:
+        return forecast_conductor_refit._entries(manifest_path), None
+    except forecast_conductor_refit.ArtifactIntegrityError as exc:
+        return {}, str(exc)
+
+
+def conductor_basis(cities, config_version: Optional[str] = None, refit_root: Optional[str] = None,
+                    frozen_manifest: Optional[str] = None) -> dict:
+    """
+    Which conductor configuration the headline is scored under (D-01) and whether the artifacts that would be served
+    are sound. A city differs when its production point (`city_point.production_city_point`) differs from the frozen
+    Drake point (`forecast_conductor_refit.production_differs`).
+
+    With no differing city the headline is the default path (the 12 frozen artifacts serve as the production models,
+    D-10) and the secondary is "identical to the headline by construction; not computed separately".
+
+    With differing cities: for each differing city the two refit artifacts (`REFIT_METHODS`) under
+    `<refit_root>/<config_version>/` are checked against that directory's manifest, and every frozen artifact of the
+    cities asked for against the frozen manifest. Files are hashed, never deserialized. `problems` lists every reason
+    the CLI refuses before any network call: any refit artifact that is not `verified`, and any frozen artifact whose
+    status is hash_mismatch, not_in_manifest or manifest_unreadable (an absent frozen file stays candidate_unavailable,
+    as in the default path). `refit_root` / `frozen_manifest` default (at call time) to the refit module's constants.
+    """
+    cities = list(cities)
+    version = config.RATING_CONFIG_VERSION if config_version is None else config_version
+    differing = [c for c in cities if forecast_conductor_refit.production_differs(c)]
+    basis: dict = {
+        "config_version": version, "cities": cities, "differing": differing,
+        "parity_cities": [c for c in cities if c not in differing],
+        "refit_artifacts": [], "frozen_artifacts": [], "problems": [], "refit_verified": True,
+    }
+    if not differing:
+        basis["headline"] = PARITY_HEADLINE_TEXT
+        basis["secondary"] = PARITY_SECONDARY_TEXT
+        return basis
+
+    refit_root = forecast_conductor_refit.REFIT_ROOT if refit_root is None else refit_root
+    frozen_manifest = forecast_conductor_refit.FROZEN_MANIFEST if frozen_manifest is None else frozen_manifest
+    basis["headline"] = (
+        f"production per-city conductors (D-01): {', '.join(differing)} scored under the production configuration with "
+        f"the refit ml_cooling_corrected and reference_ml_refit_24h for config version {version}; every other "
+        f"city and ml_wind_corrected use the frozen artifacts")
+    basis["secondary"] = (
+        f"{SECONDARY_LABEL}: the 12 frozen Drake artifacts scored under the Drake configuration on the same fetched frames")
+
+    directory = forecast_conductor_refit.refit_dir(version, refit_root)
+    refit_manifest = os.path.join(directory, forecast_conductor_refit.MANIFEST_NAME)
+    entries, error = _manifest_entries(refit_manifest)
+    for city in differing:
+        for method in forecast_conductor_refit.REFIT_METHODS:
+            path = forecast_conductor_refit._artifact_path(directory, city, method)
+            entry = {"city": city, "method": method, **_artifact_status(path, refit_manifest, entries, error)}
+            basis["refit_artifacts"].append(entry)
+            if not entry["verified"]:
+                basis["problems"].append(f"refit artifact {entry['path']}: {entry['status']}"
+                                         + (f" ({entry['error']})" if entry.get("error") else ""))
+    basis["refit_verified"] = all(a["verified"] for a in basis["refit_artifacts"])
+
+    entries, error = _manifest_entries(frozen_manifest)
+    for city in cities:
+        for method in MODEL_METHODS:
+            path = forecast_shadow_pipeline._model_path_for(city, method)
+            entry = {"city": city, "method": method, **_artifact_status(path, frozen_manifest, entries, error)}
+            basis["frozen_artifacts"].append(entry)
+            if entry["status"] in _FROZEN_REFUSED_STATUSES:
+                basis["problems"].append(f"frozen artifact {entry['path']}: {entry['status']}"
+                                         + (f" ({entry['error']})" if entry.get("error") else ""))
+    return basis
+
+
+def late_descriptive_status(base_evidence_root: str, current_version: Optional[str] = None) -> dict:
+    """
+    D-03 gate for round `v4-late-descriptive`: the descriptive re-score exists to describe a conductor change after
+    read 1, so it is allowed only when the current RATING_CONFIG_VERSION differs from the one recorded in the newest
+    v4-read1 headline report (`<base>/v4-read1/reconstructed_frames_*/report.json`, newest directory name).
+    Only the `rating_config_version` key of that report is read. Returns {"allowed", "reason", "read1_report",
+    "read1_rating_config_version", "current_rating_config_version"}; `reason` starts with
+    "nothing to re-score descriptively (D-03)" whenever it is not allowed.
+    """
+    current = config.RATING_CONFIG_VERSION if current_version is None else current_version
+    read1_root = core.round_evidence_root(base_evidence_root, core.V4_READ1)
+    status = {"allowed": False, "reason": None, "read1_report": None, "read1_rating_config_version": None,
+              "current_rating_config_version": current}
+    found = sorted(glob.glob(os.path.join(read1_root, f"{ROW_SOURCE}_*", "report.json")))
+    if not found:
+        status["reason"] = f"{NOTHING_TO_RESCORE}: no v4-read1 headline report exists under {read1_root!r}"
+        return status
+    newest = found[-1]
+    status["read1_report"] = newest
+    try:
+        with open(newest, "r", encoding="utf-8") as fh:
+            recorded = json.load(fh).get("rating_config_version")
+    except (OSError, ValueError, AttributeError) as exc:
+        status["reason"] = f"{NOTHING_TO_RESCORE}: the read-1 report {newest!r} cannot be read ({type(exc).__name__}: {exc})"
+        return status
+    status["read1_rating_config_version"] = recorded
+    if not isinstance(recorded, str) or not recorded:
+        status["reason"] = (f"{NOTHING_TO_RESCORE}: the read-1 report {newest!r} records no rating_config_version, so a "
+                            f"conductor change after read 1 cannot be established")
+    elif recorded == current:
+        status["reason"] = (f"{NOTHING_TO_RESCORE}: the current rating config version {current!r} equals the one recorded "
+                            f"in the read-1 report, so the conductor did not change after read 1")
+    else:
+        status["allowed"] = True
+        status["reason"] = f"rating config version changed after read 1 ({recorded!r} -> {current!r})"
+    return status
+
+
+# --------------------------------------------------------------------------
 # Orchestration
 # --------------------------------------------------------------------------
 
@@ -889,7 +1045,7 @@ def run_confirmation(*, cities, guard_cfg: core.GuardConfig, evidence_root: str,
                      model_loader: Optional[Callable] = None, window=None, repo_root: Optional[str] = None,
                      extra_probe_arms: Optional[dict] = None, round_name: Optional[str] = None,
                      vetoes: Optional[dict] = None, point_resolver: Optional[Callable] = None,
-                     secondary: Optional[dict] = None) -> dict:
+                     secondary: Optional[dict] = None, conductor_basis: Optional[dict] = None) -> dict:
     """
     Order: scope valid times from the window; require the veto record for a
     FRESH decision read (before the guard); `check_guard`; refuse a
@@ -920,6 +1076,8 @@ def run_confirmation(*, cities, guard_cfg: core.GuardConfig, evidence_root: str,
     decides" (pick None). The two are never pooled. A per-city failure in the secondary is recorded under
     `report["secondary"]["failed_cities"]` and never removes the headline's city. `report["scored_artifacts"]`
     lists every artifact the headline and the secondary loaded (city, method, path, sha256, source, role).
+    `conductor_basis` (the dict `conductor_basis()` returns, or None) is recorded verbatim in the config and the
+    report; every report also records `rating_config_version` (config.RATING_CONFIG_VERSION at run time).
 
     A per-city failure (fetch, structure, prediction) is recorded and that city
     is excluded and named in the report. EvaluationGuardError and
@@ -978,6 +1136,8 @@ def run_confirmation(*, cities, guard_cfg: core.GuardConfig, evidence_root: str,
         "frame_provider": "production" if frame_provider is None else "injected",
         "model_loader": "load_correction_model" if headline_is_frozen else "injected",
         "point_resolver": _resolver_name(point_resolver),
+        "rating_config_version": config.RATING_CONFIG_VERSION,
+        "conductor_basis": conductor_basis,
         "secondary": None if secondary is None else {
             "label": SECONDARY_LABEL, "point_resolver": _resolver_name(secondary["point_resolver"]),
             "model_loader": "load_correction_model" if secondary_loader.source == "frozen" else "injected"},
@@ -992,6 +1152,8 @@ def run_confirmation(*, cities, guard_cfg: core.GuardConfig, evidence_root: str,
     report["round"] = rnd.name
     report["vetoes"] = None if vetoes is None else {"source": veto_source, "record": vetoes}
     report["truth_stats"] = {}
+    report["rating_config_version"] = config.RATING_CONFIG_VERSION
+    report["conductor_basis"] = conductor_basis
     sec_report = None
     if secondary is not None:
         sec_report = {
@@ -1090,11 +1252,17 @@ def _score_secondary_city(sec_report, sec_error_frames, city, secondary, seconda
 
 def dry_run(*, cities, guard_cfg: core.GuardConfig, evidence_root: str, now=None,
             params: Optional[dict] = None, repo_root: Optional[str] = None,
-            round_name: Optional[str] = None) -> dict:
+            round_name: Optional[str] = None, basis: Optional[dict] = None,
+            late_gate: Optional[dict] = None) -> dict:
     """
     No network, no FRESH read, no directory created. Reports the round, whether the
     guard would refuse now, the planned requests (archive and previous-runs per city,
     over the round's fetch window), the 12 artifact hashes and the freeze check.
+
+    Also reports the conductor basis (`basis`, default `conductor_basis(cities)`): which cities differ from Drake,
+    which refit artifacts would be served and whether their hashes verify (files are hashed, never loaded), the
+    `rating_config_version`, and, for the late descriptive round, the D-03 gate status (`late_gate`). A dry run
+    reports a problem; it never refuses because of one.
     """
     cities = list(cities)
     rnd = _resolve_round(round_name, guard_cfg)
@@ -1115,8 +1283,10 @@ def dry_run(*, cities, guard_cfg: core.GuardConfig, evidence_root: str, now=None
         planned.append({"city": city, "label": "previous_runs", "url": url, "params": p})
     root = repo_root or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     prov = core.provenance(root, cities)
-    return {
+    result = {
         "round": rnd.name,
+        "rating_config_version": config.RATING_CONFIG_VERSION,
+        "conductor_basis": conductor_basis(cities) if basis is None else basis,
         "guard": guard,
         "now_evaluated": now_ts.isoformat(),
         "protocol_status_note": "unsigned runs are exploratory",
@@ -1129,6 +1299,9 @@ def dry_run(*, cities, guard_cfg: core.GuardConfig, evidence_root: str, now=None
         "freeze_check": prov["freeze_check"],
         "evidence_root": evidence_root,
     }
+    if rnd.name == LATE_ROUND:
+        result["late_descriptive_gate"] = late_gate
+    return result
 
 
 # --------------------------------------------------------------------------
@@ -1177,9 +1350,14 @@ def main(argv=None) -> int:
         guard_cfg = score_mod._guard_from_args(args)
         params = score_mod._params_from_args(args)
         round_root = core.round_evidence_root(args.evidence_root, rnd)
+        try:
+            basis = conductor_basis(args.cities)
+        except KeyError as exc:          # a city without a usable production table entry: refuse, nothing has run
+            raise ValueError(f"conductor basis: {exc.args[0] if exc.args else exc}") from exc
+        late_gate = late_descriptive_status(args.evidence_root) if rnd.name == LATE_ROUND else None
         if args.dry_run:
             result = dry_run(cities=args.cities, guard_cfg=guard_cfg, evidence_root=round_root, params=params,
-                             round_name=rnd.name)
+                             round_name=rnd.name, basis=basis, late_gate=late_gate)
             text = core.dumps(result, indent=2)
             if args.out:
                 with open(args.out, "w", encoding="utf-8") as fh:
@@ -1200,9 +1378,29 @@ def main(argv=None) -> int:
             if problems:
                 raise core.EvaluationGuardError(
                     f"a deciding round ({rnd.name}) cannot start: " + "; ".join(problems))
+        if late_gate is not None and not late_gate["allowed"]:
+            raise core.EvaluationGuardError(late_gate["reason"])
+        if basis["problems"]:
+            raise core.EvaluationGuardError(
+                "conductor basis: a city's production conductor differs from Drake but its artifacts are not sound; "
+                "refusing before any network call: " + "; ".join(basis["problems"]))
+        run_kwargs: dict = {}
+        if basis["differing"]:
+            version, root_dir = basis["config_version"], forecast_conductor_refit.REFIT_ROOT
+            frozen_manifest = forecast_conductor_refit.FROZEN_MANIFEST
+            # Both loaders verify every artifact's sha256 against its manifest before it is deserialized (T-07-19);
+            # the secondary serves only frozen Drake artifacts.
+            run_kwargs = {
+                "point_resolver": city_point.production_city_point,
+                "model_loader": forecast_conductor_refit.make_headline_loader(
+                    version, set(basis["differing"]), root=root_dir, frozen_manifest=frozen_manifest),
+                "secondary": {"label": "secondary", "point_resolver": None,
+                              "model_loader": forecast_conductor_refit.make_headline_loader(
+                                  version, frozenset(), root=root_dir, frozen_manifest=frozen_manifest)},
+            }
         report = run_confirmation(cities=args.cities, guard_cfg=guard_cfg, evidence_root=round_root,
                                   protocol_status=args.protocol_status, params=params, round_name=rnd.name,
-                                  vetoes=vetoes)
+                                  vetoes=vetoes, conductor_basis=basis, **run_kwargs)
         if args.out:
             with open(args.out, "w", encoding="utf-8") as fh:
                 fh.write(core.dumps(report, indent=2))
@@ -1213,6 +1411,9 @@ def main(argv=None) -> int:
         return 2
     except core.LeakageProbeError as exc:
         print(f"failed: {exc}", file=sys.stderr)
+        return 1
+    except forecast_conductor_refit.ArtifactIntegrityError as exc:
+        print(f"failed: an artifact failed its hash check after the pre-check: {exc}", file=sys.stderr)
         return 1
 
 
