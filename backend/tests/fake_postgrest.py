@@ -63,7 +63,7 @@ def make_rating_rows(slots, cities=config.LOCATIONS, newest=None, **overrides):
     Complete city_rating rows (the 31 published columns plus a few diagnostics) for every city and
     every hourly slot. `slots` is a count (newest slot, then one hour older each) or an iterable of
     aware datetimes. `newest` defaults to the current UTC hour. `overrides` replace a column on every
-    row. Labels are the real config strings, so is_provisional is true unless overridden.
+    row. Labels are the real config strings; since the Phase 7 go they lack the word, so is_provisional is false unless overridden.
     """
     if newest is None:
         newest = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)

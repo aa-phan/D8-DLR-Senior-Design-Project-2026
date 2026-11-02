@@ -126,7 +126,7 @@ READ_CASES = [
      "latest_rating_values", "whole hour"),
     ("stale_flag_disagrees", {"latest": lambda rows: rows[0].update(is_stale=True)},
      "latest_rating_flags", "is_stale"),
-    ("provisional_flag_disagrees", {"latest": lambda rows: rows[0].update(is_provisional=False)},
+    ("provisional_flag_disagrees", {"latest": lambda rows: rows[0].update(is_provisional=True)},
      "latest_rating_flags", "is_provisional"),
     ("keyless_request_answered", {"require_key": False}, "keyless_request_refused", "without"),
     ("assert_fresh_missing", {"rpc_available": False}, "assert_fresh_answers", "404"),

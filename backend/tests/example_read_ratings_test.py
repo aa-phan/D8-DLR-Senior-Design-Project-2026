@@ -67,7 +67,9 @@ def _history_rows(cities=config.LOCATIONS):
         rows += make_rating_rows(slots, cities=("AUSTIN",))
     others = tuple(c for c in cities if c != "AUSTIN")
     if others:
-        rows += make_rating_rows(3, cities=others, newest=NEWEST)
+        # Since the Phase 7 go the current live label is not provisional; older live rows still are, so the
+        # other cities carry a pre-go version label to exercise the example's PROVISIONAL line.
+        rows += make_rating_rows(3, cities=others, newest=NEWEST, config_version="v2-provisional-2026-11-02")
     return rows
 
 

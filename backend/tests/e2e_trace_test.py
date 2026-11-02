@@ -337,10 +337,13 @@ def test_arrays_and_nulls_are_compared_exactly():
 
 
 def test_is_provisional_is_checked_against_the_labels(served, tmp_path, capsys):
-    # the real labels carry the word, so the view must say true
-    rows = make_rows()
+    # rows written before the Phase 7 go still carry the word, so the view must say true for them
+    # (the current live label is lifted, see the last case below)
+    old_label = {"rating_basis": "Per-conductor amperes. Values are provisional until the go.",
+                 "config_version": "v2-provisional-2026-11-02"}
+    rows = make_rows(**old_label)
     assert contract.is_provisional(rows[0]["rating_basis"], rows[0]["config_version"]) is True
-    world = World()
+    world = World(rest_rows=rows, sql_rows=[to_sql_row(r) for r in rows])
     fake = served(world)
     assert run_main(world, tmp_path) == 0
     assert read_json(tmp_path)["ok"] is True
@@ -359,7 +362,14 @@ def test_is_provisional_is_checked_against_the_labels(served, tmp_path, capsys):
     assert link(result, "is_provisional")["ok"] is False
     assert link(result, "SQL equals REST")["ok"] is True  # the stored columns were fine
 
-    # labels without the word and a view that says false agree
+    # the current live label (lifted by the Phase 7 go) and a view that says false agree
+    current = make_rows()
+    assert contract.is_provisional(current[0]["rating_basis"], current[0]["config_version"]) is False
+    world = World(rest_rows=current, sql_rows=[to_sql_row(r) for r in current])
+    served(world)
+    assert run_main(world, tmp_path) == 0
+
+    # other labels without the word and a view that says false agree
     clean = make_rows(rating_basis="Per-conductor amperes (final)", config_version="v-final")
     world = World(rest_rows=clean, sql_rows=[to_sql_row(r) for r in clean])
     served(world)

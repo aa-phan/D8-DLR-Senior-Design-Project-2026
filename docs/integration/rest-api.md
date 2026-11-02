@@ -93,10 +93,10 @@ The identity columns are how a change shows up (D-01). If `config_fingerprint`, 
 
 ## Provisional values
 
-- Every rating value is PROVISIONAL (OD-5) until Phase 7's re-validation go (REVAL-01). `is_provisional` lets your code branch on a boolean instead of reading the label text.
+- Every rating value is PROVISIONAL (OD-5) except on rows written going forward under the new label, which the Phase 7 re-validation go (REVAL-01, 2026-11-02) covers. `is_provisional` lets your code branch on a boolean instead of reading the label text.
 - **The word rule.** `is_provisional` is true while the word `provisional` (any capitalisation) appears in `rating_basis` OR in `config_version`. Live rows and backfill rows begin their labels differently, so the flag looks for the word, not for a prefix.
-- **Phase 7 hand-off.** Phase 7's REVAL-01 go must remove the word `provisional` from both `rating_basis` and `config_version` for `is_provisional` to turn false. A phrase such as "no longer provisional" would still read as provisional, because it contains the word. New rows then show `is_provisional` false; older rows keep their labels.
-- Show `rating_basis` next to every value. Never describe a row, the backfill included, as having passed a go/no-go.
+- **Phase 7 hand-off.** The owner signed the Phase 7 re-validation go (REVAL-01) on 2026-11-02, for rows written going forward only. A row written with the new `rating_basis` and a `config_version` that both lack the word `provisional` shows `is_provisional` false (the new label lacks the word); older live rows and backfill rows keep their labels and still show true. A phrase such as "no longer provisional" would still read as provisional, because it contains the word.
+- Show `rating_basis` next to every value. Never describe a backfill row or a row written before the label change as having passed a go/no-go; only rows carrying the new label are covered by the Phase 7 re-validation (`docs/data-science/decisions/real_data_validation_p7.md`).
 
 ## What produced each row
 

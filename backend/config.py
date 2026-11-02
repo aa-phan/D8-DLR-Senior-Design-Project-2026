@@ -428,12 +428,24 @@ POWER_FACTOR: float = 0.95      # Standard conservative assumption for grid powe
 # Written into every public.city_rating row by backend/supabase_store.py so a
 # consumer can always tell what a stored value is (OD-5). Not the shadow
 # bundle labels above (BUNDLE_*), which describe a different quantity.
+#
+# REVAL-01 (plan 07-17): the owner signed GO on 2026-11-02 (UTC), going forward
+# only. This text replaces the older label that carried the word "provisional";
+# the new text must never contain that word in any case, because
+# latest_rating.is_provisional (D-03) reads it from here and from
+# config_version. It keeps the conductor basis visible on every row (D-13).
+# Pinned to the schema doc's "Provisional label (OD-5)" section by
+# supabase_schema_doc_test.
 RATING_BASIS: str = (
     "Per-conductor amperes from the IEEE 738 thermal model at one rating point "
-    "per city. Static ratings are owner-supplied 345 kV bundle averages divided "
-    "by an assumed subconductor count; line bearings are assumed, not measured. "
-    "Not a verified equipment-limited circuit rating. Values are provisional "
-    "until Phase 7's re-validation go (REVAL-01) lifts this label."
+    "per city, using the per-city conductor table identified by the row's "
+    "config_version and config_fingerprint. AUSTIN's conductor type and maximum "
+    "operating temperature come from an Austin Energy statement; every other "
+    "conductor value, for every city, is a model default awaiting Power Systems "
+    "confirmation. Static ratings are owner-supplied 345 kV bundle averages "
+    "divided by an assumed subconductor count; line bearings are assumed, not "
+    "measured. Not a verified equipment-limited circuit rating. The Phase 3 "
+    "findings were re-validated in Phase 7 (REVAL-01) on this conductor basis."
 )
 
 # Human-readable label of the rating assumption set (DB-06). Bump it whenever

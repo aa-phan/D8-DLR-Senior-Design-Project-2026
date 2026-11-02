@@ -125,7 +125,9 @@ def test_doc_states_the_provisional_hand_off():
     for needle in ("REVAL-01", "rating_basis", "config_version", "both", "no longer provisional",
                    "any capitalisation", "OR in"):
         assert needle in section, needle
-    assert "remove the word" in section
+    # The 2026-11-02 go lifted the label going forward only: new rows lack the word, older rows keep it.
+    assert "going forward only" in section
+    assert "lacks the word" in section
 
 
 # ---------------------------------------------------------------------------
@@ -267,7 +269,7 @@ def test_city_rating_doc_states_the_view_and_the_word_rule():
     assert "no consumer role has any access" not in lives
     provisional = _section(SCHEMA_DOC, "## Provisional label (OD-5)")
     for needle in ("latest_rating.is_provisional", "the word provisional", "rating_basis", "config_version",
-                   "REVAL-01", "both strings", "(D-03)", "no longer provisional"):
+                   "REVAL-01", "both lack the word", "(D-03)", "no longer provisional"):
         assert needle in provisional, needle
     fresh = _section(SCHEMA_DOC, "## Freshness and failures")
     for needle in ("is_stale", "age_minutes", "rpc/assert_fresh", "(D-02)"):

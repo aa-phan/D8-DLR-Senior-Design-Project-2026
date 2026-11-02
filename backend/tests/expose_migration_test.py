@@ -294,6 +294,14 @@ def test_newest_row_wins_even_when_it_is_a_fallback(pg_url):
 # ---------------------------------------------------------------------------
 
 _VERIFY_SQL = os.path.join(local_pg.REPO_ROOT, "supabase", "ops", "verify_exposure.sql")
+# The live label before the Phase 7 REVAL-01 go (rows written then keep it; the go is going-forward only).
+_OLD_LIVE_BASIS = (
+    "Per-conductor amperes from the IEEE 738 thermal model at one rating point "
+    "per city. Static ratings are owner-supplied 345 kV bundle averages divided "
+    "by an assumed subconductor count; line bearings are assumed, not measured. "
+    "Not a verified equipment-limited circuit rating. Values are provisional "
+    "until Phase 7's re-validation go (REVAL-01) lifts this label."
+)
 _MANIFEST = os.path.join(local_pg.REPO_ROOT, "docs", "data-science", "decisions", "real_data_validation",
                          "manifest.json")
 
@@ -330,14 +338,16 @@ def _replace_city_rows(conn, rows):
 
 
 def test_live_label_is_provisional_offline():
-    # D-03 drift guard, no database: the real labels the live runner writes must still read provisional.
-    assert contract.is_provisional(config.RATING_BASIS, config.RATING_CONFIG_VERSION), (
-        "config.RATING_BASIS / RATING_CONFIG_VERSION no longer contain the word provisional: if Phase 7's "
-        "REVAL-01 go lifted the label, update this expectation; otherwise latest_rating.is_provisional "
-        "would tell consumers that provisional rows are final")
+    # D-03 drift guard, no database. The Phase 7 REVAL-01 go (signed 2026-11-02, going forward only) lifted the
+    # label on rows the live runner writes now: neither the live basis nor the live version carries the word.
+    assert not contract.is_provisional(config.RATING_BASIS, config.RATING_CONFIG_VERSION), (
+        "config.RATING_BASIS / RATING_CONFIG_VERSION carry the word provisional again: after the signed "
+        "REVAL-01 go, latest_rating.is_provisional would read every newly written live row as provisional")
+    assert "provisional" not in config.RATING_BASIS.lower()
+    # Older live rows keep the pre-go text, which still reads provisional (the go is going-forward only).
+    assert contract.is_provisional(_OLD_LIVE_BASIS, config.RATING_CONFIG_VERSION)
     # Either label alone is enough, and a lifted pair is final.
-    assert contract.is_provisional(config.RATING_BASIS, "v2-2026-11-01")
-    # (since v3 the live version label no longer carries the word; the live basis above still does)
+    assert contract.is_provisional(config.RATING_BASIS, "v2-provisional-2026-11-02")
     assert contract.is_provisional("Per-conductor amperes.", "v2-provisional-2026-11-02")
     assert contract.is_provisional("PROVISIONAL (OD-5). Phase 3 backfill", "v2")
     assert not contract.is_provisional("Per-conductor amperes; values confirmed by Phase 7 re-validation.", "v2-2026-11-01")
@@ -486,12 +496,12 @@ def test_is_provisional_reads_the_real_labels(pg_url):
     lifted_version = "v2-2026-11-01"
     slot = local_pg.current_utc_hour()
     cases = {  # city -> (rating_basis, config_version)
-        "AUSTIN": (config.RATING_BASIS, config.RATING_CONFIG_VERSION),          # what the live runner writes
+        "AUSTIN": (config.RATING_BASIS, config.RATING_CONFIG_VERSION),          # what the live runner writes now (lifted)
         "CORPUS_CHRISTI": (backfill_basis, lifted_version),                     # what the backfill writes
-        "MIDLAND": (lifted_basis, config.RATING_CONFIG_VERSION),                # the word in config_version only
+        "MIDLAND": (_OLD_LIVE_BASIS, config.RATING_CONFIG_VERSION),             # an older live row: the word in rating_basis only
         "EL_PASO": (lifted_basis, lifted_version),                              # a lifted pair
     }
-    expected = {"AUSTIN": True, "CORPUS_CHRISTI": True, "MIDLAND": True, "EL_PASO": False}
+    expected = {"AUSTIN": False, "CORPUS_CHRISTI": True, "MIDLAND": True, "EL_PASO": False}
     with _session(pg_url) as conn:
         _replace_city_rows(conn, [
             local_pg.rating_row(city, slot, rating_basis=basis, config_version=version)
