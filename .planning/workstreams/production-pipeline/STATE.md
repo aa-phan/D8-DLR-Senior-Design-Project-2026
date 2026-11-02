@@ -1,19 +1,19 @@
 ---
 gsd_state_version: "1.0"
 current_phase: 07
-current_plan: 7
+current_plan: 8
 status: executing
-stopped_at: Completed 07-06-PLAN.md
-last_updated: "2026-11-02T07:24:02.292Z"
+stopped_at: Completed 07-07-PLAN.md
+last_updated: "2026-11-02T07:49:56.389Z"
 last_activity: 2026-11-01
 last_activity_desc: Phase 07 execution started
-state_head: bd02a43e37139eef4129f62c2a8525d3c3982999
+state_head: 47bd95733151394ce4d70553c0f477dddcb9abf4
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 66
-  completed_plans: 53
-  percent: 80
+  completed_plans: 54
+  percent: 82
 milestone_name: Production Pipeline (Supabase + live ratings)
 workstream: production-pipeline
 created: 2026-10-18
@@ -37,7 +37,7 @@ whoever owns that analysis; they are not work items here.
 
 **Status:** Ready to execute
 **Current Phase:** 07
-**Current Plan:** 7
+**Current Plan:** 8
 **Total Plans in Phase:** 19
 **Last Activity:** 2026-11-01 — Phase 07 execution started
 **Last Activity Description:** Phase 07 execution started
@@ -200,6 +200,9 @@ These block or affect stringing the system together and belong to the phases nam
 - [Phase 07]: 07-06: signed v4 rounds are frozen ProtocolRound values selected by name; check_guard measures dates against the selected round, so the before-instant and one-shot refusals stay armed and a FRESH run takes no override — An override disabled both refusals (research Pitfall 4); T-07-12, SEL-01, SEL-04
 - [Phase 07]: 07-06: a FRESH run is refused at the retired 2026-11-24 instant and while v4 is unsigned (v4_signed reads the signature line before any network call); relative_margin_fraction 0.02 is pre-registered so a non-default value is refused — T-07-13, T-07-14; decision_margin_amps 5.0 stays registered until 07-07 replaces the v3 ship-rule call
 - [Phase 07]: 07-06 operator note: forecast_shadow_confirm.py is untouched until 07-07; a real (non dry-run) run now passes the guard without the veto check, so do not run it before 07-07 and the vetoes exist — Real clock 2026-11-02 is past the read-1 instant and v4 is signed
+- [Phase 07]: 07-07: deciding rounds (v4-read1, v4-read2) refuse at the CLI unless --vetoes loads (both source-report sha256 values match disk) and --protocol-status is signed; run_confirmation also refuses a FRESH decision scope with no veto record before the guard — SEL-03: the ABLATION and TEST vetoes must exist before the one-shot FRESH read; a crash after the guard would spend it
+- [Phase 07]: 07-07: load_vetoes requires all three real candidates in both veto sections with real-bool flags; round_name defaults to the guard's round and a disagreement is refused — an edited or truncated record must not un-veto by omission (T-07-15); a read-2 guard must not yield a read-1 decision
+- [Phase 07]: 07-07: the shadow-log scorer applies apply_ship_rule_v4 with the live label (pick always None); only the headline port decides; --decision-margin-amps stays registered but unused — D-01/D-02: live-system check never decides; PD-15 still refuses a non-default value in a FRESH run
 
 ## Open Decisions
 
@@ -223,9 +226,9 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 
 ## Session Continuity
 
-**Last session:** 2026-11-02T07:24:01.955Z
+**Last session:** 2026-11-02T07:49:56.036Z
 
-**Stopped At:** Completed 07-06-PLAN.md
+**Stopped At:** Completed 07-07-PLAN.md
 **Resume File:** None
 
 ## Performance Metrics
@@ -281,6 +284,7 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 | Phase 07 P04 | 8 min | 2 tasks | 9 files |
 | Phase 07 P05 | 6 min | 2 tasks | 2 files |
 | Phase 07 P06 | 22 min | 2 tasks | 6 files |
+| Phase 07 P07 | 22 min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
