@@ -1,7 +1,7 @@
 <!-- generated-by: gsd-doc-writer -->
 # Phase 7 re-validation and new go/no-go (REVAL-01)
 
-**Status:** the measurements and the checklist are complete; the owner's go/no-go is not yet signed (see "Decision"). Nothing in this note changes any rating, label, model or setting. Every figure cites a file in [`real_data_validation_p7/`](real_data_validation_p7/) (the offline re-run of 2026-09-08 to 2026-09-28, plan 07-14) or the Phase 3 note [`real_data_validation.md`](real_data_validation.md).
+**Status:** the measurements and the checklist are complete; the owner signed GO on 2026-11-02 (see "Decision"). The measurements in this note change no rating, model or setting; the label text changes only as the Decision records. Every figure cites a file in [`real_data_validation_p7/`](real_data_validation_p7/) (the offline re-run of 2026-09-08 to 2026-09-28, plan 07-14) or the Phase 3 note [`real_data_validation.md`](real_data_validation.md).
 
 ## In plain English
 
@@ -88,4 +88,19 @@ B3 (history gap between the backfill window and go-live) and B6 (Open-Meteo sola
 
 ## Decision
 
-Pending owner decision.
+**Decision: GO.** The owner signed GO on lifting the provisional label, in the mode `go-forward-only`: the new label applies to rows written after the promotion push in plan 07-18. No stored live row is relabelled and no backfill row is ever relabelled. The proposed `RATING_BASIS` text above was accepted without edits.
+
+- **Label mode:** `go-forward-only` (no date named, no stored-row `UPDATE`).
+- **D-15, interim G6 method:** `ml` (retrained, `e0a00a9`). No change to `dlr_live_run.FORECAST_METHOD`.
+- **B4 follow-up date:** `2026-11-30T00:00:00Z` accepted (refit the CORPUS_CHRISTI anomaly detector on station-measured inputs once Power Systems answers, or by that date if they never do, then re-check with a replay of the September window).
+- **Closed blockers:** B1, B2, B4 and B5 are closed as set out in the checklist; B3 and B6 remain not blocking.
+- **What changed in code and docs on this GO:** `config.RATING_BASIS` and the schema doc's "Provisional label (OD-5)" section carry the new text together; `RATING_CONFIG_VERSION` is unchanged (`v3-powersystems-2026-11-02`, which does not contain the word), so `latest_rating.is_provisional` is false for a row that carries both. The schema doc's "Rules for consumers" and `docs/integration/rest-api.md` "Provisional values" were reworded so they stay correct for older rows (which still read provisional) and for rows carrying the new label. Nothing is pushed or applied to the live database in plan 07-17.
+
+The owner's reply, recorded verbatim (2026-11-02T20:43Z), second line included:
+
+> go-forward-only, D-15: ml; 2026-11-30 ok; aaphan
+> power systems answers were primarily to clear assumptions causing austin to fallback to static over half the time, other results are accepted as stated
+
+**Signed by:** aaphan, 2026-11-02 (UTC)
+
+**Recorded by:** the executor, from the owner's reply at plan 07-17's checkpoint
