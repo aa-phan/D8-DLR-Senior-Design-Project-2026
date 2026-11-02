@@ -7,7 +7,7 @@ Production rating, training and validation read only `config.PRODUCTION_CONDUCTO
 `config.DEFAULT_CONDUCTOR_CONFIG_KWARGS` through `city_point.city_point` (COND-02, proven by
 cond02_shadow_golden_test.py). Covered here: table completeness and sources for every
 `config.LOCATIONS` city, the resolver's closed-set and range contract (boundary, empty and
-missing-field edges), and the provisional parity with the Drake default.
+missing-field edges), and the documented divergence of AUSTIN (100 C) from the Drake default (the other cities at parity).
 
 The caller split (COND-02, T-07-09) is pinned by an AST test over the module files: production
 callers resolve through `production_city_point`, the three static-only callers use
@@ -104,24 +104,40 @@ def test_production_point_is_built_from_the_table_with_the_tables_azimuth(monkey
     assert city_point.city_point(_CITY).bearing_deg == config.CITY_LINE_BEARING_DEG[_CITY]
 
 
-def test_provisional_parity():
+def test_documented_divergence():
     """
-    PROVISIONAL (D-09): until Power Systems answers, every city's production point equals the shadow Drake
-    point (795 kcmil Drake ACSR, 75 C, 900 m, the carried-over bearing). DELETE OR REWRITE THIS TEST when
-    Power Systems' values land in config.PRODUCTION_CONDUCTORS.
+    DOCUMENTED DIVERGENCE (D-11, signed v4 O4): Power Systems answered for AUSTIN only, so exactly AUSTIN's
+    production point differs from the shadow Drake point, and only in maximum operating temperature (100 C,
+    not 75 C). CORPUS_CHRISTI, MIDLAND and EL_PASO stay at parity (795 kcmil Drake ACSR, 75 C, 900 m, the
+    carried-over bearing). Moving another city off Drake is a table edit, a version bump and an edit here.
     """
+    diverging = {"AUSTIN"}
+    drake = lambda city: config.conductor_kwargs_for(config.CITY_LINE_BEARING_DEG[city])
     for city in config.LOCATIONS:
         production = city_point.production_city_point(city)
         shadow = city_point.city_point(city)
-        assert vars(production.conductor) == vars(shadow.conductor), city
+        entry = config.PRODUCTION_CONDUCTORS[city]
+        # what is shared by every city, diverging or not
         assert production.bearing_deg == shadow.bearing_deg == config.CITY_LINE_BEARING_DEG[city]
         assert production.coord == shadow.coord
         assert production.static_rating == shadow.static_rating
         assert production.rating_bounds == shadow.rating_bounds
-        entry = config.PRODUCTION_CONDUCTORS[city]
-        drake = config.conductor_kwargs_for(config.CITY_LINE_BEARING_DEG[city])
-        assert {k: entry[k] for k in drake} == drake
         assert entry["resist_temp_coef"] == thermal_model.ConductorConfig().alpha_r
+        if city in diverging:
+            assert vars(production.conductor) != vars(shadow.conductor), city
+            assert production.conductor.T_max == 100.0 and shadow.conductor.T_max == 75.0
+            # the only differing value is the maximum operating temperature
+            assert {k: v for k, v in vars(production.conductor).items() if k != "T_max"} == \
+                {k: v for k, v in vars(shadow.conductor).items() if k != "T_max"}
+            assert {k: entry[k] for k in drake(city) if k != "max_temp_c"} == \
+                {k: v for k, v in drake(city).items() if k != "max_temp_c"}
+            assert entry["max_temp_c"] == 100.0 and entry["conductor_type"] == "795 kcmil ACSR Drake"
+        else:
+            assert vars(production.conductor) == vars(shadow.conductor), city
+            assert {k: entry[k] for k in drake(city)} == drake(city)
+            assert entry["max_temp_c"] == 75.0
+    assert {c for c in config.LOCATIONS if vars(city_point.production_city_point(c).conductor)
+            != vars(city_point.city_point(c).conductor)} == diverging
 
 
 @pytest.mark.parametrize("bad_city", ["NOT_A_CITY", ""])
@@ -302,11 +318,11 @@ def test_production_follows_the_table_and_shadow_does_not(monkeypatch):
     assert baseline["fallback"] is False
     shadow_before = vars(city_point.city_point("AUSTIN").conductor).copy()
 
-    monkeypatch.setitem(config.PRODUCTION_CONDUCTORS, "AUSTIN", _entry("AUSTIN", max_temp_c=100.0))
+    monkeypatch.setitem(config.PRODUCTION_CONDUCTORS, "AUSTIN", _entry("AUSTIN", max_temp_c=125.0))   # AUSTIN is at 100 C since v3
     hotter = rate()
     assert hotter["fallback"] is False
     # a hotter allowed conductor temperature carries more current for the same observation
     assert hotter["rating"] > baseline["rating"]
-    # the shadow resolver (and its Drake 75 C conductor) did not move
+    # the shadow resolver (and its Drake 75 C conductor, not AUSTIN's 100 C) did not move
     assert vars(city_point.city_point("AUSTIN").conductor) == shadow_before
     assert city_point.city_point("AUSTIN").conductor.T_max == 75.0

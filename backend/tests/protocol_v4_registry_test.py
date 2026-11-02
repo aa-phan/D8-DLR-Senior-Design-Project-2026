@@ -302,7 +302,10 @@ def test_the_registry_keys_collected_by_the_parametrized_cases_are_counted():
 
 @pytest.fixture
 def table(monkeypatch):
+    """A copy of the production table as it stood BEFORE the O4 switch (AUSTIN at the provisional 75 C), so each
+    test starts from the pre-switch state whatever the live table holds now."""
     rows = {c: dict(v) for c, v in config.PRODUCTION_CONDUCTORS.items()}
+    rows["AUSTIN"]["max_temp_c"] = 75.0
     monkeypatch.setattr(config, "PRODUCTION_CONDUCTORS", rows)
     return rows
 
@@ -326,7 +329,8 @@ def test_after_the_switch_a_second_changed_city_or_an_unswitched_austin_fails(mo
         _check_switch_cities(SIGNED["power_systems.switch_cities"])
 
 
-def test_while_provisional_a_changed_austin_value_is_not_silently_accepted(table):
+def test_while_provisional_a_changed_austin_value_is_not_silently_accepted(monkeypatch, table):
+    monkeypatch.setattr(config, "RATING_CONFIG_VERSION", "v2-provisional-2026-11-02")
     table["AUSTIN"]["max_temp_c"] = 100.0                     # still labelled v2-provisional: the label must move too
     with pytest.raises(AssertionError):
         _check_switch_cities(SIGNED["power_systems.switch_cities"])

@@ -229,7 +229,8 @@ CITY_LINE_BEARING_DEG: dict[str, float] = {
 # (COND-02), so the table must never be read from a shadow module.
 #
 # Per D-09 every city starts on the model default (795 kcmil Drake ACSR, 75 C,
-# 900 m, the carried-over line bearing above) until Power Systems answers; each
+# 900 m, the carried-over line bearing above) until Power Systems answers; since
+# v3 (plan 07-11) AUSTIN alone holds the Power Systems 100 C value. Each
 # value carries a source string below. Replacing a value is an edit here plus a
 # RATING_CONFIG_VERSION bump, never a code change: the table is fingerprinted
 # per city (rating_identity.FINGERPRINTED_CONFIG_NAMES), so a changed value
@@ -253,13 +254,13 @@ PRODUCTION_CONDUCTOR_FIELDS: tuple[str, ...] = (
 # the max_temp_c line of every entry) sees every value on its own line.
 PRODUCTION_CONDUCTORS: dict[str, dict] = {
     "AUSTIN": {
-        "conductor_type": "795 kcmil ACSR Drake (model default)",
+        "conductor_type": "795 kcmil ACSR Drake",
         "diameter_m": 0.02814,
         "resistance_ac": 0.0726,
         "resist_temp_coef": 0.00404,
         "emissivity": 0.8,
         "absorptivity": 0.8,
-        "max_temp_c": 75.0,
+        "max_temp_c": 100.0,
         "elevation_m": 900.0,
         "line_azimuth": 173.15,
     },
@@ -315,6 +316,23 @@ PRODUCTION_CONDUCTOR_SOURCES: dict[str, dict[str, str]] = {
     }
     for city in PRODUCTION_CONDUCTORS
 }
+
+# AUSTIN (v3, plan 07-11): the owner's relayed answer. Conductor type and maximum
+# operating temperature are the answer itself; diameter and AC resistance are the
+# catalogue values for that type (unchanged), and every value the answer did not
+# touch keeps its provisional source above.
+PRODUCTION_CONDUCTOR_SOURCE_AUSTIN_POWER_SYSTEMS: str = (
+    "Austin Energy teammate, relayed by owner 2026-10-27; Austin Energy 2005 ERCOT ROS/SPWG statement; "
+    "signed v4 O4 (2026-11-02)"
+)
+for _field in ("conductor_type", "max_temp_c"):
+    PRODUCTION_CONDUCTOR_SOURCES["AUSTIN"][_field] = PRODUCTION_CONDUCTOR_SOURCE_AUSTIN_POWER_SYSTEMS
+for _field in ("diameter_m", "resistance_ac"):
+    PRODUCTION_CONDUCTOR_SOURCES["AUSTIN"][_field] = (
+        "Drake 795 ACSR catalogue value (03-05-CONDUCTOR-RESEARCH.md), unchanged; type confirmed by "
+        + PRODUCTION_CONDUCTOR_SOURCE_AUSTIN_POWER_SYSTEMS
+    )
+del _field
 
 # Inclusive plausibility ranges for the numeric fields (units as in the table).
 # A guard against a typo or a unit slip, not an engineering limit.
@@ -435,7 +453,15 @@ RATING_BASIS: str = (
 # (rating_identity.RATING_CONFIG_SNAPSHOT_SCHEMA). The word "provisional" stays
 # until a signed GO in 07-17 lifts the label (REVAL-01), and RATING_BASIS is
 # unchanged here.
-RATING_CONFIG_VERSION: str = "v2-provisional-2026-11-02"
+#
+# v3 (production-pipeline Phase 7, plan 07-11, owner's Power Systems gate, signed
+# v4 O4): AUSTIN only moves to 795 kcmil ACSR Drake at a 100 C maximum operating
+# temperature (Austin Energy teammate, relayed by the owner 2026-10-27; Austin
+# Energy 2005 ERCOT ROS/SPWG statement). Every other value of every city is
+# unchanged, and CORPUS_CHRISTI, MIDLAND and EL_PASO stay on the model-default
+# Drake 75 C (no answer). The label no longer starts with "v2-provisional", but
+# the provisional rating_basis caveat is unchanged until a signed GO in 07-17.
+RATING_CONFIG_VERSION: str = "v3-powersystems-2026-11-02"
 
 # OD-8: the forecast and the detector read the last 30 days per city from
 # Postgres (supabase_store.read_history).
