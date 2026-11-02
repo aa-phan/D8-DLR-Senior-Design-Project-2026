@@ -284,7 +284,7 @@ def test_city_training_frame_uses_own_ampacity(monkeypatch, city):
     result = ft.city_training_frame(city, years=1)
 
     assert fetched == [city]  # exactly one city's weather, no pairing
-    point = city_point.city_point(city)
+    point = city_point.production_city_point(city)
     perp = thermal_model.perpendicular_wind(
         weather["wind_speed"].to_numpy(), weather["wind_direction"].to_numpy(),
         point.bearing_deg,
@@ -302,6 +302,30 @@ def test_city_training_frame_uses_own_ampacity(monkeypatch, city):
     assert (result["city"] == city).all()
     assert "corridor" not in result.columns
     assert result["static_rating"].iloc[0] == float(point.static_rating)
+
+
+@pytest.mark.parametrize("city", sorted(config.LOCATIONS))
+def test_city_training_frame_stores_projected_wind(monkeypatch, city):
+    # B2 (D-14): the stored wind_speed is the line-perpendicular component,
+    # the quantity serving reads from the archive (city_rating._project_wind),
+    # not the measured speed.
+    timestamps, weather = _city_weather()
+    monkeypatch.setattr(ft, "fetch_city_weather", lambda c, y: weather.copy())
+
+    result = ft.city_training_frame(city, years=1)
+
+    point = city_point.production_city_point(city)
+    expected = np.asarray(thermal_model.perpendicular_wind(
+        5.0, 90.0, point.bearing_deg
+    ), dtype=float)
+
+    assert len(result) == len(timestamps)
+    np.testing.assert_allclose(
+        result["wind_speed"].to_numpy(), np.full(len(result), float(expected)),
+        rtol=1e-9,
+    )
+    # the projection must actually change the value for this bearing
+    assert not np.allclose(result["wind_speed"].to_numpy(), 5.0)
 
 
 def test_city_training_frame_has_no_min_reduction():

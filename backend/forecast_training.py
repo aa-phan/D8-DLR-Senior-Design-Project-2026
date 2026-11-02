@@ -188,6 +188,12 @@ def city_training_frame(city: str, years: int) -> pd.DataFrame:
     that city's OWN ampacity (no reduction across cities), and every row's
     weather is the weather that produced its rating.
 
+    The stored `wind_speed` is the line-perpendicular component (the same
+    `perp` array that feeds `dlr_amps`), which is the quantity the live
+    archive and Postgres history carry (`city_rating._project_wind`), so the
+    ml model trains on the same feature it is served (B2, D-14; Phase 3
+    Finding 2). The measured speed is not stored.
+
     The frame carries a `city` column; `bottleneck_index` is null (no
     cross-city reduction exists).
 
@@ -221,7 +227,7 @@ def city_training_frame(city: str, years: int) -> pd.DataFrame:
         "datetime_utc": weather["datetime_utc"],
         "city": city,
         "air_temp": weather["air_temp"].to_numpy(dtype=float),
-        "wind_speed": weather["wind_speed"].to_numpy(dtype=float),
+        "wind_speed": np.asarray(perp, dtype=float),
         "solar_radiation": weather["solar_radiation"].to_numpy(dtype=float),
         "dlr_amps": dlr_amps,
         "static_rating": float(point.static_rating),
