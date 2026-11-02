@@ -35,10 +35,10 @@ import thermal_model
 
 CITIES = list(config.LOCATIONS)
 INSTANT = core.EVALUATION_INSTANT_DEFAULT
-BEFORE_INSTANT = "2026-11-23T23:59:59Z"
-AT_INSTANT = "2026-11-24T00:00:00Z"
+BEFORE_INSTANT = "2026-10-31T23:59:59Z"
+AT_INSTANT = "2026-11-01T00:00:00Z"
 FETCH_START, FETCH_END = core.RECON_FETCH_START, core.RECON_FETCH_END
-SMALL = {"n_resamples": 200}  # non-default: only used with an override or on a development basis
+SMALL = {"n_resamples": 200}  # non-default: only used on a development basis (a FRESH run refuses it)
 DEV_WINDOW = ("2026-04-01T00:00:00Z", "2026-04-11T00:00:00Z")
 
 
@@ -97,8 +97,8 @@ def archive_weather(city: str, start: str, end: str) -> pd.DataFrame:
 
 
 def recon_frame(city: str) -> pd.DataFrame:
-    """The frame `anchored_pair_frame(city, 2026-09-28, 2026-11-16)` would build."""
-    frame = make_frame(city, "2026-09-28", "2026-11-16 23:00")
+    """The frame `anchored_pair_frame(city, 2026-09-28, 2026-10-24)` (v4-read1's fetch window) would build."""
+    frame = make_frame(city, "2026-09-28", "2026-10-24 23:00")
     return frame[frame["anchor_datetime_utc"] >= pd.Timestamp("2026-09-28", tz="UTC")].reset_index(drop=True)
 
 
@@ -108,7 +108,7 @@ def injected_provider(*, weather_edit=None, frame_edit=None, fail=()):
         if city in fail:
             raise conf.FrameFetchError(f"{city}: injected fetch failure")
         frame = recon_frame(city)
-        weather = archive_weather(city, "2026-09-28", "2026-11-16 23:00")
+        weather = archive_weather(city, "2026-09-28", "2026-10-24 23:00")
         if frame_edit is not None:
             frame = frame_edit(city, frame)
         if weather_edit is not None:
@@ -292,13 +292,25 @@ def independent_amps(weather_row_cols: dict, city: str) -> np.ndarray:
 # Constants and window arithmetic
 # --------------------------------------------------------------------------
 
-def test_default_window_is_the_192_slot_fresh_window():
+def test_default_window_is_the_100_slot_fresh_window_of_read_1():
+    # rewritten for v4-read1: the retired v3 window had 192 slots (to 2026-11-16T18Z)
     win = conf.default_window()
     slots = win.slots()
     assert win.start == pd.Timestamp("2026-09-30T00:00:00Z") and win.end == core.VALID_TIME_CUTOFF_DEFAULT
-    assert len(slots) == 192
-    assert slots[0] == pd.Timestamp("2026-09-30T00:00:00Z") and slots[-1] == pd.Timestamp("2026-11-16T18:00:00Z")
+    assert win.end == pd.Timestamp("2026-10-25T00:00:00Z")
+    assert len(slots) == 100 == core.V4_READ1.slots_per_city
+    assert slots[0] == pd.Timestamp("2026-09-30T00:00:00Z") and slots[-1] == pd.Timestamp("2026-10-24T18:00:00Z")
+    assert pd.Timestamp("2026-10-25T00:00:00Z") not in set(slots)        # start <= valid_time < cutoff
     assert all(t.hour % 6 == 0 for t in slots)
+
+
+def test_each_signed_round_has_its_registered_slot_count_and_window():
+    for name, count, last in (("v4-read1", 100, "2026-10-24T18:00:00Z"), ("v4-read2", 128, "2026-10-31T18:00:00Z")):
+        guard = core.guard_for_round(name)
+        win = conf.default_window(guard)
+        slots = win.slots()
+        assert win.end == guard.valid_time_cutoff and len(slots) == count
+        assert slots[-1] == pd.Timestamp(last) and win.end not in set(slots)
 
 
 def test_fetch_window_constants_are_consistent():
@@ -340,21 +352,31 @@ def test_cli_refuses_before_the_instant_with_exit_2(monkeypatch, evidence_root, 
     assert not os.path.exists(evidence_root)
 
 
-def test_override_passes_and_is_recorded(monkeypatch, evidence_root, model_dir):
+def test_override_text_is_refused_for_a_fresh_run_before_any_request(monkeypatch, evidence_root, model_dir):
+    # v4: the old "rehearsal of the evaluation day" override ran FRESH rows early; it is now refused outright
     server = FakeServer(monkeypatch)
-    report = run(evidence_root, now=BEFORE_INSTANT, cities=["AUSTIN"], params=SMALL,
-                 guard_cfg=core.GuardConfig(override_reason="rehearsal of the evaluation day"))
-    assert report["guard"]["override_reason"] == "rehearsal of the evaluation day"
-    saved = json.load(open(os.path.join(report["evidence_dir"], "report.json"), encoding="utf-8"))
-    assert saved["guard"]["override_reason"] == "rehearsal of the evaluation day"
+    for now in (BEFORE_INSTANT, AT_INSTANT):
+        with pytest.raises(core.EvaluationGuardError, match="take no override"):
+            run(evidence_root, now=now, cities=["AUSTIN"], params=SMALL,
+                guard_cfg=core.GuardConfig(override_reason="rehearsal of the evaluation day"))
+    assert server.calls == [] and not os.path.exists(evidence_root)
+
+
+def test_development_override_is_recorded_in_the_report(evidence_root, stub_models):
+    report = run(evidence_root, now="2026-10-13T08:00:00Z", cities=["AUSTIN"], frame_provider=dev_provider,
+                 model_loader=loader_for(stub_models), window=DEV_WINDOW, params=SMALL,
+                 guard_cfg=core.GuardConfig(override_reason="rehearsal on development data"))
+    assert report["basis"] == "development"
+    assert report["guard"]["override_reason"] == "rehearsal on development data"
     md = open(os.path.join(report["evidence_dir"], "report.md"), encoding="utf-8").read()
-    assert "Override: rehearsal of the evaluation day" in md
-    assert len(server.calls) == 2
+    assert "Override: rehearsal on development data" in md and "Round: v4-read1" in md
 
 
-def test_nondefault_parameter_in_a_fresh_run_needs_an_override(evidence_root, stub_models):
+def test_nondefault_parameter_in_a_fresh_run_is_refused_and_no_override_helps(evidence_root, stub_models):
     with pytest.raises(ValueError, match="PD-15"):
         injected_run(evidence_root, stub_models, params=SMALL)
+    with pytest.raises(core.EvaluationGuardError, match="take no override"):
+        injected_run(evidence_root, stub_models, params=SMALL, guard_cfg=core.GuardConfig(override_reason="smaller"))
     assert not os.path.exists(evidence_root)
 
 
@@ -362,11 +384,13 @@ def test_second_fresh_run_is_refused_without_override(evidence_root, stub_models
     first = injected_run(evidence_root, stub_models, cities=["AUSTIN", "MIDLAND"])
     assert first["basis"] == "FRESH"
     with pytest.raises(core.EvaluationGuardError, match="second FRESH run"):
-        injected_run(evidence_root, stub_models, cities=["AUSTIN", "MIDLAND"], now="2026-11-24T00:00:05Z")
+        injected_run(evidence_root, stub_models, cities=["AUSTIN", "MIDLAND"], now="2026-11-01T00:00:05Z")
     assert len(os.listdir(evidence_root)) == 1
-    again = injected_run(evidence_root, stub_models, cities=["AUSTIN"], now="2026-11-24T00:00:09Z",
-                         guard_cfg=core.GuardConfig(override_reason="owner-approved rerun"))
-    assert again["guard"]["prior_fresh_runs"] and again["guard"]["override_reason"] == "owner-approved rerun"
+    # an "owner-approved rerun" text no longer reopens the one-shot read
+    with pytest.raises(core.EvaluationGuardError, match="take no override"):
+        injected_run(evidence_root, stub_models, cities=["AUSTIN"], now="2026-11-01T00:00:09Z",
+                     guard_cfg=core.GuardConfig(override_reason="owner-approved rerun"))
+    assert len(os.listdir(evidence_root)) == 1
 
 
 def test_a_run_that_crashed_after_its_guard_still_blocks_the_next_one(evidence_root, stub_models):
@@ -377,15 +401,15 @@ def test_a_run_that_crashed_after_its_guard_still_blocks_the_next_one(evidence_r
     assert os.path.isfile(os.path.join(evidence_root, run_dir, "run_started.json"))
     assert not os.path.exists(os.path.join(evidence_root, run_dir, "report.json"))
     with pytest.raises(core.EvaluationGuardError, match="second FRESH run"):
-        injected_run(evidence_root, stub_models, cities=["AUSTIN"], now="2026-11-24T00:01:00Z")
+        injected_run(evidence_root, stub_models, cities=["AUSTIN"], now="2026-11-01T00:01:00Z")
 
 
 def test_a_prior_shadow_logs_marker_does_not_block_the_port(evidence_root, stub_models):
-    prior = os.path.join(evidence_root, "shadow_logs_20261124T000000Z")
+    prior = os.path.join(evidence_root, "shadow_logs_20261101T000000Z")
     os.makedirs(prior)
     with open(os.path.join(prior, "run_started.json"), "w", encoding="utf-8") as fh:
         json.dump({"row_source": "shadow_logs", "basis": "FRESH"}, fh)
-    report = injected_run(evidence_root, stub_models, cities=["AUSTIN"], now="2026-11-24T00:02:00Z")
+    report = injected_run(evidence_root, stub_models, cities=["AUSTIN"], now="2026-11-01T00:02:00Z")
     assert report["guard"]["prior_fresh_runs"] == []
 
 
@@ -424,7 +448,7 @@ def test_production_provider_records_two_requests_and_redirects_the_cache(monkey
     assert not os.path.exists(before)
     assert config.FORECAST_EXPERIMENT_CACHE_DIR == before
     assert weather["datetime_utc"].min() == pd.Timestamp("2026-09-28T00:00:00Z")
-    assert weather["datetime_utc"].max() == pd.Timestamp("2026-11-16T23:00:00Z")
+    assert weather["datetime_utc"].max() == pd.Timestamp("2026-10-24T23:00:00Z")
     assert frame["datetime_utc"].min() == pd.Timestamp("2026-09-29T00:00:00Z")
     assert meta["fetch_window"] == [FETCH_START, FETCH_END]
 
@@ -471,7 +495,7 @@ def test_full_production_run_at_the_instant_with_default_parameters(monkeypatch,
     assert len(server.calls) == 8
     for city in CITIES:
         assert len(server.calls_for(city)) == 2
-        assert report["per_city"][city]["n_scored"] == {name: 192 for name in core.CANDIDATES}
+        assert report["per_city"][city]["n_scored"] == {name: 100 for name in core.CANDIDATES}
     ev = report["evidence_dir"]
     assert len([f for f in os.listdir(os.path.join(ev, "http")) if f.endswith(".body")]) == 8
     assert len(os.listdir(os.path.join(ev, "frames"))) == 4
@@ -497,7 +521,7 @@ def test_one_city_previous_runs_503_is_named_and_not_retried(monkeypatch, eviden
     assert os.path.isfile(os.path.join(http_dir, midland[0].replace(".meta.json", ".body")))  # archive body kept
     assert report["per_city"]["MIDLAND"]["excluded_by_reason"] == {"city_failed:frame_fetch_failed": 1}
     for city in ("AUSTIN", "CORPUS_CHRISTI", "EL_PASO"):
-        assert report["per_city"][city]["n_scored"]["raw_forecast"] == 192
+        assert report["per_city"][city]["n_scored"]["raw_forecast"] == 100
     assert len(report["family"]["comparisons"]) == 9
     assert "MIDLAND" in open(os.path.join(report["evidence_dir"], "report.md"), encoding="utf-8").read()
 
@@ -506,13 +530,13 @@ def test_one_city_previous_runs_503_is_named_and_not_retried(monkeypatch, eviden
 # Scored rows
 # --------------------------------------------------------------------------
 
-def test_scored_rows_are_exact_lead_fresh_and_at_most_192():
+def test_scored_rows_are_exact_lead_fresh_and_at_most_100():
     prepared, diag = conf.prepare_city_frame(recon_frame("AUSTIN"), "AUSTIN")
-    assert len(prepared) == 192 == diag["n_expected_slots"] == diag["n_scored_slots"]
+    assert len(prepared) == 100 == diag["n_expected_slots"] == diag["n_scored_slots"]
     forecast_experiment.assert_exact_lead(prepared, lead_hours=24)
     vt = prepared["datetime_utc"]
     assert (vt.dt.hour % 6 == 0).all()
-    assert vt.min() == pd.Timestamp("2026-09-30T00:00:00Z") and vt.max() == pd.Timestamp("2026-11-16T18:00:00Z")
+    assert vt.min() == pd.Timestamp("2026-09-30T00:00:00Z") and vt.max() == pd.Timestamp("2026-10-24T18:00:00Z")
     assert (vt < core.VALID_TIME_CUTOFF_DEFAULT).all() and (vt >= core.FRESH_BASIS_START).all()
     assert diag["missing_from_reconstruction"] == [] and diag["anchor_after_fit_end"]
     fit_end = pd.Timestamp(fit_models.train_val_window_end(), tz="UTC")
@@ -528,7 +552,7 @@ def test_missing_slots_and_null_weather_rows_are_counted_never_imputed():
     frame = frame[frame["datetime_utc"] != drop_a].copy()
     frame.loc[frame["datetime_utc"] == drop_b, "fcst_wind_speed"] = np.nan
     prepared, diag = conf.prepare_city_frame(frame, "AUSTIN")
-    assert len(prepared) == 190 and diag["n_missing_from_reconstruction"] == 2
+    assert len(prepared) == 98 and diag["n_missing_from_reconstruction"] == 2
     assert sorted(diag["missing_from_reconstruction"]) == [drop_a.isoformat(), drop_b.isoformat()]
     assert diag["n_rows_dropped_null_weather"] == 1
     assert drop_a not in set(prepared["datetime_utc"]) and drop_b not in set(prepared["datetime_utc"])
@@ -555,7 +579,7 @@ def test_a_non_24_hour_anchor_gap_is_refused():
 @pytest.fixture(scope="module")
 def austin_inputs():
     frame = recon_frame("AUSTIN")
-    weather = archive_weather("AUSTIN", "2026-09-28", "2026-11-16 23:00")
+    weather = archive_weather("AUSTIN", "2026-09-28", "2026-10-24 23:00")
     return frame, weather
 
 
@@ -601,7 +625,7 @@ def test_wind_and_cooling_equal_the_live_methods_row_by_row(austin_inputs, stub_
     point = city_point.city_point("AUSTIN")
     wind_method = pipeline.WindCorrectionShadowMethod(models[conf.WIND])
     cooling_method = pipeline.CoolingCorrectionShadowMethod(models[conf.COOLING])
-    for i in (0, 1, 37, 95, 191):
+    for i in (0, 1, 37, 60, 99):
         one = prepared.iloc[[i]]
         assert preds[conf.WIND].iloc[i] == pytest.approx(wind_method.predict(one, point), abs=1e-9, rel=0)
         assert preds[conf.COOLING].iloc[i] == pytest.approx(cooling_method.predict(one, point), abs=1e-9, rel=0)
@@ -620,17 +644,17 @@ def test_reference_features_equal_the_training_matrix_at_the_anchor(austin_input
 
 def test_reference_prediction_ignores_truth_after_its_anchor(stub_models):
     frame = recon_frame("AUSTIN")
-    weather = archive_weather("AUSTIN", "2026-09-28", "2026-11-16 23:00")
+    weather = archive_weather("AUSTIN", "2026-09-28", "2026-10-24 23:00")
     models = stub_models["AUSTIN"]
     _, base, _ = predictions("AUSTIN", frame, weather, models)
-    cut = pd.Timestamp("2026-11-01T00:00:00Z")  # perturb truth strictly after this hour, in both sources
+    cut = pd.Timestamp("2026-10-14T00:00:00Z")  # perturb truth strictly after this hour, in both sources
     f2, w2 = frame.copy(), weather.copy()
     for col, delta in (("air_temp", 3.0), ("wind_speed", 1.0), ("solar_radiation", 50.0)):
         w2.loc[w2["datetime_utc"] > cut, col] = w2.loc[w2["datetime_utc"] > cut, col] + delta
         f2.loc[f2["datetime_utc"] > cut, f"truth_{col}"] = f2.loc[f2["datetime_utc"] > cut, f"truth_{col}"] + delta
     _, shifted, _ = predictions("AUSTIN", f2, w2, models)
     unaffected = base["anchor_time"] <= cut
-    assert unaffected.sum() > 100
+    assert unaffected.sum() > 50
     assert np.array_equal(base.loc[unaffected, conf.REFERENCE].to_numpy(), shifted.loc[unaffected, conf.REFERENCE].to_numpy())
     assert not np.allclose(base.loc[~unaffected, conf.REFERENCE], shifted.loc[~unaffected, conf.REFERENCE])
 
@@ -638,7 +662,7 @@ def test_reference_prediction_ignores_truth_after_its_anchor(stub_models):
 def test_a_missing_hour_makes_exactly_the_dependent_rows_reference_features_missing(austin_inputs, stub_models):
     frame, weather = austin_inputs
     removed = [pd.Timestamp("2026-10-10T03:00:00Z"), pd.Timestamp("2026-10-21T15:00:00Z")]
-    nulled = pd.Timestamp("2026-11-02T09:00:00Z")
+    nulled = pd.Timestamp("2026-10-23T09:00:00Z")
     w2 = weather[~weather["datetime_utc"].isin(removed)].copy()
     w2.loc[w2["datetime_utc"] == nulled, "wind_speed"] = np.nan
     prepared, preds, diag = predictions("AUSTIN", frame, w2, stub_models["AUSTIN"])
@@ -740,8 +764,8 @@ def test_missing_artifact_is_candidate_unavailable_with_the_file_not_found_text(
     os.remove(os.path.join(model_dir, f"{conf.COOLING}_MIDLAND.joblib"))
     report = run(evidence_root, now=AT_INSTANT, cities=["MIDLAND"], frame_provider=injected_provider())
     block = report["per_city"]["MIDLAND"]
-    assert block["n_scored"][conf.COOLING] == 0 and block["n_scored"][conf.WIND] == 192
-    assert block["candidate_exclusions"][conf.COOLING] == {"candidate_unavailable": 192}
+    assert block["n_scored"][conf.COOLING] == 0 and block["n_scored"][conf.WIND] == 100
+    assert block["candidate_exclusions"][conf.COOLING] == {"candidate_unavailable": 100}
     reason = report["diagnostics"]["MIDLAND"]["unavailable_reasons"][conf.COOLING]
     assert "no persisted" in reason and "MIDLAND" in reason
     assert report["provenance"]["artifacts"][1]["sha256"] == "missing"
@@ -827,14 +851,14 @@ def test_missing_slots_flow_into_the_report(evidence_root, stub_models):
     report = injected_run(evidence_root, stub_models, cities=["AUSTIN", "MIDLAND"], frame_provider=provider)
     assert report["per_city"]["AUSTIN"]["excluded_by_reason"] == {"missing_from_reconstruction": 1}
     assert report["diagnostics"]["AUSTIN"]["missing_slots"] == [drop.isoformat()]
-    assert report["per_city"]["AUSTIN"]["n_scored"]["raw_forecast"] == 191
-    assert report["per_city"]["MIDLAND"]["n_scored"]["raw_forecast"] == 192
+    assert report["per_city"]["AUSTIN"]["n_scored"]["raw_forecast"] == 99
+    assert report["per_city"]["MIDLAND"]["n_scored"]["raw_forecast"] == 100
 
 
 def test_rows_at_or_after_the_cutoff_are_never_scored(evidence_root, stub_models):
-    extra = lambda c, f: pd.concat([f, make_frame(c, "2026-11-17 00:00", "2026-11-20 00:00")], ignore_index=True)
+    extra = lambda c, f: pd.concat([f, make_frame(c, "2026-10-25 00:00", "2026-10-28 00:00")], ignore_index=True)
     report = injected_run(evidence_root, stub_models, cities=["AUSTIN"], frame_provider=injected_provider(frame_edit=extra))
-    assert report["per_city"]["AUSTIN"]["n_scored"]["raw_forecast"] == 192
+    assert report["per_city"]["AUSTIN"]["n_scored"]["raw_forecast"] == 100
 
 
 def test_a_structural_failure_in_one_city_is_named_and_the_others_are_scored(evidence_root, stub_models):
@@ -843,14 +867,16 @@ def test_a_structural_failure_in_one_city_is_named_and_the_others_are_scored(evi
     report = injected_run(evidence_root, stub_models, frame_provider=injected_provider(frame_edit=broken))
     assert list(report["failed_cities"]) == ["EL_PASO"]
     assert "fcst_wind_speed" in report["failed_cities"]["EL_PASO"]["error"]
-    assert report["per_city"]["AUSTIN"]["n_scored"]["raw_forecast"] == 192
+    assert report["per_city"]["AUSTIN"]["n_scored"]["raw_forecast"] == 100
 
 
 def test_unsigned_status_is_labelled_exploratory(evidence_root, stub_models):
     report = injected_run(evidence_root, stub_models, cities=["AUSTIN"])
     assert any(core.EXPLORATORY_STATEMENT in s for s in report["decision"]["statements"])
-    signed = injected_run(evidence_root, stub_models, cities=["AUSTIN"], protocol_status="signed",
-                          now="2026-11-24T00:05:00Z", guard_cfg=core.GuardConfig(override_reason="x"))
+    # a separate evidence root: the one-shot rule would refuse a second FRESH run in the first one, and no
+    # override text can reopen it
+    signed = injected_run(evidence_root + "_signed", stub_models, cities=["AUSTIN"], protocol_status="signed",
+                          now="2026-11-01T00:05:00Z")
     assert not any(core.EXPLORATORY_STATEMENT in s for s in signed["decision"]["statements"])
 
 
@@ -889,11 +915,11 @@ def test_dry_run_planned_requests_equal_what_the_provider_sends(monkeypatch, mod
 def test_dry_run_says_it_would_not_refuse_at_the_instant(evidence_root, model_dir):
     result = conf.dry_run(cities=CITIES, guard_cfg=core.GuardConfig(), evidence_root=evidence_root, now=AT_INSTANT)
     assert result["guard"] == {"would_refuse": False, "reason": None}
-    assert result["expected_slots_per_city"] == 192
+    assert result["expected_slots_per_city"] == 100
 
 
 def test_dry_run_reports_a_prior_fresh_run(evidence_root, model_dir):
-    prior = os.path.join(evidence_root, "reconstructed_frames_20261124T000000Z")
+    prior = os.path.join(evidence_root, "reconstructed_frames_20261101T000000Z")
     os.makedirs(prior)
     with open(os.path.join(prior, "run_started.json"), "w", encoding="utf-8") as fh:
         json.dump({"row_source": "reconstructed_frames", "basis": "FRESH"}, fh)
@@ -913,9 +939,13 @@ def test_cli_unknown_city_exits_2(capsys):
 
 
 def test_cli_nondefault_parameter_in_a_fresh_run_is_refused(monkeypatch, evidence_root, capsys):
-    monkeypatch.setattr(core, "utcnow", lambda: pd.Timestamp("2026-11-24T00:00:00Z"))
+    monkeypatch.setattr(core, "utcnow", lambda: pd.Timestamp(AT_INSTANT))
     assert conf.main(["--evidence-root", evidence_root, "--block-lengths", "1", "2"]) == 2
-    assert "override" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "refused" in err and "no override" in err
+    assert conf.main(["--evidence-root", evidence_root, "--block-lengths", "1", "2",
+                      "--override-reason", "smaller blocks"]) == 2
+    assert "no override" in capsys.readouterr().err
     assert not os.path.exists(evidence_root)
 
 

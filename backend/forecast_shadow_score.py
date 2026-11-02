@@ -19,12 +19,20 @@ nothing here fetches them)::
     # any time (status-only counts, no truth, no ampacity-derived number):
     PYTHONPATH=backend .venv/bin/python backend/forecast_shadow_score.py \\
         --count-only --predictions-dir $D --out $D/counts.json
-    # one-shot evaluation, at or after 2026-11-24T00:00:00Z only:
-    PYTHONPATH=backend .venv/bin/python backend/forecast_shadow_score.py \\
+    # one-shot live-system check for read 1, at or after 2026-11-01T00:00:00Z only
+    # (signed protocol v4; the evidence lands under data/shadow/evaluation/v4-read1):
+    PYTHONPATH=backend .venv/bin/python backend/forecast_shadow_score.py --round v4-read1 \\
+        --predictions-dir $D --source-commit $(git rev-parse origin/shadow-collection-data)
+    # the conditional re-test, only if read 1 names no winner, at or after 2026-11-08T00:00:00Z:
+    PYTHONPATH=backend .venv/bin/python backend/forecast_shadow_score.py --round v4-read2 \\
         --predictions-dir $D --source-commit $(git rev-parse origin/shadow-collection-data)
 
-Before the evaluation instant a FRESH-dated scoring run is refused before any
-network call (`forecast_shadow_eval_core.check_guard`). `--count-only` is the
+The 2026-11-24 evaluation of protocol v3 is retired by signed v4 and is refused
+for any FRESH run. `--round` selects a signed round by name (v4-read1, v4-read2
+or v4-late-descriptive) and writes into that round's own evidence subroot, so no
+override is ever needed; a FRESH run takes none. Before the round's instant, or
+while v4 is unsigned, a FRESH-dated scoring run is refused before any network
+call (`forecast_shadow_eval_core.check_guard`). `--count-only` is the
 mechanical-health-check carve-out: it never fetches truth and never uses a
 logged ampacity.
 
@@ -42,6 +50,7 @@ reanalysis-derived, never sensor-validated.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import math
 import os
@@ -721,13 +730,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--count-only", action="store_true",
                    help="status-only counts; no truth fetched, no ampacity read; allowed at any time")
     p.add_argument("--out", default=None, help="write the count-only JSON (or a copy of report.json) here")
+    p.add_argument("--round", choices=sorted(core.PROTOCOL_ROUNDS), default=core.DEFAULT_ROUND.name,
+                   help="signed protocol v4 round to score under; its evidence goes to "
+                        "<evidence-root>/<round> (default %(default)s)")
     p.add_argument("--evidence-root", default=core.EVIDENCE_ROOT_DEFAULT)
     p.add_argument("--source-commit", default=None, help="commit of the exported logs (git rev-parse origin/shadow-collection-data)")
     p.add_argument("--evaluation-instant", default=None)
     p.add_argument("--valid-time-cutoff", default=None)
-    p.add_argument("--override-reason", default=None)
+    p.add_argument("--override-reason", default=None,
+                   help="development runs only; a FRESH run takes no override (signed v4 rounds)")
     p.add_argument("--protocol-status", choices=("signed", "unsigned"), default="unsigned")
-    # Pre-registered statistical parameters. Any non-default value in a FRESH run needs --override-reason.
+    # Pre-registered statistical parameters. Any non-default value in a FRESH run is refused (no override).
     # There is deliberately no --row-gate and no --family-size (decisions 2 and 3).
     p.add_argument("--block-lengths", type=int, nargs="+", default=None, help="six-hourly slot block lengths (default 1 4 8 28)")
     p.add_argument("--n-resamples", type=int, default=None)
@@ -740,12 +753,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _guard_from_args(args) -> core.GuardConfig:
+    """The selected round's guard, with an explicit instant / cutoff applied on top.
+
+    An explicit date that differs from the round's is a non-default value for the guard:
+    a development run then needs an override reason and a FRESH run is refused.
+    """
     kwargs = {}
     if args.evaluation_instant:
         kwargs["evaluation_instant"] = core.to_utc(args.evaluation_instant)
     if args.valid_time_cutoff:
         kwargs["valid_time_cutoff"] = core.to_utc(args.valid_time_cutoff)
-    return core.GuardConfig(override_reason=args.override_reason, **kwargs)
+    base = core.guard_for_round(getattr(args, "round", core.DEFAULT_ROUND.name))
+    return dataclasses.replace(base, override_reason=args.override_reason, **kwargs)
 
 
 def _params_from_args(args) -> Optional[dict]:
@@ -778,8 +797,9 @@ def main(argv=None) -> int:
                       f"missing_forecast_model {c['missing_forecast_model']}, "
                       f"other_forecast_model {c['other_forecast_model']}", file=sys.stderr)
             return 0
+        evidence_root = core.round_evidence_root(args.evidence_root, core.round_named(args.round))
         report = score(args.predictions_dir, cities=args.cities, guard_cfg=guard_cfg,
-                       evidence_root=args.evidence_root, protocol_status=args.protocol_status,
+                       evidence_root=evidence_root, protocol_status=args.protocol_status,
                        source_commit=args.source_commit, params=_params_from_args(args))
         if args.out:
             with open(args.out, "w", encoding="utf-8") as fh:

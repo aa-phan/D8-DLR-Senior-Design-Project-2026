@@ -90,16 +90,16 @@ WIND, COOL, RAW, PERSIST, REF = (
     "ml_wind_corrected", "ml_cooling_corrected", "raw_forecast", "persistence_24h", "reference_ml_refit_24h")
 CANDS = (WIND, COOL, RAW, PERSIST, REF)
 SENTINEL = 4321.987
-SMALL = {"n_resamples": 300}     # development basis only; a FRESH run with this needs an override
+SMALL = {"n_resamples": 300}     # development basis only; a FRESH run with this is refused (no override helps)
 DEV_NOW = "2026-10-13T08:00:00Z"
-INSTANT = "2026-11-24T00:00:00Z"
-BEFORE_INSTANT = "2026-11-23T23:59:59Z"
+INSTANT = "2026-11-01T00:00:00Z"            # the v4-read1 evaluation instant
+BEFORE_INSTANT = "2026-10-31T23:59:59Z"
 CUTOFF = core.VALID_TIME_CUTOFF_DEFAULT
 DEV_WINDOW = ("2026-04-01T00:00:00Z", "2026-06-01T00:00:00Z")
 SLOTS = pd.date_range("2026-04-01T00:00:00Z", "2026-05-31T18:00:00Z", freq="6h")   # 244 slots per city
 PROD_SHIFT_DAYS = 182          # production-window dates 2026-09-28.. map onto fixture 2026-03-30..
 FRESH_LOG_SHIFT_DAYS = 200     # FRESH-calendar logs: 2026-04-01 -> 2026-10-18
-PROD_SLOTS = SLOTS[:192]       # fixture-time slots behind the 192 production-window slots
+PROD_SLOTS = SLOTS[:100]       # fixture-time slots behind the 100 production-window slots of v4-read1
 HALF = pd.Timedelta(hours=12)
 DAY = pd.Timedelta(hours=24)
 TOL = 1e-9
@@ -1017,19 +1017,20 @@ def test_fault_rows_lacking_forecast_model_and_other_models_never_reach_a_metric
 
 
 def test_fault_rows_at_or_after_the_cutoff_and_a_reference_target_at_or_after_it(monkeypatch, tmp_path):
-    # FRESH-calendar log (+200 days) restricted to logged valid times 2026-11-15T00Z .. 2026-11-17T06Z
-    indices = range(112, 122)
+    # FRESH-calendar log (+200 days) restricted to logged valid times 2026-10-23T00Z .. 2026-10-25T06Z
+    indices = range(20, 30)
     report, server = run_log_fault(monkeypatch, tmp_path, shift_days=FRESH_LOG_SHIFT_DAYS, indices=indices,
                                    now=INSTANT, params=None)
     assert report["basis"] == "FRESH" and report["guard"]["defaults_used"]
     excl = report["exclusions"]["AUSTIN"]
     assert excl["row_level"]["at_or_after_cutoff"] == 2          # exactly the cutoff and cutoff + 6 h
     block = report["per_city"]["AUSTIN"]
-    assert block["n_in_scope"] == 8                              # cutoff - 6 h (2026-11-16T18Z) is kept
-    assert server.calls[0][1]["end_date"] == "2026-11-16"        # never fetches the cutoff day
-    # own target hour (valid + 12 h) at or after the cutoff: the rows valid 2026-11-16T12Z and T18Z
+    assert block["n_in_scope"] == 8                              # cutoff - 6 h (2026-10-24T18Z) is kept
+    assert server.calls[0][1]["end_date"] == "2026-10-24"        # never fetches the cutoff day
+    # own target hour (valid + 12 h) at or after the cutoff: the rows valid 2026-10-24T12Z and T18Z
     assert block["candidate_exclusions"][REF] == {"reference_target_at_or_after_cutoff": 2}
-    assert block["n_scored"] == {WIND: 8, COOL: 8, RAW: 8, PERSIST: 8, REF: 6}
+    # row index 20 is a multiple of 10, so its persistence is unavailable by construction of the log fixture
+    assert block["n_scored"] == {WIND: 8, COOL: 8, RAW: 8, PERSIST: 7, REF: 6}
     errs = {"AUSTIN": oracle_log_errors("AUSTIN", shift_days=FRESH_LOG_SHIFT_DAYS, cutoff=CUTOFF, only=set(indices))}
     for cand in CANDS:
         assert_metrics_equal(block["metrics"][cand], errs["AUSTIN"][cand].to_numpy())
@@ -1116,7 +1117,7 @@ def test_port_fault_http_503_on_one_citys_previous_runs_is_named_not_retried_and
     errs = {}
     for city in ("AUSTIN", "CORPUS_CHRISTI", "EL_PASO"):
         errs[city] = port_errors(port_oracle(city, stub_models[city], PROD_SLOTS))
-        assert report["per_city"][city]["n_scored"] == {c: 192 for c in CANDS}
+        assert report["per_city"][city]["n_scored"] == {c: 100 for c in CANDS}
         for cand in CANDS:
             assert_metrics_equal(report["per_city"][city]["metrics"][cand], errs[city][cand].to_numpy())
     errs["MIDLAND"] = pd.DataFrame({c: pd.Series(dtype=float) for c in CANDS})
@@ -1164,8 +1165,9 @@ def test_logs_at_the_instant_score_fresh_rows_and_exclude_everything_from_the_cu
     assert len(server.calls) == 4
     errs = {}
     for city in CITIES:
-        assert report["exclusions"][city]["row_level"]["at_or_after_cutoff"] == 124        # logged 2026-11-17 .. 2026-12-17
-        assert report["per_city"][city]["n_in_scope"] == 120
+        # 244 logged slots 2026-10-18 .. 2026-12-17: 28 before the 2026-10-25 cutoff, the other 216 at or after it
+        assert report["exclusions"][city]["row_level"]["at_or_after_cutoff"] == 216
+        assert report["per_city"][city]["n_in_scope"] == 28
         errs[city] = oracle_log_errors(city, shift_days=FRESH_LOG_SHIFT_DAYS, cutoff=CUTOFF)
         for cand in CANDS:
             assert_metrics_equal(report["per_city"][city]["metrics"][cand], errs[city][cand].to_numpy())
@@ -1174,13 +1176,23 @@ def test_logs_at_the_instant_score_fresh_rows_and_exclude_everything_from_the_cu
     _assert_pooled_nominal_not_judged(report)
 
 
-def test_logs_override_is_recorded_in_json_and_markdown(monkeypatch, tmp_path, evidence_root):
+def test_logs_override_text_is_refused_for_a_fresh_run_and_is_still_recorded_for_a_development_run(monkeypatch, tmp_path, evidence_root):
+    # v4: the old "rehearsal of the evaluation day" override let a FRESH run through early; the refusal replaces it
     pred = _fresh_logs(tmp_path)
-    FakeServer(monkeypatch, shift_days=FRESH_LOG_SHIFT_DAYS)
-    report = score_logs(pred, evidence_root, now=BEFORE_INSTANT, guard_cfg=core.GuardConfig(override_reason="rehearsal of the evaluation day"))
-    assert report["guard"]["override_reason"] == "rehearsal of the evaluation day"
-    assert read_json(report)["guard"]["override_reason"] == "rehearsal of the evaluation day"
-    assert "Override: rehearsal of the evaluation day" in read_md(report)
+    server = FakeServer(monkeypatch, shift_days=FRESH_LOG_SHIFT_DAYS)
+    for now in (BEFORE_INSTANT, INSTANT):
+        with pytest.raises(core.EvaluationGuardError, match="take no override"):
+            score_logs(pred, evidence_root, now=now, guard_cfg=core.GuardConfig(override_reason="rehearsal of the evaluation day"))
+    assert server.calls == [] and not os.path.exists(evidence_root)
+    # development rows keep the recorded override
+    dev_pred = tmp_path / "dev_pred"
+    write_logs(dev_pred, ["AUSTIN"], 0)
+    with monkeypatch.context() as m:
+        FakeServer(m)
+        report = score_logs(dev_pred, tmp_path / "ev_dev", guard_cfg=core.GuardConfig(override_reason="rehearsal on development data"))
+    assert report["basis"] == "development"
+    assert read_json(report)["guard"]["override_reason"] == "rehearsal on development data"
+    assert "Override: rehearsal on development data" in read_md(report)
 
 
 def test_logs_second_fresh_run_is_refused_even_after_a_first_run_that_crashed(monkeypatch, tmp_path, evidence_root):
@@ -1189,11 +1201,13 @@ def test_logs_second_fresh_run_is_refused_even_after_a_first_run_that_crashed(mo
     first = score_logs(pred, evidence_root, now=INSTANT, params=None)
     assert first["basis"] == "FRESH"
     with pytest.raises(core.EvaluationGuardError, match="second FRESH run"):
-        score_logs(pred, evidence_root, now="2026-11-24T00:00:05Z", params=None)
+        score_logs(pred, evidence_root, now="2026-11-01T00:00:05Z", params=None)
     assert len(os.listdir(evidence_root)) == 1
-    again = score_logs(pred, evidence_root, now="2026-11-24T00:00:09Z",
-                       guard_cfg=core.GuardConfig(override_reason="owner-approved rerun"), params=None)
-    assert again["guard"]["prior_fresh_runs"] and again["guard"]["override_reason"] == "owner-approved rerun"
+    # an "owner-approved rerun" text no longer reopens the one-shot read
+    with pytest.raises(core.EvaluationGuardError, match="take no override"):
+        score_logs(pred, evidence_root, now="2026-11-01T00:00:09Z",
+                   guard_cfg=core.GuardConfig(override_reason="owner-approved rerun"), params=None)
+    assert len(os.listdir(evidence_root)) == 1
 
     other_root = str(tmp_path / "evidence_crash")
     with monkeypatch.context() as m:
@@ -1204,15 +1218,18 @@ def test_logs_second_fresh_run_is_refused_even_after_a_first_run_that_crashed(mo
     assert os.path.isfile(os.path.join(other_root, run_dir, "run_started.json"))
     assert not os.path.exists(os.path.join(other_root, run_dir, "report.json"))
     with pytest.raises(core.EvaluationGuardError, match="second FRESH run"):
-        score_logs(pred, other_root, now="2026-11-24T00:01:00Z", params=None)
+        score_logs(pred, other_root, now="2026-11-01T00:01:00Z", params=None)
 
 
-def test_logs_nondefault_block_lengths_in_a_fresh_run_are_refused_without_an_override(monkeypatch, tmp_path, evidence_root, capsys):
+def test_logs_nondefault_block_lengths_in_a_fresh_run_are_refused_and_no_override_helps(monkeypatch, tmp_path, evidence_root, capsys):
     pred = _fresh_logs(tmp_path)
     monkeypatch.setattr(core, "utcnow", lambda: pd.Timestamp(INSTANT))
     code = score_mod.main(["--predictions-dir", str(pred), "--cities", "AUSTIN", "--evidence-root", evidence_root,
                            "--block-lengths", "1", "2"])
-    assert code == 2 and "override" in capsys.readouterr().err
+    assert code == 2 and "no override" in capsys.readouterr().err
+    code = score_mod.main(["--predictions-dir", str(pred), "--cities", "AUSTIN", "--evidence-root", evidence_root,
+                           "--block-lengths", "1", "2", "--override-reason", "smaller blocks"])
+    assert code == 2 and "no override" in capsys.readouterr().err
     assert not os.path.exists(evidence_root)
     with pytest.raises(SystemExit):
         score_mod.build_parser().parse_args(["--row-gate", "1"])
@@ -1230,7 +1247,7 @@ def test_port_guard_refuses_before_the_instant_before_any_request_frame_build_ar
     assert not os.path.exists(config.FORECAST_EXPERIMENT_CACHE_DIR)
 
 
-def test_port_at_the_instant_scores_192_fresh_slots_per_city_and_matches_the_oracle(monkeypatch, evidence_root, model_dir, stub_models):
+def test_port_at_the_instant_scores_100_fresh_slots_per_city_and_matches_the_oracle(monkeypatch, evidence_root, model_dir, stub_models):
     report, server = prod_run(monkeypatch, evidence_root)
     assert report["basis"] == "FRESH" and report["guard"]["defaults_used"] and report["guard"]["override_reason"] is None
     assert len(server.calls) == 8 and all(len(server.calls_for(c)) == 2 for c in CITIES)
@@ -1240,7 +1257,7 @@ def test_port_at_the_instant_scores_192_fresh_slots_per_city_and_matches_the_ora
     errs = {}
     for city in CITIES:
         errs[city] = port_errors(port_oracle(city, stub_models[city], PROD_SLOTS))
-        assert report["per_city"][city]["n_scored"] == {c: 192 for c in CANDS}
+        assert report["per_city"][city]["n_scored"] == {c: 100 for c in CANDS}
         for cand in CANDS:
             assert_metrics_equal(report["per_city"][city]["metrics"][cand], errs[city][cand].to_numpy())
         diag = report["diagnostics"][city]
@@ -1253,26 +1270,30 @@ def test_port_at_the_instant_scores_192_fresh_slots_per_city_and_matches_the_ora
     assert not os.path.exists(config.FORECAST_EXPERIMENT_CACHE_DIR)                # nothing under the (real-path stand-in) cache dir
     assert "DEVELOPMENT DATA" not in read_md(report)
     _assert_pooled_nominal_not_judged(report)
-    assert report["sample_size"]["pooled_nominal"]["n_scored"][RAW] == 768
+    assert report["sample_size"]["pooled_nominal"]["n_scored"][RAW] == 400
 
 
-def test_port_override_is_recorded_in_json_and_markdown(monkeypatch, evidence_root, model_dir):
-    report, _ = prod_run(monkeypatch, evidence_root, cities=["AUSTIN"], now=BEFORE_INSTANT,
-                         guard_cfg=core.GuardConfig(override_reason="rehearsal of the evaluation day"))
-    assert report["guard"]["override_reason"] == "rehearsal of the evaluation day"
-    assert read_json(report)["guard"]["override_reason"] == "rehearsal of the evaluation day"
-    assert "Override: rehearsal of the evaluation day" in read_md(report)
+def test_port_override_text_is_refused_for_a_fresh_run_before_any_request(monkeypatch, evidence_root, model_dir):
+    # v4: the old "rehearsal of the evaluation day" override ran the port on FRESH rows early; now it is refused
+    server = FakeServer(monkeypatch, shift_days=PROD_SHIFT_DAYS)
+    for now in (BEFORE_INSTANT, INSTANT):
+        with pytest.raises(core.EvaluationGuardError, match="take no override"):
+            conf.run_confirmation(cities=["AUSTIN"], evidence_root=str(evidence_root), now=now, params=None,
+                                  guard_cfg=core.GuardConfig(override_reason="rehearsal of the evaluation day"))
+    assert server.calls == [] and not os.path.exists(evidence_root)
 
 
 def test_port_second_fresh_run_is_refused_even_after_a_first_run_that_crashed(monkeypatch, evidence_root, model_dir, tmp_path):
     first, _ = prod_run(monkeypatch, evidence_root, cities=["AUSTIN"])
     assert first["basis"] == "FRESH"
     with pytest.raises(core.EvaluationGuardError, match="second FRESH run"):
-        prod_run(monkeypatch, evidence_root, cities=["AUSTIN"], now="2026-11-24T00:00:05Z")
+        prod_run(monkeypatch, evidence_root, cities=["AUSTIN"], now="2026-11-01T00:00:05Z")
     assert len(os.listdir(evidence_root)) == 1
-    again, _ = prod_run(monkeypatch, evidence_root, cities=["AUSTIN"], now="2026-11-24T00:00:09Z",
-                        guard_cfg=core.GuardConfig(override_reason="owner-approved rerun"))
-    assert again["guard"]["prior_fresh_runs"] and again["guard"]["override_reason"] == "owner-approved rerun"
+    # an "owner-approved rerun" text no longer reopens the one-shot read
+    with pytest.raises(core.EvaluationGuardError, match="take no override"):
+        prod_run(monkeypatch, evidence_root, cities=["AUSTIN"], now="2026-11-01T00:00:09Z",
+                 guard_cfg=core.GuardConfig(override_reason="owner-approved rerun"))
+    assert len(os.listdir(evidence_root)) == 1
 
     other_root = str(tmp_path / "evidence_crash")
     with monkeypatch.context() as m:
@@ -1283,13 +1304,15 @@ def test_port_second_fresh_run_is_refused_even_after_a_first_run_that_crashed(mo
     assert os.path.isfile(os.path.join(other_root, run_dir, "run_started.json"))
     assert not os.path.exists(os.path.join(other_root, run_dir, "report.json"))
     with pytest.raises(core.EvaluationGuardError, match="second FRESH run"):
-        prod_run(monkeypatch, other_root, cities=["AUSTIN"], now="2026-11-24T00:01:00Z")
+        prod_run(monkeypatch, other_root, cities=["AUSTIN"], now="2026-11-01T00:01:00Z")
 
 
-def test_port_nondefault_block_lengths_in_a_fresh_run_are_refused_without_an_override(monkeypatch, evidence_root, capsys):
+def test_port_nondefault_block_lengths_in_a_fresh_run_are_refused_and_no_override_helps(monkeypatch, evidence_root, capsys):
     monkeypatch.setattr(core, "utcnow", lambda: pd.Timestamp(INSTANT))
     assert conf.main(["--evidence-root", evidence_root, "--block-lengths", "1", "2"]) == 2
-    assert "override" in capsys.readouterr().err
+    assert "no override" in capsys.readouterr().err
+    assert conf.main(["--evidence-root", evidence_root, "--block-lengths", "1", "2", "--override-reason", "x"]) == 2
+    assert "no override" in capsys.readouterr().err
     assert not os.path.exists(evidence_root)
 
 
@@ -1312,7 +1335,7 @@ def test_the_real_fresh_cache_paths_are_refused_and_the_frozen_window_paths_are_
             pd.read_csv(path)
         core.assert_not_fresh_experiment_cache(FROZEN_CACHE.format(city=city))
     # a FRESH-window cache is allowed only inside the run's own evidence directory
-    inside = tmp_path / "evidence" / "reconstructed_frames_x" / "frames" / "anchored_pair_frame_AUSTIN_2026-09-28_2026-11-16_lead24_previous_runs.csv"
+    inside = tmp_path / "evidence" / "reconstructed_frames_x" / "frames" / "anchored_pair_frame_AUSTIN_2026-09-28_2026-10-24_lead24_previous_runs.csv"
     core.assert_not_fresh_experiment_cache(str(inside), allow_dir=str(tmp_path / "evidence"))
     with pytest.raises(core.EvaluationGuardError):
         core.assert_not_fresh_experiment_cache(str(inside), allow_dir=str(tmp_path / "elsewhere"))
@@ -1340,7 +1363,7 @@ def test_no_evaluator_mode_opens_a_fresh_experiment_cache_outside_its_own_eviden
     write_logs(fresh_logs, ["AUSTIN"], FRESH_LOG_SHIFT_DAYS)
     # count-only (permitted at any time: no request, no ampacity)
     counts = score_mod.count_only_report(str(fresh_logs), ["AUSTIN"], core.GuardConfig())
-    assert counts["cities"]["AUSTIN"]["counters"]["in_scope_rows"] == 120
+    assert counts["cities"]["AUSTIN"]["counters"]["in_scope_rows"] == 28
     # dry run of the port
     plan = conf.dry_run(cities=CITIES, guard_cfg=core.GuardConfig(), evidence_root=evidence_root, now=DEV_NOW)
     assert len(plan["planned_requests"]) == 8

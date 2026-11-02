@@ -6,6 +6,7 @@ file lives under `tmp_path`. No test reads `data/experiment` or any real log.
 
 from __future__ import annotations
 
+import argparse
 import builtins
 import json
 import os
@@ -259,12 +260,12 @@ def test_valid_time_off_the_six_hour_grid_is_a_lead_mismatch():
 
 
 def test_cutoff_is_strict():
-    at = make_row("AUSTIN", "2026-11-17T00:00:00Z")
-    before = make_row("AUSTIN", "2026-11-16T18:00:00Z")
-    after = make_row("AUSTIN", "2026-11-17T06:00:00Z")
+    at = make_row("AUSTIN", "2026-10-25T00:00:00Z")           # the v4-read1 cutoff: the first unscored slot
+    before = make_row("AUSTIN", "2026-10-24T18:00:00Z")       # the last scored slot (100th)
+    after = make_row("AUSTIN", "2026-10-25T06:00:00Z")
     frame, counters, _ = _select([at, before, after])
     assert counters["at_or_after_cutoff"] == 2
-    assert list(frame["valid_time"]) == [pd.Timestamp("2026-11-16T18:00:00Z")]
+    assert list(frame["valid_time"]) == [pd.Timestamp("2026-10-24T18:00:00Z")]
 
 
 def test_first_logged_duplicate_wins_and_duplicates_are_listed_with_inversions():
@@ -640,12 +641,16 @@ def test_fresh_run_at_the_instant_then_second_run_is_refused(tmp_path, monkeypat
     assert report["basis"] == "FRESH" and "DEVELOPMENT DATA" not in open(report["report_paths"]["report_md"]).read()
     with pytest.raises(core.EvaluationGuardError):
         score_mod.score(str(d), cities=["AUSTIN"], guard_cfg=guard_cfg(), evidence_root=ev, now=INSTANT + pd.Timedelta(hours=2))
-    again = score_mod.score(str(d), cities=["AUSTIN"], guard_cfg=guard_cfg(override_reason="rerun"), evidence_root=ev,
-                            now=INSTANT + pd.Timedelta(hours=2))
-    assert again["guard"]["override_reason"] == "rerun" and len(again["guard"]["prior_fresh_runs"]) == 1
+    # signed v4 rounds take no override: the old "rerun" text no longer lets a second FRESH run through
+    with pytest.raises(core.EvaluationGuardError, match="take no override"):
+        score_mod.score(str(d), cities=["AUSTIN"], guard_cfg=guard_cfg(override_reason="rerun"), evidence_root=ev,
+                        now=INSTANT + pd.Timedelta(hours=2))
+    assert len(os.listdir(ev)) == 1
 
 
-def test_cli_guard_refusal_exits_2_with_message_and_no_network(tmp_path, capsys):
+def test_cli_guard_refusal_exits_2_with_message_and_no_network(tmp_path, capsys, monkeypatch):
+    # the CLI exposes no clock, so pin it before the round's instant: the run must be refused
+    monkeypatch.setattr(core, "utcnow", lambda: INSTANT - pd.Timedelta(days=3))
     d = tmp_path / "logs"
     d.mkdir()
     write_log(d / "AUSTIN.jsonl", [make_row("AUSTIN", "2026-10-20T00:00:00Z")])
@@ -655,6 +660,11 @@ def test_cli_guard_refusal_exits_2_with_message_and_no_network(tmp_path, capsys)
     rc = score_mod.main(["--predictions-dir", str(d), "--cities", "AUSTIN", "--evidence-root", str(tmp_path / "ev"),
                          "--evaluation-instant", "2026-12-01T00:00:00Z"])
     assert rc == 2 and "override" in capsys.readouterr().err
+    # an override reason cannot make a FRESH run through, not even with a non-default instant
+    rc = score_mod.main(["--predictions-dir", str(d), "--cities", "AUSTIN", "--evidence-root", str(tmp_path / "ev"),
+                         "--evaluation-instant", "2026-12-01T00:00:00Z", "--override-reason", "please"])
+    assert rc == 2 and "no override" in capsys.readouterr().err
+    assert not (tmp_path / "ev").exists()
 
 
 def test_cli_rejects_unknown_city_and_exposes_no_clock(capsys):
@@ -705,13 +715,16 @@ def test_score_attaches_the_nine_test_family_and_the_live_system_decision(tmp_pa
     assert "descriptive, uncorrected" in md and core.FLAG_V2 in md and "NON-DEFAULT" in md
 
 
-def test_fresh_run_with_a_nondefault_parameter_needs_an_override_and_creates_nothing(tmp_path):
+def test_fresh_run_with_a_nondefault_parameter_is_refused_with_or_without_text_and_creates_nothing(tmp_path):
     d = tmp_path / "logs"
     d.mkdir()
     write_log(d / "AUSTIN.jsonl", [make_row("AUSTIN", "2026-10-20T00:00:00Z")])
-    with pytest.raises(ValueError, match="override"):
+    with pytest.raises(ValueError, match="refused"):
         score_mod.score(str(d), cities=["AUSTIN"], guard_cfg=guard_cfg(), evidence_root=str(tmp_path / "ev"), now=INSTANT,
                         params={"decision_margin_amps": 7.0})
+    with pytest.raises(core.EvaluationGuardError, match="take no override"):
+        score_mod.score(str(d), cities=["AUSTIN"], guard_cfg=guard_cfg(override_reason="owner says so"),
+                        evidence_root=str(tmp_path / "ev"), now=INSTANT, params={"decision_margin_amps": 7.0})
     assert not (tmp_path / "ev").exists()
 
 
@@ -735,6 +748,87 @@ def test_cli_exposes_the_preregistered_parameters_and_no_row_gate_or_family_size
     rc = score_mod.main(["--predictions-dir", str(d), "--cities", *cities, "--evidence-root", str(tmp_path / "ev"),
                          "--n-resamples", "300"])
     assert rc == 0
-    (run,) = os.listdir(tmp_path / "ev")
-    saved = json.loads(open(tmp_path / "ev" / run / "report.json").read())
+    # the scoring run writes into its round's own evidence subroot
+    assert os.listdir(tmp_path / "ev") == ["v4-read1"]
+    (run,) = os.listdir(tmp_path / "ev" / "v4-read1")
+    saved = json.loads(open(tmp_path / "ev" / "v4-read1" / run / "report.json").read())
     assert saved["config"]["params"]["n_resamples"] == 300 and saved["guard"]["nondefault_params"] == {"n_resamples": 300}
+    assert saved["guard"]["round"] == "v4-read1"
+
+
+# --------------------------------------------------------------------------
+# 07-06: --round selects a signed protocol round (v4)
+# --------------------------------------------------------------------------
+
+def test_cli_lists_the_signed_rounds_and_defaults_to_read_1():
+    parser = score_mod.build_parser()
+    action = next(a for a in parser._actions if "--round" in a.option_strings)
+    assert sorted(action.choices) == ["v4-late-descriptive", "v4-read1", "v4-read2"]
+    assert "--round {v4-late-descriptive,v4-read1,v4-read2}" in parser.format_help()
+    assert parser.parse_args([]).round == "v4-read1"
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--round", "v3"])
+
+
+def test_guard_from_args_builds_the_selected_rounds_guard():
+    parser = score_mod.build_parser()
+    g1 = score_mod._guard_from_args(parser.parse_args([]))
+    assert (g1.round_name, g1.evaluation_instant, g1.valid_time_cutoff) == (
+        "v4-read1", pd.Timestamp("2026-11-01T00:00:00Z"), pd.Timestamp("2026-10-25T00:00:00Z"))
+    g2 = score_mod._guard_from_args(parser.parse_args(["--round", "v4-read2"]))
+    assert (g2.round_name, g2.evaluation_instant, g2.valid_time_cutoff, g2.override_reason) == (
+        "v4-read2", pd.Timestamp("2026-11-08T00:00:00Z"), pd.Timestamp("2026-11-01T00:00:00Z"), None)
+    # an object without a round attribute (the confirm port's namespace) gets read 1
+    legacy = argparse.Namespace(evaluation_instant=None, valid_time_cutoff=None, override_reason=None)
+    assert score_mod._guard_from_args(legacy) == g1
+    # an explicit date goes on top of the round and is then non-default for the guard
+    g3 = score_mod._guard_from_args(parser.parse_args(["--round", "v4-read2", "--valid-time-cutoff", "2026-10-31T00:00:00Z"]))
+    assert g3.round_name == "v4-read2" and g3.valid_time_cutoff == pd.Timestamp("2026-10-31T00:00:00Z")
+    assert g3.evaluation_instant == g2.evaluation_instant
+
+
+def test_round_read_2_scores_into_the_read_2_subroot_with_read_2_dates(tmp_path, monkeypatch):
+    d = tmp_path / "logs"
+    d.mkdir()
+    rows = [make_row("AUSTIN", pd.Timestamp("2026-10-30T00:00:00Z") + pd.Timedelta(hours=6 * k)) for k in range(4)]
+    write_log(d / "AUSTIN.jsonl", rows)
+    install_archive(monkeypatch)
+    base = tmp_path / "ev"
+    monkeypatch.setattr(core, "utcnow", lambda: pd.Timestamp("2026-11-08T00:00:00Z"))
+    rc = score_mod.main(["--round", "v4-read2", "--predictions-dir", str(d), "--cities", "AUSTIN",
+                         "--evidence-root", str(base)])
+    assert rc == 0
+    assert os.listdir(base) == ["v4-read2"]                    # nothing under read 1's subroot
+    (run,) = os.listdir(base / "v4-read2")
+    saved = json.loads((base / "v4-read2" / run / "report.json").read_text())
+    assert saved["guard"]["round"] == "v4-read2" and saved["guard"]["defaults_used"] is True
+    assert saved["guard"]["evaluation_instant"] == "2026-11-08T00:00:00+00:00"
+    assert saved["guard"]["valid_time_cutoff"] == "2026-11-01T00:00:00+00:00"
+    assert saved["guard"]["override_reason"] is None
+    # the same run again is refused (one shot per round), and read 1 is still open
+    rc = score_mod.main(["--round", "v4-read2", "--predictions-dir", str(d), "--cities", "AUSTIN",
+                         "--evidence-root", str(base)])
+    assert rc == 2
+    assert os.listdir(base) == ["v4-read2"] and len(os.listdir(base / "v4-read2")) == 1
+
+
+def test_round_read_2_is_refused_before_its_own_instant_even_after_read_1s(tmp_path, monkeypatch, capsys):
+    d = tmp_path / "logs"
+    d.mkdir()
+    write_log(d / "AUSTIN.jsonl", [make_row("AUSTIN", "2026-10-30T00:00:00Z")])
+    monkeypatch.setattr(core, "utcnow", lambda: pd.Timestamp("2026-11-02T00:00:00Z"))   # after read 1, before read 2
+    rc = score_mod.main(["--round", "v4-read2", "--predictions-dir", str(d), "--cities", "AUSTIN",
+                         "--evidence-root", str(tmp_path / "ev")])
+    assert rc == 2 and "2026-11-08" in capsys.readouterr().err
+    assert not (tmp_path / "ev").exists()
+
+
+def test_count_only_ignores_the_round_and_never_needs_one(tmp_path):
+    d = tmp_path / "logs"
+    d.mkdir()
+    write_log(d / "AUSTIN.jsonl", [make_row("AUSTIN", "2026-10-20T00:00:00Z")])
+    out = tmp_path / "counts.json"
+    for extra in ([], ["--round", "v4-read2"]):
+        assert score_mod.main(["--count-only", "--predictions-dir", str(d), "--cities", "AUSTIN", "--out", str(out),
+                               "--evidence-root", str(tmp_path / "ev"), *extra]) == 0
+    assert not (tmp_path / "ev").exists()
