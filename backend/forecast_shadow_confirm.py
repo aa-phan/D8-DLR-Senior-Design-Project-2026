@@ -89,6 +89,7 @@ import pandas as pd
 import ampacity_forecast
 import city_point
 import config
+import forecast_conductor_refit
 import forecast_experiment
 import forecast_shadow_decision_v4 as decision_v4
 import forecast_shadow_eval_core as core
@@ -117,6 +118,7 @@ AMPS_CROSS_CHECK_TOLERANCE = 1e-9
 REASON_UNAVAILABLE = "candidate_unavailable"
 REASON_FAILED = "candidate_failed"
 REASON_REFERENCE_FEATURES = "reference_features_missing"
+SECONDARY_LABEL = decision_v4.LABELS["secondary"]
 MODEL_SOURCE_TEXT = (
     "the 12 frozen per-city artifacts (PD-01); not a train-only refit, so the development "
     "(train-only) numbers are not directly comparable"
@@ -256,7 +258,7 @@ def production_frame_provider(city: str, *, evidence_dir: str, window=None, roun
 # Frame preparation
 # --------------------------------------------------------------------------
 
-def prepare_city_frame(frame: pd.DataFrame, city: str, *, window: Optional[ScoredWindow] = None):
+def prepare_city_frame(frame: pd.DataFrame, city: str, *, window: Optional[ScoredWindow] = None, point=None):
     """
     Mirror `forecast_shadow_fit_models.fit_from_frame`'s preparation with
     city_point geometry: sort, recompute `truth_dlr_amps` from the truth weather
@@ -267,12 +269,19 @@ def prepare_city_frame(frame: pd.DataFrame, city: str, *, window: Optional[Score
     imputed) and counted; their slots are reported as missing_from_reconstruction.
     Returns (prepared, diagnostics).
 
+    `point` (D-01, opt-in) is a `CityPoint` to score under instead of the frozen Drake
+    `city_point.city_point(city)`: truth is recomputed with that point's bearing and
+    conductor through `forecast_conductor_refit.arm5_frame_for_point`. With no point
+    every call is exactly the frozen path.
+
     Raises:
         ReconstructionError: duplicate valid times, a non-24 h anchor gap, or an
             anchor inside the artifacts' fit window.
     """
     window = default_window() if window is None else window
-    point = city_point.city_point(city)
+    explicit_point = point is not None
+    if point is None:
+        point = city_point.city_point(city)
     work = frame.copy()
     work["datetime_utc"] = pd.to_datetime(work["datetime_utc"], utc=True)
     work["anchor_datetime_utc"] = pd.to_datetime(work["anchor_datetime_utc"], utc=True)
@@ -290,8 +299,11 @@ def prepare_city_frame(frame: pd.DataFrame, city: str, *, window: Optional[Score
     n_null_rows = int(bad.sum())
 
     if len(work):
-        work["truth_dlr_amps"] = forecast_shadow_fit_models.weather_to_arm5_frame(
-            work, city, prefix="truth_")["dlr_amps"].to_numpy(dtype=float)
+        if explicit_point:
+            truth_arm5 = forecast_conductor_refit.arm5_frame_for_point(work, point, prefix="truth_")
+        else:
+            truth_arm5 = forecast_shadow_fit_models.weather_to_arm5_frame(work, city, prefix="truth_")
+        work["truth_dlr_amps"] = truth_arm5["dlr_amps"].to_numpy(dtype=float)
     else:
         work["truth_dlr_amps"] = pd.Series(dtype=float)
     work["city"] = city
@@ -333,8 +345,9 @@ def prepare_city_frame(frame: pd.DataFrame, city: str, *, window: Optional[Score
 # Candidate predictions
 # --------------------------------------------------------------------------
 
-def _arm5_from_weather(weather: pd.DataFrame, city: str):
-    """Archive weather to the arm-5 frame; null-weather hours are dropped, never imputed."""
+def _arm5_from_weather(weather: pd.DataFrame, city: str, *, point=None):
+    """Archive weather to the arm-5 frame; null-weather hours are dropped, never imputed.
+    With a `point` the ampacity is computed under it (arm5_frame_for_point), otherwise under the frozen Drake point."""
     frame = weather.copy()
     frame["datetime_utc"] = pd.to_datetime(frame["datetime_utc"], utc=True)
     numeric = frame[list(_WEATHER_FIELDS)].apply(pd.to_numeric, errors="coerce")
@@ -345,6 +358,8 @@ def _arm5_from_weather(weather: pd.DataFrame, city: str):
         clean[col] = numeric.loc[~bad, col].to_numpy(dtype=float)
     if clean.empty:
         raise ReconstructionError(f"{city}: the archive weather has no usable hour")
+    if point is not None:
+        return forecast_conductor_refit.arm5_frame_for_point(clean, point), dropped
     return forecast_shadow_fit_models.weather_to_arm5_frame(clean, city), dropped
 
 
@@ -386,9 +401,13 @@ def _arms(point, models: dict) -> dict:
 
 
 def candidate_predictions(prepared: pd.DataFrame, archive_weather: pd.DataFrame, city: str, models: dict,
-                          *, unavailable: Optional[dict] = None):
+                          *, unavailable: Optional[dict] = None, point=None):
     """
     The five candidates and the truth for one city on its prepared rows.
+
+    `point` (opt-in, D-01) replaces the frozen Drake `city_point.city_point(city)` for every ampacity
+    computation here (truth cross-check, raw forecast, persistence, the corrected arms' conductor and the
+    reference history); it must be the point the frame was prepared with.
 
     `models` maps method name to a fitted model (None when its artifact is
     unavailable). Returns (DataFrame indexed by valid_time with `valid_time`,
@@ -407,7 +426,9 @@ def candidate_predictions(prepared: pd.DataFrame, archive_weather: pd.DataFrame,
             from the archive weather.
     """
     unavailable = dict(unavailable or {})
-    point = city_point.city_point(city)
+    explicit_point = point is not None
+    if point is None:
+        point = city_point.city_point(city)
     n = len(prepared)
     vt = pd.DatetimeIndex(prepared["datetime_utc"]) if n else pd.DatetimeIndex([], tz="UTC")
     out = pd.DataFrame(index=vt)
@@ -443,7 +464,7 @@ def candidate_predictions(prepared: pd.DataFrame, archive_weather: pd.DataFrame,
             f"{city}: the frame's truth weather differs from the recorded archive weather "
             f"(max abs difference {max_diff}); refusing to score"
         )
-    arm5, dropped_hours = _arm5_from_weather(archive_weather, city)
+    arm5, dropped_hours = _arm5_from_weather(archive_weather, city, point=point if explicit_point else None)
     amps_diff = None
     if n:
         archive_amps = arm5.set_index("datetime_utc")["dlr_amps"].reindex(vt).to_numpy(dtype=float)
@@ -513,18 +534,21 @@ def _sabotage_truth(prepared: pd.DataFrame) -> pd.DataFrame:
     return s
 
 
-def leakage_probe(prepared: pd.DataFrame, city: str, models: dict, *, extra_arms: Optional[dict] = None) -> dict:
+def leakage_probe(prepared: pd.DataFrame, city: str, models: dict, *, extra_arms: Optional[dict] = None,
+                  point=None) -> dict:
     """
     Recompute raw, persistence, wind and cooling (and any `extra_arms`, a
     test-injection hook) on a copy with sabotaged truth columns and require
-    identical output; require the oracle arm (it reads truth wind) to change.
+    identical output; require the oracle arm (it reads truth wind) to change. `point` (opt-in) is the
+    point the arms are built over, as in `candidate_predictions`.
 
     Raises:
         LeakageProbeError: a genuine candidate changed, or the oracle did not.
     """
     if len(prepared) == 0:
         return {"status": "skipped_no_rows", "passed": True}
-    point = city_point.city_point(city)
+    if point is None:
+        point = city_point.city_point(city)
     sabotaged = _sabotage_truth(prepared)
     arms = {**_arms(point, models), **dict(extra_arms or {})}
     checked, max_diff = [], 0.0
@@ -568,6 +592,39 @@ def load_models(city: str, loader: Callable[[str, str], object]):
             models[method] = None
             unavailable[method] = str(exc)
     return models, unavailable
+
+
+def _recording_loader(loader: Callable[[str, str], object], source: str, records: Optional[list] = None):
+    """
+    Wrap a `(city, method)` model loader so every artifact it serves is recorded (research Pitfall 7).
+
+    A loader that keeps its own `served` list (`forecast_conductor_refit.make_headline_loader`) is the
+    authority for the path, sha256 and `source` ("refit" or "frozen") of what it served. For any other
+    loader the path is the frozen artifact path `forecast_shadow_pipeline._model_path_for(city, method)`,
+    its sha256 is `core.sha256_file` of that file (None when no such file exists, e.g. an injected stub
+    loader) and the source is `source`. A repeat is recorded once. Errors from the wrapped loader
+    (FileNotFoundError, ArtifactIntegrityError, ...) propagate unchanged. The records list is exposed as
+    `.records`.
+    """
+    records = [] if records is None else records
+
+    def wrapped(city: str, method: str):
+        model = loader(city, method)
+        served = getattr(loader, "served", None)
+        entry = None
+        if served is not None:
+            entry = next((dict(s) for s in reversed(served) if s["city"] == city and s["method"] == method), None)
+        if entry is None:
+            path = forecast_shadow_pipeline._model_path_for(city, method)
+            entry = {"city": city, "method": method, "path": path.replace(os.sep, "/"),
+                     "sha256": core.sha256_file(path) if os.path.isfile(path) else None, "source": source}
+        if entry not in records:
+            records.append(entry)
+        return model
+
+    wrapped.records = records
+    wrapped.source = source
+    return wrapped
 
 
 # --------------------------------------------------------------------------
@@ -719,9 +776,11 @@ def _truth_stats(preds: pd.DataFrame) -> Optional[dict]:
 
 
 def _attach_family_and_decision(report: dict, error_frames: dict, params: dict, protocol_status: str, *,
-                                truth_stats: dict, round_name: str, vetoes: Optional[dict], basis: str) -> dict:
+                                truth_stats: dict, round_name: str, vetoes: Optional[dict], basis: str,
+                                label: Optional[str] = None) -> dict:
     """The 9-test family and the signed v4 decision. Headline label for a deciding round, descriptive label for
-    the late descriptive round; the veto record is required only for a FRESH headline run."""
+    the late descriptive round, or the explicit `label` ("secondary"); the veto record is required only for a
+    FRESH headline run."""
     family = stats.build_family_report(error_frames, row_source=ROW_SOURCE, params=params)
     report["family"] = family
     report["sample_size"]["pairs"] = family["sample_size"]["pairs"]
@@ -729,19 +788,108 @@ def _attach_family_and_decision(report: dict, error_frames: dict, params: dict, 
     report["sample_size"]["nominal_vs_effective"] = (
         "n is nominal; effective sample sizes (ACF per city, bootstrap pooled) are in `pairs` and are smaller")
     descriptive = core.round_named(round_name).descriptive_only
+    if label is None:
+        label = "descriptive" if descriptive else "headline"
     report["decision"] = decision_v4.apply_ship_rule_v4(
-        family, truth_stats=truth_stats, round_name=round_name, label="descriptive" if descriptive else "headline",
-        vetoes=_rule_vetoes(vetoes), require_vetoes=(basis == "FRESH" and not descriptive),
+        family, truth_stats=truth_stats, round_name=round_name, label=label,
+        vetoes=_rule_vetoes(vetoes), require_vetoes=(label == "headline" and basis == "FRESH" and not descriptive),
         protocol_status=protocol_status, fraction=params["relative_margin_fraction"],
         min_cities=params["consistency_min_cities"])
     return report
+
+
+def _score_city(frame, archive_weather, city, *, window, point, model_loader, extra_probe_arms, stage: list):
+    """One city, one configuration: prepare, load models, predict, probe. `stage[0]` names the step in flight so a
+    failure can be recorded against it. Returns (prep_diag, preds, pred_diag, probe)."""
+    stage[0] = "prepare"
+    prepared, prep_diag = prepare_city_frame(frame, city, window=window, point=point)
+    stage[0] = "models"
+    models, unavailable = load_models(city, model_loader)
+    stage[0] = "predict"
+    preds, pred_diag = candidate_predictions(prepared, archive_weather, city, models, unavailable=unavailable, point=point)
+    stage[0] = "leakage_probe"
+    probe = leakage_probe(prepared, city, models, extra_arms=extra_probe_arms, point=point)
+    return prep_diag, preds, pred_diag, probe
+
+
+def _city_blocks(preds: pd.DataFrame, prep_diag: dict, pred_diag: dict, probe: dict, fetch_meta) -> dict:
+    """The per-city report blocks (per_city, exclusions, diagnostics, truth) for one scored city."""
+    metrics, n_scored, cand_excl = {}, {}, {}
+    for name in core.CANDIDATES:
+        mask = preds[name].notna().to_numpy() if len(preds) else np.array([], dtype=bool)
+        metrics[name] = core.descriptive_metrics(preds.loc[mask, name].to_numpy() if len(preds) else [],
+                                                 preds.loc[mask, "truth_amps"].to_numpy() if len(preds) else [])
+        n_scored[name] = metrics[name]["n"]
+        reasons = preds[f"{name}__excl"].dropna().value_counts().to_dict() if len(preds) else {}
+        cand_excl[name] = {str(k): int(v) for k, v in reasons.items()}
+    n_with_truth = int(len(preds))
+    n_missing = prep_diag["n_missing_from_reconstruction"]
+    row_excl = {"missing_from_reconstruction": n_missing}
+    per_city = {
+        "n_in_scope": prep_diag["n_expected_slots"], "n_with_truth": n_with_truth, "n_scored": n_scored,
+        "excluded_by_reason": {k: v for k, v in row_excl.items() if v},
+        "candidate_exclusions": cand_excl, "metrics": metrics, "truth_label": core.TRUTH_LABEL,
+    }
+    city_truth = _truth_stats(preds)
+    if city_truth is not None:
+        per_city["truth_stats"] = city_truth
+    exclusions = {
+        "row_level": row_excl,
+        "rows_dropped_null_weather": prep_diag["n_rows_dropped_null_weather"],
+        "candidate_level": cand_excl,
+        "accounting": {
+            "expected_slots_equals_scored_plus_missing": prep_diag["n_expected_slots"] == n_with_truth + n_missing,
+            "per_candidate_scored_plus_exclusions_equals_rows": {
+                name: n_with_truth == n_scored[name] + sum(cand_excl[name].values()) for name in core.CANDIDATES},
+        },
+    }
+    diagnostics = {
+        "leakage_probe": probe,
+        "missing_slots": prep_diag["missing_from_reconstruction"],
+        "reference_feature_gaps": pred_diag["reference_feature_gaps"],
+        "archive_vs_frame_truth": pred_diag["archive_vs_frame_truth"],
+        "unavailable_reasons": pred_diag["unavailable_reasons"],
+        "candidate_failed_rows": pred_diag["candidate_failed_rows"],
+        "preparation": {k: v for k, v in prep_diag.items() if k != "missing_from_reconstruction"},
+        "frame_fetch": fetch_meta,
+        "reference_target": "the valid time by construction (features at anchor = valid - 24 h)",
+    }
+    return {"per_city": per_city, "exclusions": exclusions, "diagnostics": diagnostics, "truth": city_truth}
+
+
+def _sample_size_block(per_city: dict, cities) -> dict:
+    pooled = {name: int(sum(per_city[c]["n_scored"][name] for c in cities)) for name in core.CANDIDATES}
+    return {
+        "per_city": {c: {"n_in_scope": per_city[c]["n_in_scope"], "n_scored": per_city[c]["n_scored"],
+                         "targets": core.precision_targets(max(per_city[c]["n_scored"].values(), default=0))}
+                     for c in cities},
+        "pooled_nominal": {"label": "nominal, not effective", "n_scored": pooled,
+                           "targets": core.pooled_nominal_targets(max(pooled.values(), default=0))},
+    }
+
+
+def _validate_secondary(secondary) -> None:
+    """A secondary spec is {"label": "secondary", "point_resolver": callable or None, "model_loader": callable}."""
+    if (not isinstance(secondary, dict) or secondary.get("label") != "secondary"
+            or not callable(secondary.get("model_loader"))
+            or not (secondary.get("point_resolver") is None or callable(secondary.get("point_resolver")))):
+        raise ValueError(
+            "run_confirmation: the secondary spec must be a dict {'label': 'secondary', 'point_resolver': "
+            "callable or None, 'model_loader': callable}; the labelled secondary never decides (D-01)")
+
+
+def _resolver_name(resolver) -> str:
+    if resolver is None:
+        return "city_point (frozen Drake)"
+    return getattr(resolver, "__name__", None) or repr(resolver)
 
 
 def run_confirmation(*, cities, guard_cfg: core.GuardConfig, evidence_root: str, protocol_status: str = "unsigned",
                      now=None, params: Optional[dict] = None, frame_provider: Optional[Callable] = None,
                      model_loader: Optional[Callable] = None, window=None, repo_root: Optional[str] = None,
                      extra_probe_arms: Optional[dict] = None, round_name: Optional[str] = None,
-                     vetoes: Optional[dict] = None) -> dict:
+                     vetoes: Optional[dict] = None, point_resolver: Optional[Callable] = None,
+                     secondary: Optional[dict] = None) -> dict:
     """
     Order: scope valid times from the window; require the veto record for a
     FRESH decision read (before the guard); `check_guard`; refuse a
@@ -763,6 +911,16 @@ def run_confirmation(*, cities, guard_cfg: core.GuardConfig, evidence_root: str,
     one this raises ValueError BEFORE the guard and before any directory exists, because a crash after
     the guard would spend the one-shot run (SEL-03). A supplied record is always validated and applied.
 
+    `point_resolver(city)` (opt-in, D-01) returns the `CityPoint` the HEADLINE is scored under (the CLI
+    passes `city_point.production_city_point` only when a city's production conductor differs from Drake);
+    with None every call is the frozen Drake path, unchanged. `secondary` (opt-in) is {"label": "secondary",
+    "point_resolver": callable or None, "model_loader": callable}: on the SAME fetched frames and archive
+    weather it scores a second configuration (the CLI: the frozen Drake artifacts under the Drake point) into
+    `report["secondary"]` with its own family and a decision labelled "secondary: frozen Drake artifacts, never
+    decides" (pick None). The two are never pooled. A per-city failure in the secondary is recorded under
+    `report["secondary"]["failed_cities"]` and never removes the headline's city. `report["scored_artifacts"]`
+    lists every artifact the headline and the secondary loaded (city, method, path, sha256, source, role).
+
     A per-city failure (fetch, structure, prediction) is recorded and that city
     is excluded and named in the report. EvaluationGuardError and
     LeakageProbeError are never swallowed.
@@ -780,6 +938,8 @@ def run_confirmation(*, cities, guard_cfg: core.GuardConfig, evidence_root: str,
                          "inject a frame_provider for a development window")
     scope_times = list(win.slots())
 
+    if secondary is not None:
+        _validate_secondary(secondary)
     if vetoes is not None:
         validate_veto_record(vetoes)
     if vetoes is None and not rnd.descriptive_only and any(t >= core.FRESH_BASIS_START for t in scope_times):
@@ -802,6 +962,12 @@ def run_confirmation(*, cities, guard_cfg: core.GuardConfig, evidence_root: str,
     provider = frame_provider or functools.partial(production_frame_provider, round_name=rnd.name)
     veto_source = _veto_source(vetoes)
 
+    headline_is_frozen = model_loader is forecast_shadow_pipeline.load_correction_model
+    headline_loader = _recording_loader(model_loader, "frozen" if headline_is_frozen else "injected")
+    secondary_loader = None if secondary is None else _recording_loader(
+        secondary["model_loader"],
+        "frozen" if secondary["model_loader"] is forecast_shadow_pipeline.load_correction_model else "injected")
+
     config_record = {
         "cities": cities, "protocol_status": protocol_status, "evidence_root": evidence_root,
         "round": rnd.name, "vetoes": veto_source,
@@ -810,7 +976,11 @@ def run_confirmation(*, cities, guard_cfg: core.GuardConfig, evidence_root: str,
         "fetch_window": [rnd.fetch_start, rnd.fetch_end],
         "model_source": MODEL_SOURCE_TEXT,
         "frame_provider": "production" if frame_provider is None else "injected",
-        "model_loader": "load_correction_model" if model_loader is forecast_shadow_pipeline.load_correction_model else "injected",
+        "model_loader": "load_correction_model" if headline_is_frozen else "injected",
+        "point_resolver": _resolver_name(point_resolver),
+        "secondary": None if secondary is None else {
+            "label": SECONDARY_LABEL, "point_resolver": _resolver_name(secondary["point_resolver"]),
+            "model_loader": "load_correction_model" if secondary_loader.source == "frozen" else "injected"},
     }
     evidence_dir = core.new_evidence_dir(evidence_root, ROW_SOURCE, now_ts, guard_record, config_record)
     root = repo_root or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -822,87 +992,96 @@ def run_confirmation(*, cities, guard_cfg: core.GuardConfig, evidence_root: str,
     report["round"] = rnd.name
     report["vetoes"] = None if vetoes is None else {"source": veto_source, "record": vetoes}
     report["truth_stats"] = {}
+    sec_report = None
+    if secondary is not None:
+        sec_report = {
+            "label": SECONDARY_LABEL, "row_source": ROW_SOURCE, "round": rnd.name,
+            "point_resolver": _resolver_name(secondary["point_resolver"]),
+            "per_city": {}, "exclusions": {}, "diagnostics": {}, "failed_cities": {}, "truth_stats": {},
+        }
 
     error_frames: dict = {}
+    sec_error_frames: dict = {}
     for city in cities:
-        stage = "frame_fetch"
+        stage = ["frame_fetch"]
+        frame = archive_weather = fetch_meta = None
         try:
             frame, archive_weather, fetch_meta = provider(city, evidence_dir=evidence_dir)
-            stage = "prepare"
-            prepared, prep_diag = prepare_city_frame(frame, city, window=win)
-            stage = "models"
-            models, unavailable = load_models(city, model_loader)
-            stage = "predict"
-            preds, pred_diag = candidate_predictions(prepared, archive_weather, city, models, unavailable=unavailable)
-            stage = "leakage_probe"
-            probe = leakage_probe(prepared, city, models, extra_arms=extra_probe_arms)
+            stage[0] = "prepare"
+            head_point = point_resolver(city) if point_resolver is not None else None
+            prep_diag, preds, pred_diag, probe = _score_city(
+                frame, archive_weather, city, window=win, point=head_point, model_loader=headline_loader,
+                extra_probe_arms=extra_probe_arms, stage=stage)
         except (FrameFetchError, ValueError, KeyError) as exc:
             error_text = f"{type(exc).__name__}: {exc}"
-            stage_name = "frame_fetch_failed" if isinstance(exc, FrameFetchError) else stage
+            stage_name = "frame_fetch_failed" if isinstance(exc, FrameFetchError) else stage[0]
             report["failed_cities"][city] = {"stage": stage_name, "error": error_text}
             error_frames[city] = _error_frame(None)
             report["per_city"][city] = _failed_city_block(city, stage_name, error_text)
             report["exclusions"][city] = {"city_failed": {"stage": stage_name, "error": error_text}}
             report["diagnostics"][city] = {"failed": {"stage": stage_name, "error": error_text}}
-            continue
+        else:
+            error_frames[city] = _error_frame(preds)
+            blocks = _city_blocks(preds, prep_diag, pred_diag, probe, fetch_meta)
+            report["per_city"][city] = blocks["per_city"]
+            if blocks["truth"] is not None:
+                report["truth_stats"][city] = blocks["truth"]
+            report["exclusions"][city] = blocks["exclusions"]
+            report["diagnostics"][city] = blocks["diagnostics"]
 
-        error_frames[city] = _error_frame(preds)
-        metrics, n_scored, cand_excl = {}, {}, {}
-        for name in core.CANDIDATES:
-            mask = preds[name].notna().to_numpy() if len(preds) else np.array([], dtype=bool)
-            metrics[name] = core.descriptive_metrics(preds.loc[mask, name].to_numpy() if len(preds) else [],
-                                                     preds.loc[mask, "truth_amps"].to_numpy() if len(preds) else [])
-            n_scored[name] = metrics[name]["n"]
-            reasons = preds[f"{name}__excl"].dropna().value_counts().to_dict() if len(preds) else {}
-            cand_excl[name] = {str(k): int(v) for k, v in reasons.items()}
-        n_with_truth = int(len(preds))
-        n_missing = prep_diag["n_missing_from_reconstruction"]
-        row_excl = {"missing_from_reconstruction": n_missing}
-        report["per_city"][city] = {
-            "n_in_scope": prep_diag["n_expected_slots"], "n_with_truth": n_with_truth, "n_scored": n_scored,
-            "excluded_by_reason": {k: v for k, v in row_excl.items() if v},
-            "candidate_exclusions": cand_excl, "metrics": metrics, "truth_label": core.TRUTH_LABEL,
-        }
-        city_truth = _truth_stats(preds)
-        if city_truth is not None:
-            report["truth_stats"][city] = city_truth
-            report["per_city"][city]["truth_stats"] = city_truth
-        report["exclusions"][city] = {
-            "row_level": row_excl,
-            "rows_dropped_null_weather": prep_diag["n_rows_dropped_null_weather"],
-            "candidate_level": cand_excl,
-            "accounting": {
-                "expected_slots_equals_scored_plus_missing": prep_diag["n_expected_slots"] == n_with_truth + n_missing,
-                "per_candidate_scored_plus_exclusions_equals_rows": {
-                    name: n_with_truth == n_scored[name] + sum(cand_excl[name].values()) for name in core.CANDIDATES},
-            },
-        }
-        report["diagnostics"][city] = {
-            "leakage_probe": probe,
-            "missing_slots": prep_diag["missing_from_reconstruction"],
-            "reference_feature_gaps": pred_diag["reference_feature_gaps"],
-            "archive_vs_frame_truth": pred_diag["archive_vs_frame_truth"],
-            "unavailable_reasons": pred_diag["unavailable_reasons"],
-            "candidate_failed_rows": pred_diag["candidate_failed_rows"],
-            "preparation": {k: v for k, v in prep_diag.items() if k != "missing_from_reconstruction"},
-            "frame_fetch": fetch_meta,
-            "reference_target": "the valid time by construction (features at anchor = valid - 24 h)",
-        }
+        if secondary is not None:
+            _score_secondary_city(sec_report, sec_error_frames, city, secondary, secondary_loader, frame, archive_weather,
+                                  fetch_meta, win, extra_probe_arms, frame_failed=frame is None)
 
-    pooled = {name: int(sum(report["per_city"][c]["n_scored"][name] for c in cities)) for name in core.CANDIDATES}
-    report["sample_size"] = {
-        "per_city": {c: {"n_in_scope": report["per_city"][c]["n_in_scope"], "n_scored": report["per_city"][c]["n_scored"],
-                         "targets": core.precision_targets(max(report["per_city"][c]["n_scored"].values(), default=0))}
-                     for c in cities},
-        "pooled_nominal": {"label": "nominal, not effective", "n_scored": pooled,
-                           "targets": core.pooled_nominal_targets(max(pooled.values(), default=0))},
-    }
+    report["sample_size"] = _sample_size_block(report["per_city"], cities)
     report = _attach_family_and_decision(report, error_frames, params, protocol_status,
                                          truth_stats=report["truth_stats"], round_name=rnd.name, vetoes=vetoes, basis=basis)
+    if sec_report is not None:
+        sec_report["sample_size"] = _sample_size_block(sec_report["per_city"], cities)
+        _attach_family_and_decision(sec_report, sec_error_frames, params, protocol_status,
+                                    truth_stats=sec_report["truth_stats"], round_name=rnd.name, vetoes=vetoes,
+                                    basis=basis, label="secondary")
+    report["secondary"] = sec_report
+    report["scored_artifacts"] = (
+        [{**entry, "role": "headline"} for entry in headline_loader.records]
+        + ([] if secondary_loader is None else [{**entry, "role": "secondary"} for entry in secondary_loader.records]))
     report["evidence"] = core.collect_evidence(evidence_dir)
     report["evidence_dir"] = evidence_dir
     report["report_paths"] = core.write_report(report, evidence_dir)
     return report
+
+
+def _score_secondary_city(sec_report, sec_error_frames, city, secondary, secondary_loader, frame, archive_weather,
+                          fetch_meta, win, extra_probe_arms, *, frame_failed: bool) -> None:
+    """Score one city under the secondary configuration on the headline's own frame and archive weather. A failure is
+    recorded in the secondary only (never retried, never touching the headline). LeakageProbeError propagates."""
+    def fail(stage_name: str, error_text: str) -> None:
+        sec_report["failed_cities"][city] = {"stage": stage_name, "error": error_text}
+        sec_error_frames[city] = _error_frame(None)
+        sec_report["per_city"][city] = _failed_city_block(city, stage_name, error_text)
+        sec_report["exclusions"][city] = {"city_failed": {"stage": stage_name, "error": error_text}}
+        sec_report["diagnostics"][city] = {"failed": {"stage": stage_name, "error": error_text}}
+
+    if frame_failed:
+        fail("frame_fetch_failed", "no frame: the headline's frame fetch for this city failed")
+        return
+    stage = ["prepare"]
+    try:
+        resolver = secondary["point_resolver"]
+        point = resolver(city) if resolver is not None else None
+        prep_diag, preds, pred_diag, probe = _score_city(
+            frame, archive_weather, city, window=win, point=point, model_loader=secondary_loader,
+            extra_probe_arms=extra_probe_arms, stage=stage)
+    except (FrameFetchError, ValueError, KeyError) as exc:
+        fail(stage[0], f"{type(exc).__name__}: {exc}")
+        return
+    sec_error_frames[city] = _error_frame(preds)
+    blocks = _city_blocks(preds, prep_diag, pred_diag, probe, fetch_meta)
+    sec_report["per_city"][city] = blocks["per_city"]
+    if blocks["truth"] is not None:
+        sec_report["truth_stats"][city] = blocks["truth"]
+    sec_report["exclusions"][city] = blocks["exclusions"]
+    sec_report["diagnostics"][city] = blocks["diagnostics"]
 
 
 # --------------------------------------------------------------------------

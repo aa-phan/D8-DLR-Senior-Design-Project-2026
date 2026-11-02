@@ -1407,3 +1407,285 @@ def test_the_v4_decision_block_of_a_development_run_leaves_family_and_metrics_al
             model_loader=loader_for(stub_models), window=DEV_WINDOW, params=SMALL)
     assert a["family"] == b["family"]
     assert {c: a["per_city"][c]["metrics"] for c in a["per_city"]} == {c: b["per_city"][c]["metrics"] for c in b["per_city"]}
+
+
+# --------------------------------------------------------------------------
+# 07-09 Task 1: the opt-in production-conductor seam, the frozen-Drake secondary, scored-artifact provenance
+# (D-01, D-09, SEL-02, COND-02). Synthetic frames, stub models, a tmp refit root; nothing real is scored.
+# --------------------------------------------------------------------------
+
+import forecast_conductor_refit as refit  # noqa: E402  (grouped with the plan's tests)
+
+SECONDARY_TEXT = "secondary: frozen Drake artifacts, never decides"
+DEV_NOW = "2026-10-13T08:00:00Z"
+
+
+@pytest.fixture
+def austin_100c(monkeypatch):
+    """The signed O4 table: AUSTIN at Drake 100 C, every other city untouched (patched, never edited in config.py)."""
+    table = {c: dict(v) for c, v in config.PRODUCTION_CONDUCTORS.items()}
+    table["AUSTIN"]["max_temp_c"] = 100.0
+    monkeypatch.setattr(config, "PRODUCTION_CONDUCTORS", table)
+    return table
+
+
+def dev_run(evidence_root, stub_models, *, cities=None, loader=None, **kwargs):
+    kwargs.setdefault("frame_provider", dev_provider)
+    kwargs.setdefault("window", DEV_WINDOW)
+    kwargs.setdefault("params", SMALL)
+    kwargs.setdefault("vetoes", None)
+    return run(evidence_root, now=DEV_NOW, cities=cities,
+               model_loader=loader or loader_for(stub_models), **kwargs)
+
+
+def _secondary_spec(stub_models, **over):
+    spec = {"label": "secondary", "point_resolver": None, "model_loader": loader_for(stub_models)}
+    spec.update(over)
+    return spec
+
+
+def _no_arm5_spies(monkeypatch):
+    calls = {"city_point": [], "production": [], "weather_to_arm5": 0, "arm5_for_point": 0}
+    real_cp, real_prod = city_point.city_point, city_point.production_city_point
+    real_w, real_a = fit_models.weather_to_arm5_frame, refit.arm5_frame_for_point
+    monkeypatch.setattr(city_point, "city_point", lambda c: calls["city_point"].append(c) or real_cp(c))
+    monkeypatch.setattr(city_point, "production_city_point", lambda c: calls["production"].append(c) or real_prod(c))
+
+    def w(*a, **k):
+        calls["weather_to_arm5"] += 1
+        return real_w(*a, **k)
+
+    def a(*args, **k):
+        calls["arm5_for_point"] += 1
+        return real_a(*args, **k)
+
+    monkeypatch.setattr(fit_models, "weather_to_arm5_frame", w)
+    monkeypatch.setattr(refit, "arm5_frame_for_point", a)
+    return calls
+
+
+def test_the_geometry_functions_take_an_optional_keyword_only_point():
+    import inspect
+    for fn in (conf.prepare_city_frame, conf._arm5_from_weather, conf.candidate_predictions, conf.leakage_probe):
+        p = inspect.signature(fn).parameters["point"]
+        assert p.kind is inspect.Parameter.KEYWORD_ONLY and p.default is None, fn.__name__
+
+
+def test_without_a_point_the_default_path_uses_city_point_and_weather_to_arm5_frame(monkeypatch, austin_inputs, stub_models):
+    frame, weather = austin_inputs
+    calls = _no_arm5_spies(monkeypatch)
+    prepared, _ = conf.prepare_city_frame(frame, "AUSTIN")
+    preds, _ = conf.candidate_predictions(prepared, weather, "AUSTIN", stub_models["AUSTIN"])
+    conf.leakage_probe(prepared, "AUSTIN", stub_models["AUSTIN"])
+    assert "AUSTIN" in calls["city_point"] and calls["production"] == []
+    assert calls["weather_to_arm5"] >= 2 and calls["arm5_for_point"] == 0
+    assert len(preds) == 100
+
+
+def test_with_a_point_the_geometry_comes_from_the_point_and_city_point_is_not_asked(monkeypatch, austin_inputs, stub_models):
+    frame, weather = austin_inputs
+    point = city_point.city_point("AUSTIN")
+    calls = _no_arm5_spies(monkeypatch)
+    prepared, _ = conf.prepare_city_frame(frame, "AUSTIN", point=point)
+    preds, _ = conf.candidate_predictions(prepared, weather, "AUSTIN", stub_models["AUSTIN"], point=point)
+    conf.leakage_probe(prepared, "AUSTIN", stub_models["AUSTIN"], point=point)
+    assert calls["city_point"] == [] and calls["production"] == []
+    assert calls["weather_to_arm5"] == 0 and calls["arm5_for_point"] >= 2
+    assert len(preds) == 100
+
+
+def test_an_explicit_drake_point_gives_exactly_the_default_numbers(austin_inputs, stub_models):
+    frame, weather = austin_inputs
+    base_prepared, base = predictions("AUSTIN", frame, weather, stub_models["AUSTIN"])[:2]
+    point = city_point.city_point("AUSTIN")
+    prepared, _ = conf.prepare_city_frame(frame, "AUSTIN", point=point)
+    other, _ = conf.candidate_predictions(prepared, weather, "AUSTIN", stub_models["AUSTIN"], point=point)
+    cols = ["truth_amps", *core.CANDIDATES]
+    assert np.array_equal(base[cols].to_numpy(), other[cols].to_numpy(), equal_nan=True)
+
+
+def test_a_production_point_raises_austin_truth_and_raw_and_persistence(austin_inputs, stub_models, austin_100c):
+    frame, weather = austin_inputs
+    _, base = predictions("AUSTIN", frame, weather, stub_models["AUSTIN"])[:2]
+    point = city_point.production_city_point("AUSTIN")
+    assert point.conductor.T_max == 100.0
+    prepared, _ = conf.prepare_city_frame(frame, "AUSTIN", point=point)
+    hot, _ = conf.candidate_predictions(prepared, weather, "AUSTIN", stub_models["AUSTIN"], point=point)
+    for col in ("truth_amps", "raw_forecast", "persistence_24h"):
+        assert (hot[col].to_numpy() > base[col].to_numpy()).all(), col
+    w = weather.set_index("datetime_utc").loc[hot.index]
+    expected = thermal_model.ieee738_ampacity(
+        w["air_temp"].to_numpy(float),
+        thermal_model.perpendicular_wind(w["wind_speed"].to_numpy(float), w["wind_direction"].to_numpy(float), point.bearing_deg),
+        w["solar_radiation"].to_numpy(float), point.conductor)
+    assert np.allclose(hot["truth_amps"], expected, atol=1e-9, rtol=0)
+
+
+def test_the_leakage_probe_passes_under_a_production_point_and_still_catches_a_leaky_arm(austin_inputs, stub_models, austin_100c):
+    frame, _ = austin_inputs
+    point = city_point.production_city_point("AUSTIN")
+    prepared, _ = conf.prepare_city_frame(frame, "AUSTIN", point=point)
+    result = conf.leakage_probe(prepared, "AUSTIN", stub_models["AUSTIN"], point=point)
+    assert result["passed"] and result["oracle_changed"]
+    leaky = {"leaky_arm": lambda f: f["truth_wind_speed"].to_numpy(dtype=float)}
+    with pytest.raises(core.LeakageProbeError, match="leaky_arm"):
+        conf.leakage_probe(prepared, "AUSTIN", stub_models["AUSTIN"], extra_arms=leaky, point=point)
+
+
+def test_a_run_without_a_resolver_never_asks_for_the_production_point_and_matches_an_explicit_drake_resolver(
+        monkeypatch, evidence_root, stub_models):
+    calls = _no_arm5_spies(monkeypatch)
+    default = dev_run(evidence_root + "_default", stub_models, cities=CITIES)
+    assert calls["production"] == [] and calls["city_point"] and calls["arm5_for_point"] == 0
+    assert default["secondary"] is None and default["config"]["point_resolver"] == "city_point (frozen Drake)"
+    drake = dev_run(evidence_root + "_drake", stub_models, cities=CITIES, point_resolver=city_point.city_point)
+    assert core.dumps(default["family"]) == core.dumps(drake["family"])
+    assert default["truth_stats"] == drake["truth_stats"]
+
+
+def test_a_production_resolver_changes_only_the_differing_citys_truth(evidence_root, stub_models, austin_100c):
+    base = dev_run(evidence_root + "_base", stub_models, cities=CITIES)
+    prod = dev_run(evidence_root + "_prod", stub_models, cities=CITIES, point_resolver=city_point.production_city_point)
+    assert prod["truth_stats"]["AUSTIN"]["mean_truth_amps"] > base["truth_stats"]["AUSTIN"]["mean_truth_amps"]
+    for city in ("CORPUS_CHRISTI", "MIDLAND", "EL_PASO"):
+        assert prod["truth_stats"][city] == base["truth_stats"][city], city
+    assert prod["config"]["point_resolver"] == "production_city_point"
+    assert prod["failed_cities"] == {}
+
+
+def test_the_secondary_equals_a_drake_only_run_on_the_same_inputs_and_never_decides(evidence_root, stub_models, austin_100c):
+    drake_only = dev_run(evidence_root + "_drake", stub_models, cities=CITIES)
+    both = dev_run(evidence_root + "_both", stub_models, cities=CITIES, point_resolver=city_point.production_city_point,
+                   secondary=_secondary_spec(stub_models))
+    sec = both["secondary"]
+    assert sec["label"] == SECONDARY_TEXT and sec["row_source"] == "reconstructed_frames"
+    assert core.dumps(sec["family"]) == core.dumps(drake_only["family"])
+    assert sec["truth_stats"] == drake_only["truth_stats"]
+    assert {c: sec["per_city"][c]["metrics"] for c in CITIES} == {c: drake_only["per_city"][c]["metrics"] for c in CITIES}
+    assert sec["decision"]["pick"] is None and sec["decision"]["label"] == SECONDARY_TEXT
+    assert sec["decision"]["rule_outcome"] == drake_only["decision"]["rule_outcome"]
+    assert sec["failed_cities"] == {}
+    # the headline is under the production conductor, so it is not the Drake result for AUSTIN
+    assert both["truth_stats"]["AUSTIN"] != drake_only["truth_stats"]["AUSTIN"]
+    assert both["decision"]["label"] == "headline decision"
+    # the two are separate reports: nothing pooled, nothing shared
+    assert sec["family"] is not both["family"] and sec["decision"] is not both["decision"]
+    assert both["config"]["secondary"]["label"] == SECONDARY_TEXT
+
+
+def test_the_secondary_report_is_accepted_by_the_combined_summary_with_its_own_label(evidence_root, stub_models, austin_100c):
+    import forecast_shadow_decision_v4 as v4
+    both = dev_run(evidence_root + "_both", stub_models, cities=CITIES, point_resolver=city_point.production_city_point,
+                   secondary=_secondary_spec(stub_models))
+    live = {"row_source": "shadow_logs", "decision": {**both["secondary"]["decision"], "row_source": "shadow_logs",
+                                                        "label": v4.LABELS["live"]}, "sample_size": {}}
+    text = v4.combined_summary_v4(both, live, both["secondary"])
+    assert "Secondary result (frozen Drake artifacts)" in text
+    with pytest.raises(ValueError):
+        v4.combined_summary_v4(both, live, both)             # a duplicated source is still refused
+
+
+def test_a_bad_secondary_spec_is_refused_before_the_guard_and_leaves_the_root_empty(evidence_root, stub_models):
+    for spec in ({"label": "headline", "point_resolver": None, "model_loader": loader_for(stub_models)},
+                 {"label": "secondary", "point_resolver": None},
+                 "secondary"):
+        with pytest.raises(ValueError, match="secondary"):
+            dev_run(evidence_root, stub_models, cities=["AUSTIN"], secondary=spec)
+    assert not os.path.exists(evidence_root)
+
+
+def test_a_secondary_failure_in_one_city_is_recorded_and_the_headline_keeps_that_city(evidence_root, stub_models):
+    def sec_loader(city, method):
+        if city == "MIDLAND":
+            raise ValueError("injected secondary load failure")
+        return stub_models[city][method]
+
+    report = dev_run(evidence_root, stub_models, cities=CITIES, secondary=_secondary_spec(stub_models, model_loader=sec_loader))
+    assert report["failed_cities"] == {} and "MIDLAND" in report["truth_stats"]
+    sec = report["secondary"]
+    assert list(sec["failed_cities"]) == ["MIDLAND"]
+    assert sec["failed_cities"]["MIDLAND"]["stage"] == "models"
+    assert "MIDLAND" not in sec["truth_stats"] and set(sec["truth_stats"]) == set(CITIES) - {"MIDLAND"}
+    assert sec["per_city"]["MIDLAND"]["failed"]["stage"] == "models"
+
+
+def test_a_frame_fetch_failure_fails_both_the_headline_and_the_secondary_city_without_a_retry(evidence_root, stub_models):
+    seen = []
+
+    def provider(city, *, evidence_dir):
+        seen.append(city)
+        if city == "EL_PASO":
+            raise conf.FrameFetchError("EL_PASO: injected")
+        return dev_provider(city, evidence_dir=evidence_dir)
+
+    report = dev_run(evidence_root, stub_models, cities=CITIES, frame_provider=provider, secondary=_secondary_spec(stub_models))
+    assert seen.count("EL_PASO") == 1 and set(report["failed_cities"]) == {"EL_PASO"}
+    assert list(report["secondary"]["failed_cities"]) == ["EL_PASO"]
+
+
+def test_a_leaky_arm_in_the_secondary_probe_still_aborts_the_run(evidence_root, stub_models):
+    leaky = {"leaky_arm": lambda f: f["truth_wind_speed"].to_numpy(dtype=float)}
+    with pytest.raises(core.LeakageProbeError, match="leaky_arm"):
+        dev_run(evidence_root, stub_models, cities=["AUSTIN"], secondary=_secondary_spec(stub_models), extra_probe_arms=leaky)
+
+
+def _frozen_world(tmp_path, monkeypatch, stub_models):
+    """12 stub 'frozen' artifacts in a tmp SHADOW_MODEL_DIR plus a matching tmp manifest; returns the manifest path."""
+    monkeypatch.setattr(pipeline, "SHADOW_MODEL_DIR", str(tmp_path / "frozen"))
+    lines = []
+    for city, models in stub_models.items():
+        for method, model in models.items():
+            pipeline.save_correction_model(model, city, method)
+            path = pipeline._model_path_for(city, method)
+            lines.append(f"{core.sha256_file(path)}  {refit._manifest_key(path)}")
+    manifest = tmp_path / "frozen_manifest.sha256"
+    manifest.write_text("# stub\n" + "\n".join(lines) + "\n", encoding="utf-8")
+    return str(manifest)
+
+
+def test_scored_artifacts_lists_every_headline_and_secondary_artifact_with_hash_and_source(
+        tmp_path, monkeypatch, evidence_root, stub_models, austin_100c):
+    manifest = _frozen_world(tmp_path, monkeypatch, stub_models)
+    root = tmp_path / "refit"
+    refit.write_refit("AUSTIN", {conf.COOLING: stub_models["AUSTIN"][conf.COOLING],
+                                 conf.REFERENCE: stub_models["AUSTIN"][conf.REFERENCE]}, "v-test", root=str(root))
+    head = refit.make_headline_loader("v-test", {"AUSTIN"}, root=str(root), frozen_manifest=manifest)
+    sec = refit.make_headline_loader("v-test", set(), root=str(root), frozen_manifest=manifest)
+    report = dev_run(evidence_root, stub_models, cities=CITIES, loader=head, point_resolver=city_point.production_city_point,
+                     secondary=_secondary_spec(stub_models, model_loader=sec))
+    arts = report["scored_artifacts"]
+    assert len(arts) == 24
+    for entry in arts:
+        assert set(entry) >= {"city", "method", "path", "sha256", "source", "role"}
+        assert len(entry["sha256"]) == 64 and entry["sha256"] == core.sha256_file(entry["path"])
+    by = {(a["role"], a["city"], a["method"]): a for a in arts}
+    assert len(by) == 24
+    for method in (conf.COOLING, conf.REFERENCE):
+        a = by[("headline", "AUSTIN", method)]
+        assert a["source"] == "refit" and a["path"].startswith(str(root))
+    assert by[("headline", "AUSTIN", conf.WIND)]["source"] == "frozen"
+    assert by[("headline", "MIDLAND", conf.COOLING)]["source"] == "frozen"
+    assert {a["source"] for a in arts if a["role"] == "secondary"} == {"frozen"}
+    assert by[("secondary", "AUSTIN", conf.COOLING)]["path"] != by[("headline", "AUSTIN", conf.COOLING)]["path"]
+    # the headline's served list is what the loader itself recorded
+    assert {(s["city"], s["method"], s["sha256"]) for s in head.served} == {
+        (a["city"], a["method"], a["sha256"]) for a in arts if a["role"] == "headline"}
+
+
+def test_scored_artifacts_for_an_injected_loader_say_injected_and_hash_nothing_that_does_not_exist(evidence_root, stub_models):
+    report = dev_run(evidence_root, stub_models, cities=["AUSTIN"])
+    arts = report["scored_artifacts"]
+    assert {(a["role"], a["city"], a["method"]) for a in arts} == {("headline", "AUSTIN", m) for m in conf.MODEL_METHODS}
+    assert all(a["source"] == "injected" for a in arts)
+
+
+def test_the_recording_loader_returns_the_model_and_records_each_served_artifact_once(tmp_path, monkeypatch, stub_models):
+    _frozen_world(tmp_path, monkeypatch, stub_models)
+    wrapped = conf._recording_loader(pipeline.load_correction_model, "frozen")
+    first = wrapped("AUSTIN", conf.WIND)
+    wrapped("AUSTIN", conf.WIND)
+    assert type(first) is type(stub_models["AUSTIN"][conf.WIND])
+    (entry,) = wrapped.records
+    assert entry["source"] == "frozen" and entry["sha256"] == core.sha256_file(entry["path"])
+    with pytest.raises(FileNotFoundError):
+        wrapped("AUSTIN", "no_such_method")
