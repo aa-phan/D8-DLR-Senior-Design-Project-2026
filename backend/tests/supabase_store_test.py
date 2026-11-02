@@ -255,6 +255,18 @@ def test_gates_are_sorted_unique_first_tokens_and_alerts_keep_utf8():
     assert "—" in row["alerts"][0]
 
 
+def test_alerts_are_redacted_and_capped_before_they_are_stored():
+    # A G6 alert carries the raw detector exception, and the column is publicly readable (review WR-03).
+    url = "postgres" + "ql://user:hunter2@db.example.invalid/x"  # built from pieces for secret_scan_test
+    leaky = "G6 FAIL (detector error (connect %s password=hunter2))" % url
+    long_alert = "G4 FAIL (" + "x" * 500 + ")"
+    row = supabase_store.build_rating_row(_result(alerts=[leaky, long_alert]), _END, _RUN_CTX)
+    assert "hunter2" not in repr(row) and "postgresql://user" not in repr(row)
+    assert "REDACTED" in row["alerts"][0]
+    assert len(row["alerts"][1]) == 300
+    assert row["fallback_gates"] == ["G4", "G6"]
+
+
 def test_probe_trail_is_json_text_without_numpy_or_nan():
     trail = [
         {"stid": "A", "lat": np.float64(30.1), "lon": -97.7, "distance_km": np.float64("nan"),

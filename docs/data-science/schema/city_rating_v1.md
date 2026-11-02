@@ -13,7 +13,7 @@
 - Rows are written by `dlr_orchestrator --store postgres` (the scheduled runner arrives in Phase 5) and, for history, by the one-time backfill loader (see "Backfill rows").
 - Consumers read the table `public.city_rating` and the view `public.latest_rating` (one current row per city, plus the computed columns `age_minutes`, `is_stale` and `is_provisional`) through Supabase's REST API; the contract is [`rest-api.md`](../../integration/rest-api.md). The read grant (SELECT for the `anon` role, OD-6) takes effect when the owner applies Phase 6's migration; until then the table is not readable with the publishable key. Nothing in this document says Phase 5 or Phase 6 is already live.
 - No connection details (host, project reference, key, URL) are published in this repository's docs. The owner hands them to the teams that need them.
-- The full history will be public by owner decision (OD-6), so no column holds anything sensitive: no file path, no credential, no error text.
+- The full history will be public by owner decision (OD-6), so no column holds a credential, and each `alerts` entry is redacted and cut to 300 characters before it is stored. An entry for a detector failure (`G6 ... detector error`) can still carry a short error message, so `alerts` is diagnostic text.
 
 ## Key and time semantics
 

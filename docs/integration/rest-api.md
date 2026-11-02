@@ -128,7 +128,7 @@ The identity columns are how a change shows up (D-01). If `config_fingerprint`, 
 
 - The publishable key reads; it cannot write. Every insert, update and delete on the rating tables and the view is refused by privilege (OD-6), not merely filtered by row-level security. The DS owner checks this against the live project (E2E-03) before the interface is announced to the teams.
 - The run log (`pipeline_run`) and the freshness log (`ops.freshness_log`) are not readable with this key.
-- The full history is public by owner decision (OD-6). Nothing sensitive is stored: no file path, no credential, no error text.
+- The full history is public by owner decision (OD-6). No credential is stored, and each `alerts` entry is redacted and cut to 300 characters before it is stored. An entry for a detector failure (`G6 ... detector error`) can still carry a short error message, so treat `alerts` as diagnostic text.
 
 ## Limits and polling
 
