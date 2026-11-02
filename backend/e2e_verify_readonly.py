@@ -101,7 +101,14 @@ HIDDEN_REFUSED_PRIVILEGE = (401, 403)
 HIDDEN_NOT_EXPOSED = (404, 406)
 HIDDEN_NOT_EXPOSED_CODES = ("PGRST205", "PGRST106", "PGRST202")
 KEYLESS_OK_STATUSES = (401, 403)
-VIEW_WRITE_DB_REFUSAL_CODES = ("55000", "42501")
+# A view write only counts as refused when the answer names the cause (same rule as the hidden-table
+# check): the database's 55000 "cannot change view" (live: HTTP 500), a 42501 privilege refusal, or a
+# PostgREST/database code that proves the view is not writable (PGRST117 unsupported verb, 42809
+# wrong object type). A bare 401 "Invalid API key", a 400 for a malformed body, a 404 for a mistyped
+# path or a 408/429 from the gateway says nothing about whether the view accepts writes.
+VIEW_WRITE_DB_REFUSAL_CODES = ("55000",)
+VIEW_WRITE_PRIVILEGE_CODES = ("42501",)
+VIEW_WRITE_NOT_WRITABLE_CODES = ("PGRST117", "42809")
 
 # E2E-03: the sentinel key sits in the year 2000, never the latest slot of any city.
 SENTINEL_CITY = "AUSTIN"
@@ -423,13 +430,16 @@ def _classify_view_write(response):
     code = body.get("code") if isinstance(body.get("code"), str) else None
     if 200 <= status < 300:
         return False, "write accepted (HTTP %d)" % status, code
-    if 400 <= status < 500:
-        return True, "refused (HTTP %d)" % status, code
-    # The live service answers a write to the (not updatable) view with HTTP 500 and the database's own
-    # 55000 "cannot change view", which is a real refusal. Any other 5xx (a gateway timeout after a
-    # committed write, say) says nothing about the outcome.
-    if status >= 500 and code in VIEW_WRITE_DB_REFUSAL_CODES:
+    if status >= 400 and code in VIEW_WRITE_DB_REFUSAL_CODES:
+        # The live service answers a write to the (not updatable) view with HTTP 500 and the database's
+        # own 55000 "cannot change view".
         return True, "refused by the database (HTTP %d, code %s)" % (status, code), code
+    if code in VIEW_WRITE_PRIVILEGE_CODES and (status in (401, 403) or status >= 500):
+        return True, "refused by privilege (HTTP %d, code %s)" % (status, code), code
+    if code in VIEW_WRITE_NOT_WRITABLE_CODES and 400 <= status < 500:
+        return True, "refused: the view is not writable (HTTP %d, code %s)" % (status, code), code
+    # Anything else (a bare 401/403, a 400/404/408/429, a 5xx with no database code, a gateway timeout
+    # after a committed write) is inconclusive: the request may never have reached the privilege layer.
     return False, "inconclusive: HTTP %d, code %s" % (status, code), code
 
 

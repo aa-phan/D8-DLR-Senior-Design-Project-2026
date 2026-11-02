@@ -574,8 +574,17 @@ def test_403_permission_denied_passes_like_401():
 
 
 @pytest.mark.parametrize("status,body,expect_ok", [
-    (401, {"message": "x"}, True), (405, {"message": "x"}, True),
     (500, {"code": "55000", "message": "cannot change view"}, True),  # what the live service answers
+    (401, {"code": "42501", "message": "permission denied for view latest_rating"}, True),
+    (403, {"code": "42501", "message": "permission denied for view latest_rating"}, True),
+    (405, {"code": "PGRST117", "message": "Unsupported HTTP method: POST"}, True),
+    (404, {"code": "42809", "message": "cannot insert into view"}, True),
+    (401, {"message": "Invalid API key"}, False),                      # a bare 401 names no cause
+    (403, {"message": "x"}, False), (405, {"message": "x"}, False),
+    (400, {"code": "PGRST102", "message": "Empty or invalid json"}, False),  # a malformed body
+    (404, {"code": "PGRST125", "message": "Invalid path specified in request URL"}, False),
+    (404, {"message": "x"}, False),
+    (408, {"message": "x"}, False), (429, {"message": "rate limited"}, False),
     (500, {"message": "x"}, False), (504, {"message": "x"}, False),   # a 5xx with no database code proves nothing
     (200, [], False), (201, [], False)])
 def test_view_write_verdicts(status, body, expect_ok):
@@ -586,6 +595,34 @@ def test_view_write_verdicts(status, body, expect_ok):
         if not expect_ok:
             assert ("write accepted" if status < 300 else "inconclusive") in results[name].detail
     assert all(results[name].ok for name in TABLE_ATTEMPTS)
+
+
+LIVE_CHECKS_DIR = os.path.join(
+    os.path.dirname(__file__), "..", "..", ".planning", "workstreams", "production-pipeline", "phases",
+    "06-exposure-e2e-verification")
+
+
+@pytest.mark.parametrize("name", ["06-09-live-checks.json", "06-12-live-checks.json", "06-13-live-checks.json"])
+def test_committed_live_view_answers_are_still_classified_as_refused(name):
+    """The strict view-write rule must keep passing the answers the live service actually gave."""
+    path = os.path.join(LIVE_CHECKS_DIR, name)
+    if not os.path.exists(path):
+        pytest.skip("live-check evidence not present: " + name)
+    with open(path, encoding="utf-8") as handle:
+        attempts = [a for a in json.load(handle)["attempts"] if a["name"].startswith("view_")]
+    assert len(attempts) == 3
+    for attempt in attempts:
+        body = {"code": attempt["code"], "message": "recorded live answer"}
+
+        class Recorded:
+            status = attempt["status"]
+
+            @staticmethod
+            def json():
+                return body
+
+        ok, detail, _ = ev._classify_view_write(Recorded)
+        assert ok, (name, attempt, detail)
 
 
 def test_rows_after_the_cutoff_do_not_break_the_snapshot():
