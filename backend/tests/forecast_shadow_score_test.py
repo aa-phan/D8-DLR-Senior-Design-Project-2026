@@ -700,9 +700,12 @@ def test_score_attaches_the_nine_test_family_and_the_live_system_decision(tmp_pa
     assert core.FLAG_V2 in by[("reference_ml_refit_24h", "raw_forecast")]["flags"]
     assert core.FLAG_V3 in by[("ml_wind_corrected", "persistence_24h")]["flags"]
     dec = report["decision"]
-    assert dec["row_source"] == "shadow_logs" and dec["label"] == "live-system check" and dec["protocol_status"] == "unsigned"
+    assert dec["rule"] == "v4" and dec["row_source"] == "shadow_logs" and dec["protocol_status"] == "unsigned"
+    assert dec["label"] == "live-system check, never decides" and dec["pick"] is None and "rule_outcome" in dec
+    assert dec["round"] == "v4-read1" and report["round"] == "v4-read1"
     assert dec["levels"]["ml_wind_corrected"]["benefit_amps"] == pytest.approx(10.0, abs=1e-9)
-    assert dec["working_choice"] in core.CANDIDATES and core.NOT_MEASURED_STATEMENT in dec["statements"]
+    assert tuple(dec["levels"]) == core.REAL_CANDIDATES and core.NOT_MEASURED_STATEMENT in dec["statements"]
+    assert "working_choice" not in dec and "action" not in dec                       # no v3 field survives
     ss = report["sample_size"]
     assert len(ss["pairs"]) == 9 and ss["pooled_nominal"]["label"] == "nominal, not effective"
     assert all(not p["targets"]["tail_rate_target_met"] and not p["targets"]["mdd_target_met"] for p in ss["pairs"])
@@ -805,6 +808,7 @@ def test_round_read_2_scores_into_the_read_2_subroot_with_read_2_dates(tmp_path,
     assert saved["guard"]["evaluation_instant"] == "2026-11-08T00:00:00+00:00"
     assert saved["guard"]["valid_time_cutoff"] == "2026-11-01T00:00:00+00:00"
     assert saved["guard"]["override_reason"] is None
+    assert saved["decision"]["round"] == "v4-read2" and saved["decision"]["rule"] == "v4" and saved["round"] == "v4-read2"
     # the same run again is refused (one shot per round), and read 1 is still open
     rc = score_mod.main(["--round", "v4-read2", "--predictions-dir", str(d), "--cities", "AUSTIN",
                          "--evidence-root", str(base)])
@@ -832,3 +836,81 @@ def test_count_only_ignores_the_round_and_never_needs_one(tmp_path):
         assert score_mod.main(["--count-only", "--predictions-dir", str(d), "--cities", "AUSTIN", "--out", str(out),
                                "--evidence-root", str(tmp_path / "ev"), *extra]) == 0
     assert not (tmp_path / "ev").exists()
+
+
+# --------------------------------------------------------------------------
+# 07-07: the v4 rule as the live-system label (never decides)
+# --------------------------------------------------------------------------
+
+def _live_report(tmp_path, monkeypatch, *, cities=("AUSTIN", "CORPUS_CHRISTI", "MIDLAND", "EL_PASO"), n=10, **kwargs):
+    d = tmp_path / "logs"
+    _write_dev_logs(d, list(cities), n=n)
+    calls = install_archive(monkeypatch, fail_cities=kwargs.pop("fail_cities", ()))
+    kwargs.setdefault("params", {"n_resamples": 300})
+    kwargs.setdefault("guard_cfg", guard_cfg())
+    return score_mod.score(str(d), cities=list(cities), evidence_root=str(tmp_path / "ev"),
+                           now=pd.Timestamp("2026-10-13T12:00:00Z"), **kwargs), calls
+
+
+def test_truth_stats_are_the_per_city_mean_of_the_raw_forecasts_truth_over_scored_rows(tmp_path, monkeypatch):
+    report, _ = _live_report(tmp_path, monkeypatch)
+    assert set(report["truth_stats"]) == set(config.LOCATIONS)
+    for city in config.LOCATIONS:
+        truth = [truth_at(city, r["valid_time"]) for r in _dev_rows(city)]
+        got = report["truth_stats"][city]
+        assert got["n_truth_rows"] == 10 and isinstance(got["n_truth_rows"], int)
+        assert got["mean_truth_amps"] == pytest.approx(float(np.mean(truth)), abs=1e-9, rel=0)
+        assert report["decision"]["bars"]["per_city"][city] == pytest.approx(0.02 * float(np.mean(truth)), abs=1e-9, rel=0)
+
+
+def test_the_live_label_is_applied_without_vetoes_and_with_the_registered_parameters(tmp_path, monkeypatch):
+    import forecast_shadow_decision_v4 as v4
+    seen = []
+    real = v4.apply_ship_rule_v4
+    monkeypatch.setattr(v4, "apply_ship_rule_v4", lambda *a, **k: seen.append(k) or real(*a, **k))
+    _live_report(tmp_path, monkeypatch, protocol_status="signed")
+    (kwargs,) = seen
+    assert kwargs["label"] == "live" and kwargs["vetoes"] is None and kwargs["require_vetoes"] is False
+    assert kwargs["round_name"] == "v4-read1" and kwargs["protocol_status"] == "signed"
+    assert kwargs["fraction"] == 0.02 and kwargs["min_cities"] == 3
+
+
+def test_a_large_model_benefit_gives_a_would_be_outcome_but_the_reported_pick_stays_none(tmp_path, monkeypatch):
+    monkeypatch.setitem(DELTAS, "raw_forecast", 200.0)       # raw overrates by 200 A, wind by 10 A: benefit 190 A >> the bar
+    report, _ = _live_report(tmp_path, monkeypatch, protocol_status="signed")
+    dec = report["decision"]
+    assert dec["levels"]["ml_wind_corrected"]["benefit_amps"] == pytest.approx(190.0, abs=1e-9)
+    assert dec["levels"]["ml_wind_corrected"]["level"] in ("supported", "indicated, not resolved")
+    assert dec["rule_outcome"] == "ml_wind_corrected" and dec["pick"] is None
+    assert dec["label"] == "live-system check, never decides"
+    assert "its pick is always None" in dec["statement"]
+    md = open(os.path.join(report["evidence_dir"], "report.md")).read()
+    section = md.split("## Decision (live-system check)")[1].split("\n## ")[0]
+    assert "Reported pick: None" in section and "\nPick:" not in section and "Would-be outcome under the v4 rule: ml_wind_corrected" in section
+
+
+def test_the_scorer_names_its_round_from_the_guard_and_refuses_a_disagreeing_round_name(tmp_path, monkeypatch):
+    report, _ = _live_report(tmp_path, monkeypatch, cities=("AUSTIN",), guard_cfg=core.guard_for_round("v4-late-descriptive"))
+    assert report["decision"]["round"] == "v4-late-descriptive" and report["round"] == "v4-late-descriptive"
+    d = tmp_path / "logs"
+    with pytest.raises(ValueError, match="round"):
+        score_mod.score(str(d), cities=["AUSTIN"], guard_cfg=core.guard_for_round("v4-read2"), round_name="v4-read1",
+                        evidence_root=str(tmp_path / "ev2"), now=pd.Timestamp("2026-10-13T12:00:00Z"))
+    assert not (tmp_path / "ev2").exists()
+
+
+def test_a_city_whose_truth_fetch_fails_has_no_truth_stats_and_cannot_be_consistent(tmp_path, monkeypatch):
+    report, calls = _live_report(tmp_path, monkeypatch, fail_cities=("MIDLAND", "EL_PASO"))
+    assert set(report["truth_stats"]) == {"AUSTIN", "CORPUS_CHRISTI"}
+    dec = report["decision"]
+    assert set(dec["bars"]["per_city"]) == {"AUSTIN", "CORPUS_CHRISTI"}
+    assert all(not dec["consistency"][c]["possible"] and dec["consistency"][c]["cities_with_data"] == 2 for c in core.REAL_CANDIDATES)
+    assert dec["rule_outcome"] is None and dec["pick"] is None
+    assert len(calls) == 4                                    # one archive request per city, never retried
+
+
+def test_the_v3_decision_module_is_no_longer_imported_by_the_scorer():
+    import ast
+    tree = ast.parse(open(score_mod.__file__, encoding="utf-8").read())
+    imported = {a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
+    assert "forecast_shadow_decision" not in imported and "forecast_shadow_decision_v4" in imported

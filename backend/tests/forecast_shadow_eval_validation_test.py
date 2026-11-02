@@ -72,7 +72,8 @@ import config
 import forecast_correction_models as fcm
 import forecast_experiment
 import forecast_shadow_confirm as conf
-import forecast_shadow_decision as decision
+import forecast_shadow_decision as decision          # retired v3 rule: kept for its own refusal test
+import forecast_shadow_decision_v4 as decision_v4
 import forecast_shadow_eval_core as core
 import forecast_shadow_fit_models as fit_models
 import forecast_shadow_pipeline as pipeline
@@ -547,6 +548,25 @@ def evidence_root(tmp_path):
     return str(tmp_path / "evidence")
 
 
+def no_veto_record() -> dict:
+    """A synthetic ABLATION + TEST veto record in which nothing is vetoed (every FRESH-calendar decision run needs one)."""
+    section = lambda: {"vetoes": {c: {"vetoed": False, "reasons": []} for c in core.REAL_CANDIDATES}}
+    return {"protocol": "v4", "ablation": section(), "test": section()}
+
+
+def write_veto_file(tmp_path) -> str:
+    """A veto file with its two source reports (sha256 recorded) for the CLI's --vetoes."""
+    record = {"protocol": "v4"}
+    for basis in ("ablation", "test"):
+        report = tmp_path / f"{basis}_report.json"
+        report.write_text(json.dumps({"synthetic": basis}), encoding="utf-8")
+        record[basis] = {"report": str(report), "sha256": hashlib.sha256(report.read_bytes()).hexdigest(),
+                         "vetoes": {c: {"vetoed": False, "reasons": []} for c in core.REAL_CANDIDATES}}
+    path = tmp_path / "vetoes.json"
+    path.write_text(json.dumps(record), encoding="utf-8")
+    return str(path)
+
+
 def score_logs(pred_dir, evidence_root, *, cities=("AUSTIN",), now=DEV_NOW, params=SMALL, guard_cfg=None, **kw):
     return score_mod.score(str(pred_dir), cities=list(cities), guard_cfg=guard_cfg or core.GuardConfig(),
                            evidence_root=str(evidence_root), now=now, params=params, **kw)
@@ -694,7 +714,17 @@ def test_log_family_margins_equal_the_complete_case_oracle(logs_base):
         if WIND in (c["a"], c["b"]) or COOL in (c["a"], c["b"]):
             assert core.FLAG_V1 in c["flags"]
     assert logs_base.report["decision"]["row_source"] == "shadow_logs"
-    assert logs_base.report["decision"]["label"] == "live-system check"
+    assert logs_base.report["decision"]["rule"] == "v4"
+    assert logs_base.report["decision"]["label"] == "live-system check, never decides"
+    assert logs_base.report["decision"]["pick"] is None
+
+
+def test_log_truth_stats_equal_the_oracle_mean_truth_and_feed_the_live_decision(logs_base):
+    for city in CITIES:
+        mean_truth = float(world(city).truth[SLOTS].mean())
+        assert logs_base.report["truth_stats"][city] == {"mean_truth_amps": pytest.approx(mean_truth, abs=TOL, rel=0),
+                                                         "n_truth_rows": 244}
+        assert logs_base.report["decision"]["bars"]["per_city"][city] == pytest.approx(0.02 * mean_truth, abs=TOL, rel=0)
 
 
 def test_log_anchor_source_split_equals_the_oracle(logs_base):
@@ -790,6 +820,7 @@ def test_port_metrics_and_family_margins_equal_numpy(port_base, stub_models):
     for c in report["family"]["comparisons"]:
         assert c["row_source"] == "reconstructed_frames" and c["flags"] == [core.FLAG_V4]
     assert report["decision"]["row_source"] == "reconstructed_frames" and report["decision"]["label"] == "headline decision"
+    assert report["decision"]["rule"] == "v4" and set(report["truth_stats"]) == set(CITIES)
 
 
 # ==========================================================================
@@ -1099,6 +1130,7 @@ def test_port_fault_a_nan_weather_hour_is_missing_from_reconstruction_and_poison
 def prod_run(monkeypatch, evidence_root, *, cities=CITIES, now=INSTANT, fail_previous=(), params=None, guard_cfg=None, **kw):
     """The production path: anchored_pair_frame behind the recorder, fed by a fake server that re-dates the fixture."""
     server = FakeServer(monkeypatch, shift_days=PROD_SHIFT_DAYS, fail_previous=fail_previous)
+    kw.setdefault("vetoes", no_veto_record())          # a FRESH decision read needs the record (SEL-03)
     report = conf.run_confirmation(cities=list(cities), guard_cfg=guard_cfg or core.GuardConfig(), evidence_root=str(evidence_root),
                                    now=now, params=params, **kw)
     return report, server
@@ -1242,7 +1274,8 @@ def test_port_guard_refuses_before_the_instant_before_any_request_frame_build_ar
     monkeypatch.setattr(forecast_experiment, "anchored_pair_frame", boom)
     monkeypatch.setattr(pipeline, "load_correction_model", boom)
     with pytest.raises(core.EvaluationGuardError, match="evaluation instant"):
-        conf.run_confirmation(cities=CITIES, guard_cfg=core.GuardConfig(), evidence_root=evidence_root, now=BEFORE_INSTANT)
+        conf.run_confirmation(cities=CITIES, guard_cfg=core.GuardConfig(), evidence_root=evidence_root, now=BEFORE_INSTANT,
+                              vetoes=no_veto_record())
     assert not os.path.exists(evidence_root)
     assert not os.path.exists(config.FORECAST_EXPERIMENT_CACHE_DIR)
 
@@ -1264,6 +1297,11 @@ def test_port_at_the_instant_scores_100_fresh_slots_per_city_and_matches_the_ora
         assert diag["leakage_probe"]["passed"] and diag["archive_vs_frame_truth"]["max_abs_diff_weather"] == 0.0
         assert diag["missing_slots"] == []
     assert_family_equals_oracle(report["family"], errs)
+    for city in CITIES:                     # the decision's bars come from the independent oracle's mean truth
+        mean_truth = float(port_oracle(city, stub_models[city], PROD_SLOTS)["truth_amps"].mean())
+        assert report["truth_stats"][city] == {"mean_truth_amps": pytest.approx(mean_truth, abs=TOL, rel=0), "n_truth_rows": 100}
+        assert report["decision"]["bars"]["per_city"][city] == pytest.approx(0.02 * mean_truth, abs=TOL, rel=0)
+    assert report["decision"]["rule"] == "v4" and report["decision"]["round"] == "v4-read1"
     ev = report["evidence_dir"]
     assert len([f for f in os.listdir(os.path.join(ev, "http")) if f.endswith(".body")]) == 8
     assert len(os.listdir(os.path.join(ev, "frames"))) == 4
@@ -1279,6 +1317,7 @@ def test_port_override_text_is_refused_for_a_fresh_run_before_any_request(monkey
     for now in (BEFORE_INSTANT, INSTANT):
         with pytest.raises(core.EvaluationGuardError, match="take no override"):
             conf.run_confirmation(cities=["AUSTIN"], evidence_root=str(evidence_root), now=now, params=None,
+                                  vetoes=no_veto_record(),
                                   guard_cfg=core.GuardConfig(override_reason="rehearsal of the evaluation day"))
     assert server.calls == [] and not os.path.exists(evidence_root)
 
@@ -1307,11 +1346,12 @@ def test_port_second_fresh_run_is_refused_even_after_a_first_run_that_crashed(mo
         prod_run(monkeypatch, other_root, cities=["AUSTIN"], now="2026-11-01T00:01:00Z")
 
 
-def test_port_nondefault_block_lengths_in_a_fresh_run_are_refused_and_no_override_helps(monkeypatch, evidence_root, capsys):
+def test_port_nondefault_block_lengths_in_a_fresh_run_are_refused_and_no_override_helps(monkeypatch, evidence_root, capsys, tmp_path):
     monkeypatch.setattr(core, "utcnow", lambda: pd.Timestamp(INSTANT))
-    assert conf.main(["--evidence-root", evidence_root, "--block-lengths", "1", "2"]) == 2
+    deciding = ["--vetoes", write_veto_file(tmp_path), "--protocol-status", "signed"]
+    assert conf.main(["--evidence-root", evidence_root, *deciding, "--block-lengths", "1", "2"]) == 2
     assert "no override" in capsys.readouterr().err
-    assert conf.main(["--evidence-root", evidence_root, "--block-lengths", "1", "2", "--override-reason", "x"]) == 2
+    assert conf.main(["--evidence-root", evidence_root, *deciding, "--block-lengths", "1", "2", "--override-reason", "x"]) == 2
     assert "no override" in capsys.readouterr().err
     assert not os.path.exists(evidence_root)
 
@@ -1401,7 +1441,8 @@ def test_the_port_refuses_a_preexisting_fresh_window_cache_before_anchored_pair_
     monkeypatch.setattr(core, "new_evidence_dir", seeded_new_evidence_dir)
     monkeypatch.setattr(forecast_experiment, "anchored_pair_frame", lambda *a, **k: called.append(a) or real_frame(*a, **k))
     with pytest.raises(core.EvaluationGuardError, match="already exists"):
-        conf.run_confirmation(cities=["AUSTIN"], guard_cfg=core.GuardConfig(), evidence_root=evidence_root, now=INSTANT)
+        conf.run_confirmation(cities=["AUSTIN"], guard_cfg=core.GuardConfig(), evidence_root=evidence_root, now=INSTANT,
+                              vetoes=no_veto_record())
     assert called == [] and server.calls == []
 
 
@@ -1442,6 +1483,7 @@ def test_each_tool_reports_only_its_own_row_source(logs_base, port_base):
 
 
 def test_apply_ship_rule_refuses_a_family_that_mixes_row_sources(port_base, logs_base):
+    """The retired v3 module (frozen, byte-identical since d71c501) still refuses mixed sources."""
     mixed = copy.deepcopy(port_base.report["family"])
     mixed["comparisons"][4]["row_source"] = "shadow_logs"
     with pytest.raises(ValueError, match="mixes row sources"):
@@ -1483,13 +1525,29 @@ def test_build_family_report_refuses_error_frames_tagged_with_two_row_sources(mo
         real({"AUSTIN": log_frames["AUSTIN"]}, row_source="pooled")
 
 
+def test_apply_ship_rule_v4_refuses_a_family_that_mixes_row_sources(port_base, logs_base):
+    truth = port_base.report["truth_stats"]
+    mixed = copy.deepcopy(port_base.report["family"])
+    mixed["comparisons"][4]["row_source"] = "shadow_logs"
+    with pytest.raises(ValueError, match="mixes row sources"):
+        decision_v4.apply_ship_rule_v4(mixed, truth_stats=truth, round_name="v4-read1", label="headline", require_vetoes=False)
+    relabelled = copy.deepcopy(logs_base.report["family"])
+    relabelled["row_source"] = "reconstructed_frames"
+    with pytest.raises(ValueError, match="row source"):
+        decision_v4.apply_ship_rule_v4(relabelled, truth_stats=truth, round_name="v4-read1", label="live", require_vetoes=False)
+    # the live-system check can never carry the headline label
+    with pytest.raises(ValueError, match="never decides"):
+        decision_v4.apply_ship_rule_v4(logs_base.report["family"], truth_stats=logs_base.report["truth_stats"],
+                                       round_name="v4-read1", label="headline", require_vetoes=False)
+
+
 def test_combined_summary_keeps_the_two_sources_apart_and_never_adds_their_counts(small_reports):
     logs, port = small_reports.logs, small_reports.port
     assert logs["per_city"]["AUSTIN"]["n_scored"][RAW] == 50 and port["per_city"]["AUSTIN"]["n_scored"][RAW] == 190
-    text = decision.combined_summary(port, logs)
-    # the runbook's one-liner feeds the two saved report.json files to combined_summary: same lines (report.json is
+    text = decision_v4.combined_summary_v4(port, logs)
+    # the runbook's one-liner feeds the two saved report.json files to combined_summary_v4: same lines (report.json is
     # written with sorted keys, so only the order of the three candidate lines inside a section can differ)
-    from_disk = decision.combined_summary(read_json(port), read_json(logs))
+    from_disk = decision_v4.combined_summary_v4(read_json(port), read_json(logs))
     assert sorted(from_disk.splitlines()) == sorted(text.splitlines())
     head, rest = text.split("## Live-system check")
     live, agreement = rest.split("## Agreement")
@@ -1497,14 +1555,17 @@ def test_combined_summary_keeps_the_two_sources_apart_and_never_adds_their_count
     assert "row source: shadow_logs" in live and "45 to 50" in live and "190" not in live
     assert "240" not in text and "235" not in text                      # 50 + 190 and 45 + 190 never appear
     # the headline decision is exactly the reconstructed report's decision; the live check is the logs report's own
-    assert f"Action: ship {port['decision']['action']['ship']} ({port['decision']['action']['level']})" in head
-    assert f"Action: ship {logs['decision']['action']['ship']} ({logs['decision']['action']['level']})" in live
-    assert f"Working choice: {port['decision']['working_choice']}" in head
+    hd, ld = port["decision"], logs["decision"]
+    assert (f"Pick: {hd['pick']}" if hd["pick"] else "No pick.") in head
+    assert f"Reported pick: None (live-system check, never decides). Would-be outcome under the v4 rule: " \
+           f"{ld['rule_outcome'] or 'no candidate qualifies'}." in live
     assert "never changes the headline decision" in agreement
-    assert port["decision"]["label"] == "headline decision" and logs["decision"]["label"] == "live-system check"
+    assert hd["label"] == "headline decision" and ld["label"] == "live-system check, never decides"
+    assert hd["rule"] == ld["rule"] == "v4" and ld["pick"] is None
+    for pair in ((logs, port), (port, port), (logs, logs)):
+        with pytest.raises(ValueError, match="never swapped or duplicated"):
+            decision_v4.combined_summary_v4(*pair)
     with pytest.raises(ValueError, match="never swapped or duplicated"):
-        decision.combined_summary(logs, port)
+        decision_v4.combined_summary_v4(port, logs, port)               # a secondary that is the headline report itself
     with pytest.raises(ValueError, match="never swapped or duplicated"):
-        decision.combined_summary(port, port)
-    with pytest.raises(ValueError, match="never swapped or duplicated"):
-        decision.combined_summary(logs, logs)
+        decision_v4.combined_summary_v4(port, logs, logs)               # a secondary from the wrong row source
