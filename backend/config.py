@@ -427,7 +427,15 @@ RATING_BASIS: str = (
 # Every row also stores `config_fingerprint` (supabase_store.rating_config_fingerprint),
 # which changes automatically with any of them, so a forgotten bump is still
 # visible in the data; the fingerprint is the authoritative identity.
-RATING_CONFIG_VERSION: str = "v1-provisional-2026-10-13"
+#
+# v2 (production-pipeline Phase 7, plans 07-04 and 07-19): production reads the
+# per-city PRODUCTION_CONDUCTORS table through city_point.production_city_point;
+# values are unchanged from v1 (Drake 795 ACSR, 75 C, 900 m, carried-over
+# bearings, D-09); the fingerprint snapshot schema is 2
+# (rating_identity.RATING_CONFIG_SNAPSHOT_SCHEMA). The word "provisional" stays
+# until a signed GO in 07-17 lifts the label (REVAL-01), and RATING_BASIS is
+# unchanged here.
+RATING_CONFIG_VERSION: str = "v2-provisional-2026-11-02"
 
 # OD-8: the forecast and the detector read the last 30 days per city from
 # Postgres (supabase_store.read_history).

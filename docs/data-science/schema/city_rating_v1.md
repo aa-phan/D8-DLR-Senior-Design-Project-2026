@@ -105,7 +105,9 @@ Every row carries the label in `rating_basis`. The current live label is:
 
 > Per-conductor amperes from the IEEE 738 thermal model at one rating point per city. Static ratings are owner-supplied 345 kV bundle averages divided by an assumed subconductor count; line bearings are assumed, not measured. Not a verified equipment-limited circuit rating. Values are provisional until Phase 7's re-validation go (REVAL-01) lifts this label.
 
-The current assumption-set label is `v1-provisional-2026-10-13` (that is `config.RATING_CONFIG_VERSION`). It is bumped by people whenever any rating assumption changes, every per-city conductor parameter included. The fingerprint (next section) changes automatically; the version is its human-readable label.
+The current assumption-set label is `v2-provisional-2026-11-02` (that is `config.RATING_CONFIG_VERSION`). It is bumped by people whenever any rating assumption changes, every per-city conductor parameter included. The fingerprint (next section) changes automatically; the version is its human-readable label.
+
+**Conductor basis per city (Phase 7).** Each city's conductor (type, diameter, AC resistance, emissivity, absorptivity, maximum operating temperature, elevation, azimuth) now comes from a per-city table with a recorded source per value, and production reads that table (v2). Today every city holds the model default (795 kcmil Drake ACSR, 75 C, 900 m, carried-over line bearings), so the values are unchanged from v1 and stay provisional until Power Systems answers. A Power Systems value is a config change plus a version bump. Rows written before this version carry `v1-provisional-2026-10-13`; backfill rows keep their Phase 3 label.
 
 Rules for consumers:
 
@@ -122,6 +124,8 @@ Four columns say what produced a row, so a change in configuration or model is v
 - `config_fingerprint`: the authoritative identity, computed automatically. It is the sha256 of the canonical JSON of the city's rating assumptions: every conductor parameter (diameter, AC resistance and its temperature coefficient, emissivity, absorptivity, maximum operating temperature, elevation, line azimuth), the rating point's coordinate, the static rating, the plausibility bounds, the line bearing, the subconductors per phase, line voltage, power factor, the G6 control limit and the forecast and detector parameters. It is computed per city, so a change that touches one city changes only that city's fingerprint.
 - `forecast_model_sha256`: the sha256 of the forecast model file the run loaded. NULL when the forecast method has no artifact (`forecast_method` then names it, for example `naive` or `ewm`), or when no forecast was produced.
 - `anomaly_model_sha256`: the sha256 of the anomaly model file the run loaded. NULL when none was loaded.
+
+From v2 the fingerprint uses snapshot schema 2 (the per-city conductor table is fingerprinted, its source notes are not), so fingerprints are comparable only within one schema, and every live fingerprint changes once at the switch.
 
 Backfill rows carry the values of the Phase 3 run: fingerprints computed on the code at the Phase 3 manifest's commit and model hashes from that manifest.
 
