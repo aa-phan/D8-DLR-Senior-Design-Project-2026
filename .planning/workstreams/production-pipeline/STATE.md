@@ -1,19 +1,19 @@
 ---
 gsd_state_version: "1.0"
 current_phase: 07
-current_plan: 9
+current_plan: 10
 status: executing
-stopped_at: Completed 07-08-PLAN.md
-last_updated: "2026-11-02T08:00:37.170Z"
+stopped_at: Completed 07-19-PLAN.md
+last_updated: "2026-11-02T08:07:46.429Z"
 last_activity: 2026-11-01
 last_activity_desc: Phase 07 execution started
-state_head: 03188a48a5bf161985d95b462cb836cdcd0bc92f
+state_head: 725502362d62416a764b8e6cce8c35be9176d031
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 66
-  completed_plans: 55
-  percent: 83
+  completed_plans: 56
+  percent: 85
 milestone_name: Production Pipeline (Supabase + live ratings)
 workstream: production-pipeline
 created: 2026-10-18
@@ -37,7 +37,7 @@ whoever owns that analysis; they are not work items here.
 
 **Status:** Ready to execute
 **Current Phase:** 07
-**Current Plan:** 9
+**Current Plan:** 10
 **Total Plans in Phase:** 19
 **Last Activity:** 2026-11-01 — Phase 07 execution started
 **Last Activity Description:** Phase 07 execution started
@@ -205,6 +205,7 @@ These block or affect stringing the system together and belong to the phases nam
 - [Phase 07]: 07-07: the shadow-log scorer applies apply_ship_rule_v4 with the live label (pick always None); only the headline port decides; --decision-margin-amps stays registered but unused — D-01/D-02: live-system check never decides; PD-15 still refuses a non-default value in a FRESH run
 - [Phase 07]: 07-08: forecast_used_by_g6 is an explicit primary_fed_g6 flag; the naive G6 fallback (D-17) never reads as the stored ml forecast, g6_forecast_method/g6_forecast are trace-only
 - [Phase 07]: 07-08: g6_method_recorded is column presence in the trace; pre-B5 traces report NA counts, not zeros (a mixed trace counts pre-B5 hours as no band)
+- [Phase 07]: 07-19: city_training_frame stores the line-perpendicular wind in wind_speed (B2, D-14); RATING_CONFIG_VERSION is v2-provisional-2026-11-02 with the schema doc naming it, snapshot schema 2 and the per-city conductor basis — Training and serving use the same projected feature; the label tells consumers production reads the per-city table (values unchanged, D-09) and fingerprints change once; provisional stays until 07-17's signed GO; no model retrained (07-14), forecast_training_test:287 now on production_city_point so 07-11's AUSTIN change is safe
 
 ## Open Decisions
 
@@ -228,9 +229,9 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 
 ## Session Continuity
 
-**Last session:** 2026-11-02T08:00:36.830Z
+**Last session:** 2026-11-02T08:07:46.125Z
 
-**Stopped At:** Completed 07-08-PLAN.md
+**Stopped At:** Completed 07-19-PLAN.md
 **Resume File:** None
 
 ## Performance Metrics
@@ -288,6 +289,7 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 | Phase 07 P06 | 22 min | 2 tasks | 6 files |
 | Phase 07 P07 | 22 min | 2 tasks | 6 files |
 | Phase 07 P08 | 10 min | 2 tasks | 9 files |
+| Phase 07 P19 | 6 min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
