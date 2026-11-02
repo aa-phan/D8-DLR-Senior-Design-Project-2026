@@ -1,0 +1,5 @@
+city,n_g6_evaluated,n_band_ml,n_band_naive,n_band_other,n_no_band,band_share,g6_method_recorded
+AUSTIN,321,261,56,0,4,0.9875,True
+CORPUS_CHRISTI,336,233,83,0,20,0.9405,True
+MIDLAND,268,169,82,0,17,0.9366,True
+EL_PASO,336,330,6,0,0,1.0,True
