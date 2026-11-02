@@ -132,7 +132,7 @@ proposals.
 
 ### Per-city conductors, shadow refit and early model selection (Phase 7)
 
-- [ ] **COND-01**: Each city has its own conductor configuration (conductor type, diameter, AC
+- [x] **COND-01**: Each city has its own conductor configuration (conductor type, diameter, AC
   resistance, maximum operating temperature, elevation, azimuth) in config, with a recorded source
   for every value. Values are provisional until Power Systems confirms them; replacing them is a
   config change with a version bump, not a code change.
@@ -150,14 +150,14 @@ proposals.
   - the evidence bases and what each may support;
   - a conductor-independent (relative) selection threshold;
   - the action if no candidate qualifies.
-- [ ] **SEL-02**: `ml_cooling_corrected` and `reference_ml_refit_24h` are refit per city under the
+- [x] **SEL-02**: `ml_cooling_corrected` and `reference_ml_refit_24h` are refit per city under the
   production conductor configs wherever those differ from the frozen Drake configuration, on rows
   before 2026-03-17 only (asserted). They are saved as new, hashed artifacts without overwriting
   the frozen Drake artifacts. `ml_wind_corrected` is reused without a refit. *(Amended 2026-10-25,
   Phase 7 D-10: a city still on the Drake assumption at the Power Systems deadline,
   2026-10-31T00:00Z, uses its frozen artifacts as its production-conductor models and gets no
   duplicate refit; the refit tooling is built and tested regardless.)*
-- [ ] **SEL-03**: Before the FRESH read, two analyses are run and reported against criteria
+- [x] **SEL-03**: Before the FRESH read, two analyses are run and reported against criteria
   pre-registered in v4:
   - an ABLATION conductor-invariance re-score (fit on train, score on validation, under
     bracketing conductor configs);
@@ -227,10 +227,10 @@ proposals.
 | E2E-01 | Phase 6 | Complete |
 | E2E-02 | Phase 6 | Complete |
 | E2E-03 | Phase 6 | Complete |
-| COND-01 | Phase 7 | Pending |
+| COND-01 | Phase 7 | Complete |
 | COND-02 | Phase 7 | Complete |
 | SEL-01 | Phase 7 | Complete |
-| SEL-02 | Phase 7 | Pending |
-| SEL-03 | Phase 7 | Pending |
+| SEL-02 | Phase 7 | Complete |
+| SEL-03 | Phase 7 | Complete |
 | SEL-04 | Phase 7 | Pending |
 | REVAL-01 | Phase 7 | Pending |
