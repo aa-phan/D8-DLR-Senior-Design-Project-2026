@@ -47,9 +47,11 @@ with the public key is refused, and the data afterwards is identical."
                                  "RLS-only rejection: a write grant is still present"; anything
                                  else fails as inconclusive
   write:view_insert          \
-  write:view_patch            |  the same three writes against public.latest_rating pass on any
-  write:view_delete          /   4xx answer (or HTTP 500 with the database's 55000 "cannot change
-                                 view") and fail on any 2xx; any other 5xx is inconclusive
+  write:view_patch            |  the same three writes against public.latest_rating pass only when the
+  write:view_delete          /   answer names the cause: 55000 "cannot change view" (live: HTTP 500),
+                                 42501 on 401/403/5xx, or PGRST117/42809 on a 4xx. Any 2xx fails as
+                                 "write accepted"; a bare 401/403, 400, 404, 429 or uncoded 5xx is
+                                 inconclusive
   snapshot_unchanged         the snapshot is read again; the row count and the SHA-256 must be
                              identical, because a status code alone can pass on a project that
                              silently changed data
