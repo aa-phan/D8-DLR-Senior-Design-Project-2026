@@ -1,23 +1,23 @@
 ---
 gsd_state_version: "1.0"
-current_phase: 06
-current_plan: 13
-status: verifying
-stopped_at: Completed 06-13-PLAN.md
-last_updated: "2026-11-02T00:00:38.274Z"
-last_activity: 2026-10-26
-last_activity_desc: Phase 06 execution started
-state_head: 367c5aa399a770d2811ce13f914dd652681222e6
+current_phase: 07 — Per-City Conductors, Shadow Refit and Early Model Selection
+current_plan: Not started
+status: executing
+stopped_at: Phase 06 complete, ready to execute Phase 07
+last_updated: "2026-11-02T00:13:11.844Z"
+last_activity: 2026-11-01
+last_activity_desc: Phase 06 complete, transitioned to Phase 07
+state_head: fced310ed77ca18b9778950412907e1119c7b334
 progress:
   total_phases: 7
-  completed_phases: 5
+  completed_phases: 6
   total_plans: 66
   completed_plans: 47
-  percent: 71
+  percent: 86
 milestone_name: Production Pipeline (Supabase + live ratings)
 workstream: production-pipeline
 created: 2026-10-18
-current_phase_name: Exposure & E2E Verification
+current_phase_name: Per-City Conductors, Shadow Refit and Early Model Selection
 ---
 
 # Project State
@@ -35,12 +35,12 @@ whoever owns that analysis; they are not work items here.
 
 ## Current Position
 
-**Status:** Phase complete — ready for verification
-**Current Phase:** 06
-**Current Plan:** 13
+**Status:** Ready to execute
+**Current Phase:** 07 — Per-City Conductors, Shadow Refit and Early Model Selection
+**Current Plan:** Not started
 **Total Plans in Phase:** 13
-**Last Activity:** 2026-10-26 — Phase 06 execution started
-**Last Activity Description:** Phase 06 execution started
+**Last Activity:** 2026-11-01
+**Last Activity Description:** Phase 06 complete, transitioned to Phase 07
 
 ## Planning Summary (2026-10-19)
 
@@ -217,7 +217,7 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 
 **Last session:** 2026-11-02T00:00:37.985Z
 
-**Stopped At:** Completed 06-13-PLAN.md
+**Stopped At:** Phase 06 complete, ready to execute Phase 07
 **Resume File:** None
 
 ## Performance Metrics

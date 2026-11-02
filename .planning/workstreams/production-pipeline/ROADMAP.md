@@ -48,7 +48,7 @@ infrastructure was replaced on 2026-10-21; see "Re-sequencing" above.)
 - [x] **Phase 3: Real-Data Validation** — ratings and calibration on backfilled data; production go/no-go (completed 2026-10-21)
 - [x] **Phase 4: Supabase Store & Writer** — schema migration, Postgres read/write, backfill load, secrets (completed 2026-10-24)
 - [x] **Phase 5: Scheduled Live Runs** — new workflow, cron-job.org trigger, failure isolation, runbook (completed 2026-10-26)
-- [ ] **Phase 6: Exposure & E2E Verification** — REST via RLS, `latest_rating` view, soak test
+- [x] **Phase 6: Exposure & E2E Verification** — REST via RLS, `latest_rating` view, soak test (completed 2026-11-01)
 - [ ] **Phase 7: Per-City Conductors, Shadow Refit and Early Model Selection** — protocol v4, per-city conductor configs, cooling/reference refit, selection by 2026-11-01, re-validation and go/no-go (parallel with 4-6)
 
 ## Phase Details
@@ -235,7 +235,7 @@ is visible per row), and Phase 7's go lifts the label.
 `age_minutes` / `is_stale` / `is_provisional`, dry soak from existing rows, probe smoke check, deploy
 annotations, permanent alarm, env-var examples for Python 3.7+, secret-scan extension, post-10-30
 re-check folding T-04-22). Offline build first (waves 1-3); every live step waits for 05-08's sign-off (D-06).
-**Plans**: 13/13 plans executed
+**Plans**: 13/13 plans complete
 
 Plans:
 **Wave 1**
@@ -374,5 +374,5 @@ instant and 07-14 waits for 07-12.
 | 3. Real-Data Validation | 5/5 | Complete    | 2026-10-21 |
 | 4. Supabase Store & Writer | 12/12 | Complete    | 2026-10-24 |
 | 5. Scheduled Live Runs | 8/8 | Complete    | 2026-10-26 |
-| 6. Exposure & E2E Verification | 13/13 | In Progress | - |
+| 6. Exposure & E2E Verification | 13/13 | Complete    | 2026-11-01 |
 | 7. Per-City Conductors, Shadow Refit and Early Model Selection | 0/19 | Planned | - |
