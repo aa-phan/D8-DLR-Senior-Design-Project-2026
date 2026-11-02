@@ -40,7 +40,9 @@ def run_city_pipeline(
       2. clean it (data_cleaning.clean_history): the forecast and detector
          see only the rows left usable
       3. forecast ahead from that history (None if cold start)
-      4. build the city's anomaly detector from the forecast + history
+      4. build the city's anomaly detector from the forecast + history (when
+         an `ml` forecast is withheld only by the lookback rule, the detector
+         gets the naive band from the same cleaned history instead, D-17)
       5. rate the city with that detector wired into G6
 
     `history_reader` is how the Postgres store (DB-02) supplies history: a
@@ -121,14 +123,58 @@ def run_city_pipeline(
     gap_reason = None
     if forecast is not None and cleaned is not None:
         gap_reason = data_cleaning.forecast_gap_reason(cleaned.report, forecast_method)
+    gap_kind = None
+    if gap_reason and cleaned is not None:
+        gap_kind = data_cleaning.forecast_gap_kind(cleaned.report, forecast_method)
+
+    # What G6 gets, and which method produced it (B5, D-17). The stored forecast
+    # (`forecast`) is never replaced: only the band handed to the detector is.
+    forecast_for_detector = None
+    g6_forecast = None
+    g6_forecast_method = None
+    primary_fed_g6 = False
     if forecast_degenerate:
         log.info("%s: forecast band has zero width -- not used for G6 this run", city)
-        forecast_for_detector = None
     elif gap_reason:
-        log.info("%s: forecast not used for G6 this run -- %s", city, gap_reason)
-        forecast_for_detector = None
+        if gap_kind == data_cleaning.GAP_KIND_ML_LOOKBACK and forecast_method == "ml":
+            # ml is withheld only because its lookback spans a missing hour; the
+            # naive band needs just the newest usable row, so it still describes
+            # the hour being rated and restores the high-side band check.
+            naive = None
+            try:
+                naive = ampacity_forecast.forecast_ampacity(history, method="naive")
+            except Exception as exc:
+                log.warning(
+                    "%s: ml forecast withheld (%s) and the naive fallback band failed (%s) "
+                    "-- G6 has no forecast band this run",
+                    city, gap_reason, exc,
+                )
+            else:
+                if naive is None:
+                    log.info(
+                        "%s: ml forecast withheld (%s); no naive band (too little history) "
+                        "-- G6 has no forecast band this run", city, gap_reason,
+                    )
+                elif naive.ci_upper_amps - naive.ci_lower_amps <= 0:
+                    log.info(
+                        "%s: ml forecast withheld (%s); naive band has zero width "
+                        "-- G6 has no forecast band this run", city, gap_reason,
+                    )
+                else:
+                    log.info(
+                        "%s: ml forecast withheld (%s); G6 uses the naive band (D-17)",
+                        city, gap_reason,
+                    )
+                    g6_forecast = naive
+                    g6_forecast_method = "naive"
+                    forecast_for_detector = naive
+        else:
+            log.info("%s: forecast not used for G6 this run -- %s", city, gap_reason)
     else:
         forecast_for_detector = forecast
+        g6_forecast = forecast
+        g6_forecast_method = forecast_method if forecast is not None else None
+        primary_fed_g6 = forecast is not None
 
     detector = AnomalyDetector.for_city(city, forecast=forecast_for_detector, history=history)
 
@@ -154,7 +200,23 @@ def run_city_pipeline(
         "cleaning_error": cleaning_error,
         # Set when the forecast call raised (IN-07); same route to the run log.
         "forecast_error": forecast_error,
-        "forecast_used_by_g6": forecast_for_detector is not None,
+        # True only when the stored (primary) forecast fed G6; False when the
+        # naive fallback fed it (see `g6_forecast_method`).
+        "forecast_used_by_g6": primary_fed_g6,
+        # Which method's band gated G6 this run: "ml", "naive", "ewm" or None.
+        # Neither this nor `g6_forecast` is a city_rating column; the backfill
+        # trace and the re-validation report carry them.
+        "g6_forecast_method": g6_forecast_method,
+        "g6_forecast": (
+            None if g6_forecast is None else {
+                "amps": float(g6_forecast.amps),
+                "ci_lower_amps": float(g6_forecast.ci_lower_amps),
+                "ci_upper_amps": float(g6_forecast.ci_upper_amps),
+                "n_observations": int(g6_forecast.n_observations),
+                "horizon_min": g6_forecast.horizon_min,
+                "method": str(g6_forecast.method),
+            }
+        ),
         "forecast": (
             None if forecast is None else {
                 "amps": float(forecast.amps),

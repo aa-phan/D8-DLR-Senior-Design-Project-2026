@@ -305,7 +305,7 @@ def test_pipeline_key_reports_history_forecast_and_detector(tmp_path, monkeypatc
     assert set(pipeline) == {
         "history_rows", "usable_history_rows", "forecast_method", "forecast_status",
         "forecast_used_by_g6", "forecast", "detector_signal", "detector_model",
-        "cleaning_error", "forecast_error",
+        "cleaning_error", "forecast_error", "g6_forecast_method", "g6_forecast",
     }
     assert pipeline["cleaning_error"] is None
     assert pipeline["forecast_error"] is None
@@ -451,6 +451,214 @@ def test_a_forecast_withheld_by_the_gap_guard_is_still_status_ok(tmp_path, monke
     assert detector_seen["forecast"] is None
     assert result["pipeline"]["forecast_used_by_g6"] is False
     assert result["pipeline"]["forecast_status"] == "ok"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# B5 (D-17): naive band for G6 when the ml lookback withholds the ml forecast
+# ──────────────────────────────────────────────────────────────────────────────
+
+_ML_BAND = (1100.0, 1300.0)
+_NAIVE_BAND = (1150.0, 1250.0)
+
+
+def _result_for(method, lower, upper):
+    return ampacity_forecast.ForecastResult(
+        horizon_min=60.0, amps=1200.0, ci_lower_amps=lower, ci_upper_amps=upper,
+        n_observations=14, method=method)
+
+
+def _per_method_forecast(monkeypatch, ml="default", naive="default"):
+    """
+    Replace forecast_ampacity with a fake that answers per method. A value that
+    is an Exception instance is raised; None is a cold start. Returns the list
+    of methods asked for, in order.
+    """
+    answers = {
+        "ml": _result_for("ml", *_ML_BAND) if ml == "default" else ml,
+        "naive": _result_for("naive", *_NAIVE_BAND) if naive == "default" else naive,
+    }
+    asked = []
+
+    def fake(history, method="naive", **kw):
+        asked.append(method)
+        answer = answers[method]
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    monkeypatch.setattr(ampacity_forecast, "forecast_ampacity", fake)
+    return asked
+
+
+def _write_hours(tmp_path, hours):
+    _write_archive(tmp_path / "archive.csv", [_archive_row(_CITY, h) for h in hours])
+
+
+# Newest usable row 16 with the run slot at 18: one missing slot (allowed) and a
+# break at hour 14 leaves two consecutive newest rows, fewer than ML_LOOKBACK_ROWS.
+_LOOKBACK_GAP_HOURS = [h for h in range(17) if h != 14]
+
+
+def test_ml_lookback_gap_gives_g6_the_naive_band_and_keeps_ml_as_the_stored_forecast(
+        tmp_path, monkeypatch, caplog):
+    _write_hours(tmp_path, _LOOKBACK_GAP_HOURS)
+    detector_seen = _spy_detector(monkeypatch)
+    asked = _per_method_forecast(monkeypatch)
+
+    with caplog.at_level(logging.INFO, logger="city_pipeline"):
+        result = _run(tmp_path, forecast_method="ml")
+
+    pipeline = result["pipeline"]
+    assert asked == ["ml", "naive"]
+    assert detector_seen["forecast"].method == "naive"
+    assert (detector_seen["forecast"].ci_lower_amps, detector_seen["forecast"].ci_upper_amps) \
+        == _NAIVE_BAND
+    assert pipeline["g6_forecast_method"] == "naive"
+    assert pipeline["g6_forecast"]["method"] == "naive"
+    assert pipeline["g6_forecast"]["ci_lower_amps"] == _NAIVE_BAND[0]
+    assert pipeline["g6_forecast"]["ci_upper_amps"] == _NAIVE_BAND[1]
+    assert pipeline["forecast_used_by_g6"] is False
+    assert pipeline["forecast_status"] == "ok"
+    assert pipeline["forecast_method"] == "ml"
+    # The stored forecast block is still the ml forecast, not the naive band.
+    assert pipeline["forecast"]["ci_lower_amps"] == _ML_BAND[0]
+    assert pipeline["forecast"]["ci_upper_amps"] == _ML_BAND[1]
+    assert any("G6 uses the naive band (D-17)" in r.getMessage() for r in caplog.records)
+
+
+def test_ml_with_a_trailing_gap_withholds_every_band(tmp_path, monkeypatch):
+    # Newest usable row 14 against run slot 18: three missing slots.
+    _write_hours(tmp_path, range(15))
+    detector_seen = _spy_detector(monkeypatch)
+    asked = _per_method_forecast(monkeypatch)
+
+    pipeline = _run(tmp_path, forecast_method="ml")["pipeline"]
+
+    assert asked == ["ml"]
+    assert detector_seen["forecast"] is None
+    assert pipeline["g6_forecast_method"] is None
+    assert pipeline["g6_forecast"] is None
+    assert pipeline["forecast_used_by_g6"] is False
+
+
+@pytest.mark.parametrize(
+    "newest_hour, band_expected",
+    [(17, True), (16, True), (15, False)],
+    ids=["no_missing_slot", "one_missing_slot", "two_missing_slots"],
+)
+def test_trailing_gap_limit_is_one_missing_slot_for_every_band(
+        tmp_path, monkeypatch, newest_hour, band_expected):
+    # Adjacency edge: exactly one missing slot still allows the band, two do not.
+    _write_hours(tmp_path, range(newest_hour + 1))
+    detector_seen = _spy_detector(monkeypatch)
+    _per_method_forecast(monkeypatch)
+
+    pipeline = _run(tmp_path, forecast_method="ml")["pipeline"]
+
+    assert (detector_seen["forecast"] is not None) is band_expected
+    assert (pipeline["g6_forecast_method"] is not None) is band_expected
+
+
+@pytest.mark.parametrize(
+    "naive",
+    [None, _result_for("naive", 1200.0, 1200.0), _result_for("naive", 1210.0, 1190.0),
+     RuntimeError("naive blew up")],
+    ids=["cold_start", "zero_width", "inverted", "raises"],
+)
+def test_no_usable_naive_band_leaves_g6_without_a_band_and_the_city_still_rates(
+        tmp_path, monkeypatch, caplog, naive):
+    _write_hours(tmp_path, _LOOKBACK_GAP_HOURS)
+    detector_seen = _spy_detector(monkeypatch)
+    asked = _per_method_forecast(monkeypatch, naive=naive)
+
+    with caplog.at_level(logging.INFO, logger="city_pipeline"):
+        result = _run(tmp_path, forecast_method="ml")
+
+    pipeline = result["pipeline"]
+    assert asked == ["ml", "naive"]
+    assert detector_seen["forecast"] is None
+    assert pipeline["g6_forecast_method"] is None
+    assert pipeline["g6_forecast"] is None
+    assert pipeline["forecast_used_by_g6"] is False
+    assert pipeline["forecast_status"] == "ok"
+    assert "rating" in result
+    messages = [r.getMessage() for r in caplog.records if r.name == "city_pipeline"]
+    assert any("naive" in m for m in messages)
+    if isinstance(naive, RuntimeError):
+        assert any(r.levelno == logging.WARNING and "naive blew up" in r.getMessage()
+                   for r in caplog.records)
+
+
+def test_ml_with_no_gap_and_a_positive_band_gates_g6_with_ml(tmp_path, monkeypatch):
+    _write_hours(tmp_path, range(18))
+    detector_seen = _spy_detector(monkeypatch)
+    asked = _per_method_forecast(monkeypatch)
+
+    pipeline = _run(tmp_path, forecast_method="ml")["pipeline"]
+
+    assert asked == ["ml"]
+    assert detector_seen["forecast"].method == "ml"
+    assert pipeline["g6_forecast_method"] == "ml"
+    assert pipeline["g6_forecast"]["method"] == "ml"
+    assert pipeline["forecast_used_by_g6"] is True
+
+
+def test_naive_primary_with_no_gap_reports_naive_as_the_g6_method(tmp_path, monkeypatch):
+    _write_hours(tmp_path, range(18))
+    detector_seen = _spy_detector(monkeypatch)
+    asked = _per_method_forecast(monkeypatch)
+
+    pipeline = _run(tmp_path, forecast_method="naive")["pipeline"]
+
+    assert asked == ["naive"]
+    assert detector_seen["forecast"].method == "naive"
+    assert pipeline["g6_forecast_method"] == "naive"
+    assert pipeline["forecast_used_by_g6"] is True
+
+
+def test_g6_forecast_method_encodes_as_the_exact_strings_or_null():
+    # Encoding edge (REVAL-01): the report counts these by exact string match, so
+    # the trace must hold the plain strings, not enum reprs or capitalised names.
+    import json
+    for value in ("ml", "naive", "ewm", None):
+        assert json.loads(json.dumps({"g6_forecast_method": value}))["g6_forecast_method"] == value
+
+
+def test_a_degenerate_primary_is_not_replaced_by_a_naive_band(tmp_path, monkeypatch):
+    # The fallback is only for a lookback withheld forecast; a zero-width ml band
+    # on an unbroken history stays withheld.
+    _write_hours(tmp_path, range(18))
+    detector_seen = _spy_detector(monkeypatch)
+    asked = _per_method_forecast(monkeypatch, ml=_result_for("ml", 1200.0, 1200.0))
+
+    pipeline = _run(tmp_path, forecast_method="ml")["pipeline"]
+
+    assert asked == ["ml"]
+    assert detector_seen["forecast"] is None
+    assert pipeline["g6_forecast_method"] is None
+
+
+def test_naive_fallback_is_fed_only_non_fallback_history(tmp_path, monkeypatch):
+    # The Phase 2 rule: fallback rows never reach the naive call either.
+    rows = [
+        _archive_row(_CITY, h, dlr_amps=1825.0, fallback=True) if h == 16
+        else _archive_row(_CITY, h) for h in _LOOKBACK_GAP_HOURS
+    ]
+    _write_archive(tmp_path / "archive.csv", rows)
+    _spy_detector(monkeypatch)
+    histories = []
+
+    def fake(history, method="naive", **kw):
+        histories.append((method, history))
+        return _result_for(method, *(_ML_BAND if method == "ml" else _NAIVE_BAND))
+
+    monkeypatch.setattr(ampacity_forecast, "forecast_ampacity", fake)
+
+    _run(tmp_path, forecast_method="ml")
+
+    for _method, history in histories:
+        assert not history["fallback"].astype(str).str.lower().isin(["true", "1"]).any()
+        assert 1825.0 not in set(history["dlr_amps"])
 
 
 def _raising_clean(monkeypatch, text="boom"):

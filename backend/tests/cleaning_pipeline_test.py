@@ -381,9 +381,17 @@ def test_two_skipped_cycles_before_the_run_withhold_the_forecast_from_g6(
 
 
 def test_ml_forecast_across_a_gap_in_its_lookback_is_withheld(tmp_path, monkeypatch, caplog):
+    # B5 (D-17): the ml forecast is still withheld from G6 across a lookback gap,
+    # but G6 is gated by the naive band from the same history instead of nothing.
     archive = tmp_path / "archive.csv"
     _hourly_archive(archive, [h for h in range(10) if h != 5])
-    _forecast_spy(monkeypatch, result=_band("ml"))
+    ml_band = _band("ml", 1100.0, 1300.0)
+    naive_band = _band("naive")
+
+    def fake(history, method="naive", **kw):
+        return ml_band if method == "ml" else naive_band
+
+    monkeypatch.setattr(ampacity_forecast, "forecast_ampacity", fake)
     detector_seen = _detector_spy(monkeypatch)
 
     with caplog.at_level(logging.INFO, logger="city_pipeline"):
@@ -391,10 +399,13 @@ def test_ml_forecast_across_a_gap_in_its_lookback_is_withheld(tmp_path, monkeypa
 
     assert result["pipeline"]["forecast_used_by_g6"] is False
     assert result["pipeline"]["forecast"] is not None
-    assert detector_seen["forecast"] is None
-    notes = _gap_notes(caplog)
-    assert len(notes) == 1
-    assert "ml" in notes[0]
+    assert result["pipeline"]["forecast"]["ci_lower_amps"] == 1100.0
+    assert detector_seen["forecast"] is naive_band
+    assert result["pipeline"]["g6_forecast_method"] == "naive"
+    # The "not used for G6" note is for a band that is withheld outright.
+    assert _gap_notes(caplog) == []
+    assert any("withheld" in r.getMessage() and "ml" in r.getMessage()
+               and "naive band" in r.getMessage() for r in caplog.records)
 
     complete = tmp_path / "complete.csv"
     _hourly_archive(complete, range(10))

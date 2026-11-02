@@ -637,6 +637,57 @@ def test_a_missing_field_column_skips_its_rules():
 # The written policy and the code agree
 # ──────────────────────────────────────────────────────────────────────────────
 
+def _gap_report(rows_usable=5, trailing_gap_slots=0, contiguous_tail_rows=5):
+    return {"rows_usable": rows_usable, "trailing_gap_slots": trailing_gap_slots,
+            "contiguous_tail_rows": contiguous_tail_rows}
+
+
+def test_gap_kind_constants_are_the_two_exact_strings():
+    assert data_cleaning.GAP_KIND_TRAILING == "trailing_gap"
+    assert data_cleaning.GAP_KIND_ML_LOOKBACK == "ml_lookback"
+
+
+def test_gap_kind_is_none_without_usable_rows():
+    report = _gap_report(rows_usable=0, trailing_gap_slots=9, contiguous_tail_rows=0)
+    assert data_cleaning.forecast_gap_kind(report, "ml") is None
+    assert data_cleaning.forecast_gap_kind(report, "naive") is None
+
+
+def test_gap_kind_trailing_gap_above_the_limit():
+    limit = data_cleaning.MAX_TRAILING_GAP_SLOTS
+    assert data_cleaning.forecast_gap_kind(
+        _gap_report(trailing_gap_slots=limit + 1), "naive") == data_cleaning.GAP_KIND_TRAILING
+    # Adjacency edge: exactly the limit is still allowed.
+    assert data_cleaning.forecast_gap_kind(_gap_report(trailing_gap_slots=limit), "naive") is None
+    assert data_cleaning.forecast_gap_kind(_gap_report(trailing_gap_slots=None), "naive") is None
+
+
+def test_gap_kind_ml_lookback_only_for_ml_and_below_the_lookback():
+    lookback = data_cleaning.ML_LOOKBACK_ROWS
+    short = _gap_report(trailing_gap_slots=1, contiguous_tail_rows=lookback - 1)
+    assert data_cleaning.forecast_gap_kind(short, "ml") == data_cleaning.GAP_KIND_ML_LOOKBACK
+    # Adjacency edge: exactly the lookback is enough.
+    assert data_cleaning.forecast_gap_kind(
+        _gap_report(contiguous_tail_rows=lookback), "ml") is None
+    for method in ("naive", "ewm"):
+        assert data_cleaning.forecast_gap_kind(_gap_report(contiguous_tail_rows=1), method) is None
+
+
+def test_gap_kind_checks_the_trailing_gap_before_the_lookback():
+    both = _gap_report(trailing_gap_slots=2, contiguous_tail_rows=1)
+    assert data_cleaning.forecast_gap_kind(both, "ml") == data_cleaning.GAP_KIND_TRAILING
+
+
+@pytest.mark.parametrize("trailing", [0, 1, 2, None])
+@pytest.mark.parametrize("tail", [1, 6, 7, 9])
+@pytest.mark.parametrize("method", ["ml", "naive", "ewm"])
+def test_gap_kind_is_none_exactly_when_gap_reason_is_none(trailing, tail, method):
+    report = _gap_report(trailing_gap_slots=trailing, contiguous_tail_rows=tail)
+    reason = data_cleaning.forecast_gap_reason(report, method)
+    kind = data_cleaning.forecast_gap_kind(report, method)
+    assert (reason is None) == (kind is None)
+
+
 def _policy_doc_lines():
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     path = os.path.join(root, "docs", "data-science", "decisions", "data_cleaning.md")
