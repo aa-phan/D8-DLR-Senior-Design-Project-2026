@@ -667,8 +667,8 @@ def test_soak_export_reads_probes_read_only_and_bound(tmp_path):
 
 @pytest.mark.parametrize("landed, breaches, shown, code", [
     (timedelta(minutes=30), 0, None, 0),                  # exactly 90 min: within budget (OD-4)
-    (timedelta(minutes=30, seconds=6), 1, 90.1, 0),       # 90.1 min: a breach, explained as a late run
-    (timedelta(minutes=30, seconds=2), 1, 90.0, 0),       # displays as 90.0 but is over: exact timedelta decides
+    (timedelta(minutes=30, seconds=6), 1, 90.1, 1),       # 90.1 min: a breach; "late run" names it but does not excuse it
+    (timedelta(minutes=30, seconds=2), 1, 90.0, 1),       # displays as 90.0 but is over: exact timedelta decides
 ])
 def test_soak_exactly_90_minutes_is_not_a_breach(tmp_path, landed, breaches, shown, code):
     writes, runs, run_rows = healthy(SOAK_HOURS)
@@ -1001,8 +1001,8 @@ def _case_late_run(writes, runs, run_rows):
 
 
 @pytest.mark.parametrize("case", [_case_missing, _case_failed_visible, _case_city_failure,
-                                  _case_red_run_and_city_failure, _case_late_run],
-                         ids=["missing", "failed-visible", "city-failure", "red-run-and-city-failure", "late-run"])
+                                  _case_red_run_and_city_failure],
+                         ids=["missing", "failed-visible", "city-failure", "red-run-and-city-failure"])
 def test_causes_follow_the_slot_verdicts(tmp_path, case, capsys):
     writes, runs, run_rows = healthy(SOAK_HOURS)
     writes, runs, run_rows, cities, expected = case(writes, runs, run_rows)
@@ -1022,6 +1022,34 @@ def test_causes_follow_the_slot_verdicts(tmp_path, case, capsys):
     assert marker not in markdown and marker not in json.dumps(result)  # the error text is redacted
     # a cause appears in the table the owner reads
     assert expected.split(" (child")[0] in markdown
+
+
+def test_late_run_names_the_breach_but_does_not_excuse_it(tmp_path, capsys):
+    # With an hourly cadence "written 30+ min after its slot" is the 90 min breach restated (review WR-05).
+    writes, runs, run_rows, cities, expected = _case_late_run(*healthy(SOAK_HOURS))
+    probes = make_probes(writes)
+
+    code, markdown, result = soak_run(tmp_path, writes, runs, run_rows, probes)
+
+    assert code == 1, capsys.readouterr().out
+    assert result["verdict"] == "fail"
+    assert [b["city"] for b in result["breaches"]] == cities
+    breach = result["breaches"][0]
+    assert breach["cause"] == expected and breach["explanation"] is None  # still named
+    assert any("explained only by lateness" in line and "needs an owner annotation" in line
+               for line in result["lines"]), result["lines"]
+    assert "lateness only" in markdown
+
+    # the owner can still accept it, with an annotation printed beside the cause
+    note = {"explanation": "Actions queue delay on the day; the row landed 40 min after its slot",
+            "by": "A. Owner", "date": "2026-10-28"}
+    path = tmp_path / "annotations.json"
+    path.write_text(json.dumps({"breaches": {breach["id"]: note}, "events": []}))
+    code, markdown, result = soak_run(tmp_path, writes, runs, run_rows, probes, SOAK_HOURS, "--annotations",
+                                      str(path), name="soak_annotated")
+    assert code == 0, capsys.readouterr().out
+    assert result["breaches"][0]["explanation"]["by"] == "A. Owner"
+    assert "owner annotation by A. Owner" in markdown and "late run: written +40 min" in markdown
 
 
 def test_annotation_explains_an_unexplained_breach(tmp_path, capsys):

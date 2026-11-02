@@ -563,8 +563,9 @@ Run it during the soak as often as you like; a run before 72 h have passed fails
   included.
 - The cause is derived, not guessed: no workflow run for the slot (dispatch missing); a run that
   concluded failure; the city listed as failed in that run's `pipeline_run` row (with its redacted
-  error); or a row first written more than 30 minutes after its slot (a late run). A breach none of
-  these explains needs an owner annotation.
+  error). A row first written more than 30 minutes after its slot is named as a "late run", but that is
+  the same condition as the 90-minute limit being passed, so it does not excuse the breach. A breach
+  none of the other causes explains, or that only a late run explains, needs an owner annotation.
 - Deploys are derived from the data (D-08): any slot where a city's `pipeline_version`,
   `config_fingerprint`, model hashes, `forecast_method` or `config_version` differs from its previous
   row, classified with `git diff --name-only <old> <new>` as model, config, workflow, code or no runtime

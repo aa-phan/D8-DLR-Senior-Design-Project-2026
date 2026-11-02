@@ -54,8 +54,9 @@ Soak mode (06-07, the 72 h window). The same two subcommands take `--mode soak`:
         start time, then config.LOCATIONS order, then kind, with the id `<kind>:<city>:<start ISO>`
         (kinds write, probe, probe-gap).
 
-        A breach is explained only by a rule-derived cause (Phase 5's slot verdicts and pipeline_run)
-        or an owner annotation, printed verbatim with its author and date. A deploy during the
+        A breach is explained only by a rule-derived cause (Phase 5's slot verdicts and pipeline_run;
+        a "late run" cause names the breach but does not excuse it) or an owner annotation, printed
+        verbatim with its author and date. A deploy during the
         window is derived from the data and shown as context; it never excuses a breach (D-08).
         Exit 0 only when the window is at least --min-hours, probes are present and every breach and
         probe gap is explained; 1 otherwise; 2 on missing or malformed input or annotations.
@@ -809,12 +810,27 @@ def _breach_summary(b) -> str:
         what = f"{b['city']}: the probe log saw a breach {span} that no write interval explains"
     else:
         what = f"the probe log has a gap {span} ({_minutes(b['end'] - b['start']):.1f} min)"
+    if b["cause"]:
+        return (f"{b['id']} is explained only by lateness ({b['cause']}), which is the breach itself, so it "
+                f"needs an owner annotation: {what}")
     return f"{b['id']} has no cause or annotation: {what}"
+
+
+def _needs_annotation(b) -> bool:
+    """
+    True when nothing but the owner can explain the breach. A "late run" cause is the breach restated
+    (with an hourly cadence a row written more than LATE_RUN_MIN after its slot is the same
+    condition as the 90 min limit being passed), so it names the breach but never excuses it.
+    """
+    if b["explanation"]:
+        return False
+    return not b["cause"] or b["cause"].startswith(LATE_RUN_CAUSE)
 
 
 # ── cause attribution (Phase 5's slot verdicts) ───────────────────────────────
 
 LATE_RUN_MIN = 30       # a row first written more than this after its slot makes the next breach a "late run"
+LATE_RUN_CAUSE = "late run:"   # a cause that only restates the breach: shown, but it needs an owner annotation
 CONTEXT_WINDOW = timedelta(hours=2)   # a deploy this far before a breach (up to its end) is shown as its context
 CAUSE_ERROR_CHARS = 200
 
@@ -857,7 +873,8 @@ def attribute_causes(breaches, inputs, since, until) -> list:
       the city in that slot's cities_failed -> "city failure: <outcome>" with the redacted error
                         (appended after a red run's cause: both are true)
       the city's row first written more than LATE_RUN_MIN after the slot
-                      -> "late run: written +<n> min after the slot"
+                      -> "late run: written +<n> min after the slot" (named, but it does not excuse
+                         the breach: it is the breach restated, so it still needs an annotation)
     """
     since, until = _ts(since), _ts(until)
     lead_in = since.replace(minute=0, second=0, microsecond=0) - 2 * _ONE_HOUR
@@ -908,7 +925,7 @@ def attribute_causes(breaches, inputs, since, until) -> list:
         if not parts:
             written = first_written.get((b["city"], slot_time))
             if written is not None and written - slot_time > timedelta(minutes=LATE_RUN_MIN):
-                parts.append(f"late run: written +{_plain((written - slot_time).total_seconds() / 60)} min "
+                parts.append(f"{LATE_RUN_CAUSE} written +{_plain((written - slot_time).total_seconds() / 60)} min "
                              f"after the slot")
         b["cause"] = "; ".join(parts) or None
     return breaches
@@ -1101,7 +1118,7 @@ def evaluate_soak(inputs, since, until, max_age_min=DEFAULT_MAX_AGE_MIN, min_hou
     It is the dry-mode statistics plus `breaches` (id, kind, city, start, end, peak_age_min,
     probe_count, cause, context, explanation), `probe_coverage`, `trailing_age` and a `verdict`.
     `annotations` is the parsed annotations file (see load_annotations). A breach is explained
-    when it has a rule-derived cause (attribute_causes) or an annotation; the window passes only
+    when it has a rule-derived cause other than a late run (attribute_causes) or an annotation; the window passes only
     when it is at least `min_hours`, probes are present and every breach and probe gap is
     explained. Deploys are derived from the rows (derive_deploys, `git_runner` and `repo_root`
     for the classification) and listed beside the owner's events; a deploy within two hours
@@ -1144,7 +1161,7 @@ def evaluate_soak(inputs, since, until, max_age_min=DEFAULT_MAX_AGE_MIN, min_hou
         failures.append("no live rows in the window")
     if findings["found"] == 0:
         failures.append("no probes in the window: the probe log recorded nothing")
-    unexplained = [b for b in breaches if not (b["cause"] or b["explanation"])]
+    unexplained = [b for b in breaches if _needs_annotation(b)]
     failures += [_breach_summary(b) for b in unexplained]
 
     warnings = list(result["warnings"])
@@ -1286,11 +1303,14 @@ def _cell_text(text) -> str:
 
 
 def _explanation_cell(b) -> str:
-    if b["cause"]:
+    if b["cause"] and not b["cause"].startswith(LATE_RUN_CAUSE):
         return "cause: " + _cell_text(b["cause"])
     if b["explanation"]:
         note = b["explanation"]
-        return f"owner annotation by {_cell_text(note['by'])} on {_cell_text(note['date'])} (verbatim below)"
+        text = f"owner annotation by {_cell_text(note['by'])} on {_cell_text(note['date'])} (verbatim below)"
+        return text + ("; cause: " + _cell_text(b["cause"]) if b["cause"] else "")
+    if b["cause"]:
+        return "cause: " + _cell_text(b["cause"]) + " (lateness only: needs an owner annotation)"
     return "no cause or annotation"
 
 
