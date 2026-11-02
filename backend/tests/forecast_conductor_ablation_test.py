@@ -200,8 +200,8 @@ def test_split_refuses_a_row_at_the_test_split():
 
 
 def _counted(n_train, n_val, city="MIDLAND"):
-    train = pd.date_range("2025-01-01T00:00:00Z", periods=n_train, freq="6h")
-    val = pd.date_range("2025-09-02T00:00:00Z", periods=n_val, freq="6h")
+    train = pd.date_range("2024-01-20T06:00:00Z", periods=n_train, freq="6h")  # ends 2025-09-01T00:00Z at 2359
+    val = pd.date_range("2025-09-02T00:00:00Z", periods=n_val, freq="5h")
     return _exact_rows(list(train) + list(val), city)
 
 
@@ -626,5 +626,9 @@ def test_neither_driver_touches_the_frozen_directory_or_save_helpers():
         names = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
         names |= {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
         assert "save_correction_model" not in names
-    source = open(abl.__file__, encoding="utf-8").read()
-    assert "joblib.dump" not in source and "joblib.load" not in source
+    tree = ast.parse(open(abl.__file__, encoding="utf-8").read())
+    joblib_calls = [n.attr for n in ast.walk(tree)
+                    if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name) and n.value.id == "joblib"]
+    assert joblib_calls == [], "the ABLATION driver fits in memory only and never dumps or loads a model"
+    imported = {a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
+    assert "joblib" not in imported
