@@ -1,0 +1,21 @@
+{
+  "body_file": "05_MIDLAND.body",
+  "byte_length": 26773,
+  "content_type": "application/json; charset=utf-8",
+  "date_header": "Mon, 02 Nov 2026 17:52:00 GMT",
+  "error": null,
+  "params": {
+    "end_date": "2026-10-24",
+    "hourly": "temperature_2m,wind_speed_10m,wind_direction_10m,shortwave_radiation,relative_humidity_2m",
+    "latitude": 31.9974,
+    "longitude": -102.0779,
+    "start_date": "2026-09-28",
+    "timezone": "UTC",
+    "wind_speed_unit": "ms"
+  },
+  "retrieval_completed_at_utc": "2026-11-02T17:52:00.028792+00:00",
+  "retrieval_started_at_utc": "2026-11-02T17:51:59.445444+00:00",
+  "sha256": "5c2d6bb36049308bbefe2a65058cbd02dd3550d2804ffe87a9b352b7100eca79",
+  "status_code": 200,
+  "url": "https://archive-api.open-meteo.com/v1/archive"
+}

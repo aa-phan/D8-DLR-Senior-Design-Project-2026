@@ -1,0 +1,22 @@
+{
+  "body_file": "08_EL_PASO.body",
+  "byte_length": 26802,
+  "content_type": "application/json; charset=utf-8",
+  "date_header": "Mon, 02 Nov 2026 17:52:02 GMT",
+  "error": null,
+  "params": {
+    "end_date": "2026-10-24",
+    "hourly": "temperature_2m_previous_day1,wind_speed_10m_previous_day1,wind_direction_10m_previous_day1,shortwave_radiation_previous_day1,relative_humidity_2m_previous_day1",
+    "latitude": 31.7601,
+    "longitude": -106.487,
+    "models": "gfs_seamless",
+    "start_date": "2026-09-28",
+    "timezone": "UTC",
+    "wind_speed_unit": "ms"
+  },
+  "retrieval_completed_at_utc": "2026-11-02T17:52:02.078431+00:00",
+  "retrieval_started_at_utc": "2026-11-02T17:52:01.327598+00:00",
+  "sha256": "ae2cd1f9fe62e39e1e8299bcb9a64f28ca0705db3521a1c21d388c9373878eaa",
+  "status_code": 200,
+  "url": "https://previous-runs-api.open-meteo.com/v1/forecast"
+}
