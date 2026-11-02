@@ -104,3 +104,24 @@ The owner's reply, recorded verbatim (2026-11-02T20:43Z), second line included:
 **Signed by:** aaphan, 2026-11-02 (UTC)
 
 **Recorded by:** the executor, from the owner's reply at plan 07-17's checkpoint
+
+## Promotion
+
+**Outcome: pushed and verified.** The owner approved the promotion push with the reply "push" at 2026-11-02T23:13Z (UTC), after being told that a merge of `origin/main` into `main` was needed first and that "push" approved that merge-first step.
+
+**Push.** `origin/main` was 5 commits ahead of the reviewed local `main` (teammate documentation only: the input-provenance workstream, pull requests #11 and #12; `git merge-tree` showed no conflict). Local `main` was merged with `origin/main` (`682801d`, a merge commit, no conflict) and pushed as a fast-forward of `origin/main` from `e970549` to `682801d` (never forced). Before the push: `backend/dlr_live_check_models.py` printed OK for all 8 artifacts, `golden_shadow_capture.py --check` matched, `.github` was unchanged against `origin/main`, and `git merge-base --is-ancestor origin/main main` exited 0. `origin/main` was re-fetched immediately before the push and had not moved.
+
+**Run.** One `dlr_live.yml` dispatch (`gh workflow run dlr_live.yml --ref main`) at 2026-11-02T23:15Z, run id `41543992876`, head `682801d`, event `workflow_dispatch`, conclusion success in 3 minutes. The step "Pre-flight - live model artifacts present and verified" passed against the new manifest. The hourly cron-job.org dispatch of 23:05Z (run `41542570586`) ran on the old head `e970549` before the push and is not the run verified here; this run rewrote the same hourly slot (valid_time 23:00Z), so the four rows for that slot now carry this run's id. The next scheduled run (00:05Z) was not started by this plan.
+
+**Checked values** (read-only, counts and values only):
+
+| City | config_version | config_fingerprint (first 12) | forecast_model_sha256 equals manifest | rating_basis equals `config.RATING_BASIS` | contains "provisional" | `latest_rating.is_provisional` |
+|---|---|---|---|---|---|---|
+| AUSTIN | v3-powersystems-2026-11-02 | c68d35482144 | yes | yes | no | false |
+| CORPUS_CHRISTI | v3-powersystems-2026-11-02 | ac6981de3a7b | yes | yes | no | false |
+| EL_PASO | v3-powersystems-2026-11-02 | 0a92b915d653 | yes | yes | no | false |
+| MIDLAND | v3-powersystems-2026-11-02 | ea30ca4e48d0 | yes | yes | no | false |
+
+Four distinct fingerprints, all rows `origin = live`. The `pipeline_run` row for the run lists all four cities in `cities_ok` (4) and none in `cities_failed`. `is_provisional` was read through the public read path (`e2e_verify_readonly.py --check-read`: `E2E READONLY OK`, four fresh rows, `is_provisional` false on each), since the writer role has no privilege on the view.
+
+**Label mode and relabel.** `go-forward-only` (07-17): rows written from this run on carry the new label; no stored live row was relabelled and no backfill row was touched. `supabase/ops/lift_provisional_label.sql` was therefore not prepared, and the owner-run relabel (plan task 3) is not applicable.
