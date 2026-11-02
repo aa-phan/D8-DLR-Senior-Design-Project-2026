@@ -318,7 +318,7 @@ ml-modeling workstream's evaluation; record it in that workstream's STATE.md as 
 
      After that decision, B1, B2, B4 and B5 are closed, the Phase 3 validation is re-run on the same
      non-FRESH window, and a new go/no-go is signed. A GO lifts the provisional label on stored rows.
-**Plans**: 14/19 plans executed
+**Plans**: 15/19 plans executed
 
 Plans:
 *Waiting on owner gates:* while the v4 signature (07-02) is pending, 07-01, 07-03, 07-04, 07-08 and
@@ -354,7 +354,7 @@ instant and 07-14 waits for 07-12.
 - [x] 07-12-PLAN.md — Owner's go after an automated preflight, then v4 read 1 at or after 2026-11-01T00:00Z, once (SEL-04)
 
 **Wave 8** *(07-14 after 07-12, so nothing rewrites tracked files during the read-1 preflight)*
-- [ ] 07-13-PLAN.md — Read-1 results in plain English and the owner's recorded SEL-04 decision (SEL-04)
+- [x] 07-13-PLAN.md — Read-1 results in plain English and the owner's recorded SEL-04 decision (SEL-04)
 - [x] 07-14-PLAN.md — REVAL re-run: B2 retrain with a new live manifest (not pushed), ml and naive replays with zero fidelity mismatches, report tables (REVAL-01)
 
 **Wave 9**
@@ -375,4 +375,4 @@ instant and 07-14 waits for 07-12.
 | 4. Supabase Store & Writer | 12/12 | Complete    | 2026-10-24 |
 | 5. Scheduled Live Runs | 8/8 | Complete    | 2026-10-26 |
 | 6. Exposure & E2E Verification | 13/13 | Complete    | 2026-11-01 |
-| 7. Per-City Conductors, Shadow Refit and Early Model Selection | 14/19 | In Progress | - |
+| 7. Per-City Conductors, Shadow Refit and Early Model Selection | 15/19 | In Progress | - |
