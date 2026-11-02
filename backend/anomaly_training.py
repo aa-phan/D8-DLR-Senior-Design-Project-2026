@@ -550,8 +550,8 @@ def inject_anomalies(
 def _dlr_amps_for(frame: pd.DataFrame, city: str) -> np.ndarray:
     """
     Converts `frame`'s three raw feature columns into a `dlr_amps` series
-    using `city_point.city_point(city)`'s
-    `ConductorConfig` and `thermal_model.ieee738_ampacity`, reproducing
+    using the `ConductorConfig` from `city_point.production_city_point`
+    for `city` and `thermal_model.ieee738_ampacity`, reproducing
     `DLRSafetyMonitor._compute_ampacity`'s exact call (`T_amb_c=air_temp`,
     `wind_perp_ms=wind_speed`, `ghi_wm2=solar_radiation`, default
     `solar_altitude_deg`) -- the raw `wind_speed` reading IS the value the
@@ -563,7 +563,7 @@ def _dlr_amps_for(frame: pd.DataFrame, city: str) -> np.ndarray:
     same physics. Explicit float cast -- `ieee738_ampacity` returns an
     array even for scalar input (RESEARCH.md Pitfall 2).
     """
-    point = city_point.city_point(city)
+    point = city_point.production_city_point(city)
     amps = thermal_model.ieee738_ampacity(
         T_amb_c=frame["air_temp"].to_numpy(dtype=float),
         wind_perp_ms=frame["wind_speed"].to_numpy(dtype=float),

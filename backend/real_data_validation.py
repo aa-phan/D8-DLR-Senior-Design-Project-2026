@@ -307,7 +307,7 @@ def computed_amps(city, temp, wind_perp, solar) -> np.ndarray:
     the figure gate G4 judged. `wind_perp` is the projected (line-perpendicular)
     component, as stored in the trace and the archive.
     """
-    point = city_point.city_point(city)
+    point = city_point.production_city_point(city)
     return np.asarray(thermal_model.ieee738_ampacity(
         T_amb_c=np.asarray(temp, dtype=float), wind_perp_ms=np.asarray(wind_perp, dtype=float),
         ghi_wm2=np.asarray(solar, dtype=float), conductor=point.conductor,
@@ -370,7 +370,7 @@ def classify_steps(trace, archive, cities, steps, start, warmup_hours) -> pd.Dat
 
     rows = []
     for city in cities:
-        point = city_point.city_point(city)
+        point = city_point.production_city_point(city)
         lower, upper = point.rating_bounds
         for ts in steps:
             rec = records.get((city, ts))
@@ -487,7 +487,7 @@ def _quantile_cells(prefix: str, values: pd.Series) -> dict:
 def _ratings_table(frame, cities) -> pd.DataFrame:
     rows = []
     for city in cities:
-        point = city_point.city_point(city)
+        point = city_point.production_city_point(city)
         part = frame[(frame["city"] == city) & (frame["period"] == "scored")]
         n = len(part)
         reported, computed = part["reported_a"], part["computed_a"]
