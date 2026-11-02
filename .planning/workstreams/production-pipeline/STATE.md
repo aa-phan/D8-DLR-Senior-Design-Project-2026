@@ -1,19 +1,19 @@
 ---
 gsd_state_version: "1.0"
 current_phase: 07
-current_plan: 10
+current_plan: 11
 status: executing
-stopped_at: Completed 07-19-PLAN.md
-last_updated: "2026-11-02T08:07:46.429Z"
+stopped_at: Completed 07-09-PLAN.md
+last_updated: "2026-11-02T08:29:43.394Z"
 last_activity: 2026-11-01
 last_activity_desc: Phase 07 execution started
-state_head: 725502362d62416a764b8e6cce8c35be9176d031
+state_head: 148f59c7ca337007442baf675bfeda1f9242cf7f
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 66
-  completed_plans: 56
-  percent: 85
+  completed_plans: 57
+  percent: 86
 milestone_name: Production Pipeline (Supabase + live ratings)
 workstream: production-pipeline
 created: 2026-10-18
@@ -37,7 +37,7 @@ whoever owns that analysis; they are not work items here.
 
 **Status:** Ready to execute
 **Current Phase:** 07
-**Current Plan:** 10
+**Current Plan:** 11
 **Total Plans in Phase:** 19
 **Last Activity:** 2026-11-01 — Phase 07 execution started
 **Last Activity Description:** Phase 07 execution started
@@ -206,6 +206,8 @@ These block or affect stringing the system together and belong to the phases nam
 - [Phase 07]: 07-08: forecast_used_by_g6 is an explicit primary_fed_g6 flag; the naive G6 fallback (D-17) never reads as the stored ml forecast, g6_forecast_method/g6_forecast are trace-only
 - [Phase 07]: 07-08: g6_method_recorded is column presence in the trace; pre-B5 traces report NA counts, not zeros (a mixed trace counts pre-B5 hours as no band)
 - [Phase 07]: 07-19: city_training_frame stores the line-perpendicular wind in wind_speed (B2, D-14); RATING_CONFIG_VERSION is v2-provisional-2026-11-02 with the schema doc naming it, snapshot schema 2 and the per-city conductor basis — Training and serving use the same projected feature; the label tells consumers production reads the per-city table (values unchanged, D-09) and fingerprints change once; provisional stays until 07-17's signed GO; no model retrained (07-14), forecast_training_test:287 now on production_city_point so 07-11's AUSTIN change is safe
+- [Phase 07]: 07-09: the CLI's frozen secondary loader is make_headline_loader with no refit cities (hash-verified frozen serving) rather than the bare load_correction_model; frozen artifacts are pre-verified with the refit ones, so a tampered file refuses with exit 2 before any request
+- [Phase 07]: 07-09: v4-late-descriptive needs a v4-read1 report.json whose rating_config_version differs from the current one (newest directory wins); otherwise exit 2 'nothing to re-score descriptively (D-03)'. At parity report['secondary'] is None and conductor_basis states it is identical by construction
 
 ## Open Decisions
 
@@ -229,9 +231,9 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 
 ## Session Continuity
 
-**Last session:** 2026-11-02T08:07:46.125Z
+**Last session:** 2026-11-02T08:29:43.083Z
 
-**Stopped At:** Completed 07-19-PLAN.md
+**Stopped At:** Completed 07-09-PLAN.md
 **Resume File:** None
 
 ## Performance Metrics
@@ -290,6 +292,7 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 | Phase 07 P07 | 22 min | 2 tasks | 6 files |
 | Phase 07 P08 | 10 min | 2 tasks | 9 files |
 | Phase 07 P19 | 6 min | 2 tasks | 4 files |
+| Phase 07 P09 | 22 min | 2 tasks | 2 files |
 
 ## Accumulated Context
 

@@ -136,7 +136,7 @@ proposals.
   resistance, maximum operating temperature, elevation, azimuth) in config, with a recorded source
   for every value. Values are provisional until Power Systems confirms them; replacing them is a
   config change with a version bump, not a code change.
-- [ ] **COND-02**: The production rating, training and validation paths use the per-city
+- [x] **COND-02**: The production rating, training and validation paths use the per-city
   configurations. The shadow collector, the 12 frozen shadow artifacts and the frozen evaluation
   modules keep the Drake configuration they were frozen with. A golden test proves their outputs
   are byte-identical before and after the change.
@@ -228,7 +228,7 @@ proposals.
 | E2E-02 | Phase 6 | Complete |
 | E2E-03 | Phase 6 | Complete |
 | COND-01 | Phase 7 | Pending |
-| COND-02 | Phase 7 | Pending |
+| COND-02 | Phase 7 | Complete |
 | SEL-01 | Phase 7 | Complete |
 | SEL-02 | Phase 7 | Pending |
 | SEL-03 | Phase 7 | Pending |
