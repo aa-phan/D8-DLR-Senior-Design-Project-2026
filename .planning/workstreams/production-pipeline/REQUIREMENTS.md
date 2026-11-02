@@ -167,7 +167,7 @@ proposals.
   grading all rows including read 1's. A recorded owner decision names which shadow model, if any,
   replaces `ml`, and the interim G6 forecast method (OD-3 revisited). *(Amended 2026-10-25, Phase 7
   D-08: replaces "the single v4 FRESH read".)*
-- [ ] **REVAL-01**: After SEL-04, B1, B2, B4 and B5 are closed, the Phase 3 validation is re-run on the
+- [x] **REVAL-01**: After SEL-04, B1, B2, B4 and B5 are closed, the Phase 3 validation is re-run on the
   same non-FRESH window with the new configs and models, and a new go/no-go is signed. A GO lifts
   the provisional label on stored rows.
 
@@ -233,4 +233,4 @@ proposals.
 | SEL-02 | Phase 7 | Complete |
 | SEL-03 | Phase 7 | Complete |
 | SEL-04 | Phase 7 | Pending |
-| REVAL-01 | Phase 7 | Pending |
+| REVAL-01 | Phase 7 | Complete |
