@@ -21,7 +21,9 @@ What is NOT ported, and why:
   * the 590-row gate (decision 3A): this module neither calls nor names the
     frozen gate machinery (an AST test pins that);
   * calibrated overrating risk and retained capacity (decision 1C): candidates
-    are ranked on point error only, with the 5 A three-level ship rule;
+    are ranked on point error only, with the signed protocol-v4 ship rule
+    (`forecast_shadow_decision_v4`: 2% of mean truth ampacity as the bar, ABLATION
+    and TEST vetoes, a single pick or no pick);
   * the network basis manifest (the HTTP evidence recorder replaces it).
 
 Two correctness points (planner findings F4 and F5):
@@ -31,25 +33,41 @@ Two correctness points (planner findings F4 and F5):
     Truth, raw_forecast and persistence are therefore recomputed from the
     weather columns with city_point geometry; no `*_dlr_amps` column is read.
   * F5. The frozen FRESH window began 2026-09-30, so the join on the 24 h
-    anchor lost the first FRESH day. The fetch window here is
-    2026-09-28..2026-11-16 (PD-02), giving 192 scored rows per city
-    (2026-09-30T00Z..2026-11-16T18Z, hour % 6 == 0).
+    anchor lost the first FRESH day. The fetch window is the selected round's:
+    v4-read1 2026-09-28..2026-10-24 (100 scored rows per city,
+    2026-09-30T00Z..2026-10-24T18Z, hour % 6 == 0) and v4-read2 2026-09-28..2026-10-31
+    (128 scored rows per city, to 2026-10-31T18Z); v4-late-descriptive reuses read 1's.
 
 Anti-peeking. Nothing here builds a FRESH frame, opens a FRESH cache file or
 fetches FRESH truth unless `forecast_shadow_eval_core.check_guard` passed
-first (clock at or after 2026-11-24T00:00:00Z, or an explicit override that is
-recorded). The frame cache is redirected into this run's evidence directory,
+first (clock at or after the selected round's instant; a FRESH run takes no
+override). The frame cache is redirected into this run's evidence directory,
 so the real data/experiment FRESH caches are never opened. `--dry-run` makes
 no network call and reads no FRESH file.
 
-Operator command (one shot, at or after 2026-11-24T00:00:00Z)::
+The veto record (SEL-03, D-02). A deciding round (v4-read1, v4-read2) refuses to
+start unless `--vetoes` names a record whose ABLATION and TEST source-report
+sha256 values equal the files on disk and `--protocol-status signed` is given;
+both checks run before `run_confirmation`, and `run_confirmation` itself refuses
+a FRESH decision read without a record before its guard, so the one-shot read
+is never spent on a run that could not decide. The record's path and hash are
+written into the report and `run_started.json`.
 
+Operator commands (one shot per round; evidence lands in
+data/shadow/evaluation/<round>)::
+
+    # read 1, at or after 2026-11-01T00:00:00Z, after the ABLATION and TEST vetoes exist:
     PYTHONPATH=backend .venv/bin/python backend/forecast_shadow_confirm.py \\
-        --evidence-root data/shadow/evaluation --out confirm.json
+        --round v4-read1 --vetoes <vetoes.json> --protocol-status signed --out confirm.json
+    # the conditional re-test, only if read 1 names no winner, at or after 2026-11-08T00:00:00Z:
+    PYTHONPATH=backend .venv/bin/python backend/forecast_shadow_confirm.py \\
+        --round v4-read2 --vetoes <vetoes.json> --protocol-status signed --out confirm_read2.json
 
     # any time, no network, evidence root not created:
     PYTHONPATH=backend .venv/bin/python backend/forecast_shadow_confirm.py \\
-        --dry-run --out dry_run.json
+        --dry-run --round v4-read1 --out dry_run.json
+
+The 2026-11-24 evaluation of protocol v3 is retired by signed v4 and is refused.
 
 Truth is reanalysis-derived (Open-Meteo Archive reanalysis through IEEE 738),
 never sensor-validated.
@@ -58,6 +76,7 @@ never sensor-validated.
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import os
 import sys
@@ -71,7 +90,7 @@ import ampacity_forecast
 import city_point
 import config
 import forecast_experiment
-import forecast_shadow_decision as decision
+import forecast_shadow_decision_v4 as decision_v4
 import forecast_shadow_eval_core as core
 import forecast_shadow_fit_models
 import forecast_shadow_pipeline
@@ -164,14 +183,16 @@ def _inside(path: str, directory: str) -> bool:
     return real_path == real_dir or real_path.startswith(real_dir + os.sep)
 
 
-def production_frame_provider(city: str, *, evidence_dir: str, window=None):
+def production_frame_provider(city: str, *, evidence_dir: str, window=None, round_name: Optional[str] = None):
     """
     Build one city's reconstructed frame through the frozen
-    `forecast_experiment.anchored_pair_frame(city, 2026-09-28, 2026-11-16,
-    lead_hours=24)`, inside the HTTP evidence recorder and with the frame cache
+    `forecast_experiment.anchored_pair_frame(city, <round fetch start>, <round fetch end>,
+    lead_hours=24)` (read 1: 2026-09-28..2026-10-24, read 2: 2026-09-28..2026-10-31),
+    inside the HTTP evidence recorder and with the frame cache
     redirected into `evidence_dir/frames` (restored in a finally block).
 
-    Refuses any window other than RECON_FETCH_START..RECON_FETCH_END, and
+    Refuses any window other than the selected round's fetch window (default
+    round v4-read1), and
     refuses (before `anchored_pair_frame` is called) if the redirected cache
     path already exists. Returns (frame, archive_weather, evidence_meta), where
     `archive_weather` is the recorded archive body re-parsed with
@@ -179,15 +200,16 @@ def production_frame_provider(city: str, *, evidence_dir: str, window=None):
     window).
 
     Raises:
-        ValueError: a window other than the pre-registered fetch window.
+        ValueError: a window other than the round's pre-registered fetch window.
         EvaluationGuardError: a pre-existing cache file in the redirected directory.
         FrameFetchError: any failure of the two HTTP fetches or the frame build.
     """
-    start, end = (core.RECON_FETCH_START, core.RECON_FETCH_END) if window is None else window
-    if (str(start), str(end)) != (core.RECON_FETCH_START, core.RECON_FETCH_END):
+    rnd = core.round_named(core.DEFAULT_ROUND.name if round_name is None else round_name)
+    start, end = (rnd.fetch_start, rnd.fetch_end) if window is None else window
+    if (str(start), str(end)) != (rnd.fetch_start, rnd.fetch_end):
         raise ValueError(
             f"production_frame_provider: window {start}..{end} is not the pre-registered fetch window "
-            f"{core.RECON_FETCH_START}..{core.RECON_FETCH_END} (PD-02)"
+            f"{rnd.fetch_start}..{rnd.fetch_end} of round {rnd.name!r} (PD-02)"
         )
     frames_dir = os.path.join(evidence_dir, "frames")
     original_dir = config.FORECAST_EXPERIMENT_CACHE_DIR
@@ -573,15 +595,144 @@ def _failed_city_block(city: str, stage: str, error: str) -> dict:
     }
 
 
-def _attach_family_and_decision(report: dict, error_frames: dict, params: dict, protocol_status: str) -> dict:
+VETO_BASES = ("ablation", "test")
+VETO_RECORD_PROTOCOL = "v4"
+
+
+def _repo_root() -> str:
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def validate_veto_record(record) -> dict:
+    """
+    The structural checks of a veto record, shared by `load_vetoes` and `run_confirmation` so a malformed record
+    given directly is refused before the guard too. Candidate names are matched as exact strings against
+    `core.REAL_CANDIDATES`: every one must be present in both sections and no other key is allowed, so an
+    edited or truncated record can never un-veto a candidate by omission. Returns `record`.
+
+    Raises:
+        ValueError: not an object, a missing section, a wrong or missing candidate key, a vetoed flag that is
+            not a bool (0, 1 and strings are refused).
+    """
+    if not isinstance(record, dict):
+        raise ValueError("veto record: expected a JSON object with 'ablation' and 'test' sections")
+    for basis in VETO_BASES:
+        section = record.get(basis)
+        if not isinstance(section, dict):
+            raise ValueError(f"veto record: the {basis!r} section is missing (SEL-03 needs both ABLATION and TEST)")
+        vetoes = section.get("vetoes")
+        if not isinstance(vetoes, dict):
+            raise ValueError(f"veto record: {basis!r} has no 'vetoes' object")
+        unknown = sorted(k for k in vetoes if k not in core.REAL_CANDIDATES)
+        absent = [c for c in core.REAL_CANDIDATES if c not in vetoes]
+        if unknown:
+            raise ValueError(f"veto record: {basis!r} names unknown candidate(s) {unknown}; candidates are matched as "
+                             f"exact strings, valid: {list(core.REAL_CANDIDATES)}")
+        if absent:
+            raise ValueError(f"veto record: {basis!r} is missing candidate(s) {absent}; every candidate needs a "
+                             f"vetoed flag so none is un-vetoed by omission")
+        for cand, entry in vetoes.items():
+            flag = entry.get("vetoed") if isinstance(entry, dict) else None
+            if not isinstance(flag, bool):
+                raise ValueError(f"veto record: {basis!r} candidate {cand!r} needs a 'vetoed' flag that is a bool, "
+                                 f"got {flag!r}")
+    return record
+
+
+def load_vetoes(path: str, *, base_dir: Optional[str] = None) -> dict:
+    """
+    Read and verify the ABLATION and TEST veto record (07-11 writes it; SEL-03, T-07-15).
+
+    Shape: {"protocol": "v4", "ablation": {"report": <path>, "sha256": <hex>, "vetoes": {candidate:
+    {"vetoed": bool, "reasons": [..]}}, ...}, "test": {... same ...}, "created_at_utc": <iso>}. Every
+    referenced report must exist and its sha256 must equal the recorded value; a relative `report` path is
+    resolved against `base_dir` (default the repository root).
+
+    Returns the parsed record plus `"file": {"path": <absolute path>, "sha256": <sha256 of the record file>}`,
+    which is what the run records in its config and report.
+
+    Raises:
+        ValueError: unreadable or non-JSON file, not v4, a structural fault (see `validate_veto_record`), a
+            missing source report, or a sha256 that does not match the report on disk.
+    """
+    try:
+        with open(path, "rb") as fh:
+            raw = fh.read()
+    except OSError as exc:
+        raise ValueError(f"load_vetoes: cannot read {path!r}: {exc}") from exc
+    try:
+        record = json.loads(raw.decode("utf-8"))
+    except ValueError as exc:
+        raise ValueError(f"load_vetoes: {path!r} is not valid JSON: {exc}") from exc
+    validate_veto_record(record)
+    if record.get("protocol") != VETO_RECORD_PROTOCOL:
+        raise ValueError(f"load_vetoes: the record's protocol is {record.get('protocol')!r}, expected {VETO_RECORD_PROTOCOL!r}")
+    base = _repo_root() if base_dir is None else base_dir
+    for basis in VETO_BASES:
+        section = record[basis]
+        report_path, recorded = section.get("report"), section.get("sha256")
+        if not isinstance(report_path, str) or not report_path.strip() or not isinstance(recorded, str) or not recorded.strip():
+            raise ValueError(f"load_vetoes: {basis!r} must name its source 'report' path and its 'sha256'")
+        full = os.path.join(base, report_path)
+        if not os.path.isfile(full):
+            raise ValueError(f"load_vetoes: the {basis!r} source report {report_path!r} does not exist (looked at {full!r})")
+        actual = core.sha256_file(full)
+        if actual != recorded.strip().lower():
+            raise ValueError(f"load_vetoes: the {basis!r} source report {report_path!r} has sha256 {actual}, but the "
+                             f"veto record says {recorded} (T-07-15: the report changed after the record was written)")
+    return {**record, "file": {"path": os.path.abspath(path), "sha256": core.sha256_bytes(raw)}}
+
+
+def _rule_vetoes(vetoes: Optional[dict]) -> Optional[dict]:
+    """The veto record in the shape `apply_ship_rule_v4` takes: {"ablation": {cand: {...}}, "test": {...}}."""
+    if vetoes is None:
+        return None
+    return {basis: vetoes[basis]["vetoes"] for basis in VETO_BASES}
+
+
+def _veto_source(vetoes: Optional[dict]) -> Optional[dict]:
+    """What the config and report say about where the veto record came from (path and hashes), or None."""
+    if vetoes is None:
+        return None
+    file_info = vetoes.get("file") or {}
+    return {
+        "path": file_info.get("path"), "sha256": file_info.get("sha256"), "injected": not file_info,
+        "ablation_report": {k: vetoes["ablation"].get(k) for k in ("report", "sha256")},
+        "test_report": {k: vetoes["test"].get(k) for k in ("report", "sha256")},
+    }
+
+
+def _resolve_round(round_name: Optional[str], guard_cfg: core.GuardConfig) -> core.ProtocolRound:
+    """The signed round of a run: `round_name`, else the guard's. The two must agree."""
+    name = guard_cfg.round_name if round_name is None else round_name
+    if name != guard_cfg.round_name:
+        raise ValueError(f"run_confirmation: round_name {name!r} disagrees with the guard's round "
+                         f"{guard_cfg.round_name!r}; build the guard with core.guard_for_round({name!r})")
+    return core.round_named(name)
+
+
+def _truth_stats(preds: pd.DataFrame) -> Optional[dict]:
+    """Per-city mean truth ampacity and its row count over the prepared rows (None when the city has no rows)."""
+    if preds is None or len(preds) == 0:
+        return None
+    return {"mean_truth_amps": float(np.mean(preds["truth_amps"].to_numpy(dtype=float))), "n_truth_rows": int(len(preds))}
+
+
+def _attach_family_and_decision(report: dict, error_frames: dict, params: dict, protocol_status: str, *,
+                                truth_stats: dict, round_name: str, vetoes: Optional[dict], basis: str) -> dict:
+    """The 9-test family and the signed v4 decision. Headline label for a deciding round, descriptive label for
+    the late descriptive round; the veto record is required only for a FRESH headline run."""
     family = stats.build_family_report(error_frames, row_source=ROW_SOURCE, params=params)
     report["family"] = family
     report["sample_size"]["pairs"] = family["sample_size"]["pairs"]
     report["sample_size"]["targets_met"] = family["sample_size"]["targets_met"]
     report["sample_size"]["nominal_vs_effective"] = (
         "n is nominal; effective sample sizes (ACF per city, bootstrap pooled) are in `pairs` and are smaller")
-    report["decision"] = decision.apply_ship_rule(
-        family, protocol_status=protocol_status, margin=params["decision_margin_amps"],
+    descriptive = core.round_named(round_name).descriptive_only
+    report["decision"] = decision_v4.apply_ship_rule_v4(
+        family, truth_stats=truth_stats, round_name=round_name, label="descriptive" if descriptive else "headline",
+        vetoes=_rule_vetoes(vetoes), require_vetoes=(basis == "FRESH" and not descriptive),
+        protocol_status=protocol_status, fraction=params["relative_margin_fraction"],
         min_cities=params["consistency_min_cities"])
     return report
 
@@ -589,13 +740,15 @@ def _attach_family_and_decision(report: dict, error_frames: dict, params: dict, 
 def run_confirmation(*, cities, guard_cfg: core.GuardConfig, evidence_root: str, protocol_status: str = "unsigned",
                      now=None, params: Optional[dict] = None, frame_provider: Optional[Callable] = None,
                      model_loader: Optional[Callable] = None, window=None, repo_root: Optional[str] = None,
-                     extra_probe_arms: Optional[dict] = None) -> dict:
+                     extra_probe_arms: Optional[dict] = None, round_name: Optional[str] = None,
+                     vetoes: Optional[dict] = None) -> dict:
     """
-    Order: scope valid times from the window; `check_guard`; refuse a
+    Order: scope valid times from the window; require the veto record for a
+    FRESH decision read (before the guard); `check_guard`; refuse a
     development-basis run without an injected `model_loader`; create the
     evidence directory; per city: frame provider, prepare, load models, candidate
     predictions, leakage probe; absolute errors; descriptive metrics; the 9-test
-    family; the ship rule; provenance; report.
+    family; the v4 ship rule; provenance; report.
 
     `window` is (scored_start, scored_end_exclusive) or a ScoredWindow; the default
     is the FRESH window 2026-09-30T00Z .. the valid-time cutoff. A custom window is
@@ -603,6 +756,12 @@ def run_confirmation(*, cities, guard_cfg: core.GuardConfig, evidence_root: str,
     `frame_provider(city, *, evidence_dir)` returns (frame, archive_weather, meta).
     `model_loader(city, method)` defaults to `load_correction_model` in a FRESH run.
     `extra_probe_arms` is a test hook: extra arms the leakage probe must also clear.
+
+    `round_name` is the signed round (default: the guard's, which defaults to v4-read1); it fixes the
+    fetch window of the production provider and the decision's round. `vetoes` is the record
+    `load_vetoes` returns. A FRESH scope in a deciding (not descriptive-only) round needs it: without
+    one this raises ValueError BEFORE the guard and before any directory exists, because a crash after
+    the guard would spend the one-shot run (SEL-03). A supplied record is always validated and applied.
 
     A per-city failure (fetch, structure, prediction) is recorded and that city
     is excluded and named in the report. EvaluationGuardError and
@@ -614,11 +773,20 @@ def run_confirmation(*, cities, guard_cfg: core.GuardConfig, evidence_root: str,
         raise ValueError(f"run_confirmation: unknown cities {bad}; valid: {list(config.LOCATIONS)}")
     params = core.default_params() if params is None else {**core.default_params(), **params}
     now_ts = core.utc_now_or(now)
+    rnd = _resolve_round(round_name, guard_cfg)
     win = _resolve_window(window, guard_cfg)
     if frame_provider is None and (win.start, win.end) != (default_window(guard_cfg).start, default_window(guard_cfg).end):
         raise ValueError("run_confirmation: the production frame provider supports only the default window; "
                          "inject a frame_provider for a development window")
     scope_times = list(win.slots())
+
+    if vetoes is not None:
+        validate_veto_record(vetoes)
+    if vetoes is None and not rnd.descriptive_only and any(t >= core.FRESH_BASIS_START for t in scope_times):
+        raise ValueError(
+            f"run_confirmation: a FRESH decision read in round {rnd.name!r} needs the ABLATION and TEST veto record "
+            f"(SEL-03, --vetoes); refused before the guard so no one-shot run is spent"
+        )
 
     nd = core.nondefault_params(params)
     guard_record = core.check_guard(guard_cfg, valid_times=scope_times, row_source=ROW_SOURCE, now=now_ts,
@@ -631,13 +799,15 @@ def run_confirmation(*, cities, guard_cfg: core.GuardConfig, evidence_root: str,
                 "(runbook 'Fit-window decision'); inject a model_loader for a development-basis run"
             )
         model_loader = forecast_shadow_pipeline.load_correction_model
-    provider = frame_provider or production_frame_provider
+    provider = frame_provider or functools.partial(production_frame_provider, round_name=rnd.name)
+    veto_source = _veto_source(vetoes)
 
     config_record = {
         "cities": cities, "protocol_status": protocol_status, "evidence_root": evidence_root,
+        "round": rnd.name, "vetoes": veto_source,
         "params": {k: (list(v) if isinstance(v, tuple) else v) for k, v in params.items()},
         "scored_window": [win.start.isoformat(), win.end.isoformat()],
-        "fetch_window": [core.RECON_FETCH_START, core.RECON_FETCH_END],
+        "fetch_window": [rnd.fetch_start, rnd.fetch_end],
         "model_source": MODEL_SOURCE_TEXT,
         "frame_provider": "production" if frame_provider is None else "injected",
         "model_loader": "load_correction_model" if model_loader is forecast_shadow_pipeline.load_correction_model else "injected",
@@ -649,6 +819,9 @@ def run_confirmation(*, cities, guard_cfg: core.GuardConfig, evidence_root: str,
                              guard=guard_record, config_record=config_record, prov=prov, params=params)
     report["scored_window"] = [win.start.isoformat(), win.end.isoformat()]
     report["failed_cities"] = {}
+    report["round"] = rnd.name
+    report["vetoes"] = None if vetoes is None else {"source": veto_source, "record": vetoes}
+    report["truth_stats"] = {}
 
     error_frames: dict = {}
     for city in cities:
@@ -690,6 +863,10 @@ def run_confirmation(*, cities, guard_cfg: core.GuardConfig, evidence_root: str,
             "excluded_by_reason": {k: v for k, v in row_excl.items() if v},
             "candidate_exclusions": cand_excl, "metrics": metrics, "truth_label": core.TRUTH_LABEL,
         }
+        city_truth = _truth_stats(preds)
+        if city_truth is not None:
+            report["truth_stats"][city] = city_truth
+            report["per_city"][city]["truth_stats"] = city_truth
         report["exclusions"][city] = {
             "row_level": row_excl,
             "rows_dropped_null_weather": prep_diag["n_rows_dropped_null_weather"],
@@ -720,7 +897,8 @@ def run_confirmation(*, cities, guard_cfg: core.GuardConfig, evidence_root: str,
         "pooled_nominal": {"label": "nominal, not effective", "n_scored": pooled,
                            "targets": core.pooled_nominal_targets(max(pooled.values(), default=0))},
     }
-    report = _attach_family_and_decision(report, error_frames, params, protocol_status)
+    report = _attach_family_and_decision(report, error_frames, params, protocol_status,
+                                         truth_stats=report["truth_stats"], round_name=rnd.name, vetoes=vetoes, basis=basis)
     report["evidence"] = core.collect_evidence(evidence_dir)
     report["evidence_dir"] = evidence_dir
     report["report_paths"] = core.write_report(report, evidence_dir)
@@ -732,13 +910,15 @@ def run_confirmation(*, cities, guard_cfg: core.GuardConfig, evidence_root: str,
 # --------------------------------------------------------------------------
 
 def dry_run(*, cities, guard_cfg: core.GuardConfig, evidence_root: str, now=None,
-            params: Optional[dict] = None, repo_root: Optional[str] = None) -> dict:
+            params: Optional[dict] = None, repo_root: Optional[str] = None,
+            round_name: Optional[str] = None) -> dict:
     """
-    No network, no FRESH read, no directory created. Reports whether the guard
-    would refuse now, the planned requests (archive and previous-runs per city),
-    the 12 artifact hashes and the freeze check.
+    No network, no FRESH read, no directory created. Reports the round, whether the
+    guard would refuse now, the planned requests (archive and previous-runs per city,
+    over the round's fetch window), the 12 artifact hashes and the freeze check.
     """
     cities = list(cities)
+    rnd = _resolve_round(round_name, guard_cfg)
     params = core.default_params() if params is None else {**core.default_params(), **params}
     now_ts = core.utc_now_or(now)
     win = default_window(guard_cfg)
@@ -750,16 +930,18 @@ def dry_run(*, cities, guard_cfg: core.GuardConfig, evidence_root: str, now=None
         guard = {"would_refuse": True, "reason": str(exc)}
     planned = []
     for city in cities:
-        url, p = core.build_archive_request(city, core.RECON_FETCH_START, core.RECON_FETCH_END)
+        url, p = core.build_archive_request(city, rnd.fetch_start, rnd.fetch_end)
         planned.append({"city": city, "label": "archive", "url": url, "params": p})
-        url, p = build_previous_runs_request(city, core.RECON_FETCH_START, core.RECON_FETCH_END)
+        url, p = build_previous_runs_request(city, rnd.fetch_start, rnd.fetch_end)
         planned.append({"city": city, "label": "previous_runs", "url": url, "params": p})
     root = repo_root or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     prov = core.provenance(root, cities)
     return {
+        "round": rnd.name,
         "guard": guard,
         "now_evaluated": now_ts.isoformat(),
         "protocol_status_note": "unsigned runs are exploratory",
+        "fetch_window": [rnd.fetch_start, rnd.fetch_end],
         "scored_window": [win.start.isoformat(), win.end.isoformat()],
         "expected_slots_per_city": int(len(win.slots())),
         "planned_requests": planned,
@@ -779,6 +961,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--cities", nargs="+", default=list(config.LOCATIONS))
     p.add_argument("--dry-run", action="store_true",
                    help="no network, no FRESH read, evidence root not created; prints the plan")
+    p.add_argument("--round", choices=sorted(core.PROTOCOL_ROUNDS), default=core.DEFAULT_ROUND.name,
+                   help="signed protocol v4 round to run under; its evidence goes to <evidence-root>/<round> "
+                        "(default %(default)s)")
+    p.add_argument("--vetoes", default=None, metavar="PATH",
+                   help="the ABLATION and TEST veto record (JSON, sha256-checked against both source reports); "
+                        "required for a deciding round (v4-read1, v4-read2) and refused unless "
+                        "--protocol-status is signed (SEL-03)")
     p.add_argument("--evidence-root", default=core.EVIDENCE_ROOT_DEFAULT)
     p.add_argument("--out", default=None, help="write the dry-run JSON (or a copy of report.json) here")
     p.add_argument("--evaluation-instant", default=None)
@@ -788,7 +977,9 @@ def build_parser() -> argparse.ArgumentParser:
     # Pre-registered statistical parameters (no --row-gate, no --family-size: decisions 2 and 3).
     p.add_argument("--block-lengths", type=int, nargs="+", default=None)
     p.add_argument("--n-resamples", type=int, default=None)
-    p.add_argument("--decision-margin-amps", type=float, default=None)
+    p.add_argument("--decision-margin-amps", type=float, default=None,
+                   help="retired v3 parameter: the v4 rule does not use it (it uses 2%% of mean truth); a non-default "
+                        "value is still refused in a FRESH run (PD-15)")
     p.add_argument("--consistency-min-cities", type=int, default=None)
     p.add_argument("--min-paired-rows", type=int, default=None)
     p.add_argument("--power", type=float, default=None)
@@ -803,10 +994,13 @@ def main(argv=None) -> int:
         print(f"error: unknown cities {bad}; valid: {list(config.LOCATIONS)}", file=sys.stderr)
         return 2
     try:
+        rnd = core.round_named(args.round)
         guard_cfg = score_mod._guard_from_args(args)
         params = score_mod._params_from_args(args)
+        round_root = core.round_evidence_root(args.evidence_root, rnd)
         if args.dry_run:
-            result = dry_run(cities=args.cities, guard_cfg=guard_cfg, evidence_root=args.evidence_root, params=params)
+            result = dry_run(cities=args.cities, guard_cfg=guard_cfg, evidence_root=round_root, params=params,
+                             round_name=rnd.name)
             text = core.dumps(result, indent=2)
             if args.out:
                 with open(args.out, "w", encoding="utf-8") as fh:
@@ -814,8 +1008,22 @@ def main(argv=None) -> int:
             else:
                 print(text)
             return 0
-        report = run_confirmation(cities=args.cities, guard_cfg=guard_cfg, evidence_root=args.evidence_root,
-                                  protocol_status=args.protocol_status, params=params)
+        vetoes = None
+        if args.vetoes is not None:
+            vetoes = load_vetoes(args.vetoes)
+        if not rnd.descriptive_only:
+            problems = []
+            if vetoes is None:
+                problems.append("--vetoes must name the ABLATION and TEST veto record (SEL-03: the vetoes exist "
+                                "before the FRESH read)")
+            if args.protocol_status != "signed":
+                problems.append("--protocol-status signed is required")
+            if problems:
+                raise core.EvaluationGuardError(
+                    f"a deciding round ({rnd.name}) cannot start: " + "; ".join(problems))
+        report = run_confirmation(cities=args.cities, guard_cfg=guard_cfg, evidence_root=round_root,
+                                  protocol_status=args.protocol_status, params=params, round_name=rnd.name,
+                                  vetoes=vetoes)
         if args.out:
             with open(args.out, "w", encoding="utf-8") as fh:
                 fh.write(core.dumps(report, indent=2))

@@ -268,8 +268,15 @@ def _fresh_cache_spy(monkeypatch, tmp_path):
     monkeypatch.setattr(pd, "read_csv", spy_read_csv)
 
 
+def no_veto_record() -> dict:
+    """A synthetic ABLATION + TEST veto record in which no candidate is vetoed (a FRESH read needs one, SEL-03)."""
+    section = lambda: {"vetoes": {c: {"vetoed": False, "reasons": []} for c in core.REAL_CANDIDATES}}
+    return {"protocol": "v4", "ablation": section(), "test": section()}
+
+
 def run(evidence_root, *, now=AT_INSTANT, cities=None, **kwargs):
     kwargs.setdefault("guard_cfg", core.GuardConfig())
+    kwargs.setdefault("vetoes", no_veto_record())        # pass vetoes=None explicitly to run without a record
     return conf.run_confirmation(cities=cities or CITIES, evidence_root=evidence_root, now=now, **kwargs)
 
 
@@ -344,11 +351,13 @@ def test_guard_refuses_before_any_side_effect(monkeypatch, evidence_root, tmp_pa
     assert not os.path.exists(config.FORECAST_EXPERIMENT_CACHE_DIR)
 
 
-def test_cli_refuses_before_the_instant_with_exit_2(monkeypatch, evidence_root, capsys):
+def test_cli_refuses_before_the_instant_with_exit_2(monkeypatch, evidence_root, capsys, tmp_path):
     monkeypatch.setattr(core, "utcnow", lambda: pd.Timestamp("2026-10-13T08:00:00Z"))
-    code = conf.main(["--evidence-root", evidence_root])
+    vetoes_path = write_veto_files(tmp_path)[0]
+    code = conf.main(["--evidence-root", evidence_root, "--vetoes", vetoes_path, "--protocol-status", "signed"])
     assert code == 2
-    assert "refused" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "refused" in err and "evaluation instant" in err
     assert not os.path.exists(evidence_root)
 
 
@@ -938,12 +947,13 @@ def test_cli_unknown_city_exits_2(capsys):
     assert "unknown cities" in capsys.readouterr().err
 
 
-def test_cli_nondefault_parameter_in_a_fresh_run_is_refused(monkeypatch, evidence_root, capsys):
+def test_cli_nondefault_parameter_in_a_fresh_run_is_refused(monkeypatch, evidence_root, capsys, tmp_path):
     monkeypatch.setattr(core, "utcnow", lambda: pd.Timestamp(AT_INSTANT))
-    assert conf.main(["--evidence-root", evidence_root, "--block-lengths", "1", "2"]) == 2
+    deciding = ["--vetoes", write_veto_files(tmp_path)[0], "--protocol-status", "signed"]
+    assert conf.main(["--evidence-root", evidence_root, *deciding, "--block-lengths", "1", "2"]) == 2
     err = capsys.readouterr().err
     assert "refused" in err and "no override" in err
-    assert conf.main(["--evidence-root", evidence_root, "--block-lengths", "1", "2",
+    assert conf.main(["--evidence-root", evidence_root, *deciding, "--block-lengths", "1", "2",
                       "--override-reason", "smaller blocks"]) == 2
     assert "no override" in capsys.readouterr().err
     assert not os.path.exists(evidence_root)
@@ -968,3 +978,432 @@ def test_no_evaluator_mode_opens_a_fresh_cache_file(monkeypatch, evidence_root, 
     FakeServer(monkeypatch)
     run(evidence_root, now=AT_INSTANT, cities=["AUSTIN"])
     conf.dry_run(cities=CITIES, guard_cfg=core.GuardConfig(), evidence_root=evidence_root, now=AT_INSTANT)
+
+
+# --------------------------------------------------------------------------
+# Signed v4 rounds, the veto record (SEL-03) and the v4 decision (07-07)
+# --------------------------------------------------------------------------
+
+def write_veto_files(tmp_path, *, ablation_vetoed=(), test_vetoed=(), name="vetoes.json"):
+    """Two synthetic source reports and a veto record naming them with their sha256 values (the 07-11 shape)."""
+    ab, te = tmp_path / "ablation_report.json", tmp_path / "test_report.json"
+    ab.write_text(json.dumps({"synthetic": "ablation source report"}), encoding="utf-8")
+    te.write_text(json.dumps({"synthetic": "test source report"}), encoding="utf-8")
+
+    def section(path, vetoed):
+        return {"report": str(path), "sha256": sha(str(path)),
+                "vetoes": {c: {"vetoed": c in vetoed, "reasons": ["synthetic"] if c in vetoed else []}
+                           for c in core.REAL_CANDIDATES}}
+
+    record = {"protocol": "v4",
+              "ablation": {**section(ab, ablation_vetoed), "ranking_invariant": True},
+              "test": {**section(te, test_vetoed), "conductor_basis": "synthetic"},
+              "created_at_utc": "2026-11-02T00:00:00Z"}
+    path = tmp_path / name
+    path.write_text(json.dumps(record), encoding="utf-8")
+    return str(path), record, (ab, te)
+
+
+def capture_main(monkeypatch, argv, *, now=AT_INSTANT):
+    """Run main with the clock pinned and run_confirmation replaced by a recorder: nothing real can run."""
+    seen = {}
+    monkeypatch.setattr(core, "utcnow", lambda: pd.Timestamp(now))
+
+    def fake_run(**kwargs):
+        seen.update(kwargs)
+        return {"evidence_dir": "stub-evidence-dir"}
+
+    monkeypatch.setattr(conf, "run_confirmation", fake_run)
+    return conf.main(argv), seen
+
+
+def test_cli_lists_the_signed_rounds_and_takes_a_vetoes_path():
+    args = conf.build_parser().parse_args([])
+    assert args.round == core.DEFAULT_ROUND.name == "v4-read1" and args.vetoes is None
+    help_text = conf.build_parser().format_help()
+    for name in sorted(core.PROTOCOL_ROUNDS):
+        assert name in help_text
+    with pytest.raises(SystemExit):
+        conf.build_parser().parse_args(["--round", "v3-final"])
+
+
+@pytest.mark.parametrize("argv_tail", [
+    ["--round", "v4-read1"],
+    ["--round", "v4-read2"],
+    ["--round", "v4-read1", "--protocol-status", "signed"],          # signed but no veto record
+])
+def test_a_deciding_round_without_a_veto_record_is_refused_before_anything_runs(monkeypatch, evidence_root, capsys, argv_tail):
+    code, seen = capture_main(monkeypatch, [*argv_tail, "--evidence-root", evidence_root])
+    assert code == 2 and seen == {}
+    err = capsys.readouterr().err
+    assert err.startswith("refused:") and "--vetoes" in err
+    assert not os.path.exists(evidence_root)
+
+
+def test_a_deciding_round_with_an_unsigned_status_is_refused_even_with_a_valid_veto_record(monkeypatch, evidence_root, capsys, tmp_path):
+    vetoes_path = write_veto_files(tmp_path)[0]
+    code, seen = capture_main(monkeypatch, ["--round", "v4-read1", "--vetoes", vetoes_path, "--evidence-root", evidence_root])
+    assert code == 2 and seen == {}
+    err = capsys.readouterr().err
+    assert err.startswith("refused:") and "signed" in err
+    assert not os.path.exists(evidence_root)
+
+
+def test_a_tampered_source_report_refuses_the_run_at_the_cli(monkeypatch, evidence_root, capsys, tmp_path):
+    vetoes_path, _, (ablation_report, _) = write_veto_files(tmp_path)
+    ablation_report.write_text(json.dumps({"synthetic": "edited after the veto record was written"}), encoding="utf-8")
+    code, seen = capture_main(monkeypatch, ["--round", "v4-read1", "--vetoes", vetoes_path, "--protocol-status", "signed",
+                                            "--evidence-root", evidence_root])
+    assert code == 2 and seen == {}
+    err = capsys.readouterr().err
+    assert err.startswith("refused:") and "sha256" in err and "ablation" in err
+    assert not os.path.exists(evidence_root)
+
+
+@pytest.mark.parametrize("round_name", ["v4-read1", "v4-read2"])
+def test_a_valid_veto_record_and_a_signed_status_reach_run_confirmation_in_the_round_subroot(monkeypatch, evidence_root,
+                                                                                           tmp_path, round_name):
+    vetoes_path, record, _ = write_veto_files(tmp_path, ablation_vetoed=("ml_cooling_corrected",))
+    code, seen = capture_main(monkeypatch, ["--round", round_name, "--vetoes", vetoes_path, "--protocol-status", "signed",
+                                            "--evidence-root", evidence_root])
+    assert code == 0
+    assert seen["round_name"] == round_name and seen["protocol_status"] == "signed"
+    assert seen["evidence_root"] == os.path.join(evidence_root, round_name)        # the one-shot rule is per round
+    assert seen["guard_cfg"] == core.guard_for_round(round_name)
+    assert seen["vetoes"]["ablation"]["vetoes"]["ml_cooling_corrected"]["vetoed"] is True
+    assert seen["vetoes"]["file"]["sha256"] == sha(vetoes_path)
+    assert not os.path.exists(evidence_root)
+
+
+def test_the_descriptive_round_needs_no_veto_record_and_still_uses_its_own_subroot(monkeypatch, evidence_root):
+    code, seen = capture_main(monkeypatch, ["--round", "v4-late-descriptive", "--evidence-root", evidence_root])
+    assert code == 0 and seen["round_name"] == "v4-late-descriptive" and seen["vetoes"] is None
+    assert seen["evidence_root"] == os.path.join(evidence_root, "v4-late-descriptive")
+
+
+def test_dry_run_for_read_2_lists_requests_ending_2026_10_31_and_128_slots(tmp_path):
+    out = str(tmp_path / "dry_r2.json")
+    assert conf.main(["--dry-run", "--round", "v4-read2", "--out", out]) == 0
+    result = json.load(open(out, encoding="utf-8"))
+    assert result["round"] == "v4-read2" and result["expected_slots_per_city"] == 128
+    assert len(result["planned_requests"]) == 8
+    assert {r["params"]["end_date"] for r in result["planned_requests"]} == {"2026-10-31"}
+    assert {r["params"]["start_date"] for r in result["planned_requests"]} == {"2026-09-28"}
+    assert result["scored_window"][1] == "2026-11-01T00:00:00+00:00"
+
+
+def test_dry_run_for_read_1_keeps_the_read_1_window(tmp_path):
+    out = str(tmp_path / "dry_r1.json")
+    assert conf.main(["--dry-run", "--round", "v4-read1", "--out", out]) == 0
+    result = json.load(open(out, encoding="utf-8"))
+    assert (result["round"], result["expected_slots_per_city"]) == ("v4-read1", 100)
+    assert {r["params"]["end_date"] for r in result["planned_requests"]} == {"2026-10-24"}
+
+
+# --- load_vetoes ---
+
+def test_load_vetoes_accepts_a_matching_record_and_reports_its_own_sha256(tmp_path):
+    path, record, _ = write_veto_files(tmp_path, ablation_vetoed=("ml_wind_corrected",), test_vetoed=("reference_ml_refit_24h",))
+    loaded = conf.load_vetoes(path)
+    assert loaded["ablation"]["vetoes"]["ml_wind_corrected"]["vetoed"] is True
+    assert loaded["test"]["vetoes"]["reference_ml_refit_24h"]["vetoed"] is True
+    assert loaded["test"]["vetoes"]["ml_wind_corrected"]["vetoed"] is False
+    assert loaded["file"] == {"path": os.path.abspath(path), "sha256": sha(path)}
+    assert loaded["ablation"]["ranking_invariant"] is True and loaded["test"]["conductor_basis"] == "synthetic"
+
+
+def _edit_record(tmp_path, edit):
+    path, record, files = write_veto_files(tmp_path)
+    edit(record)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(record, fh)
+    return path
+
+
+@pytest.mark.parametrize("label, edit, match", [
+    ("ablation sha256 differs", lambda r: r["ablation"].update(sha256="0" * 64), "ablation.*sha256"),
+    ("test sha256 differs", lambda r: r["test"].update(sha256="f" * 64), "test.*sha256"),
+    ("ablation section missing", lambda r: r.pop("ablation"), "ablation"),
+    ("test section missing", lambda r: r.pop("test"), "test"),
+    ("vetoed flag is a string", lambda r: r["ablation"]["vetoes"]["ml_wind_corrected"].update(vetoed="no"), "bool"),
+    ("vetoed flag is an integer", lambda r: r["test"]["vetoes"]["ml_cooling_corrected"].update(vetoed=0), "bool"),
+    ("unknown candidate key", lambda r: r["ablation"]["vetoes"].update(raw_forecast={"vetoed": False}), "raw_forecast"),
+    ("wrong-case candidate key", lambda r: r["test"]["vetoes"].update(ML_WIND_CORRECTED=r["test"]["vetoes"].pop("ml_wind_corrected")), "ML_WIND_CORRECTED"),
+    ("a candidate is absent", lambda r: r["ablation"]["vetoes"].pop("reference_ml_refit_24h"), "reference_ml_refit_24h"),
+    ("source report file is gone", lambda r: r["test"].update(report=r["test"]["report"] + ".gone"), "test.*report"),
+    ("protocol is not v4", lambda r: r.update(protocol="v3"), "protocol"),
+])
+def test_load_vetoes_refuses_a_broken_record(tmp_path, label, edit, match):
+    path = _edit_record(tmp_path, edit)
+    with pytest.raises(ValueError, match=match):
+        conf.load_vetoes(path)
+
+
+def test_load_vetoes_refuses_a_file_that_is_not_a_json_object(tmp_path):
+    for text in ("", "not json", "[1, 2]", "null"):
+        p = tmp_path / "bad.json"
+        p.write_text(text, encoding="utf-8")
+        with pytest.raises(ValueError):
+            conf.load_vetoes(str(p))
+    with pytest.raises(ValueError, match="cannot read"):
+        conf.load_vetoes(str(tmp_path / "does_not_exist.json"))
+
+
+def test_load_vetoes_resolves_a_relative_report_path_against_the_base_dir(tmp_path):
+    path, record, (ab, te) = write_veto_files(tmp_path)
+    record["ablation"]["report"], record["test"]["report"] = ab.name, te.name
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(record, fh)
+    assert conf.load_vetoes(path, base_dir=str(tmp_path))["ablation"]["report"] == ab.name
+    with pytest.raises(ValueError, match="report"):
+        conf.load_vetoes(path, base_dir=str(tmp_path / "elsewhere"))
+
+
+# --- run_confirmation: the veto record is checked before the guard ---
+
+def test_a_fresh_run_without_a_veto_record_raises_before_the_guard_and_leaves_the_root_empty(monkeypatch, evidence_root):
+    def boom(*a, **k):
+        raise AssertionError("must not be reached: the veto record is checked before the guard")
+
+    monkeypatch.setattr(core, "check_guard", boom)
+    monkeypatch.setattr(core, "new_evidence_dir", boom)
+    for round_name, now in (("v4-read1", AT_INSTANT), ("v4-read2", "2026-11-08T00:00:00Z")):
+        with pytest.raises(ValueError, match="SEL-03"):
+            conf.run_confirmation(cities=CITIES, guard_cfg=core.guard_for_round(round_name), evidence_root=evidence_root,
+                                  now=now, vetoes=None)
+    assert not os.path.exists(evidence_root)
+
+
+def test_a_malformed_veto_record_given_directly_also_raises_before_the_guard(monkeypatch, evidence_root):
+    monkeypatch.setattr(core, "check_guard", lambda *a, **k: (_ for _ in ()).throw(AssertionError("guard reached")))
+    broken = no_veto_record()
+    broken["test"]["vetoes"]["ml_wind_corrected"]["vetoed"] = "yes"
+    with pytest.raises(ValueError, match="bool"):
+        run(evidence_root, vetoes=broken)
+    assert not os.path.exists(evidence_root)
+
+
+def test_round_name_and_guard_must_agree(evidence_root):
+    with pytest.raises(ValueError, match="round"):
+        run(evidence_root, guard_cfg=core.guard_for_round("v4-read2"), round_name="v4-read1")
+
+
+def test_the_report_and_config_record_the_round_and_the_veto_file_with_its_hash(evidence_root, stub_models, tmp_path):
+    path, record, (ab, te) = write_veto_files(tmp_path)
+    vetoes = conf.load_vetoes(path)
+    report = injected_run(evidence_root, stub_models, cities=["AUSTIN"], vetoes=vetoes, protocol_status="signed")
+    assert report["round"] == report["config"]["round"] == "v4-read1"
+    src = report["config"]["vetoes"]
+    assert src["path"] == os.path.abspath(path) and src["sha256"] == sha(path)
+    assert src["ablation_report"] == {"report": str(ab), "sha256": sha(str(ab))}
+    assert src["test_report"] == {"report": str(te), "sha256": sha(str(te))}
+    assert report["vetoes"]["source"] == src and report["vetoes"]["record"]["ablation"]["vetoes"].keys() == set(core.REAL_CANDIDATES)
+    saved = json.load(open(os.path.join(report["evidence_dir"], "report.json"), encoding="utf-8"))
+    assert saved["vetoes"]["source"]["sha256"] == sha(path) and saved["round"] == "v4-read1"
+    started = json.load(open(os.path.join(report["evidence_dir"], "run_started.json"), encoding="utf-8"))
+    assert started["config"]["vetoes"]["sha256"] == sha(path)           # recorded before any row is read
+
+
+def test_a_synthetic_record_is_recorded_as_injected_not_as_a_file(evidence_root, stub_models):
+    report = injected_run(evidence_root, stub_models, cities=["AUSTIN"])
+    assert report["config"]["vetoes"]["injected"] is True and report["config"]["vetoes"]["path"] is None
+
+
+def test_a_development_run_without_a_veto_record_records_none(evidence_root, stub_models):
+    report = run(evidence_root, now="2026-10-13T08:00:00Z", cities=["AUSTIN"], frame_provider=dev_provider,
+                 model_loader=loader_for(stub_models), window=DEV_WINDOW, params=SMALL, vetoes=None)
+    assert report["config"]["vetoes"] is None and report["vetoes"] is None and report["round"] == "v4-read1"
+
+
+# --- the v4 decision in the headline port ---
+
+def test_a_development_basis_run_decides_with_the_v4_rule_and_the_exploratory_statement(monkeypatch, evidence_root, stub_models):
+    import forecast_shadow_decision_v4 as v4
+    calls = []
+    real = v4.apply_ship_rule_v4
+    monkeypatch.setattr(v4, "apply_ship_rule_v4", lambda *a, **k: calls.append(k) or real(*a, **k))
+    report = run(evidence_root, now="2026-10-13T08:00:00Z", cities=["AUSTIN", "EL_PASO"], frame_provider=dev_provider,
+                 model_loader=loader_for(stub_models), window=DEV_WINDOW, params=SMALL, vetoes=None)
+    (kwargs,) = calls
+    assert kwargs["label"] == "headline" and kwargs["require_vetoes"] is False and kwargs["vetoes"] is None
+    assert kwargs["round_name"] == "v4-read1" and kwargs["fraction"] == 0.02 and kwargs["min_cities"] == 3
+    dec = report["decision"]
+    assert dec["rule"] == "v4" and dec["label"] == "headline decision" and dec["row_source"] == "reconstructed_frames"
+    assert core.EXPLORATORY_STATEMENT in dec["statements"]
+    assert "working_choice" not in dec and "action" not in dec                  # no v3 field survives
+    assert set(report["truth_stats"]) == {"AUSTIN", "EL_PASO"}
+    for city in ("AUSTIN", "EL_PASO"):
+        stats_c = report["truth_stats"][city]
+        assert stats_c["n_truth_rows"] == 40 and report["per_city"][city]["truth_stats"] == stats_c
+        assert dec["bars"]["per_city"][city] == pytest.approx(0.02 * stats_c["mean_truth_amps"], abs=1e-12, rel=0)
+
+
+def test_truth_stats_are_the_unrounded_mean_of_the_independent_truth_ampacity(evidence_root, stub_models):
+    report = injected_run(evidence_root, stub_models, cities=["AUSTIN", "MIDLAND"])
+    vt = pd.date_range("2026-09-30", "2026-10-24 18:00", freq="6h", tz="UTC")
+    for city in ("AUSTIN", "MIDLAND"):
+        w = archive_weather(city, "2026-09-28", "2026-10-24 23:00").set_index("datetime_utc").loc[vt]
+        truth = independent_amps({c: w[c] for c in ("air_temp", "wind_speed", "wind_direction", "solar_radiation")}, city)
+        stats_c = report["truth_stats"][city]
+        assert stats_c["n_truth_rows"] == len(vt) == 100
+        assert stats_c["mean_truth_amps"] == pytest.approx(float(truth.mean()), abs=1e-9, rel=0)
+        assert isinstance(stats_c["mean_truth_amps"], float) and isinstance(stats_c["n_truth_rows"], int)
+        assert report["decision"]["bars"]["per_city"][city] == pytest.approx(0.02 * float(truth.mean()), abs=1e-9, rel=0)
+
+
+def test_a_fresh_run_decides_and_a_vetoed_candidate_is_never_picked(tmp_path, stub_models):
+    free = injected_run(str(tmp_path / "ev_free"), stub_models, protocol_status="signed")
+    dec = free["decision"]
+    assert dec["rule"] == "v4" and dec["label"] == "headline decision" and dec["round"] == "v4-read1"
+    assert free["basis"] == "FRESH" and dec["pick"] is not None and dec["pick"] in dec["qualifying"], dec["reasons"]
+    winner = dec["pick"]
+    assert not any(dec["vetoes"][c]["vetoed"] for c in core.REAL_CANDIDATES)
+
+    for basis_name, vetoed_section in (("ablation", "ablation_vetoed"), ("test", "test_vetoed")):
+        (tmp_path / basis_name).mkdir()
+        path = write_veto_files(tmp_path / basis_name, **{vetoed_section: (winner,)})[0]
+        vetoed_run = injected_run(str(tmp_path / f"ev_{basis_name}"), stub_models, protocol_status="signed",
+                                  vetoes=conf.load_vetoes(path))
+        vdec = vetoed_run["decision"]
+        assert vdec["vetoes"][winner]["vetoed"] is True and vdec["vetoes"][winner][basis_name] is True
+        assert winner not in vdec["qualifying"] and vdec["pick"] != winner
+        assert any(f"{winner} does not qualify" in r and "vetoed" in r for r in vdec["reasons"])
+        # the family statistics do not depend on the veto record
+        assert vetoed_run["family"] == free["family"]
+
+
+def test_vetoing_every_candidate_gives_no_pick_and_the_signed_read_2_text(tmp_path, stub_models):
+    path = write_veto_files(tmp_path, test_vetoed=core.REAL_CANDIDATES)[0]
+    report = injected_run(str(tmp_path / "ev"), stub_models, protocol_status="signed", vetoes=conf.load_vetoes(path))
+    dec = report["decision"]
+    assert dec["pick"] is None and dec["qualifying"] == []
+    assert "No candidate qualifies under signed protocol v4" in dec["statement"]
+    assert "v4-read2" in dec["statement"]
+    md = open(os.path.join(report["evidence_dir"], "report.md"), encoding="utf-8").read()
+    assert "No candidate qualifies under signed protocol v4" in md and "\nPick:" not in md
+
+
+def test_read_2_is_scored_with_the_read_2_round_window_and_decision_text(tmp_path, stub_models):
+    path = write_veto_files(tmp_path, test_vetoed=core.REAL_CANDIDATES)[0]
+
+    def provider(city, *, evidence_dir):
+        # the frame `anchored_pair_frame(city, 2026-09-28, 2026-10-31)` would build for read 2
+        frame = make_frame(city, "2026-09-28", "2026-10-31 23:00")
+        frame = frame[frame["anchor_datetime_utc"] >= pd.Timestamp("2026-09-28", tz="UTC")].reset_index(drop=True)
+        return frame, archive_weather(city, "2026-09-28", "2026-10-31 23:00"), {"city": city}
+
+    report = run(str(tmp_path / "ev"), now="2026-11-08T00:00:00Z", guard_cfg=core.guard_for_round("v4-read2"),
+                 frame_provider=provider, model_loader=loader_for(stub_models), vetoes=conf.load_vetoes(path),
+                 protocol_status="signed")
+    assert report["round"] == "v4-read2" and report["decision"]["round"] == "v4-read2"
+    assert report["per_city"]["AUSTIN"]["n_scored"]["raw_forecast"] == 128 == core.V4_READ2.slots_per_city
+    assert report["config"]["fetch_window"] == ["2026-09-28", "2026-10-31"]
+    assert report["scored_window"] == ["2026-09-30T00:00:00+00:00", "2026-11-01T00:00:00+00:00"]
+    assert report["decision"]["pick"] is None and "Read 2 (v4-read2) also names no winner" in report["decision"]["statement"]
+
+
+def test_the_descriptive_round_never_picks_and_needs_no_veto_record(evidence_root, stub_models):
+    report = injected_run(evidence_root, stub_models, cities=["AUSTIN", "MIDLAND", "EL_PASO", "CORPUS_CHRISTI"],
+                          guard_cfg=core.guard_for_round("v4-late-descriptive"), vetoes=None, protocol_status="signed")
+    dec = report["decision"]
+    assert dec["label"] == "descriptive re-score (D-03), cannot overturn" and dec["pick"] is None
+    assert dec["round"] == "v4-late-descriptive" and report["round"] == "v4-late-descriptive"
+    assert "Round: v4-late-descriptive (descriptive only)" in open(os.path.join(report["evidence_dir"], "report.md"), encoding="utf-8").read()
+
+
+def test_a_city_whose_fetch_fails_has_no_truth_stats_and_the_decision_uses_the_other_three(evidence_root, stub_models):
+    report = injected_run(evidence_root, stub_models, frame_provider=injected_provider(fail=("MIDLAND",)))
+    assert list(report["failed_cities"]) == ["MIDLAND"]
+    assert report["failed_cities"]["MIDLAND"]["stage"] == "frame_fetch_failed"
+    assert "injected fetch failure" in report["failed_cities"]["MIDLAND"]["error"]
+    assert "MIDLAND" not in report["truth_stats"] and "truth_stats" not in report["per_city"]["MIDLAND"]
+    assert set(report["truth_stats"]) == {"AUSTIN", "CORPUS_CHRISTI", "EL_PASO"}
+    dec = report["decision"]
+    assert "MIDLAND" not in dec["bars"]["per_city"]
+    for cand in core.REAL_CANDIDATES:
+        assert dec["consistency"][cand]["cities_with_data"] == 3
+    assert dec["pick"] is not None                                            # three cities can still decide
+
+
+def test_two_failed_cities_leave_fewer_than_three_and_no_pick_is_made(evidence_root, stub_models):
+    report = injected_run(evidence_root, stub_models, frame_provider=injected_provider(fail=("MIDLAND", "EL_PASO")))
+    assert sorted(report["failed_cities"]) == ["EL_PASO", "MIDLAND"]
+    dec = report["decision"]
+    assert dec["pick"] is None and dec["qualifying"] == []
+    assert all(dec["consistency"][c]["cities_with_data"] == 2 and not dec["consistency"][c]["possible"] for c in core.REAL_CANDIDATES)
+    assert any("only 2 cities" in r for r in dec["reasons"])
+
+
+def test_a_failed_city_is_never_retried_in_a_decision_run(monkeypatch, evidence_root, stub_models):
+    attempts = []
+    base = injected_provider(fail=("MIDLAND",))
+
+    def counting(city, *, evidence_dir):
+        attempts.append(city)
+        return base(city, evidence_dir=evidence_dir)
+
+    injected_run(evidence_root, stub_models, frame_provider=counting)
+    assert attempts.count("MIDLAND") == 1 and sorted(attempts) == sorted(CITIES)
+
+
+def test_candidates_are_matched_as_exact_strings(evidence_root, stub_models):
+    report = injected_run(evidence_root, stub_models, cities=["AUSTIN"])
+    dec = report["decision"]
+    assert tuple(dec["levels"]) == core.REAL_CANDIDATES == ("ml_wind_corrected", "ml_cooling_corrected", "reference_ml_refit_24h")
+    assert set(dec["vetoes"]) == set(core.REAL_CANDIDATES) and set(dec["consistency"]) == set(core.REAL_CANDIDATES)
+    assert dec["pick"] is None or dec["pick"] in core.REAL_CANDIDATES
+
+
+@pytest.mark.parametrize("instant_text, refused", [
+    ("2026-11-01T02:00:00+02:00", False),     # the same moment as 2026-11-01T00:00:00Z, written with an offset
+    ("2026-11-01T01:59:59+02:00", True),      # one second before it
+    ("2026-10-31T19:00:00-05:00", False),     # also the same moment (UTC-5)
+    ("2026-10-31T18:59:59-05:00", True),
+])
+def test_instants_are_compared_as_utc_moments_never_as_text(evidence_root, stub_models, instant_text, refused):
+    # text order would put "2026-10-31..." before "2026-11-01..." and "2026-11-01T01:59:59+02:00" after "2026-11-01T00:00:00Z"
+    if refused:
+        with pytest.raises(core.EvaluationGuardError, match="evaluation instant"):
+            injected_run(evidence_root, stub_models, cities=["AUSTIN"], now=instant_text)
+        assert not os.path.exists(evidence_root)
+    else:
+        report = injected_run(evidence_root, stub_models, cities=["AUSTIN"], now=instant_text)
+        assert report["guard"]["now_evaluated"] == "2026-11-01T00:00:00+00:00" and report["guard"]["defaults_used"]
+
+
+def test_a_naive_or_offset_guard_instant_equal_to_the_round_is_still_the_default(evidence_root, stub_models):
+    for i, instant in enumerate((pd.Timestamp("2026-11-01T00:00:00"), pd.Timestamp("2026-11-01T02:00:00+02:00"))):
+        guard = core.GuardConfig(evaluation_instant=instant, valid_time_cutoff=pd.Timestamp("2026-10-25T02:00:00+02:00"))
+        report = injected_run(f"{evidence_root}_{i}", stub_models, cities=["AUSTIN"], guard_cfg=guard)
+        assert report["guard"]["defaults_used"] and report["guard"]["valid_time_cutoff"] == "2026-10-25T00:00:00+00:00"
+        assert report["per_city"]["AUSTIN"]["n_scored"]["raw_forecast"] == 100
+
+
+def test_the_report_renders_the_v4_decision_in_plain_form(evidence_root, stub_models, tmp_path):
+    path = write_veto_files(tmp_path, ablation_vetoed=("reference_ml_refit_24h",))[0]
+    report = injected_run(evidence_root, stub_models, protocol_status="signed", vetoes=conf.load_vetoes(path))
+    md = open(os.path.join(report["evidence_dir"], "report.md"), encoding="utf-8").read()
+    section = md.split("## Decision (headline decision)")[1].split("\n## ")[0]
+    for city in CITIES:
+        assert any(line.startswith(f"- Bar {city}:") and line.endswith(" A") for line in section.splitlines()), city
+    dec = report["decision"]
+    for cand in core.REAL_CANDIDATES:
+        line = next(l for l in section.splitlines() if l.startswith(f"- {cand} vs raw_forecast:"))
+        assert dec["levels"][cand]["level"] in line and "pooled bar" in line and "favoured in" in line and "of 4 cities" in line
+    ref_line = next(l for l in section.splitlines() if l.startswith("- reference_ml_refit_24h vs raw_forecast:"))
+    assert "vetoed by ABLATION" in ref_line
+    wind_line = next(l for l in section.splitlines() if l.startswith("- ml_wind_corrected vs raw_forecast:"))
+    assert "not vetoed" in wind_line
+    assert dec["pick"] is not None and f"\nPick: {dec['pick']}\n" in section
+    assert "Label: headline decision" in section and "Round: v4-read1" in section
+    assert core.NOT_MEASURED_STATEMENT in section and "working choice" not in section.lower()
+
+
+def test_the_v4_decision_block_of_a_development_run_leaves_family_and_metrics_alone(evidence_root, stub_models):
+    # same fixture, once without and once with a veto record: only the decision block (and its inputs) may differ
+    a = run(evidence_root + "_a", now="2026-10-13T08:00:00Z", cities=["AUSTIN", "EL_PASO"], frame_provider=dev_provider,
+            model_loader=loader_for(stub_models), window=DEV_WINDOW, params=SMALL, vetoes=None)
+    b = run(evidence_root + "_b", now="2026-10-13T08:00:00Z", cities=["AUSTIN", "EL_PASO"], frame_provider=dev_provider,
+            model_loader=loader_for(stub_models), window=DEV_WINDOW, params=SMALL)
+    assert a["family"] == b["family"]
+    assert {c: a["per_city"][c]["metrics"] for c in a["per_city"]} == {c: b["per_city"][c]["metrics"] for c in b["per_city"]}

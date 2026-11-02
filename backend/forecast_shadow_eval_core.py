@@ -1170,12 +1170,55 @@ def render_family(report: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _render_decision_v4(dec: dict) -> list[str]:
+    """The signed-v4 decision in plain form: label, per-city bars, each candidate's level with its bar,
+    consistency, vetoes with their source, then the single pick or the no-pick statement and the statements."""
+    lines = [f"Label: {dec.get('label')}. Round: {dec.get('round')}. Rule: v4. Protocol status: {dec.get('protocol_status')}.",
+             "", f"Bars: {(dec.get('fraction') or 0) * 100:g}% of each city's mean truth "
+                 f"ampacity over its scored rows (amps):"]
+    bars = (dec.get("bars") or {}).get("per_city") or {}
+    for city, bar in bars.items():
+        lines.append(f"- Bar {city}: {_f(bar)} A" if bar is not None else f"- Bar {city}: n/a A (no truth rows)")
+    lines += ["", "Each candidate against raw_forecast (pooled benefit against the pooled bar):"]
+    for cand, lv in (dec.get("levels") or {}).items():
+        cons = (dec.get("consistency") or {}).get(cand) or {}
+        veto = (dec.get("vetoes") or {}).get(cand) or {}
+        if veto.get("vetoed"):
+            by = " and ".join(b.upper() for b in ("ablation", "test") if veto.get(b))
+            veto_text = f"vetoed by {by}; veto records consulted: {veto.get('source')}"
+        else:
+            veto_text = f"not vetoed; veto records consulted: {veto.get('source')}"
+        lines.append(
+            f"- {cand} vs raw_forecast: **{lv['level']}** (benefit {_f(lv.get('benefit_amps'))} A, pooled bar "
+            f"{_f(lv.get('bar_amps'))} A, Holm-adjusted p {_f(lv.get('p_holm_adjusted'), 4)}; favoured in "
+            f"{cons.get('cities_favoring')} of {cons.get('cities_with_data')} cities, "
+            f"{'consistent' if cons.get('consistent') else 'not consistent'}; {veto_text})")
+    lines.append("")
+    for alt, d in (dec.get("alternatives_vs_default") or {}).items():
+        lines.append(f"- {alt} vs {DEFAULT_CHOICE}: pooled margin {_f(d.get('margin_over_default_amps'))} A against a pooled "
+                     f"bar of {_f(d.get('bar_amps'))} A, favoured in {d.get('cities_favoring')} of "
+                     f"{d.get('cities_with_data')} cities, consistently better: {d.get('consistently_better')}")
+    lines.append("")
+    if dec.get("pick") is not None:
+        lines.append(f"Pick: {dec['pick']}")
+    elif str(dec.get("label", "")).startswith("headline"):
+        lines.append(dec.get("statement") or "No pick.")
+    else:
+        lines.append(f"Reported pick: None ({dec.get('label')}). "
+                     f"Would-be outcome under the v4 rule: {dec.get('rule_outcome') or 'no candidate qualifies'}.")
+    lines.append("")
+    lines += [f"- {s}" for s in dec.get("statements") or []]
+    return lines
+
+
 def render_decision(report: dict) -> str:
     dec = report.get("decision")
     label = "headline decision" if report["row_source"] == HEADLINE_ROW_SOURCE else "live-system check"
     lines = [f"## Decision ({label})", ""]
     if not dec:
         return "\n".join(lines + ["(not computed)"]) + "\n"
+    if dec.get("rule") == "v4":
+        return "\n".join(lines + _render_decision_v4(dec)) + "\n"
     for cand, lv in (dec.get("levels") or {}).items():
         lines.append(f"- {cand} vs raw_forecast: **{lv['level']}** (benefit {_f(lv.get('benefit_amps'))} A, "
                      f"Holm rejected: {lv.get('holm_rejected')}, favoured in {lv.get('cities_favoring')} of {lv.get('cities_with_data')} cities)")
