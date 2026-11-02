@@ -1,19 +1,19 @@
 ---
 gsd_state_version: "1.0"
-current_phase: 07 — Per-City Conductors, Shadow Refit and Early Model Selection
-current_plan: Not started
+current_phase: 07
+current_plan: 2
 status: executing
-stopped_at: Phase 06 complete, ready to execute Phase 07
-last_updated: "2026-11-02T00:13:11.844Z"
+stopped_at: Completed 07-01-PLAN.md
+last_updated: "2026-11-02T05:01:36.672Z"
 last_activity: 2026-11-01
-last_activity_desc: Phase 06 complete, transitioned to Phase 07
-state_head: fced310ed77ca18b9778950412907e1119c7b334
+last_activity_desc: Phase 07 execution started
+state_head: d5df5960d096e86b8ba3f1f62dbd73783e3118b1
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 66
-  completed_plans: 47
-  percent: 86
+  completed_plans: 48
+  percent: 73
 milestone_name: Production Pipeline (Supabase + live ratings)
 workstream: production-pipeline
 created: 2026-10-18
@@ -36,11 +36,11 @@ whoever owns that analysis; they are not work items here.
 ## Current Position
 
 **Status:** Ready to execute
-**Current Phase:** 07 — Per-City Conductors, Shadow Refit and Early Model Selection
-**Current Plan:** Not started
-**Total Plans in Phase:** 13
-**Last Activity:** 2026-11-01
-**Last Activity Description:** Phase 06 complete, transitioned to Phase 07
+**Current Phase:** 07
+**Current Plan:** 2
+**Total Plans in Phase:** 19
+**Last Activity:** 2026-11-01 — Phase 07 execution started
+**Last Activity Description:** Phase 07 execution started
 
 ## Planning Summary (2026-10-19)
 
@@ -192,6 +192,8 @@ These block or affect stringing the system together and belong to the phases nam
 - [Phase 06]: 06-11: supabase-js approved and installed at exactly 2.117.3 (scratch folder, --ignore-scripts); PSS/E interpreter question non-blocking, owner has not yet confirmed sending (follow-up, date TBD)
 - [Phase 06]: 06-12: soak accepted (72 h, 0 breaches, 864/864 probes); sign-off signalled by running the accept-only teardown; soak cron job removed, permanent freshness alarm stays on (D-13)
 - [Phase 06]: 06-13: write verdicts after the 2026-10-30 platform change identical to 06-09 and 06-12; E2E-03 holds, T-04-22 closed
+- [Phase 07]: 07-01: legacy identity path (no production resolver, i.e. Phase 3 copies) emits the schema-1 recipe without PRODUCTION_CONDUCTORS so Phase 3 backfill fingerprints still reproduce — Unconditional schema 2 broke supabase_load_backfill_test parity with backfill_parity.json
+- [Phase 07]: 07-01: RATING_CONFIG_VERSION not bumped; fingerprint changes automatically (schema 2 plus PRODUCTION_CONDUCTORS); bump together with the city_rating_v1.md edit in a later plan — Label is pinned to the schema doc by supabase_schema_doc_test; plan did not list the bump
 
 ## Open Decisions
 
@@ -215,9 +217,9 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 
 ## Session Continuity
 
-**Last session:** 2026-11-02T00:00:37.985Z
+**Last session:** 2026-11-02T05:01:36.379Z
 
-**Stopped At:** Phase 06 complete, ready to execute Phase 07
+**Stopped At:** Completed 07-01-PLAN.md
 **Resume File:** None
 
 ## Performance Metrics
@@ -268,6 +270,7 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 | Phase 06 P11 | 1 session | 3 tasks | 3 files |
 | Phase 06 P12 | 1 session | 3 tasks | 12 files |
 | Phase 06 P13 | 1 session | 2 tasks | 3 files |
+| Phase 07 P01 | 25 min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
