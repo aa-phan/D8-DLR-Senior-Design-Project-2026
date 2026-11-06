@@ -41,6 +41,7 @@ _ROOT = os.path.abspath(os.path.join(_BACKEND, ".."))
 if _BACKEND not in sys.path:
     sys.path.insert(0, _BACKEND)
 
+import psse_fake_launch  # noqa: E402
 import psse_fake_psspy as fake_module  # noqa: E402
 import psse_fakes  # noqa: E402
 import psse_local_pg as pg_helper  # noqa: E402
@@ -412,6 +413,51 @@ def test_exit2_bad_numbers(tmp_path):
     assert (cfg["PSSE_MAX_BUSES"], cfg["PSSE_PREFLIGHT"]) == ("2000000", "0")
     cfg = launcher.read_config(Sandbox(tmp_path, values={"PSSE_MAX_BUSES": "1"}).config, "run")
     assert cfg["PSSE_MAX_BUSES"] == "1"
+
+
+def test_env_module_name_rule():
+    """PSSE_ENV_MODULE must be a plain Python module name: ASCII, no dot, slash or space, 1 to 64 characters (plan 03-09)."""
+    for value in ("psse3604", "psse35", "_helper", "A", "a1_b2", "a" * 64):
+        assert launcher.is_plain_module_name(value) is True, value
+    invalid = [
+        "", "a" * 65, "psse3604.py", "a.b", "a b", "a/b", "a\\b", "1a", "a-b", "a;b",
+        "psse3604\n", " psse3604", "psse360é", "٣abc", None, 3604,
+    ]
+    for value in invalid:
+        assert launcher.is_plain_module_name(value) is False, repr(value)
+
+
+def test_env_module_key_is_optional_and_validated(tmp_path):
+    """Invalid values are exit 2 naming the key and never the value; a valid one is read back; absent or empty leaves it out."""
+    names = [key.name for key in launcher.CONFIG_KEYS]
+    row = launcher.CONFIG_KEYS[names.index("PSSE_ENV_MODULE")]
+    assert names.index("PSSE_ENV_MODULE") == names.index("PSSE_PSSPY_DIR") + 1
+    assert row.required_for == () and row.secret is False and row.kind == "module"
+
+    for value in ("envmarker.py", "env.marker", "env marker", "env/marker", "env\\marker",
+                  "1envmarker", "env-marker", "envmarkér", "e" * 65 + "marker"):
+        box = _exit2(tmp_path, values={"PSSE_ENV_MODULE": value}, secrets=[value])
+        assert "key PSSE_ENV_MODULE" in box.err.getvalue(), value
+
+    box = Sandbox(tmp_path, values={"PSSE_ENV_MODULE": "psse3604"})
+    assert launcher.read_config(box.config, "run")["PSSE_ENV_MODULE"] == "psse3604"
+    assert "PSSE_ENV_MODULE" not in launcher.read_config(Sandbox(tmp_path).config, "run")
+    assert "PSSE_ENV_MODULE" not in launcher.read_config(
+        Sandbox(tmp_path, values={"PSSE_ENV_MODULE": ""}).config, "run")
+    for mode in ("run", "dry-run", "selftest", "probe", "gaps", "credcheck", "hold-lock"):
+        assert "PSSE_ENV_MODULE" not in launcher._missing({}, mode)
+
+    # a selftest with the key set hands the resolved configuration, key included, to the loader once
+    box = Sandbox(tmp_path, values={"PSSE_ENV_MODULE": "psse3604"})
+    calls = []
+
+    def loader(cfg):
+        calls.append(cfg)
+        return psse_fake_launch.FakeLaunchPsspy()
+
+    code = box.main(["selftest", "--config", box.config], loader=loader)
+    assert code == 0, box.err.getvalue()
+    assert len(calls) == 1 and calls[0]["PSSE_ENV_MODULE"] == "psse3604"
 
 
 def test_exit2_sslmode_rule(tmp_path, monkeypatch):

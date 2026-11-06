@@ -16,12 +16,15 @@ Every subprocess runs with `sys.executable -I -B`, a timeout and a finally block
 """
 
 import ast
+import importlib
 import os
 import socket
 import subprocess
 import sys
 import threading
 import time
+
+import pytest
 
 _HERE = os.path.dirname(__file__)
 _BACKEND = os.path.abspath(os.path.join(_HERE, ".."))
@@ -31,6 +34,7 @@ if _BACKEND not in sys.path:
 import psse_fakes  # noqa: E402
 from psse_fake_launch import (  # noqa: E402
     DLL_FAILURE_TEXT, ENV_READY_VARIABLE, STUB_PSSPY_SOURCE, write_env_gated_psspy_folder)
+from psse_job import launcher  # noqa: E402
 from psse_lock_test import probe as lock_probe  # noqa: E402
 
 ENTRY = os.path.join(_BACKEND, "psse_run_hourly.py")
@@ -193,6 +197,147 @@ def test_entry_helper_that_exits_is_reported_by_class_only(tmp_path):
         assert "lic-host-marker" not in text and "Program Files" not in text and "lic.dat" not in text
         assert "exit_helper" not in text and str(tmp_path) not in text
     assert err == ""
+
+
+def test_entry_refuses_an_invalid_env_module_before_any_import(tmp_path):
+    """A value that is not a plain module name is exit 2: the key is named, the value is not, nothing is imported or locked."""
+    folder, log_path = _write_gated_folder(tmp_path)
+    for index, value in enumerate(("psse3604.py", "psse\\3604", "psse 3604", "psse360\u00e9")):
+        lock = tmp_path / ("locks%d" % index) / "psse_job.lock"
+        config = _write_config(
+            tmp_path, folder, {"PSSE_ENV_MODULE": value, "PSSE_LOCK_PATH": str(lock)}, name="bad%d.env" % index)
+        code, out, err = _run_entry(["selftest", "--config", config], tmp_path)
+        assert code == 2, (value, out, err)
+        assert "key PSSE_ENV_MODULE" in err
+        assert value not in err and value not in out
+        assert out == ""
+        assert _log_lines(log_path) == []
+        assert not lock.exists()
+
+
+@pytest.fixture
+def _import_sandbox(monkeypatch):
+    """In-process proofs: a sys.path copy, the ready variable at 0, psspy and the helper out of sys.modules before and after."""
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    monkeypatch.setenv(ENV_READY_VARIABLE, "0")
+    monkeypatch.setattr(launcher, "DLL_DIRECTORY_HANDLES", [])
+    names = ("psspy", "psse3604")
+    for name in names:
+        monkeypatch.delitem(sys.modules, name, raising=False)
+    importlib.invalidate_caches()
+    yield
+    for name in names:
+        sys.modules.pop(name, None)
+    importlib.invalidate_caches()
+
+
+def test_load_psspy_rechecks_the_name_and_imports_the_helper_after_the_search_dirs(tmp_path, _import_sandbox):
+    """load_psspy appends no folder itself, re-checks the name before importing it, then imports helper then psspy."""
+    import psse_run_hourly
+
+    folder, log_path = _write_gated_folder(tmp_path)
+    config = _write_config(tmp_path, folder, {"PSSE_ENV_MODULE": "psse3604"})
+    cfg = launcher.read_config(config, "selftest")
+    os.makedirs(cfg["PSSE_LOG_DIR"])
+
+    # (a) before the search folders are appended the helper cannot be found
+    with pytest.raises(launcher.PsseUnavailable) as excinfo:
+        psse_run_hourly.load_psspy(cfg)
+    message = str(excinfo.value)
+    assert message == "the module named by PSSE_ENV_MODULE could not be imported (ModuleNotFoundError)"
+    assert _log_lines(log_path) == [] and "psspy" not in sys.modules
+
+    # (b) a dotted name is refused before any import, although the folder is on the path now
+    launcher.add_search_dirs(cfg)
+    with pytest.raises(launcher.PsseUnavailable) as excinfo:
+        psse_run_hourly.load_psspy(dict(cfg, PSSE_ENV_MODULE="psse3604.py"))
+    assert str(excinfo.value) == "PSSE_ENV_MODULE is not a plain module name"
+    assert "psse3604.py" not in str(excinfo.value)
+    assert _log_lines(log_path) == [] and "psse3604" not in sys.modules and "psspy" not in sys.modules
+
+    # (c) the valid name: the helper first, then psspy
+    module = psse_run_hourly.load_psspy(cfg)
+    assert module is sys.modules["psspy"]
+    assert _log_lines(log_path) == ["helper", "psspy"]
+
+
+def test_entry_env_module_failures_name_only_the_class(tmp_path):
+    """A helper that is missing, raises with a path in its text, or does not make psspy loadable: exit 6, class only."""
+    folder, log_path = _write_gated_folder(tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+
+    # (i) a name that is not in the folder
+    config = _write_config(tmp_path, folder, {"PSSE_ENV_MODULE": "no_such_helper"}, name="missing.env")
+    code, out, err = _run_entry(["selftest", "--config", config], elsewhere)
+    assert code == 6, out + err
+    assert "the module named by PSSE_ENV_MODULE could not be imported (ModuleNotFoundError)" in out
+    assert "no_such_helper" not in out and "no_such_helper" not in err
+    assert "PSS/E started" not in out and err == ""
+
+    # (ii) a helper that raises RuntimeError whose text names its own file and a licence path
+    (folder / "raising_helper.py").write_text(
+        "raise RuntimeError('cannot initialise from ' + __file__ + ' with licence C:\\\\Program Files\\\\PTI\\\\lic.dat')\n",
+        encoding="utf-8")
+    config = _write_config(tmp_path, folder, {"PSSE_ENV_MODULE": "raising_helper"}, name="raising.env")
+    code, out, err = _run_entry(["selftest", "--config", config], elsewhere)
+    assert code == 6, out + err
+    assert "(RuntimeError)" in out
+    for text in (out, err):
+        assert "cannot initialise" not in text and "raising_helper" not in text
+        assert str(tmp_path) not in text and "gated psspy folder" not in text
+        assert "Program Files" not in text and "lic.dat" not in text
+    assert err == ""
+
+    # (iii) a helper that imports but leaves the gate closed: psspy still fails, and the key is set
+    (folder / "noop_helper.py").write_text("pass\n", encoding="utf-8")
+    config = _write_config(tmp_path, folder, {"PSSE_ENV_MODULE": "noop_helper"}, name="noop.env")
+    code, out, err = _run_entry(["selftest", "--config", config], elsewhere)
+    assert code == 6, out + err
+    assert "psspy could not be imported (ImportError)" in out
+    assert "PSSE_ENV_MODULE is not set" not in out
+    assert "DLL load failed" not in out and "DLL load failed" not in err
+    assert err == ""
+    assert _log_lines(log_path) == []
+
+
+def test_entry_helper_import_is_configured_and_never_at_import_time(tmp_path):
+    """No helper is imported at module level or by a literal name; importing the entry module imports no helper or psspy."""
+    with open(ENTRY, encoding="utf-8") as handle:
+        tree = ast.parse(handle.read(), ENTRY)
+    module_level = sorted(
+        node.names[0].name if isinstance(node, ast.Import) else node.module
+        for node in tree.body if isinstance(node, (ast.Import, ast.ImportFrom)))
+    assert module_level == ["importlib", "os", "psse_job", "sys"], module_level
+
+    sites = sorted(_psspy_import_sites(tree))
+    dynamic = [site for site in sites if site[2] == "dynamic"]
+    static = [site for site in sites if site[2] == "static"]
+    assert len(dynamic) == 1 and len(static) == 1, sites
+    assert dynamic[0][1] == static[0][1] == "load_psspy"
+    assert dynamic[0][0] < static[0][0]  # the helper is imported before psspy
+    calls = [node for node in ast.walk(tree)
+             if isinstance(node, ast.Call) and getattr(node.func, "attr", "") == "import_module"]
+    assert len(calls) == 1 and len(calls[0].args) == 1
+    argument = calls[0].args[0]
+    assert not (isinstance(argument, ast.Constant) and isinstance(argument.value, str)), "a hard-coded name"
+
+    folder, log_path = _write_gated_folder(tmp_path)
+    code = (
+        "import importlib.util, os, sys\n"
+        "sys.path.append(sys.argv[2])\n"
+        "spec = importlib.util.spec_from_file_location('psse_run_hourly', sys.argv[1])\n"
+        "module = importlib.util.module_from_spec(spec)\n"
+        "spec.loader.exec_module(module)\n"
+        "print(sorted(name for name in ('psspy', 'psse3604') if name in sys.modules))\n"
+        "print(os.path.exists(sys.argv[3]))\n"
+    )
+    done = subprocess.run(
+        [sys.executable, "-I", "-B", "-c", code, ENTRY, str(folder), log_path], cwd=str(tmp_path),
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=TIMEOUT,
+        universal_newlines=True)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.splitlines() == ["[]", "False"]
 
 
 def test_entry_exit2_without_arguments_under_isolated_mode(tmp_path):
