@@ -162,7 +162,7 @@ def test_guide_config_key_table_equals_launcher_config_keys(tmp_path):
     section = _section(_read(GUIDE), "## Configuration file")
     header, rows = _table(section, "Key")
     assert header == ["Key", "Required for", "Secret", "Default", "Meaning"]
-    assert len(launcher.CONFIG_KEYS) == 13
+    assert len(launcher.CONFIG_KEYS) == 14
     names = [_backticked(cells[0]) for cells in rows]
     assert names == [key.name for key in launcher.CONFIG_KEYS]  # same keys, same order, none missing or extra
 
@@ -447,6 +447,50 @@ def test_unverified_tags_cite_existing_runbook_steps():
             cited.add(claim_id)
     assert len(_TAG.findall(guide)) >= MIN_GUIDE_TAGS
     assert set(register) - cited == set(), "register rows no sentence cites: %s" % sorted(set(register) - cited)
+
+
+def _runbook_step_text(runbook, number):
+    """The text of one runbook step: from its `### Step N:` heading to the next step heading."""
+    start = runbook.index("### Step %d: " % number)
+    end = runbook.find("\n### Step ", start + 5)
+    return runbook[start:end if end != -1 else len(runbook)]
+
+
+def test_config_example_blocks_name_only_known_keys_and_the_env_module():
+    """Plan 03-09: every KEY=VALUE line of a `text` block names a launcher key; the two examples hold PSSE_ENV_MODULE as a placeholder."""
+    known = set(key.name for key in launcher.CONFIG_KEYS)
+    examples = {}
+    for name, path in (("guide", GUIDE), ("runbook", RUNBOOK)):
+        for info, body in _fenced_blocks(_read(path)):
+            if info != "text":
+                continue
+            for line in body.splitlines():
+                match = re.match(r"([A-Z][A-Z0-9_]*)=(.*)$", line)
+                if match:
+                    assert match.group(1) in known, (name, match.group(1))
+            examples[(name, "SUPABASE_PSSE_DB_URL" in body, "PSSE_CASE_PATH" in body)] = body
+    guide_example = [body for (name, has_url, _case), body in examples.items() if name == "guide" and has_url]
+    runbook_example = [body for (name, _url, has_case), body in examples.items() if name == "runbook" and has_case]
+    assert len(guide_example) == 1 and len(runbook_example) == 1
+    for body in guide_example + runbook_example:
+        lines = [line for line in body.splitlines() if line.startswith("PSSE_ENV_MODULE=")]
+        assert len(lines) == 1, body
+        assert re.fullmatch(r"PSSE_ENV_MODULE=<[^<>]+>", lines[0]), lines[0]  # a placeholder, never a real name
+
+
+def test_env_module_claims_are_registered_and_the_stale_36x_claim_is_gone():
+    """Plan 03-09: U33 and U34 are registered, U01 and U07 keep their steps, the 36.x/3.11 claim is gone, the key is explained."""
+    guide, runbook = _read(GUIDE), _read(RUNBOOK)
+    register = _register_rows(runbook)
+    assert register["U33"][0] == 2 and register["U34"][0] == 0
+    assert register["U01"][0] == 0 and register["U07"][0] == 2
+    for name, text in (("guide", guide), ("runbook", runbook)):
+        assert re.search(r"36\.x[^|\n]{0,40}Python 3\.11", text) is None, name
+        assert "PSSE_ENV_MODULE" in text and "Python 3.13 and 3.14" in text, name
+    assert "PSSE_ENV_MODULE" in _section(guide, "## Troubleshooting")
+    step2 = _runbook_step_text(runbook, 2)
+    assert "PSSE_ENV_MODULE" in step2 and "(U33)" in step2
+    assert "PSSE_ENV_MODULE" in _runbook_step_text(runbook, 1)
 
 
 # --------------------------------------------------------------------------- the command and SQL blocks

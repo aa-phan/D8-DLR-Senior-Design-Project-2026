@@ -24,7 +24,8 @@ Read each item before installing. Write the answers in the hand-over record at t
 | PSS/E version and edition (full, free, university) | PSS/E's about box; `selftest` prints the version | picks the interpreter and the psycopg pin; an edition with a small bus limit may not fit the real case |
 | Licence type: local, dongle or network | ask the teammate | a network licence may need a VPN; a signed-out session may have no licence `[UNVERIFIED until step 0]` (U30) |
 | Python path and bitness | `<PYTHON> -c "import sys, struct; print(sys.version); print(struct.calcsize('P') * 8)"` | must be 64-bit and must match the `psspy` folder |
-| The `psspy` folder | the PSS/E install folder (`PSSPY39` for Python 3.9, and so on) | PSS/E 35.x is reported to ship Python 3.9, 34.x to be 32-bit and 36.x to ship Python 3.11 `[UNVERIFIED until step 0]` (U01) |
+| The `psspy` folder | the PSS/E install folder (`PSSPY39` for Python 3.9, and so on) | PSS/E 35.x is reported to ship Python 3.9 and 34.x to be 32-bit `[UNVERIFIED until step 0]` (U01); PSS/E 36.4 was seen to ship Python 3.13 and 3.14 (folders `PSSPY313` and `PSSPY314`) in the first laptop session |
+| The environment helper | a module in the `psspy` folder whose header says it sets the PSS/E environment (`psse3604` for PSS/E 36.4); read the folder's module names, not its path | `psspy` did not load on PSS/E 36.4 until it was imported; another version's helper may have another name `[UNVERIFIED until step 0]` (U34) |
 | Administrator status | ask the teammate | the guide needs none; a missing right changes who registers the task |
 | Windows version | `winver` | Windows 11 laptops usually use Modern Standby, which affects wake |
 | Power settings | `powercfg /a` | shows which sleep states exist and whether wake timers can work |
@@ -91,6 +92,7 @@ The configuration file is the whole configuration. The launcher reads every sett
 | `PSSE_CASE_PATH` | run, run --dry-run, probe | no | none | absolute path of Power Systems' case file (a copy for the first checks) |
 | `PSSE_MAPPING_PATH` | run, run --dry-run | no | none | absolute path of the mapping file |
 | `PSSE_PSSPY_DIR` | run, run --dry-run, selftest, probe | no | none | folder holding `psspy` for the installed PSS/E |
+| `PSSE_ENV_MODULE` | none | no | none | name of PSS/E's environment helper module in the `psspy` folder (`psse3604` for PSS/E 36.4), imported before `psspy` |
 | `PSSE_BIN_DIR` | none | no | none | PSS/E program folder, added to the DLL search path |
 | `PSSE_SITE_DIR` | none | no | none | folder with extra Python packages (psycopg) |
 | `PSSE_LOG_DIR` | none | no | `logs` next to the file | local log folder |
@@ -100,6 +102,8 @@ The configuration file is the whole configuration. The launcher reads every sett
 | `PSSE_PREFLIGHT` | none | no | `1` | 1 checks that the database host answers before PSS/E starts, 0 skips the check |
 
 Where the table says "none" in the Required for column, the key is optional for every command. A mode needs only its own keys: `selftest` needs the `psspy` folder, `probe` needs the case and the folder, a dry run needs the case, the mapping and the folder, and `hold-lock` needs no key at all.
+
+The key `PSSE_ENV_MODULE` names PSS/E's environment helper: a module in the `psspy` folder whose header says it sets the PSS/E environment so that PSS/E can run from any interpreter (`psse3604` for PSS/E 36.4). In the first laptop session, importing `psspy` directly failed on PSS/E 36.4 with Python 3.14 with `DLL load failed while importing psscommon`, also with the folders on the module search path and registered as DLL folders, and importing the helper first made `psspy` load. When the key is set, every command that starts PSS/E imports that module once, after appending the folders and before `psspy`. The value must be a plain module name (letters, digits and underscores, not starting with a digit, at most 64 characters; no dots, slashes, spaces or `.py`); any other value is exit 2 and nothing is imported. Leave the key out when the install has no such module. A failure to import the helper is reported by its exception class only, never its text, because the helper runs PSS/E code whose text may hold a path or a licence server. That the launcher's own import of the helper works on the laptop is `[UNVERIFIED until step 2]` (U33).
 
 Format rules. One `KEY=VALUE` per line. Blank lines and lines that start with `#` are ignored. One pair of matching quotes around a value is removed. An empty value counts as absent. An unknown key, a repeated key, a line that is not in that form, a relative path where an absolute one is needed, or a file larger than 65536 bytes is an error (exit 2). The error names keys and line numbers, never a value or a line's text. The file is UTF-8 (a byte-order mark is accepted).
 
@@ -112,6 +116,7 @@ SUPABASE_PUBLISHABLE_KEY=<the publishable key>
 PSSE_CASE_PATH=<absolute path of the case file>
 PSSE_MAPPING_PATH=<absolute path of the mapping file>
 PSSE_PSSPY_DIR=<the psspy folder of the PSS/E install>
+PSSE_ENV_MODULE=<the helper module in the psspy folder, for example psse3604 for PSS/E 36.4>
 PSSE_BIN_DIR=<the PSS/E program folder>
 PSSE_SITE_DIR=<the site folder with psycopg>
 PSSE_JOB_VERSION=<short label>
@@ -144,7 +149,7 @@ These are steps 2 to 5 of [the runbook](psse_laptop_runbook.md) in short; follow
 <PYTHON> -X utf8 "<REPO>\backend\psse_run_hourly.py" selftest --config "<CONFIG>"
 ```
 
-It prints `Python <version>, 64-bit`, `PSS/E started`, four notes (`<function>: redirected to the log folder`), six `PASS` rows (the version and five launch functions) and `6 PASS, 0 FAIL, 0 SKIP`, with exit 0. Whether `psseinit` takes the bus limit and 20000 is enough is `[UNVERIFIED until step 2]` (U05); that the four output functions accept a redirect to a file is `[UNVERIFIED until step 2]` (U06); that `os.add_dll_directory` cures a DLL load failure on Python 3.8 or newer is `[UNVERIFIED until step 2]` (U07); that importing `psspy` needs no registry write for a standard user is `[UNVERIFIED until step 2]` (U08).
+It prints `Python <version>, 64-bit`, `PSS/E started`, four notes (`<function>: redirected to the log folder`), six `PASS` rows (the version and five launch functions) and `6 PASS, 0 FAIL, 0 SKIP`, with exit 0. Whether `psseinit` takes the bus limit and 20000 is enough is `[UNVERIFIED until step 2]` (U05); that the four output functions accept a redirect to a file is `[UNVERIFIED until step 2]` (U06); whether the program folder on the DLL search path (`os.add_dll_directory`) is needed, or enough, for `psspy` to load on Python 3.8 or newer is `[UNVERIFIED until step 2]` (U07), with the plain observation that on PSS/E 36.4 it was not enough without the environment helper; that the launcher's import of that helper (`PSSE_ENV_MODULE`) lets `psspy` load is `[UNVERIFIED until step 2]` (U33); that importing `psspy` needs no registry write for a standard user is `[UNVERIFIED until step 2]` (U08).
 
 2. `probe` checks the real `psspy` against the adapter's call surface on a copy of one of PSS/E's own example cases. Its default report holds no identifier. The parameter list of `branch_chng_3` is `[UNVERIFIED until step 3]` (U10); the example case's folder, size and usable lines are `[UNVERIFIED until step 3]` (U09).
 
@@ -311,7 +316,8 @@ limit 5;
 |---|---|---|
 | A licence dialog or a demo banner appears | the licence or dongle is not available to this session; a demo fallback may start `[UNVERIFIED until step 0]` (U02) | stop; read the edition string in the `selftest` version row; check the dongle or the VPN; the 45 minute limit ends a run that waits for a click |
 | `Bad magic number` | the interpreter's minor version differs from the `psspy` folder's | use the interpreter that matches the folder (step 0) |
-| `DLL load failed` | PSS/E's DLL folder is not on the search path, or the bitness differs | set `PSSE_BIN_DIR`; the launcher registers it with `os.add_dll_directory` on Python 3.8 or newer `[UNVERIFIED until step 2]` (U07) |
+| `DLL load failed` | the environment helper was not imported, PSS/E's DLL folder is not on the search path, or the bitness differs | set `PSSE_ENV_MODULE` to the helper module in the `psspy` folder `[UNVERIFIED until step 2]` (U33) and `PSSE_BIN_DIR`; the launcher registers the program folder with `os.add_dll_directory` on Python 3.8 or newer, which on PSS/E 36.4 was seen not to be enough without the helper `[UNVERIFIED until step 2]` (U07) |
+| `psspy could not be imported (<Class>)`, ending in `PSSE_ENV_MODULE is not set` when the key is absent; or `the module named by PSSE_ENV_MODULE could not be imported (<Class>)` | the key is missing, or its name is wrong, or the module is not in the configured `psspy` folder | add or correct `PSSE_ENV_MODULE`; read the folder's module names (not its path); a `psspy` failure after the helper succeeded is a new finding for a gap-closure plan |
 | The task runs and exits at once, nothing in the log | antivirus or application control blocks the new folder, a path with a space is not quoted, or the XML was imported in the wrong encoding | run the same command by hand first; ask the machine's owner to allow the folder; render again and import the XML as a UTF-8 string `[UNVERIFIED until step 6]` (U17) |
 | The task is killed after 45 minutes | a hung licence request or a study that overran | read `psse_output.log`; the study has its own 1500 second budget; a hard kill may leave a licence seat held `[UNVERIFIED until step 10]` (U28) |
 | Exit 2 | the configuration file is wrong or a key is missing for the mode | read the `configuration error:` lines; fix the keys they name |
