@@ -29,31 +29,14 @@ if _BACKEND not in sys.path:
     sys.path.insert(0, _BACKEND)
 
 import psse_fakes  # noqa: E402
+from psse_fake_launch import (  # noqa: E402
+    DLL_FAILURE_TEXT, ENV_READY_VARIABLE, STUB_PSSPY_SOURCE, write_env_gated_psspy_folder)
 from psse_lock_test import probe as lock_probe  # noqa: E402
 
 ENTRY = os.path.join(_BACKEND, "psse_run_hourly.py")
 TIMEOUT = 60
 
-STUB_PSSPY = (
-    "def getdefaultint():\n"
-    "    return 100000000\n"
-    "def getdefaultreal():\n"
-    "    return 1.0e20\n"
-    "def getdefaultchar():\n"
-    "    return '\\x01'\n"
-    "def psseversion():\n"
-    "    return ('PSS(R)E stub', 35, 6, 0, 'date', 0)\n"
-    "def psseinit(buses=None):\n"
-    "    return 0\n"
-    "def report_output(islct, filarg, options):\n"
-    "    return 0\n"
-    "def progress_output(islct, filarg, options):\n"
-    "    return 0\n"
-    "def alert_output(islct, filarg, options):\n"
-    "    return 0\n"
-    "def prompt_output(islct, filarg, options):\n"
-    "    return 0\n"
-)
+STUB_PSSPY = STUB_PSSPY_SOURCE
 
 
 def _closed_port():
@@ -123,6 +106,95 @@ def test_tracer_entry_script_selftest_with_stub_psspy_folder(tmp_path):
     assert err == ""
 
 
+def _write_gated_folder(tmp_path, env_module="psse3604"):
+    """(folder, import log path) of a gated fake psspy folder; the name shows a leaked path."""
+    folder = tmp_path / "gated psspy folder"
+    folder.mkdir()
+    return folder, write_env_gated_psspy_folder(folder, env_module)
+
+
+def _log_lines(log_path):
+    """The lines of the import log; empty when no import happened (the file is absent)."""
+    if not os.path.exists(log_path):
+        return []
+    with open(log_path, encoding="utf-8") as handle:
+        return handle.read().splitlines()
+
+
+def test_tracer_env_module_closes_the_dll_load_gap(tmp_path):
+    """
+    The laptop failure on a gated fake psspy, through real -I processes: without PSSE_ENV_MODULE the
+    DLL-load ImportError becomes exit 6 (class only); with it the helper runs first and selftest
+    passes; a name that is not a plain module name is exit 2 before anything is imported.
+    """
+    folder, log_path = _write_gated_folder(tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+
+    # (1) no key: today's behaviour, the laptop's failure, class only, with the pointer
+    config = _write_config(tmp_path, folder, name="nokey.env")
+    code, out, err = _run_entry(["selftest", "--config", config], elsewhere)
+    assert code == 6, out + err
+    assert "PSS/E could not be started: PsseUnavailable: psspy could not be imported (ImportError)" in out
+    assert "PSSE_ENV_MODULE is not set" in out
+    assert "PSS/E started" not in out
+    assert _log_lines(log_path) == []
+    for text in (out, err):
+        assert str(tmp_path) not in text
+        assert "gated psspy folder" not in text
+        assert "DLL load failed" not in text and DLL_FAILURE_TEXT not in text
+    assert err == ""
+
+    # (2) the key names the helper: helper first, then psspy, six PASS rows
+    config = _write_config(tmp_path, folder, {"PSSE_ENV_MODULE": "psse3604"}, name="key.env")
+    code, out, err = _run_entry(["selftest", "--config", config], elsewhere)
+    assert code == 0, out + err
+    lines = out.splitlines()
+    assert lines[0].startswith("Python ") and lines[0].endswith(("64-bit", "32-bit"))
+    assert lines[1] == "PSS/E started"
+    assert len(lines) == 2 + 4 + 6 + 1, out
+    assert all("redirected" in note for note in lines[2:6])
+    assert all(line.startswith("PASS") for line in lines[6:-1])
+    assert lines[-1] == "6 PASS, 0 FAIL, 0 SKIP"
+    assert _log_lines(log_path) == ["helper", "psspy"]
+    for text in (out, err):
+        assert str(tmp_path) not in text
+        assert "gated psspy folder" not in text
+    assert err == ""
+
+    # (3) a dotted name with .py: refused at configuration reading, nothing imported, no lock file
+    os.remove(log_path)
+    lock = tmp_path / "bad locks" / "psse_job.lock"
+    config = _write_config(
+        tmp_path, folder, {"PSSE_ENV_MODULE": "psse3604.py", "PSSE_LOCK_PATH": str(lock)}, name="bad.env")
+    code, out, err = _run_entry(["selftest", "--config", config], elsewhere)
+    assert code == 2, out + err
+    assert "key PSSE_ENV_MODULE" in err
+    assert "psse3604.py" not in err  # the value is never echoed (the rule's own example is psse3604, no .py)
+    assert out == ""
+    assert _log_lines(log_path) == []
+    assert not lock.exists()
+
+
+def test_entry_helper_that_exits_is_reported_by_class_only(tmp_path):
+    """A vendor helper that calls sys.exit() (a BaseException) is a start failure naming only SystemExit."""
+    folder = tmp_path / "exiting psspy folder"
+    folder.mkdir()
+    (folder / "psspy.py").write_text(STUB_PSSPY, encoding="utf-8")
+    (folder / "exit_helper.py").write_text(
+        "import sys\nsys.exit('licence server lic-host-marker unreachable at C:\\\\Program Files\\\\PTI\\\\lic.dat')\n",
+        encoding="utf-8")
+    config = _write_config(tmp_path, folder, {"PSSE_ENV_MODULE": "exit_helper"})
+    code, out, err = _run_entry(["selftest", "--config", config], tmp_path)
+    assert code == 6, out + err
+    assert "PSS/E could not be started: PsseUnavailable: the module named by PSSE_ENV_MODULE could not be imported (SystemExit)" in out
+    assert "PSS/E started" not in out
+    for text in (out, err):
+        assert "lic-host-marker" not in text and "Program Files" not in text and "lic.dat" not in text
+        assert "exit_helper" not in text and str(tmp_path) not in text
+    assert err == ""
+
+
 def test_entry_exit2_without_arguments_under_isolated_mode(tmp_path):
     """No arguments: usage error, exit 2, on stderr, from a different working directory."""
     code, out, err = _run_entry([], tmp_path)
@@ -167,7 +239,11 @@ def test_entry_selftest_without_psse_exit6_names_no_path(tmp_path):
 
 
 def _psspy_import_sites(tree):
-    """[(line, enclosing function name or None)] of every import of psspy in the syntax tree."""
+    """
+    [(line, enclosing function name or None, kind)] of every import of psspy in the syntax tree and
+    every dynamic import (a call of __import__ or an import_module): kind is `static` for an import
+    statement and `dynamic` for a call.
+    """
     found = []
 
     def visit(node, function):
@@ -175,13 +251,13 @@ def _psspy_import_sites(tree):
             scope = child.name if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) else function
             if isinstance(child, ast.Import) and any(
                     alias.name.split(".")[0] == "psspy" for alias in child.names):
-                found.append((child.lineno, function))
+                found.append((child.lineno, function, "static"))
             if isinstance(child, ast.ImportFrom) and (child.module or "").split(".")[0] == "psspy":
-                found.append((child.lineno, function))
+                found.append((child.lineno, function, "static"))
             if isinstance(child, ast.Call) and getattr(child.func, "id", "") in ("__import__", "import_module"):
-                found.append((child.lineno, function))
+                found.append((child.lineno, function, "dynamic"))
             if isinstance(child, ast.Call) and getattr(child.func, "attr", "") == "import_module":
-                found.append((child.lineno, function))
+                found.append((child.lineno, function, "dynamic"))
             visit(child, scope)
 
     visit(tree, None)
@@ -189,11 +265,12 @@ def _psspy_import_sites(tree):
 
 
 def test_entry_imports_psspy_only_in_load_psspy(tmp_path):
-    """The one import of psspy is inside load_psspy, and importing the entry module does not run it."""
+    """The imports of psspy and of the configured helper are inside load_psspy, the helper's first; importing the entry module runs none."""
     with open(ENTRY, encoding="utf-8") as handle:
         tree = ast.parse(handle.read(), ENTRY)
     sites = _psspy_import_sites(tree)
-    assert [function for _line, function in sites] == ["load_psspy"], sites
+    assert [(function, kind) for _line, function, kind in sorted(sites)] == [
+        ("load_psspy", "dynamic"), ("load_psspy", "static")], sites
     # no other file of the repository's code imports it either (psse_job is gated by the contract test)
     code = (
         "import importlib.util, sys\n"

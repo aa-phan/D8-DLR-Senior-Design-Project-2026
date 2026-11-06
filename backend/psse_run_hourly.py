@@ -8,13 +8,23 @@ psse_job/launcher.py). This file is the ONLY place `psspy` is imported, and only
 both). Everything else lives in psse_job.launcher, which receives the loader as an argument. Keep
 this file small.
 
+When the configuration names PSS/E's environment helper (the optional key PSSE_ENV_MODULE, plan
+03-09), `load_psspy` imports that module once, with importlib, after launcher.main has appended the
+search folders and before `import psspy`. The name comes from configuration only and no helper name
+is written in code. Importing this module imports neither psspy nor the helper. The first laptop
+session (PSS/E 36.4, Python 3.14) saw `import psspy` fail with `DLL load failed while importing
+psscommon` even with the folders on the search path and registered as DLL folders, and saw it work
+after the helper (psse3604) had been imported by hand.
+
 Honest scope: every statement about how real PSS/E behaves here is UNVERIFIED until runbook step 2
-(plan 03-07): that `import psspy` works from the configured folder, that `psseinit` and the four
-output-control calls accept the parameters launcher.start_psspy passes, that sending the console
-output to a file works, and that os.add_dll_directory (registered by launcher.add_search_dirs)
-is needed or enough.
+(plan 03-07): that `import psspy` works from the configured folder, that the launcher's own import
+of the helper before it works on the laptop (U33), that `psseinit` and the four output-control calls
+accept the parameters launcher.start_psspy passes, that sending the console output to a file works,
+and that os.add_dll_directory (registered by launcher.add_search_dirs) is needed or enough once the
+helper has run (U07).
 """
 
+import importlib
 import os
 import sys
 
@@ -38,10 +48,26 @@ def load_psspy(cfg):
     """
     if not cfg.get("PSSE_PSSPY_DIR"):
         raise launcher.PsseUnavailable("PSSE_PSSPY_DIR is not set")
+    env_module = cfg.get("PSSE_ENV_MODULE")
+    if env_module:
+        # PSS/E's environment helper, named by configuration only (never in code), imported after
+        # the search folders were appended and before psspy. The configuration reader has already
+        # checked the name; it is checked again for a caller that did not go through it.
+        if not launcher.is_plain_module_name(env_module):
+            raise launcher.PsseUnavailable("PSSE_ENV_MODULE is not a plain module name")
+        try:
+            importlib.import_module(env_module)
+        except (Exception, SystemExit) as exc:
+            # The helper runs PSS/E code: its text may hold a path or a licence server, so only the
+            # class is named, and SystemExit (a BaseException a vendor helper could raise) too.
+            raise launcher.PsseUnavailable(
+                "the module named by PSSE_ENV_MODULE could not be imported (%s)" % type(exc).__name__)
     try:
         import psspy  # the only import of psspy in the repository
     except (ImportError, OSError) as exc:
-        raise launcher.PsseUnavailable("psspy could not be imported (%s)" % type(exc).__name__)
+        raise launcher.PsseUnavailable(
+            "psspy could not be imported (%s)%s" % (
+                type(exc).__name__, "" if env_module else "; PSSE_ENV_MODULE is not set"))
     launcher.start_psspy(
         psspy, int(cfg.get("PSSE_MAX_BUSES", "20000")), os.path.join(cfg["PSSE_LOG_DIR"], _OUTPUT_LOG_NAME))
     return psspy

@@ -56,7 +56,10 @@ Secrets: every log record passes a redacting filter against the configuration's 
 printed line passes redact(), and configuration errors name keys and line numbers only, never a
 value or a line's text. UNVERIFIED until the laptop session (plans 03-07 and 03-08): that
 os.add_dll_directory is needed or enough, that Task Scheduler passes the exit code through, and
-anything about real PSS/E.
+anything about real PSS/E. The first laptop session (PSS/E 36.4, Python 3.14) saw that putting the
+program folder on the DLL search path did not by itself let psspy load until PSS/E's environment
+helper module (the optional key PSSE_ENV_MODULE) had been imported; whether the DLL folder is
+still needed once the helper has run is UNVERIFIED until runbook step 2 (U07).
 """
 
 import argparse
@@ -114,7 +117,8 @@ DLL_DIRECTORY_HANDLES = []
 
 ConfigKey = collections.namedtuple("ConfigKey", ["name", "kind", "secret", "required_for", "meaning"])
 
-# kind: url | secret | path | dir | int | flag | text. `required_for` names the modes that need the
+# kind: url | secret | path | dir | int | flag | module | text. `module` is a plain Python module
+# name (is_plain_module_name). `required_for` names the modes that need the
 # key; modes this plan does not build yet are recorded now so the guide and plan 03-04 have one
 # source ("credcheck-rest" marks the keys of the REST leg that --skip-rest turns off).
 CONFIG_KEYS = (
@@ -130,6 +134,9 @@ CONFIG_KEYS = (
               "absolute path of the mapping file"),
     ConfigKey("PSSE_PSSPY_DIR", "dir", False, ("run", "dry-run", "selftest", "probe"),
               "folder holding psspy for the installed PSS/E"),
+    ConfigKey("PSSE_ENV_MODULE", "module", False, (),
+              "PSS/E's environment helper module in the psspy folder, imported before psspy "
+              "(psse3604 for PSS/E 36.4)"),
     ConfigKey("PSSE_BIN_DIR", "dir", False, (), "PSS/E program folder for the DLL search path"),
     ConfigKey("PSSE_SITE_DIR", "dir", False, (), "folder with extra Python packages (psycopg)"),
     ConfigKey("PSSE_LOG_DIR", "dir", False, (), "local log folder (default: logs next to the file)"),
@@ -144,6 +151,9 @@ _LINE_RE = re.compile(r"^([A-Z_][A-Z0-9_]*)[ \t]*=(.*)$")
 _KEY_NAME_MAX = 40
 _DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]")
 _WHOLE_RE = re.compile(r"^[0-9]{1,9}$")
+# A plain Python module name: ASCII letters, digits and underscore, first character not a digit, 1 to
+# 64 characters, anchored with \Z (never $, which accepts a trailing newline).
+_MODULE_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}\Z")
 _MAX_BUSES_LIMIT = 2000000
 _LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
 _TLS_MODES = ("require", "verify-ca", "verify-full")
@@ -274,6 +284,11 @@ def _db_url_problem(url):
     return None
 
 
+def is_plain_module_name(value):
+    """True when `value` is a plain Python module name (no dot, slash, space or .py; ASCII; at most 64 characters)."""
+    return isinstance(value, str) and _MODULE_NAME_RE.match(value) is not None
+
+
 def _value_problems(values):
     """Problems with the values that are present, naming each key and never a value."""
     problems = []
@@ -291,6 +306,10 @@ def _value_problems(values):
         elif key.kind == "flag":
             if value not in ("0", "1"):
                 message = "must be 0 or 1"
+        elif key.kind == "module":
+            if not is_plain_module_name(value):
+                message = ("must be a plain Python module name such as psse3604 (letters, digits and "
+                           "underscores, not starting with a digit; no dots, slashes, spaces or .py)")
         elif key.name == "SUPABASE_PSSE_DB_URL":
             message = _db_url_problem(value)
         if message:
@@ -490,8 +509,10 @@ def add_search_dirs(cfg):
     """
     Append PSSE_SITE_DIR, PSSE_PSSPY_DIR and PSSE_BIN_DIR to sys.path (never first, D-10) and
     register PSSE_BIN_DIR as a DLL folder where os.add_dll_directory exists (Windows with Python
-    3.8 or newer; absent on 3.7 and off Windows). Whether the DLL folder is needed or enough is
-    UNVERIFIED until the laptop session.
+    3.8 or newer; absent on 3.7 and off Windows). On PSS/E 36.4 with Python 3.14 the first laptop
+    session saw the program folder on the DLL search path not let psspy load until PSS/E's
+    environment helper (PSSE_ENV_MODULE) was imported; whether the DLL folder is still needed once
+    the helper has run is UNVERIFIED until runbook step 2 (U07).
     """
     for name in ("PSSE_SITE_DIR", "PSSE_PSSPY_DIR", "PSSE_BIN_DIR"):
         folder = cfg.get(name)
