@@ -48,6 +48,16 @@ def _write_manifest(path, paths=None, comments=()):
     return str(path)
 
 
+@pytest.fixture(autouse=True)
+def _live_models_only(monkeypatch):
+    """
+    Phase 8 (D-13a): the pre-flight also verifies the day-ahead files, in a warning tier. These
+    Phase 5 tests are about the eight live models only, so the tier's list is empty here; the
+    day-ahead behavior is tested in dlr_live_check_models_day_ahead_test.py.
+    """
+    monkeypatch.setattr(preflight, "required_day_ahead_artifacts", lambda: [], raising=False)
+
+
 @pytest.fixture
 def models(tmp_path, monkeypatch):
     """Eight stand-in artifacts under tmp_path, resolved through the production path functions."""
