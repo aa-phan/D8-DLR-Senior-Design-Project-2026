@@ -245,7 +245,7 @@ def test_guide_psycopg_matrix_pins():
     header, rows = _table(section, "Interpreter")
     assert header == ["Interpreter", "Pin", "Wheel", "Note"]
     by_interpreter = dict((cells[0], cells) for cells in rows)
-    assert list(by_interpreter) == ["3.7", "3.8", "3.9", "3.10 to 3.12", "32-bit (any version)"]
+    assert list(by_interpreter) == ["3.7", "3.8", "3.9", "3.10 to 3.12", "3.13 to 3.14", "32-bit (any version)"]
 
     pins = _repository_pins()
     assert set(pins) == {"psycopg", "psycopg-binary"}
@@ -257,6 +257,7 @@ def test_guide_psycopg_matrix_pins():
         "3.8": ("psycopg[binary]==3.2.13", ["cp38"]),
         "3.9": ("psycopg[binary]==3.2.13", ["cp39"]),
         "3.10 to 3.12": ("psycopg[binary]==%s" % repository, ["cp310", "cp311", "cp312"]),
+        "3.13 to 3.14": ("psycopg[binary]==%s" % repository, ["cp313", "cp314"]),
     }
     for interpreter, (pin, wheels) in expected.items():
         assert _backticked(by_interpreter[interpreter][1]) == pin, interpreter
