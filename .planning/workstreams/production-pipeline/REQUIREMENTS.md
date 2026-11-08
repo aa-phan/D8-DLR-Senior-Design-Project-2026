@@ -175,13 +175,13 @@ proposals.
 
 ### Day-ahead cooling forecast (Phase 8)
 
-- [ ] **DAY-01**: For each city, one `ml_cooling_corrected` value per 00/06/12/18 UTC target hour from
+- [x] **DAY-01**: For each city, one `ml_cooling_corrected` value per 00/06/12/18 UTC target hour from
   the Open-Meteo run initialised exactly 24 h before the target, issued by a separate stage of the
   hourly live job after the ratings. A target is due once its weather run is published (about 18 h
   before the target) and stays due until the target hour. A target missed at its first chance is
   issued by a later hourly run while it is still in the future, with its actual issue time recorded.
   Nothing is published once the target has passed (D-01, D-02, D-04).
-- [ ] **DAY-02**: The value is computed through the shadow functions unchanged under
+- [x] **DAY-02**: The value is computed through the shadow functions unchanged under
   `city_point.production_city_point`, with the cooling model loaded through hash-verified
   `make_headline_loader`. A parity test shows production equals the shadow path for the same inputs.
   If cooling cannot produce a value, nothing is published and the reason is logged. The four cooling
@@ -197,7 +197,7 @@ proposals.
   stays `ml`. The job's exit code is fixed from the ratings before the stage starts. Day-ahead
   outcomes go to `pipeline_run.day_ahead` (additive). The stage shares the existing 4 x 300 s child
   budget inside the 30-minute job (D-02, D-15).
-- [ ] **DAY-05**: A new additive migration creates `public.day_ahead_forecast`, unique on (city,
+- [x] **DAY-05**: A new additive migration creates `public.day_ahead_forecast`, unique on (city,
   target hour), with issue time, weather-run time, amps, band edges, band source and size, cooling
   model and band hashes, config fingerprint and version, run id and the label
   `day-ahead-24h; engineering-selection; not-validated`. `dlr_writer` may select and insert only.
@@ -288,11 +288,11 @@ proposals.
 | SEL-03 | Phase 7 | Complete |
 | SEL-04 | Phase 7 | Complete |
 | REVAL-01 | Phase 7 | Complete |
-| DAY-01 | Phase 8 | Pending |
-| DAY-02 | Phase 8 | Pending |
+| DAY-01 | Phase 8 | Complete |
+| DAY-02 | Phase 8 | Complete |
 | DAY-03 | Phase 8 | Complete |
 | DAY-04 | Phase 8 | Pending |
-| DAY-05 | Phase 8 | Pending |
+| DAY-05 | Phase 8 | Complete |
 | DAY-06 | Phase 8 | Pending |
 | DAY-07 | Phase 8 | Pending |
 | DAY-08 | Phase 8 | Pending |

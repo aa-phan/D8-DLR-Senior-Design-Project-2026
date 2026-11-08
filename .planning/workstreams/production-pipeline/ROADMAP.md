@@ -409,7 +409,7 @@ and API exposure, and which conductor-dependent artifacts are served (AUSTIN ref
      meaning of "24 h", and is published only after the expose step, together with the three consumer
      examples (which also read the day-ahead targets and status and ran live first) and the Software
      and PSS/E handoff notes (D-18).
-**Plans:** 3/12 plans executed
+**Plans:** 4/12 plans executed
 
 Plans:
 *Go-live order (D-17, research Pitfall 4):* write-side code first (waves 1-3), then the owner confirms the
@@ -424,7 +424,7 @@ is never pending while the write side is pushed.
 
 **Wave 2** *(after 08-01; 08-04 also after 08-02)*
 - [x] 08-03-PLAN.md — Band artifact guards, anti-peeking guard, live rolling band per city x target hour (DAY-03)
-- [ ] 08-04-PLAN.md — Per-city child `dlr_day_ahead.py` (catch-up from the table, refusals), write-side migration tests, owner store check SQL (DAY-01, DAY-02, DAY-05)
+- [x] 08-04-PLAN.md — Per-city child `dlr_day_ahead.py` (catch-up from the table, refusals), write-side migration tests, owner store check SQL (DAY-01, DAY-02, DAY-05)
 - [ ] 08-05-PLAN.md — Cooling and band artifacts in the live manifest; pre-flight warning tier (D-13a) (DAY-02, DAY-04)
 
 **Wave 3** *(after 08-02, 08-04, 08-05)*
@@ -457,4 +457,4 @@ is never pending while the write side is pushed.
 | 5. Scheduled Live Runs | 8/8 | Complete    | 2026-10-26 |
 | 6. Exposure & E2E Verification | 13/13 | Complete    | 2026-11-01 |
 | 7. Per-City Conductors, Shadow Refit and Early Model Selection | 19/19 | Complete    | 2026-11-07 |
-| 8. Day-Ahead Cooling Forecast Alongside 60-Minute G6 | 3/12 | In Progress | - |
+| 8. Day-Ahead Cooling Forecast Alongside 60-Minute G6 | 4/12 | In Progress | - |

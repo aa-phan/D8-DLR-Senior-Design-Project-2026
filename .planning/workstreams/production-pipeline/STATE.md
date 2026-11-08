@@ -1,18 +1,18 @@
 ---
 gsd_state_version: "1.0"
 current_phase: 08
-current_plan: 4
+current_plan: 5
 status: executing
-stopped_at: Completed 08-03-PLAN.md
-last_updated: "2026-11-08T09:55:37.774Z"
+stopped_at: Completed 08-04-PLAN.md
+last_updated: "2026-11-08T10:12:41.152Z"
 last_activity: 2026-11-08
 last_activity_desc: Phase 08 execution started
-state_head: 2c4cefb1c9ba51c2aa173d01267ee2eaa5af1955
+state_head: 3013e23b9b66154c017a9c3a6f9becb697a73abd
 progress:
   total_phases: 8
   completed_phases: 7
   total_plans: 78
-  completed_plans: 69
+  completed_plans: 70
   percent: 88
 milestone_name: Production Pipeline (Supabase + live ratings)
 workstream: production-pipeline
@@ -37,7 +37,7 @@ whoever owns that analysis; they are not work items here.
 
 **Status:** Ready to execute
 **Current Phase:** 08
-**Current Plan:** 4
+**Current Plan:** 5
 **Total Plans in Phase:** 12
 **Last Activity:** 2026-11-08 — Phase 08 execution started
 **Last Activity Description:** Phase 08 execution started
@@ -226,6 +226,9 @@ These block or affect stringing the system together and belong to the phases nam
 - [Phase 08]: 08-02: the day-ahead stage shares the ratings' wall-clock budget (4 x 300 s from the start of run_live; 150 s child cap, 60 s start floor) and runs only after the exit code is fixed; its own {run_id, day_ahead} pipeline_run write is counted in day_ahead_run_log, never run_log — D-02, D-15: structurally unable to delay, block or redden the live ratings; the pinned 30-minute job envelope holds; rating-stage writes never name day_ahead so a push before the column cannot fail them
 - [Phase 08]: 08-02: supabase_store.upsert_run accepts optional later-migration columns (PIPELINE_RUN_OPTIONAL_COLUMNS = day_ahead) while the 12 pinned columns and build_run_row are unchanged; 08-01's migration already adds pipeline_run.day_ahead, so no second column change — Only the writer that owns a column sends it (Pitfall 4); reconciled with 08-01 with no duplicate migration
 - [Phase 08]: 08-03: live band offsets are np.quantile of rating minus forecast; a live set that does not bracket zero keeps the TEST band (logged), and BandChoice always carries the TEST artifact sha256 (artifact bytes unchanged, sha256 19b9c522...)
+- [Phase 08]: 08-04: child calls load_verified_band() defaults, so until 08-05 pins the band artifact in the live manifest a real run refuses every target (outcome error, no row, exit 0)
+- [Phase 08]: 08-04: --no-store dry run counts computed targets like issued, keeps issued empty and sets dry_run; a key stored by a racing run is already_present, not a failure
+- [Phase 08]: 08-04: child redacts provider credentials itself and leaves database URLs to supabase_store.redact defaults (no private store name read); output written atomically
 
 ## Open Decisions
 
@@ -251,9 +254,9 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 
 ## Session Continuity
 
-**Last session:** 2026-11-08T09:55:37.366Z
+**Last session:** 2026-11-08T10:12:40.732Z
 
-**Stopped At:** Completed 08-03-PLAN.md
+**Stopped At:** Completed 08-04-PLAN.md
 **Resume File:** None
 
 ## Performance Metrics
@@ -324,6 +327,7 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 | Phase 08 P01 | 21 min | 2 tasks | 8 files |
 | Phase 08 P02 | 18 min | 3 tasks | 8 files |
 | Phase 08 P03 | 9 min | 2 tasks | 2 files |
+| Phase 08 P04 | 30min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
