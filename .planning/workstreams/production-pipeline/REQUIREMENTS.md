@@ -188,7 +188,7 @@ proposals.
   files and the band artifact are in the live manifest, the pre-flight reports a day-ahead mismatch
   as a warning only, the stage refuses a mismatched file, and an offline test fails on any mismatch
   (D-03, D-13, D-13a, D-14, D-16).
-- [ ] **DAY-03**: Each value has a 5-95% empirical residual-quantile band, one per city x target hour
+- [x] **DAY-03**: Each value has a 5-95% empirical residual-quantile band, one per city x target hour
   (16). At launch it comes from a hashed TEST-split artifact. Per band it switches to the live
   rolling band once 60 graded live pairs exist (newest 120, used only when it brackets the value),
   where the actual is the weather-computed rating at the target hour and static-fallback hours are
@@ -290,7 +290,7 @@ proposals.
 | REVAL-01 | Phase 7 | Complete |
 | DAY-01 | Phase 8 | Pending |
 | DAY-02 | Phase 8 | Pending |
-| DAY-03 | Phase 8 | Pending |
+| DAY-03 | Phase 8 | Complete |
 | DAY-04 | Phase 8 | Pending |
 | DAY-05 | Phase 8 | Pending |
 | DAY-06 | Phase 8 | Pending |

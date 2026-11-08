@@ -1,19 +1,19 @@
 ---
 gsd_state_version: "1.0"
 current_phase: 08
-current_plan: 3
+current_plan: 4
 status: executing
-stopped_at: Completed 08-02-PLAN.md
-last_updated: "2026-11-08T09:45:52.869Z"
+stopped_at: Completed 08-03-PLAN.md
+last_updated: "2026-11-08T09:55:37.774Z"
 last_activity: 2026-11-08
 last_activity_desc: Phase 08 execution started
-state_head: 9f3e47ad534975bf1346e53496a466320a94f5da
+state_head: 2c4cefb1c9ba51c2aa173d01267ee2eaa5af1955
 progress:
   total_phases: 8
   completed_phases: 7
   total_plans: 78
-  completed_plans: 68
-  percent: 87
+  completed_plans: 69
+  percent: 88
 milestone_name: Production Pipeline (Supabase + live ratings)
 workstream: production-pipeline
 created: 2026-10-18
@@ -37,7 +37,7 @@ whoever owns that analysis; they are not work items here.
 
 **Status:** Ready to execute
 **Current Phase:** 08
-**Current Plan:** 3
+**Current Plan:** 4
 **Total Plans in Phase:** 12
 **Last Activity:** 2026-11-08 — Phase 08 execution started
 **Last Activity Description:** Phase 08 execution started
@@ -225,6 +225,7 @@ These block or affect stringing the system together and belong to the phases nam
 - [Phase 08]: 08-01: load_model and read_anchor wrap loader hash refusals and missing anchor readings into DayAheadNotIssued; out-of-bounds values are logged, not suppressed — D-16 no-row reasons for every failure; the day-ahead value has no safety role
 - [Phase 08]: 08-02: the day-ahead stage shares the ratings' wall-clock budget (4 x 300 s from the start of run_live; 150 s child cap, 60 s start floor) and runs only after the exit code is fixed; its own {run_id, day_ahead} pipeline_run write is counted in day_ahead_run_log, never run_log — D-02, D-15: structurally unable to delay, block or redden the live ratings; the pinned 30-minute job envelope holds; rating-stage writes never name day_ahead so a push before the column cannot fail them
 - [Phase 08]: 08-02: supabase_store.upsert_run accepts optional later-migration columns (PIPELINE_RUN_OPTIONAL_COLUMNS = day_ahead) while the 12 pinned columns and build_run_row are unchanged; 08-01's migration already adds pipeline_run.day_ahead, so no second column change — Only the writer that owns a column sends it (Pitfall 4); reconciled with 08-01 with no duplicate migration
+- [Phase 08]: 08-03: live band offsets are np.quantile of rating minus forecast; a live set that does not bracket zero keeps the TEST band (logged), and BandChoice always carries the TEST artifact sha256 (artifact bytes unchanged, sha256 19b9c522...)
 
 ## Open Decisions
 
@@ -250,9 +251,9 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 
 ## Session Continuity
 
-**Last session:** 2026-11-08T09:45:52.466Z
+**Last session:** 2026-11-08T09:55:37.366Z
 
-**Stopped At:** Completed 08-02-PLAN.md
+**Stopped At:** Completed 08-03-PLAN.md
 **Resume File:** None
 
 ## Performance Metrics
@@ -322,6 +323,7 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 | Phase 07 P16 | 2 sessions | 3 tasks | 4 files |
 | Phase 08 P01 | 21 min | 2 tasks | 8 files |
 | Phase 08 P02 | 18 min | 3 tasks | 8 files |
+| Phase 08 P03 | 9 min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
