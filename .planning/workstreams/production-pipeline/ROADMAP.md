@@ -50,7 +50,7 @@ infrastructure was replaced on 2026-10-21; see "Re-sequencing" above.)
 - [x] **Phase 4: Supabase Store & Writer** — schema migration, Postgres read/write, backfill load, secrets (completed 2026-10-24)
 - [x] **Phase 5: Scheduled Live Runs** — new workflow, cron-job.org trigger, failure isolation, runbook (completed 2026-10-26)
 - [x] **Phase 6: Exposure & E2E Verification** — REST via RLS, `latest_rating` view, soak test (completed 2026-11-01)
-- [ ] **Phase 7: Per-City Conductors, Shadow Refit and Early Model Selection** — protocol v4, per-city conductor configs, cooling/reference refit, selection from 2026-11-01, re-validation and go/no-go (parallel with 4-6)
+- [x] **Phase 7: Per-City Conductors, Shadow Refit and Early Model Selection** — protocol v4, per-city conductor configs, cooling/reference refit, selection from 2026-11-01, re-validation and go/no-go (parallel with 4-6) (completed 2026-11-07)
 - [ ] **Phase 8: Day-Ahead Cooling Forecast Alongside 60-Minute G6** — serve `ml_cooling_corrected` as a labelled higher-error day-ahead forecast alongside the 60-minute G6 `ml` forecast
 
 ## Phase Details
@@ -327,7 +327,7 @@ ml-modeling workstream's evaluation; record it in that workstream's STATE.md as 
      UAT test 2: replaces "on stored rows" (owner's go-forward-only mode). The GO signed 2026-11-02,
      before read 2, was re-confirmed by the owner after read 2's no-winner result left the interim
      G6 method (`ml`) unchanged.)*
-**Plans**: 19/19 plans executed
+**Plans**: 19/19 plans complete
 
 Plans:
 *Waiting on owner gates:* while the v4 signature (07-02) is pending, 07-01, 07-03, 07-04, 07-08 and
@@ -407,5 +407,5 @@ Plans:
 | 4. Supabase Store & Writer | 12/12 | Complete    | 2026-10-24 |
 | 5. Scheduled Live Runs | 8/8 | Complete    | 2026-10-26 |
 | 6. Exposure & E2E Verification | 13/13 | Complete    | 2026-11-01 |
-| 7. Per-City Conductors, Shadow Refit and Early Model Selection | 19/19 | In Progress | - |
+| 7. Per-City Conductors, Shadow Refit and Early Model Selection | 19/19 | Complete    | 2026-11-07 |
 | 8. Day-Ahead Cooling Forecast Alongside 60-Minute G6 | 0/0 | Not started | - |

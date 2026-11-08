@@ -1,23 +1,23 @@
 ---
 gsd_state_version: "1.0"
-current_phase: 07
-current_plan: 19
-status: executing
-stopped_at: Completed 07-16-PLAN.md
-last_updated: "2026-11-08T01:30:47.417Z"
-last_activity: 2026-11-01
-last_activity_desc: Phase 07 execution started
-state_head: 8016f2a18bbc76fdf4e221637016a29ecf410fa8
+current_phase: 08 — Day-Ahead Cooling Forecast Alongside 60-Minute G6
+current_plan: Not started
+status: planning
+stopped_at: Phase 07 complete, ready to plan Phase 08
+last_updated: "2026-11-08T03:06:31.551Z"
+last_activity: 2026-11-07
+last_activity_desc: Phase 07 complete, transitioned to Phase 08
+state_head: f6dbd7576249180b961b598b18eb4089e608a2ad
 progress:
   total_phases: 8
-  completed_phases: 6
+  completed_phases: 7
   total_plans: 66
   completed_plans: 66
-  percent: 75
+  percent: 88
 milestone_name: Production Pipeline (Supabase + live ratings)
 workstream: production-pipeline
 created: 2026-10-18
-current_phase_name: Per-City Conductors, Shadow Refit and Early Model Selection
+current_phase_name: Day-Ahead Cooling Forecast Alongside 60-Minute G6
 ---
 
 # Project State
@@ -35,12 +35,12 @@ whoever owns that analysis; they are not work items here.
 
 ## Current Position
 
-**Status:** Ready to execute
-**Current Phase:** 07
-**Current Plan:** 19
+**Status:** Ready to plan
+**Current Phase:** 08 — Day-Ahead Cooling Forecast Alongside 60-Minute G6
+**Current Plan:** Not started
 **Total Plans in Phase:** 19
-**Last Activity:** 2026-11-01 — Phase 07 execution started
-**Last Activity Description:** Phase 07 execution started
+**Last Activity:** 2026-11-07
+**Last Activity Description:** Phase 07 complete, transitioned to Phase 08
 
 ## Planning Summary (2026-10-19)
 
@@ -219,6 +219,7 @@ These block or affect stringing the system together and belong to the phases nam
 - [Phase 07]: 07-15: read 2 (v4-read2) ran once per row source under signed v4 and also names no winner; no shadow model replaces ml, interim G6 method keeps running
 - 2026-11-08: 07-16 SEL-04 final decision (aaphan; decision_record.md, Read 2 section): option rule-outcome-keep-cooling. The signed O3 outcome is accepted (no shadow model, no day-ahead pick under the rule; interim G6 `ml` keeps running; 2026-11-24 stays retired; any later evaluation needs a new signed protocol), and the owner keeps `ml_cooling_corrected` as the day-ahead selection for Phase 8 as a continuing labelled engineering departure, never a rule pick or "validated" (read-2 best benefit 12.12 A vs 28.01 A bar, Holm p 0.29; read 2 re-grades read 1's rows). Live-system check (never decides): `ml_cooling_corrected` -0.01 A vs raw_forecast (2 of 4 cities), `ml_wind_corrected` +0.85 A.
 - [Phase 07]: 07-16: SEL-04 final decision recorded: owner accepted the signed O3 outcome after read 2 (no shadow model, interim G6 ml continues, 2026-11-24 stays retired) and keeps ml_cooling_corrected as a labelled engineering day-ahead selection for Phase 8 (continuing departure, not a rule pick, not validated)
+- 2026-11-08: Phase 07 UAT (aaphan, 2/2 pass): accepted the read-1 date slip (goal now "read 1 at or after 2026-11-01T00:00Z") and the go-forward-only label scope, re-confirming the GO after read 2; ROADMAP SC5 and REVAL-01 reworded (4f586e8). Security: T-07-23 closed by an ablation-CLI signature refusal (3aa7bf4, b15d389); CR-01, WR-01 and WR-04 deferred to before any new signed protocol or FRESH read (07-SECURITY.md). Re-verification passed 9/9 (f6dbd75).
 
 ## Open Decisions
 
@@ -244,9 +245,9 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 
 ## Session Continuity
 
-**Last session:** 2026-11-08T01:30:47.051Z
+**Last session:** 2026-11-08T03:10:00Z
 
-**Stopped At:** Completed 07-16-PLAN.md
+**Stopped At:** Phase 07 complete, ready to plan Phase 08
 **Resume File:** None
 
 ## Performance Metrics
