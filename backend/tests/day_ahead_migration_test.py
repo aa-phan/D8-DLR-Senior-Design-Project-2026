@@ -18,6 +18,7 @@ nothing, so the plan's verify command treats a skip as a failure.
 """
 
 import glob
+import hashlib
 import os
 import re
 from datetime import datetime, timedelta, timezone
@@ -32,6 +33,11 @@ _MIGRATIONS_DIR = local_pg.MIGRATIONS_DIR
 _STORE_MIGRATION = "20261108120000_day_ahead_forecast_store.sql"
 _STORE_PATH = os.path.join(_MIGRATIONS_DIR, _STORE_MIGRATION)
 _VERIFY_SQL = os.path.join(local_pg.REPO_ROOT, "supabase", "ops", "verify_day_ahead_store.sql")
+
+# Applied to the live project by the owner on 2026-11-08 (plan 08-07); the file may not be edited afterwards.
+_APPLIED_STORE_MIGRATION_SHA256 = {
+    "20261108120000_day_ahead_forecast_store.sql": "fb5337a64318259320990fa7b7b19c32d584bcdefef24fad8b1855f0e21bf8f1",
+}
 
 # The check names the owner sees after the apply (08-07), pinned so a removed check is a test failure.
 _STORE_VERIFY_CHECKS = (
@@ -207,6 +213,13 @@ def test_text_every_column_and_the_run_log_column_have_a_non_empty_unit_first_co
         assert text.strip(), f"no comment for {key}"
         assert text.startswith(_UNIT_FIRST), (key, text)
     assert comments.get("public.day_ahead_forecast", "").strip()
+
+
+def test_store_migration_is_unchanged_after_apply():
+    # The file is applied to the live project; a later edit would make the repo disagree with it.
+    for name, expected in _APPLIED_STORE_MIGRATION_SHA256.items():
+        with open(os.path.join(_MIGRATIONS_DIR, name), "rb") as handle:
+            assert hashlib.sha256(handle.read()).hexdigest() == expected, name
 
 
 def test_text_the_file_sorts_after_the_soak_freshness_migration():
