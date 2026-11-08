@@ -208,6 +208,7 @@ _BACKEND = Path(__file__).resolve().parent.parent
 # Resolve the conductor from the per-city table (rating, training, validation).
 PRODUCTION_CALLERS = (
     "city_rating", "anomaly_training", "forecast_training", "real_data_validation",
+    "day_ahead_forecast",
 )
 # Read `city_point.city_point(...)` only for `.static_rating`, the same config value on both resolvers.
 STATIC_ONLY_CALLERS = ("dlr_orchestrator", "supabase_store", "supabase_smoke")

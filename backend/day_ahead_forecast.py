@@ -108,10 +108,20 @@ def serving_model_path(city: str) -> str:
 
 
 def make_model_loader():
-    """The hash-verified headline loader for the serving models. It never calls joblib.load on a mismatch."""
+    """The hash-verified headline loader for the serving models. It refuses a hash mismatch before unpickling."""
     return fcr.make_headline_loader(
         DAY_AHEAD_REFIT_VERSION, refit_cities(), root=fcr.REFIT_ROOT, frozen_manifest=fcr.FROZEN_MANIFEST,
     )
+
+
+def load_model(loader, city: str):
+    """
+    (model, served entry) for the city's cooling model, through the hash-verified headline loader. A
+    missing, unlisted or altered file, or a load failure, is a named no-row reason (D-16); the loader
+    refuses a hash mismatch before anything is unpickled (T-08-01).
+    """
+    model = _step("model", loader, city, contract.FORECAST_METHOD)
+    return model, served_entry(loader, city)
 
 
 def served_entry(loader, city: str) -> dict:
@@ -150,6 +160,12 @@ def due_targets(now) -> list:
     return targets
 
 
+def missing_targets(due, existing) -> list:
+    """The due targets with no stored row, in due order (D-04 catch-up: the table is the state)."""
+    stored = {_utc(target) for target in existing}
+    return [target for target in due if _utc(target) not in stored]
+
+
 def existing_targets(conn, city: str, now) -> set:
     """The valid_time keys already stored for `city` that are still in the future, as UTC timestamps."""
     rows = conn.execute(
@@ -184,8 +200,8 @@ def compute_value(city: str, valid_time, *, decision_time, anchor, model) -> flo
     decision = _utc(decision_time)
     if anchor is None:
         raise DayAheadNotIssued("anchor: no anchor reading")
-    lat, lon = config.CITY_COORDINATES[city]
-    point = _step("point", city_point.production_city_point, city)
+    lat, lon = _step("city", lambda: config.CITY_COORDINATES[city])
+    point = _step("point", lambda: city_point.production_city_point(city))
 
     row, _ = _step(
         "forecast", shadow.fetch_live_forecast_for_valid_time,
@@ -200,6 +216,22 @@ def compute_value(city: str, valid_time, *, decision_time, anchor, model) -> flo
     if not supabase_store.finite(amps) or amps <= 0:
         raise DayAheadNotIssued(f"value: the prediction is not a finite positive number ({amps!r})")
     return amps
+
+
+def out_of_bounds(city: str, amps: float) -> bool:
+    """
+    True when `amps` lies outside the city's rating bounds (`config.RATING_BOUNDS_BY_LOCATION`). The
+    value is logged, never suppressed: the day-ahead value has no safety role and D-16 publishes
+    whatever cooling produces. The caller still builds and inserts the row.
+    """
+    lower, upper = config.RATING_BOUNDS_BY_LOCATION[city]
+    outside = amps < lower or amps > upper
+    if outside:
+        logger.warning(
+            "day-ahead value %.1f A for %s is outside the rating bounds [%.0f, %.0f] A; published as computed",
+            amps, city, lower, upper,
+        )
+    return outside
 
 
 # --------------------------------------------------------------------------------------------------

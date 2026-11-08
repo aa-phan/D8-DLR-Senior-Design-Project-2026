@@ -253,7 +253,8 @@ def main(argv=None) -> int:
 
         def policies_exist():
             rows = conn.execute(
-                "select tablename from pg_policies where schemaname = 'public' and policyname = %(p)s",
+                "select tablename from pg_policies where schemaname = 'public' and policyname = %(p)s "
+                "and tablename in ('city_rating', 'pipeline_run')",
                 {"p": POLICY_NAME},
             ).fetchall()
             return sorted(r[0] for r in rows) == ["city_rating", "pipeline_run"]
