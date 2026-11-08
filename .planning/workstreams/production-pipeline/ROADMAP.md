@@ -13,7 +13,8 @@ workstream:
 4. runs the pipeline on a cron-job.org schedule (Phase 5);
 5. exposes the data through Supabase REST and proves end-to-end, always-fresh results (Phase 6);
 6. in parallel with Phases 4-6, moves to per-city conductor configurations, refits the
-   conductor-dependent shadow candidates and selects the forecast method by 2026-11-01 (Phase 7).
+   conductor-dependent shadow candidates and selects the forecast method under signed protocol v4,
+   read 1 at or after 2026-11-01T00:00Z (Phase 7).
 
 **Re-sequencing (owner, 2026-10-21).** The VAL-03 NO-GO no longer blocks the database. Supabase
 (Phase 4) runs first because the web app and the PSS/E hand-off both depend on reading the data.
@@ -49,7 +50,7 @@ infrastructure was replaced on 2026-10-21; see "Re-sequencing" above.)
 - [x] **Phase 4: Supabase Store & Writer** — schema migration, Postgres read/write, backfill load, secrets (completed 2026-10-24)
 - [x] **Phase 5: Scheduled Live Runs** — new workflow, cron-job.org trigger, failure isolation, runbook (completed 2026-10-26)
 - [x] **Phase 6: Exposure & E2E Verification** — REST via RLS, `latest_rating` view, soak test (completed 2026-11-01)
-- [ ] **Phase 7: Per-City Conductors, Shadow Refit and Early Model Selection** — protocol v4, per-city conductor configs, cooling/reference refit, selection by 2026-11-01, re-validation and go/no-go (parallel with 4-6)
+- [ ] **Phase 7: Per-City Conductors, Shadow Refit and Early Model Selection** — protocol v4, per-city conductor configs, cooling/reference refit, selection from 2026-11-01, re-validation and go/no-go (parallel with 4-6)
 - [ ] **Phase 8: Day-Ahead Cooling Forecast Alongside 60-Minute G6** — serve `ml_cooling_corrected` as a labelled higher-error day-ahead forecast alongside the 60-minute G6 `ml` forecast
 
 ## Phase Details
@@ -269,9 +270,12 @@ Plans:
 ### Phase 7: Per-City Conductors, Shadow Refit and Early Model Selection
 
 **Goal**: Each city is rated with its own conductor configuration; the conductor-dependent shadow
-candidates are refit under it; and a signed, pre-registered procedure decides by 2026-11-01 which
-shadow model, if any, replaces the `ml` forecast. That decision replaces the 2026-11-24 evaluation.
-The phase ends with the NO-GO blockers closed and a new go/no-go.
+candidates are refit under it; and a signed, pre-registered procedure, with read 1 at or after
+2026-11-01T00:00Z, decides which shadow model, if any, replaces the `ml` forecast. That decision
+replaces the 2026-11-24 evaluation. The phase ends with the NO-GO blockers closed and a new go/no-go.
+*(Amended 2026-11-08, Phase 7 UAT test 1: replaces "decides by 2026-11-01". v4 was signed
+2026-11-02T05:13Z with the registered instants kept; read 1 ran 2026-11-02T17:51Z and the final
+decision followed read 2 on 2026-11-08, as SC5 pre-registers. Accepted by the owner.)*
 **Depends on**: Phase 3 (findings B1, B2, B4, B5). Runs in parallel with Phases 4-6.
 External gate: Power Systems' conductor answers. Provisional per-city values, each with a source,
 are used until they arrive.
@@ -318,7 +322,11 @@ ml-modeling workstream's evaluation; record it in that workstream's STATE.md as 
      - the interim G6 forecast method (OD-3 revisited: naive, or `ml` with B2 fixed).
 
      After that decision, B1, B2, B4 and B5 are closed, the Phase 3 validation is re-run on the same
-     non-FRESH window, and a new go/no-go is signed. A GO lifts the provisional label on stored rows.
+     non-FRESH window, and a new go/no-go is signed. A GO lifts the provisional label on rows
+     written after the promotion push; earlier stored rows keep it. *(Amended 2026-11-08, Phase 7
+     UAT test 2: replaces "on stored rows" (owner's go-forward-only mode). The GO signed 2026-11-02,
+     before read 2, was re-confirmed by the owner after read 2's no-winner result left the interim
+     G6 method (`ml`) unchanged.)*
 **Plans**: 19/19 plans executed
 
 Plans:

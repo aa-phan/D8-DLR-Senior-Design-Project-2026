@@ -169,7 +169,9 @@ proposals.
   D-08: replaces "the single v4 FRESH read".)*
 - [x] **REVAL-01**: After SEL-04, B1, B2, B4 and B5 are closed, the Phase 3 validation is re-run on the
   same non-FRESH window with the new configs and models, and a new go/no-go is signed. A GO lifts
-  the provisional label on stored rows.
+  the provisional label on rows written after the promotion push; earlier stored rows keep it.
+  *(Amended 2026-11-08, Phase 7 UAT: replaces "on stored rows" (owner's go-forward-only mode). The
+  GO signed 2026-11-02, before read 2, was re-confirmed by the owner after read 2 named no winner.)*
 
 ## Owner decisions (fixed 2026-10-19)
 
