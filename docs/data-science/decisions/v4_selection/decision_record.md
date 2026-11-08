@@ -27,3 +27,21 @@ Read 1 (round `v4-read1`, evaluation instant 2026-11-01T00:00:00Z) ran once at 2
 - Signed by: aaphan, 2026-11-02 (UTC)
 - Date (UTC): 2026-11-02
 - Recorded by: the executor (07-13)
+
+## Read 2 (2026-11-08)
+
+Read 2 (round `v4-read2`, evaluation instant 2026-11-08T00:00:00Z, valid-time cutoff 2026-11-01T00:00:00Z) ran once per row source: 2026-11-08T01:21:06Z (headline) and 2026-11-08T01:21:22Z (live-system check, never pooled). Evidence: `data/shadow/evaluation/v4-read2/reconstructed_frames_20261108T012106Z/` and `data/shadow/evaluation/v4-read2/shadow_logs_20261108T012122Z/`. Results for the owner: `read2_results.md`. Read 2 re-grades read 1's rows (100 of its 128 slots per city were already scored in read 1) and is not an independent test.
+
+**Rule's outcome (from the committed headline report):** no pick. "No candidate qualifies under signed protocol v4: no shadow model replaces ml (D-07). Read 2 (v4-read2) also names no winner: there is no day-ahead pick and the interim G6 method keeps running; 2026-11-24 stays retired and any later evaluation needs a new signed protocol (owner item O3)." The best read-2 benefit was `ml_cooling_corrected` at 12.12 A against the 28.01 A pooled bar, Holm-adjusted p 0.2930.
+
+**Owner decision (reply of 2026-11-08T01:29Z):**
+
+- Decision (option chosen): `rule-outcome-keep-cooling`. This accepts the signed O3 rule outcome after read 2 AND keeps the owner's labelled engineering selection of `ml_cooling_corrected` for the day-ahead output in Phase 8. Under the plan's option list this is the "other / different decision" path: a continuing labelled departure from the rule's outcome.
+- Final rule outcome: no shadow model; no day-ahead pick under the rule. O3 applies: the interim G6 method (`ml`, retrained on projected wind, B2) keeps running, 2026-11-24 stays retired, and any later evaluation needs a new signed protocol. No further FRESH read happens without one.
+- Continuing engineering selection: `ml_cooling_corrected` for the day-ahead (24 h) output in Phase 8, as first recorded in the Read 1 section above. It is NOT a rule pick and is NOT recorded as "validated"; the rule never selected it, at read 1 or read 2.
+- Departure from the signed rule's outcome (label): **Departure: yes (continuing) — owner engineering selection outside the signed rule's outcome.** The rule's outcome (no pick) is accepted unchanged; the departure is only that the owner keeps `ml_cooling_corrected` as the day-ahead selection.
+- Factual note from the read-2 report (not the owner's words; the live-system check never decides): in the live-system check, `ml_cooling_corrected` was at -0.01 A against `raw_forecast` (better in 2 of 4 cities) and `ml_wind_corrected` at +0.85 A. Both are about level with the plain forecast.
+- Owner's words (verbatim): "rule-outcome-keep-cooling, aaphan". The owner gave no additional wording.
+- Signed by: aaphan, 2026-11-08
+- Date (UTC): 2026-11-08
+- Recorded by: the executor (07-16)
