@@ -1,18 +1,18 @@
 ---
 gsd_state_version: "1.0"
 current_phase: 08
-current_plan: 5
+current_plan: 6
 status: executing
-stopped_at: Completed 08-04-PLAN.md
-last_updated: "2026-11-08T10:12:41.152Z"
+stopped_at: Completed 08-05-PLAN.md
+last_updated: "2026-11-08T10:22:02.743Z"
 last_activity: 2026-11-08
 last_activity_desc: Phase 08 execution started
-state_head: 3013e23b9b66154c017a9c3a6f9becb697a73abd
+state_head: bb824507d733ba2694ee632e938d5768c31df4ee
 progress:
   total_phases: 8
   completed_phases: 7
   total_plans: 78
-  completed_plans: 70
+  completed_plans: 71
   percent: 88
 milestone_name: Production Pipeline (Supabase + live ratings)
 workstream: production-pipeline
@@ -37,7 +37,7 @@ whoever owns that analysis; they are not work items here.
 
 **Status:** Ready to execute
 **Current Phase:** 08
-**Current Plan:** 5
+**Current Plan:** 6
 **Total Plans in Phase:** 12
 **Last Activity:** 2026-11-08 — Phase 08 execution started
 **Last Activity Description:** Phase 08 execution started
@@ -229,6 +229,8 @@ These block or affect stringing the system together and belong to the phases nam
 - [Phase 08]: 08-04: child calls load_verified_band() defaults, so until 08-05 pins the band artifact in the live manifest a real run refuses every target (outcome error, no row, exit 0)
 - [Phase 08]: 08-04: --no-store dry run counts computed targets like issued, keeps issued empty and sets dry_run; a key stored by a racing run is already_present, not a failure
 - [Phase 08]: 08-04: child redacts provider credentials itself and leaves database URLs to supabase_store.redact defaults (no private store name read); output written atomically
+- [Phase 08]: 08-05: the day-ahead band is strict-loaded from the path in the artifact list, not the function default, so the hashed file is the loaded file
+- [Phase 08]: 08-05: day-ahead pre-flight problems are ::warning:: only; the tier runs under one Exception+SystemExit guard after the exit code is fixed from the eight live models (D-13a)
 
 ## Open Decisions
 
@@ -254,9 +256,9 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 
 ## Session Continuity
 
-**Last session:** 2026-11-08T10:12:40.732Z
+**Last session:** 2026-11-08T10:22:02.321Z
 
-**Stopped At:** Completed 08-04-PLAN.md
+**Stopped At:** Completed 08-05-PLAN.md
 **Resume File:** None
 
 ## Performance Metrics
@@ -328,6 +330,7 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 | Phase 08 P02 | 18 min | 3 tasks | 8 files |
 | Phase 08 P03 | 9 min | 2 tasks | 2 files |
 | Phase 08 P04 | 30min | 2 tasks | 4 files |
+| Phase 08 P05 | 9 min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
