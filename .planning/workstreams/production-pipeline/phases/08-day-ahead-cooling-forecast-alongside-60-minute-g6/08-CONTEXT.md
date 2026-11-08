@@ -105,6 +105,13 @@ No new FRESH read or signed protocol is part of this phase.
   verifies them before any `joblib.load`. The band artifact (D-05) is verified the same way. If
   Power Systems answers for another city later, that city's refit replaces its entry through the
   normal promotion step (regenerate the manifest, ask before pushing).
+- **D-13a (owner, 2026-11-08, after research):** **A day-ahead file mismatch never stops live
+  ratings.** The live pre-flight step (`dlr_live_check_models.py`) still verifies the cooling and
+  band files, but only as a non-fatal warning tier. The 8 live models stay fatal, as today. The
+  day-ahead stage refuses to load any file whose hash does not match, so untrusted bytes are never
+  unpickled, and records the reason in `pipeline_run`. An offline test fails hard if the
+  day-ahead manifest entries and the files on disk disagree, so a mismatch is caught before any
+  push.
 - **D-14:** Serving uses each city's **production conductor geometry**
   (`city_point.production_city_point`), consistent with the model each city serves (D-13). Reuse
   Phase 7's `forecast_conductor_refit.make_headline_loader` (hash-verified, refit cities =
