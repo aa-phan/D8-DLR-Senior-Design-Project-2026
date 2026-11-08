@@ -392,10 +392,38 @@ day-ahead costs about +23 A MAE, ~1.7% of rating, vs the 60-minute ml) and
 `docs/data-science/exploratory/2026-11-02_ml_vs_naive/REPORT.md`. Open questions for planning: issue
 times (the shadow method exists at 00/06/12/18 UTC), how the band is built and calibrated, storage
 and API exposure, and which conductor-dependent artifacts are served (AUSTIN refit under v3).
-**Plans:** 0 plans
+**Plans:** 11 plans
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 8 to break down)
+*Go-live order (D-17, research Pitfall 4):* write-side code first (waves 1-3), then the owner confirms the
+contract and applies the write-side migration (08-07), pushes the code and verifies the first issue run
+(08-08); only then is the expose migration written (08-09, 08-10) and applied with the docs published
+(08-11), so the expose file is never pending while the write side is pushed.
+
+**Wave 1**
+- [ ] 08-01-PLAN.md — Tracer: one target through the frozen shadow functions, TEST band and first-write-wins insert on local Postgres; then every city and target, parity (D-03), no substitute (D-16), identity (DAY-01, DAY-02, DAY-03, DAY-05)
+- [ ] 08-02-PLAN.md — DAY-01..DAY-08 into REQUIREMENTS/ROADMAP; optional `pipeline_run.day_ahead` column; day-ahead stage in the runner after the exit code, child per city, shared budget (DAY-04, DAY-08)
+
+**Wave 2** *(after 08-01; 08-04 also after 08-02)*
+- [ ] 08-03-PLAN.md — Band artifact guards, anti-peeking guard, live rolling band per city x target hour (DAY-03)
+- [ ] 08-04-PLAN.md — Per-city child `dlr_day_ahead.py` (catch-up from the table, refusals), write-side migration tests, owner store check SQL (DAY-01, DAY-02, DAY-05)
+- [ ] 08-05-PLAN.md — Cooling and band artifacts in the live manifest; pre-flight warning tier (D-13a) (DAY-02, DAY-04)
+
+**Wave 3** *(after 08-02, 08-04, 08-05)*
+- [ ] 08-06-PLAN.md — Read-only first-slot check (`day_ahead_verify.py --check-store`); runbook section 17 (DAY-08, DAY-04)
+
+**Wave 4** *(owner)*
+- [ ] 08-07-PLAN.md — Owner: pre-flight, contract decision (D-09 one-way), [BLOCKING] write-side schema push, sha256 pin (DAY-05, DAY-08)
+
+**Wave 5** *(owner)*
+- [ ] 08-08-PLAN.md — Owner: approved push of the stage, first issue run verified (D-17) (DAY-08, DAY-01, DAY-04)
+
+**Wave 6** *(after 08-08)*
+- [ ] 08-09-PLAN.md — Expose migration: `day_ahead_upcoming`, `day_ahead_status`, SELECT-only grants, `assert_fresh` day-ahead clause; privilege sweep (DAY-06, DAY-07)
+- [ ] 08-10-PLAN.md — Consumer contract docs (rest-api.md, day_ahead_forecast_v1.md, PSS/E pointer); REST check; runbook section 14 (DAY-06, DAY-07, DAY-08)
+
+**Wave 7** *(owner)*
+- [ ] 08-11-PLAN.md — Owner: expose decision, [BLOCKING] expose schema push, live consumer checks, publish push, sha256 pin (DAY-06, DAY-07, DAY-08)
 
 ## Progress
 
@@ -408,4 +436,4 @@ Plans:
 | 5. Scheduled Live Runs | 8/8 | Complete    | 2026-10-26 |
 | 6. Exposure & E2E Verification | 13/13 | Complete    | 2026-11-01 |
 | 7. Per-City Conductors, Shadow Refit and Early Model Selection | 19/19 | Complete    | 2026-11-07 |
-| 8. Day-Ahead Cooling Forecast Alongside 60-Minute G6 | 0/0 | Not started | - |
+| 8. Day-Ahead Cooling Forecast Alongside 60-Minute G6 | 0/11 | Planned | - |
