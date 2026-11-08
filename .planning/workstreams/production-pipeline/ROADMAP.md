@@ -382,7 +382,7 @@ The day-ahead value is labelled as a higher-error future forecast (it carries mo
 is further ahead, like any forecast), with its own uncertainty band, and never replaces or gates the
 live rating.
 **Depends on**: Phase 7 (SEL-04 decision record; read 2 outcome reported)
-**Requirements**: TBD
+**Requirements**: DAY-01, DAY-02, DAY-03, DAY-04, DAY-05, DAY-06, DAY-07, DAY-08, DAY-09
 **Context**: owner selection recorded 2026-11-02 in
 `docs/data-science/decisions/v4_selection/decision_record.md` (engineering choice, not a rule pick
 under signed v4; read 2 still runs and a rule pick there would supersede the label). Evidence,
@@ -392,6 +392,23 @@ day-ahead costs about +23 A MAE, ~1.7% of rating, vs the 60-minute ml) and
 `docs/data-science/exploratory/2026-11-02_ml_vs_naive/REPORT.md`. Open questions for planning: issue
 times (the shadow method exists at 00/06/12/18 UTC), how the band is built and calibrated, storage
 and API exposure, and which conductor-dependent artifacts are served (AUSTIN refit under v3).
+**Success Criteria**:
+  1. Every hourly run after the go-live push issues each due target for every city from the 24 h-old
+     weather run through the unchanged shadow functions under the production conductor, parity-tested,
+     and publishes nothing when cooling cannot produce a value.
+  2. Every row carries a 5-95% band (TEST artifact at launch, live rolling per band once 60 graded
+     pairs exist), its source and size, the model and band hashes, config identity, issue time and
+     the label.
+  3. Live ratings, G6's `ml` forecast, the exit code, `city_rating` and the 34-column `latest_rating`
+     are unchanged, and a day-ahead failure or bad day-ahead file never stops or reddens a run and is
+     recorded in `pipeline_run.day_ahead`.
+  4. After the first live issue run is verified, anon reads the upcoming targets and a four-row
+     status and nothing else new, writes are refused, and the permanent alarm also fails for a
+     stalled feed.
+  5. The contract states the label, the owner-approved paragraph, the band and late rules and the
+     meaning of "24 h", and is published only after the expose step, together with the three consumer
+     examples (which also read the day-ahead targets and status and ran live first) and the Software
+     and PSS/E handoff notes (D-18).
 **Plans:** 1/12 plans executed
 
 Plans:

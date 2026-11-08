@@ -173,6 +173,58 @@ proposals.
   *(Amended 2026-11-08, Phase 7 UAT: replaces "on stored rows" (owner's go-forward-only mode). The
   GO signed 2026-11-02, before read 2, was re-confirmed by the owner after read 2 named no winner.)*
 
+### Day-ahead cooling forecast (Phase 8)
+
+- [ ] **DAY-01**: For each city, one `ml_cooling_corrected` value per 00/06/12/18 UTC target hour from
+  the Open-Meteo run initialised exactly 24 h before the target, issued by a separate stage of the
+  hourly live job after the ratings. A target is due once its weather run is published (about 18 h
+  before the target) and stays due until the target hour. A target missed at its first chance is
+  issued by a later hourly run while it is still in the future, with its actual issue time recorded.
+  Nothing is published once the target has passed (D-01, D-02, D-04).
+- [ ] **DAY-02**: The value is computed through the shadow functions unchanged under
+  `city_point.production_city_point`, with the cooling model loaded through hash-verified
+  `make_headline_loader`. A parity test shows production equals the shadow path for the same inputs.
+  If cooling cannot produce a value, nothing is published and the reason is logged. The four cooling
+  files and the band artifact are in the live manifest, the pre-flight reports a day-ahead mismatch
+  as a warning only, the stage refuses a mismatched file, and an offline test fails on any mismatch
+  (D-03, D-13, D-13a, D-14, D-16).
+- [ ] **DAY-03**: Each value has a 5-95% empirical residual-quantile band, one per city x target hour
+  (16). At launch it comes from a hashed TEST-split artifact. Per band it switches to the live
+  rolling band once 60 graded live pairs exist (newest 120, used only when it brackets the value),
+  where the actual is the weather-computed rating at the target hour and static-fallback hours are
+  excluded. Every row records its band source and sample size (D-05, D-06, D-07, D-08).
+- [ ] **DAY-04**: The stage never delays, blocks or changes live ratings. The 60-minute G6 forecast
+  stays `ml`. The job's exit code is fixed from the ratings before the stage starts. Day-ahead
+  outcomes go to `pipeline_run.day_ahead` (additive). The stage shares the existing 4 x 300 s child
+  budget inside the 30-minute job (D-02, D-15).
+- [ ] **DAY-05**: A new additive migration creates `public.day_ahead_forecast`, unique on (city,
+  target hour), with issue time, weather-run time, amps, band edges, band source and size, cooling
+  model and band hashes, config fingerprint and version, run id and the label
+  `day-ahead-24h; engineering-selection; not-validated`. `dlr_writer` may select and insert only.
+  anon and authenticated get nothing until the expose step, and RLS is on. `city_rating`,
+  `latest_rating` and its 34-column contract are unchanged (D-09, D-11).
+- [ ] **DAY-06**: A second additive migration exposes read-only `day_ahead_upcoming` (every future
+  target with a value, ordered by city then target) and `day_ahead_status` (one row per city with the
+  missing/late flag), SELECT only. The contract docs state the owner-approved label paragraph, the
+  band and late rules and that "24 h" is the weather run's age, with doc column tables guarded by
+  tests (D-09, D-10, D-11, D-12).
+- [ ] **DAY-07**: The permanent freshness alarm's `rpc/assert_fresh` (same signature and URL) also
+  fails with HTTP 503 when a grid target in the next 12 h has no row, armed once the table has its
+  first row. No new cron job (D-12).
+- [ ] **DAY-08**: Go-live is owner-gated in this order: contract confirmed, write-side migration
+  applied, code pushed, the first hourly run after the push verified (a row for every due target, up
+  to 3 per city and 12 in all, with the right label, band source and hashes, and the parity test
+  passed at the pushed commit), then the expose migration applied and the contract doc published
+  (D-17).
+- [ ] **DAY-09**: Consumer handoff: the three examples in docs/integration/examples (curl.sh,
+  supabase_js.mjs, read_ratings.py) also read the upcoming day-ahead targets per city and the
+  per-city status. They stay read-only, read only SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY from the
+  environment, keep read_ratings.py standard-library Python 3.7+, and contain no project value. They
+  run as written on the live project after the expose migration and before the publishing push. The
+  Software team handoff, the frontend API contract and the PSS/E note explain what to read, how to
+  show it and how to use it in next-day studies, published in the same push as the contract docs
+  (D-18).
+
 ## Owner decisions (fixed 2026-10-19)
 
 | # | Decision | Needed by | Decided |
@@ -197,7 +249,7 @@ proposals.
 | PSS/E-side ingestion and N-1 analysis | Power Systems team, who consume this workstream's contract |
 | PSS/E results back into the database (F7) | A follow-on table once Power Systems produce output |
 | Changes to `shadow_collect.yml`, the shadow logs, or the frozen evaluation modules | Frozen except as signed protocol v4 (SEL-01) explicitly allows; v3 governs until then |
-| Wiring a selected shadow model into the live path (runtime forecast fetch, hourly series, band for G6) | A follow-on phase, added once SEL-04 names a model |
+| Wiring a selected shadow model into the live path (runtime forecast fetch, hourly series, band for G6) | A follow-on phase, added once SEL-04 names a model. Phase 8 serves `ml_cooling_corrected` as a labelled day-ahead output alongside G6; it does not replace or gate G6 |
 
 ## Traceability
 
@@ -236,3 +288,12 @@ proposals.
 | SEL-03 | Phase 7 | Complete |
 | SEL-04 | Phase 7 | Complete |
 | REVAL-01 | Phase 7 | Complete |
+| DAY-01 | Phase 8 | Pending |
+| DAY-02 | Phase 8 | Pending |
+| DAY-03 | Phase 8 | Pending |
+| DAY-04 | Phase 8 | Pending |
+| DAY-05 | Phase 8 | Pending |
+| DAY-06 | Phase 8 | Pending |
+| DAY-07 | Phase 8 | Pending |
+| DAY-08 | Phase 8 | Pending |
+| DAY-09 | Phase 8 | Pending |
