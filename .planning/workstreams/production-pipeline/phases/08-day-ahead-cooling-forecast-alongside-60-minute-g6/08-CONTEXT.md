@@ -129,6 +129,25 @@ No new FRESH read or signed protocol is part of this phase.
   label, band source and hashes, and that the parity test (D-03) passed. Only then grant SELECT on
   the view and table and publish the contract doc. No multi-day soak.
 
+### Consumer handoff (owner, 2026-11-08, after planning)
+- **D-18:** **PSS/E and the Software team get the same hands-on material as for live ratings
+  (Phase 6 API-02 pattern), published in the same push as the contract docs.**
+  - The three examples in `docs/integration/examples/` (`curl.sh`, `supabase_js.mjs`,
+    `read_ratings.py`) also read day-ahead values: the upcoming targets per city, and the stall
+    status. They stay read-only, read only `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` from the
+    environment, keep stdlib-only Python 3.7+ for PSS/E, and contain no project value. They are run
+    live in the expose step, after the expose migration and before the publishing push.
+  - `docs/integration/software-team-handoff.md` gets a day-ahead section: what to read, a
+    dashboard view mapped to columns, and easy mistakes (it is not the live rating, it never
+    gates, show the band and label, "24 h" is the weather run's age, and empty or late targets).
+  - `docs/frontend/specs/api-contract.md` lists the new table and views alongside the
+    `city_rating` and `latest_rating` rows.
+  - `docs/data-science/decisions/pss_e_handoff.md` explains how to use the value for next-day
+    studies: which target hour to pick, reading the band rather than only the point, that it has
+    no safety role and is not validated, what to do when a target is empty or late, and the
+    example command.
+  - Nothing reaches the public repo before the D-17 verify-then-expose order allows.
+
 ### Claude's Discretion
 - Table, view and column names; the exact missing/late rule (D-12); how the band artifact is
   stored and hashed.
