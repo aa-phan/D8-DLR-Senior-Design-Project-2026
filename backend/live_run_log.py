@@ -144,6 +144,46 @@ def build_run_row(state, env=None) -> dict:
     }
 
 
+def build_day_ahead_run_row(state, env=None) -> dict:
+    """
+    The day-ahead stage's own `pipeline_run` write (pure, no database access):
+    `{"run_id": ..., "day_ahead": {...}}` and nothing else, so the upsert touches
+    only the `day_ahead` column of the run's row (Phase 8, D-15). The rating-stage
+    rows (`build_run_row`) never name this column, so code pushed before the column
+    exists cannot fail them.
+
+    `state["day_ahead"]` is the stage's result (`dlr_live_run.run_day_ahead_stage`):
+    `started_at`, `finished_at`, `budget_s` and one record per city. Every reason
+    text was redacted by the runner; here each one is only cut to `ERROR_MAX_CHARS`.
+    A stage that failed as a whole carries an `error` (an exception type name).
+    """
+    stage = state["day_ahead"]
+    cities = {}
+    for city, rec in (stage.get("cities") or {}).items():
+        cities[city] = {
+            "outcome": rec.get("outcome"),
+            "due": list(rec.get("due") or []),
+            "issued": list(rec.get("issued") or []),
+            "missing": list(rec.get("missing") or []),
+            "reasons": {str(key): _truncate(text, ERROR_MAX_CHARS)
+                        for key, text in (rec.get("reasons") or {}).items()},
+            "band_sources": dict(rec.get("band_sources") or {}),
+            "out_of_bounds": list(rec.get("out_of_bounds") or []),
+            "cooling_model_sha256": rec.get("cooling_model_sha256"),
+            "exit_code": rec.get("exit_code"),
+            "duration_s": rec.get("duration_s"),
+        }
+    day_ahead = {
+        "started_at": stage.get("started_at"),
+        "finished_at": stage.get("finished_at"),
+        "budget_s": stage.get("budget_s"),
+        "cities": cities,
+    }
+    if stage.get("error") is not None:
+        day_ahead["error"] = _truncate(stage["error"], ERROR_MAX_CHARS)
+    return {"run_id": state["run_id"], "day_ahead": day_ahead}
+
+
 def upsert_run_row(conn, row) -> None:
     """
     Upsert `row` into `public.pipeline_run` keyed by `run_id`, in one transaction.
