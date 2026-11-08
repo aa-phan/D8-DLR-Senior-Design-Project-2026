@@ -1,18 +1,18 @@
 ---
 gsd_state_version: "1.0"
 current_phase: 08
-current_plan: 7
+current_plan: 8
 status: executing
-stopped_at: Completed 08-06-PLAN.md
-last_updated: "2026-11-08T10:34:08.471Z"
+stopped_at: Completed 08-07-PLAN.md
+last_updated: "2026-11-08T23:30:02.937Z"
 last_activity: 2026-11-08
 last_activity_desc: Phase 08 execution started
-state_head: 262053b6d8326ebff679f587df102be6eef4cd29
+state_head: 7a09c9fde6a82e06c5be40d2499f37f35445d732
 progress:
   total_phases: 8
   completed_phases: 7
   total_plans: 78
-  completed_plans: 72
+  completed_plans: 73
   percent: 88
 milestone_name: Production Pipeline (Supabase + live ratings)
 workstream: production-pipeline
@@ -37,7 +37,7 @@ whoever owns that analysis; they are not work items here.
 
 **Status:** Ready to execute
 **Current Phase:** 08
-**Current Plan:** 7
+**Current Plan:** 8
 **Total Plans in Phase:** 12
 **Last Activity:** 2026-11-08 — Phase 08 execution started
 **Last Activity Description:** Phase 08 execution started
@@ -232,6 +232,8 @@ These block or affect stringing the system together and belong to the phases nam
 - [Phase 08]: 08-05: the day-ahead band is strict-loaded from the path in the artifact list, not the function default, so the hashed file is the loaded file
 - [Phase 08]: 08-05: day-ahead pre-flight problems are ::warning:: only; the tier runs under one Exception+SystemExit guard after the exit code is fixed from the eight live models (D-13a)
 - [Phase 08]: 08-06: first_run_covers_every_due_target fails on a missing due target and issue_lead_at_most_18h on a row for a target not yet due, so the two together enforce rows == due_targets(issued_at) and each failure flips exactly one check; with no first run every check fails (no vacuous pass); an unreachable database is exit 1 with a failed database_read check in the redacted JSON, only missing SUPABASE_DB_URL, bad --since or unreadable manifest is exit 2
+- [Phase 08]: 08-07: owner confirmed the day-ahead contract as built (reply: confirm); contract file at 14eb365
+- [Phase 08]: 08-07: write-side migration 20261108120000_day_ahead_forecast_store.sql applied live and pinned at sha256 fb5337a6...bf8f1; never edited again
 
 ## Open Decisions
 
@@ -257,9 +259,9 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 
 ## Session Continuity
 
-**Last session:** 2026-11-08T10:34:08.060Z
+**Last session:** 2026-11-08T23:30:02.513Z
 
-**Stopped At:** Completed 08-06-PLAN.md
+**Stopped At:** Completed 08-07-PLAN.md
 **Resume File:** None
 
 ## Performance Metrics
@@ -333,6 +335,7 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 | Phase 08 P04 | 30min | 2 tasks | 4 files |
 | Phase 08 P05 | 9 min | 2 tasks | 4 files |
 | Phase 08 P06 | 11 min | 2 tasks | 4 files |
+| Phase 08 P07 | 13h elapsed (owner gates) | 3 tasks | 2 files |
 
 ## Accumulated Context
 
