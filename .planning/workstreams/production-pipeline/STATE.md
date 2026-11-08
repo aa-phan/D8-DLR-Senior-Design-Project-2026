@@ -1,19 +1,19 @@
 ---
 gsd_state_version: "1.0"
-current_phase: 08 — Day-Ahead Cooling Forecast Alongside 60-Minute G6
-current_plan: Not started
+current_phase: 08
+current_plan: 2
 status: executing
-stopped_at: Phase 8 context gathered
-last_updated: "2026-11-08T08:19:59.924Z"
+stopped_at: Completed 08-01-PLAN.md
+last_updated: "2026-11-08T09:25:08.818Z"
 last_activity: 2026-11-08
-last_activity_desc: Phase 08 planning complete — 12 plans ready
-state_head: 72e51dcdcdf35c9e46693dfae6cf36e0cc6b91e0
+last_activity_desc: Phase 08 execution started
+state_head: 77dc3a1f105370c05b1ba7e73be2b32d38f92613
 progress:
   total_phases: 8
   completed_phases: 7
   total_plans: 78
-  completed_plans: 66
-  percent: 85
+  completed_plans: 67
+  percent: 86
 milestone_name: Production Pipeline (Supabase + live ratings)
 workstream: production-pipeline
 created: 2026-10-18
@@ -36,11 +36,11 @@ whoever owns that analysis; they are not work items here.
 ## Current Position
 
 **Status:** Ready to execute
-**Current Phase:** 08 — Day-Ahead Cooling Forecast Alongside 60-Minute G6
-**Current Plan:** Not started
+**Current Phase:** 08
+**Current Plan:** 2
 **Total Plans in Phase:** 12
-**Last Activity:** 2026-11-08 — Phase 08 planning complete
-**Last Activity Description:** Phase 08 planning complete — 12 plans ready
+**Last Activity:** 2026-11-08 — Phase 08 execution started
+**Last Activity Description:** Phase 08 execution started
 
 ## Planning Summary (2026-10-19)
 
@@ -220,6 +220,9 @@ These block or affect stringing the system together and belong to the phases nam
 - 2026-11-08: 07-16 SEL-04 final decision (aaphan; decision_record.md, Read 2 section): option rule-outcome-keep-cooling. The signed O3 outcome is accepted (no shadow model, no day-ahead pick under the rule; interim G6 `ml` keeps running; 2026-11-24 stays retired; any later evaluation needs a new signed protocol), and the owner keeps `ml_cooling_corrected` as the day-ahead selection for Phase 8 as a continuing labelled engineering departure, never a rule pick or "validated" (read-2 best benefit 12.12 A vs 28.01 A bar, Holm p 0.29; read 2 re-grades read 1's rows). Live-system check (never decides): `ml_cooling_corrected` -0.01 A vs raw_forecast (2 of 4 cities), `ml_wind_corrected` +0.85 A.
 - [Phase 07]: 07-16: SEL-04 final decision recorded: owner accepted the signed O3 outcome after read 2 (no shadow model, interim G6 ml continues, 2026-11-24 stays retired) and keeps ml_cooling_corrected as a labelled engineering day-ahead selection for Phase 8 (continuing departure, not a rule pick, not validated)
 - 2026-11-08: Phase 07 UAT (aaphan, 2/2 pass): accepted the read-1 date slip (goal now "read 1 at or after 2026-11-01T00:00Z") and the go-forward-only label scope, re-confirming the GO after read 2; ROADMAP SC5 and REVAL-01 reworded (4f586e8). Security: T-07-23 closed by an ablation-CLI signature refusal (3aa7bf4, b15d389); CR-01, WR-01 and WR-04 deferred to before any new signed protocol or FRESH read (07-SECURITY.md). Re-verification passed 9/9 (f6dbd75).
+- [Phase 08]: 08-01: band_for ships as the TEST-split branch behind its final signature; 08-03 adds live-rolling without changing callers — Keeps the runner call stable across plans
+- [Phase 08]: 08-01: supabase_smoke writer-policy check scoped to city_rating and pipeline_run; day_ahead_forecast keeps its own dlr_writer_all policy — Smaller than renaming the policy that 08-07 and 08-10 refer to; the live smoke check would otherwise fail after the migration is applied
+- [Phase 08]: 08-01: load_model and read_anchor wrap loader hash refusals and missing anchor readings into DayAheadNotIssued; out-of-bounds values are logged, not suppressed — D-16 no-row reasons for every failure; the day-ahead value has no safety role
 
 ## Open Decisions
 
@@ -245,10 +248,10 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 
 ## Session Continuity
 
-**Last session:** 2026-11-08T03:56:05.848Z
+**Last session:** 2026-11-08T09:25:08.424Z
 
-**Stopped At:** Phase 8 context gathered
-**Resume File:** .planning/workstreams/production-pipeline/phases/08-day-ahead-cooling-forecast-alongside-60-minute-g6/08-CONTEXT.md
+**Stopped At:** Completed 08-01-PLAN.md
+**Resume File:** None
 
 ## Performance Metrics
 
@@ -315,6 +318,7 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 | Phase 07 P18 | 15min | 3 tasks | 1 files |
 | Phase 07 P15 | 3min | 2 tasks | 3 files |
 | Phase 07 P16 | 2 sessions | 3 tasks | 4 files |
+| Phase 08 P01 | 21 min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
