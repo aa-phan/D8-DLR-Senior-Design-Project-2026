@@ -376,3 +376,88 @@ def test_import_order_has_no_circular_import(order, tmp_path):
         cwd=str(tmp_path), env=env, capture_output=True, text=True, timeout=120,
     )
     assert result.returncode == 0, result.stderr
+
+
+# --------------------------------------------------------------------------------------------------
+# The committed tree (no stand-ins, nothing deserialized). D-13a: a day-ahead mismatch fails here,
+# offline, before any push, instead of becoming a warning on the live runner.
+# --------------------------------------------------------------------------------------------------
+
+# The last commit that changed the live manifest before Phase 8 plan 05 added the day-ahead entries:
+# it holds exactly the eight live-model lines, which must survive unchanged.
+PRE_08_05_MANIFEST_COMMIT = "e0a00a9e37f694f03571d1e78a9c99f8ffe6cf6b"
+_REFIT_MANIFEST = os.path.join(
+    "data", "models", "conductor_refit", day_ahead_forecast.DAY_AHEAD_REFIT_VERSION, "ARTIFACT_HASHES.sha256"
+)
+_FROZEN_MANIFEST = os.path.join("data", "shadow", "models", "ARTIFACT_HASHES.sha256")
+
+
+@pytest.fixture
+def repo_root(monkeypatch):
+    monkeypatch.chdir(REPO)
+    return REPO
+
+
+def test_committed_day_ahead_files_match_the_committed_manifest(repo_root):
+    assert preflight.check_day_ahead(preflight.MANIFEST_PATH, load=False) == []
+    kinds = [kind for kind, _, _ in preflight.required_day_ahead_artifacts()]
+    assert kinds == ["day_ahead_cooling"] * len(config.LOCATIONS) + ["day_ahead_band"]
+
+
+def test_cooling_hashes_equal_the_refit_and_frozen_manifests(repo_root):
+    live = preflight.read_manifest(preflight.MANIFEST_PATH)
+    refit = preflight.read_manifest(_REFIT_MANIFEST)
+    frozen = preflight.read_manifest(_FROZEN_MANIFEST)
+    served = {city: preflight._key(path) for kind, city, path in preflight.required_day_ahead_artifacts()
+              if kind == "day_ahead_cooling"}
+
+    assert served["AUSTIN"] == (
+        "data/models/conductor_refit/v3-powersystems-2026-11-02/ml_cooling_corrected_AUSTIN.joblib"
+    )
+    assert live[served["AUSTIN"]] == refit[served["AUSTIN"]]
+    for city in ("CORPUS_CHRISTI", "MIDLAND", "EL_PASO"):
+        assert served[city] == f"data/shadow/models/ml_cooling_corrected_{city}.joblib"
+        assert live[served[city]] == frozen[served[city]]
+
+
+def test_the_eight_live_entries_are_unchanged(repo_root):
+    try:
+        shown = subprocess.run(
+            ["git", "show", f"{PRE_08_05_MANIFEST_COMMIT}:data/models/LIVE_ARTIFACT_HASHES.sha256"],
+            capture_output=True, text=True, check=True, cwd=repo_root,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError) as exc:
+        pytest.skip(f"git history for {PRE_08_05_MANIFEST_COMMIT} is not available here: {type(exc).__name__}")
+    before = {}
+    for line in shown.splitlines():
+        if line.strip() and not line.startswith("#"):
+            digest, path = line.split("  ", 1)
+            before[path] = digest
+    assert len(before) == 8
+
+    now = preflight.read_manifest(preflight.MANIFEST_PATH)
+
+    assert {path: now.get(path) for path in before} == before
+    assert len(now) == 13
+    live_paths = {preflight._key(path) for _, _, path in preflight.required_artifacts()}
+    assert set(before) == live_paths
+
+
+def test_band_default_arguments_load_the_committed_band(repo_root):
+    artifact, digest = day_ahead_band.load_verified_band()
+
+    assert sum(len(by_hour) for by_hour in artifact["bands"].values()) == 16
+    assert digest == preflight.read_manifest(preflight.MANIFEST_PATH)["data/day_ahead/day_ahead_bands_v1.json"]
+
+
+def test_full_preflight_in_a_fresh_process_prints_both_ok_lines_and_no_warning(repo_root):
+    env = dict(os.environ, PYTHONPATH=os.path.join(repo_root, "backend"))
+    result = subprocess.run(
+        [sys.executable, os.path.join("backend", "dlr_live_check_models.py")],
+        cwd=repo_root, env=env, capture_output=True, text=True, timeout=300,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "::warning" not in result.stdout + result.stderr
+    assert "OK: all 8 live model artifacts present and match" in result.stdout
+    assert "OK: all 5 day-ahead artifacts present and match" in result.stdout
