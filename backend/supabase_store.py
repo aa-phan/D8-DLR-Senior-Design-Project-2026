@@ -88,6 +88,13 @@ PIPELINE_RUN_COLUMNS = (
     "sources",
 )
 PIPELINE_RUN_JSONB = ("cities_failed", "provider_errors", "sources")
+# Columns that come from later additive migrations (Phase 8:
+# 20261108120000_day_ahead_forecast_store.sql). They are NOT part of the 12 pinned
+# columns above and build_run_row never emits them: only the writer that owns a
+# column sends it, so a code push before its migration cannot break the
+# rating-stage writes (D-15, research Pitfall 4).
+PIPELINE_RUN_OPTIONAL_COLUMNS = ("day_ahead",)
+PIPELINE_RUN_OPTIONAL_JSONB = ("day_ahead",)
 PIPELINE_RUN_KEY = "run_id"
 _RUN_ERROR_MAX_CHARS = 1000
 # A city whose forecast ran (or cold-started) and whose anomaly model loaded is healthy.
@@ -762,21 +769,25 @@ def build_run_row(run_ctx: dict, *, window_end, provider, forecast_method, start
 def upsert_run(conn, row: dict) -> None:
     """
     Upsert one `pipeline_run` row keyed by run_id, in one transaction. `row` may
-    be any subset of `PIPELINE_RUN_COLUMNS` that includes run_id; every given
-    non-key column is updated on conflict, so a re-run attempt (same
-    GITHUB_RUN_ID) replaces the row. Column names are only ever taken from
-    `PIPELINE_RUN_COLUMNS` (an unknown key raises ValueError); values are bound
-    parameters. Phase 5's live_run_log may delegate to this function.
+    be any subset of `PIPELINE_RUN_COLUMNS` + `PIPELINE_RUN_OPTIONAL_COLUMNS`
+    that includes run_id; every given non-key column is updated on conflict, so a
+    re-run attempt (same GITHUB_RUN_ID) replaces the row. Column names are only
+    ever taken from those two tuples (an unknown key raises ValueError); values
+    are bound parameters. Optional columns (day_ahead) are written only by the
+    caller that names them, after their migration exists. Phase 5's
+    live_run_log may delegate to this function.
     """
-    unknown = [key for key in row if key not in PIPELINE_RUN_COLUMNS]
+    allowed = PIPELINE_RUN_COLUMNS + PIPELINE_RUN_OPTIONAL_COLUMNS
+    jsonb = PIPELINE_RUN_JSONB + PIPELINE_RUN_OPTIONAL_JSONB
+    unknown = [key for key in row if key not in allowed]
     if unknown:
         raise ValueError(f"not pipeline_run columns: {unknown}")
     if row.get(PIPELINE_RUN_KEY) is None:
         raise ValueError("a pipeline_run row needs a run_id")
 
-    columns = [column for column in PIPELINE_RUN_COLUMNS if column in row]
+    columns = [column for column in allowed if column in row]
     placeholders = [
-        f"%({column})s::jsonb" if column in PIPELINE_RUN_JSONB else f"%({column})s"
+        f"%({column})s::jsonb" if column in jsonb else f"%({column})s"
         for column in columns
     ]
     updates = [f"{column} = excluded.{column}" for column in columns if column != PIPELINE_RUN_KEY]
@@ -791,7 +802,7 @@ def upsert_run(conn, row: dict) -> None:
     params = {
         column: (
             json.dumps(row[column], allow_nan=False, default=str)
-            if column in PIPELINE_RUN_JSONB and row[column] is not None else row[column]
+            if column in jsonb and row[column] is not None else row[column]
         )
         for column in columns
     }

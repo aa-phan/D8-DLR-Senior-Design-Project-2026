@@ -321,3 +321,57 @@ def test_run_dlr_pipeline_rejects_a_store_it_cannot_use_before_any_city_runs(mon
         orch.run_dlr_pipeline(stations=None, end=_END, archive=False, store=bad)
 
     assert calls == []
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# optional later-migration columns (Phase 8: pipeline_run.day_ahead)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_upsert_run_writes_the_day_ahead_column_alone_as_jsonb():
+    conn = FakeConn()
+    outcome = {"cities": {"AUSTIN": {"outcome": "issued", "issued": ["2026-11-09T00:00:00Z"]}}}
+
+    supabase_store.upsert_run(conn, {"run_id": "7", "day_ahead": outcome})
+
+    (sql, params), = conn.calls
+    assert "insert into public.pipeline_run (run_id, day_ahead)" in sql
+    assert "%(day_ahead)s::jsonb" in sql
+    assert sql.endswith("do update set day_ahead = excluded.day_ahead")
+    assert json.loads(params["day_ahead"]) == outcome
+    assert isinstance(params["day_ahead"], str)
+    assert params["run_id"] == "7"
+
+
+def test_upsert_run_accepts_a_full_row_plus_day_ahead_in_column_order():
+    conn = FakeConn()
+    row = _build([_record("AUSTIN")], provider_errors={"AUSTIN": {}}, sources={"AUSTIN": {}})
+    row["day_ahead"] = {"cities": {}}
+
+    supabase_store.upsert_run(conn, row)
+
+    (sql, _params), = conn.calls
+    expected = supabase_store.PIPELINE_RUN_COLUMNS + ("day_ahead",)
+    assert sql.startswith("insert into public.pipeline_run (" + ", ".join(expected) + ")")
+    assert "day_ahead = excluded.day_ahead" in sql
+
+
+def test_the_rating_stage_row_never_carries_the_optional_columns():
+    row = _build([_record("AUSTIN")])
+
+    assert "day_ahead" not in row
+    assert tuple(row) == supabase_store.PIPELINE_RUN_COLUMNS
+    assert len(supabase_store.PIPELINE_RUN_COLUMNS) == 12
+    assert supabase_store.PIPELINE_RUN_OPTIONAL_COLUMNS == ("day_ahead",)
+    assert set(supabase_store.PIPELINE_RUN_OPTIONAL_COLUMNS).isdisjoint(
+        supabase_store.PIPELINE_RUN_COLUMNS)
+    assert set(supabase_store.PIPELINE_RUN_OPTIONAL_JSONB) <= set(
+        supabase_store.PIPELINE_RUN_OPTIONAL_COLUMNS)
+
+
+def test_upsert_run_still_rejects_an_unknown_key_next_to_day_ahead():
+    conn = FakeConn()
+
+    with pytest.raises(ValueError, match="day_after"):
+        supabase_store.upsert_run(conn, {"run_id": "7", "day_ahead": {}, "day_after": 1})
+
+    assert conn.calls == []
