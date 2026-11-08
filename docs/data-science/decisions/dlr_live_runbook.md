@@ -105,10 +105,17 @@ Steps, in order (`.github/workflows/dlr_live.yml`, job `rate`, runner `ubuntu-la
 3. Install `requirements.txt`.
 4. Model pre-flight (`backend/dlr_live_check_models.py`, no secrets): fails the run before any city is
    rated if one of the eight model files is missing, differs from its recorded SHA-256 or will not load.
+   It also checks the four day-ahead cooling files and the day-ahead band artifact (section 9), as
+   warnings only (D-13a): a problem there prints a `::warning::` line, never turns the run red and never
+   stops a rating. Only the eight live models can fail the pre-flight.
 5. Run `backend/dlr_live_run.py`: one `dlr_orchestrator.py` child process per city, one after another in
    `config.LOCATIONS` order, all sharing one window end. Each child rates its city with the composed
    providers and the ML forecast and writes its own rating row. Each child has a hard budget of
    `CITY_TIMEOUT_S` = 300 s and is killed at that point.
+6. After the ratings and the exit code are settled, the day-ahead stage runs (section 17). It
+   publishes a separate day-ahead forecast table, never sets or checks a rating and never changes the
+   exit code. From Phase 8 on, `finished_at` in the run log means "the ratings finished": the
+   day-ahead stage runs after it and records its own outcome in `pipeline_run.day_ahead`.
 
 **Timeout.** `timeout-minutes: 30`. At the cap, 4 cities x 300 s = 1200 s (20 minutes) of children plus
 at most 10 minutes for checkout, install, the pre-flight and the run-log writes. That is shorter than
@@ -156,7 +163,8 @@ the previous hour's row stays the latest one for that city.
 Only the runner writes it; the children run with `--no-run-row`. It is inserted before the first city
 starts, updated after each city and finished at the end:
 
-- `finished_at` null means the run did not finish, for example the job timeout killed it.
+- `finished_at` null means the run did not finish, for example the job timeout killed it. It is the
+  moment the ratings finished; the day-ahead stage (section 17) runs after it.
 - `cities_ok`: the cities whose row was written with a healthy ML path, in `config.LOCATIONS` order.
 - `cities_failed`: an object per other city with `outcome` (`error`, `timeout` or `degraded`),
   `written`, `exit_code`, `duration_s`, `forecast_status`, `forecast_error`, `detector_model_loaded`,
@@ -273,6 +281,33 @@ approval. A binary committed to git stays in its history. The pre-flight fails t
 the manifest disagree, so an unpromoted retrain (files changed, manifest not) turns every run red before
 any city is rated. Running `backend/dlr_live_check_models.py` with no argument performs the same check
 locally.
+
+**The 13 manifest entries.** Since Phase 8 the manifest lists thirteen files, in three groups:
+
+| Group | Entries | Pre-flight tier |
+|---|---|---|
+| Live models (8) | `forecast_{CITY}.joblib` and `anomaly_{CITY}.joblib` for the four cities | Fatal: a problem fails the run before any city is rated |
+| Day-ahead cooling models (4) | The served `ml_cooling_corrected` file of each city: the AUSTIN refit file under `data/models/conductor_refit/` and the three frozen files under `data/shadow/models/` | Warning only |
+| Day-ahead band (1) | `data/day_ahead/day_ahead_bands_v1.json`, the launch band artifact | Warning only |
+
+The day-ahead child checks the hash of a cooling file and of the band artifact itself before it loads or
+parses them, and publishes nothing for a target whose file does not match (section 17). The warning tier
+is the early notice.
+
+**Promoting a later conductor refit (D-13).** If the Power Systems team answers with a different
+conductor for a city, the day-ahead forecast follows only through this step, never by itself:
+
+1. Refit that city's cooling model as in Phase 7.
+2. Bump `DAY_AHEAD_REFIT_VERSION` in `backend/day_ahead_forecast.py` together with the refit, so the
+   served path points at the new refit folder.
+3. Regenerate the manifest with `PYTHONPATH=backend .venv/bin/python backend/dlr_live_check_models.py --write-manifest`.
+4. Run the day-ahead tests (`backend/tests/day_ahead_forecast_test.py`, `dlr_day_ahead_test.py`,
+   `dlr_live_check_models_day_ahead_test.py`).
+5. Ask the owner before pushing, as for any model promotion.
+
+After a config or model change the live band starts again from the launch band: a graded pair counts only
+when its forecast and the rating it is compared with share the same `config_fingerprint` and the same
+cooling model sha256, so the 60-pair count for the live band restarts from zero.
 
 ## 10. NSRDB
 
@@ -630,3 +665,121 @@ PYTHONPATH=backend .venv/bin/python -c "from dotenv import load_dotenv; load_dot
 Compare the result with 06-09's live evidence. Any difference (a check that passed then and fails now, a
 new column, a grant that appeared or went away) is a discrepancy to bring to the owner; do not fix it
 silently. Run `--check-writes` only when no backfill load or past-slot re-run is in progress (section 15).
+
+## 17. Day-ahead forecast stage (Phase 8)
+
+In plain English: besides rating each line now (and 60 minutes ahead), the hourly job also publishes a
+separate, higher-error day-ahead forecast of each city's ampacity in amperes. It never sets or checks a
+rating, and it never gates the 60-minute forecast (G6). Every row carries the label
+`day-ahead-24h; engineering-selection; not-validated`: it is an engineering-selected forecast that has
+not been validated. It is stored in its own table, `public.day_ahead_forecast`, one row per city and
+target hour, and it is not readable with the public key until the expose migration (D-17) is applied.
+
+**What "24 h" means.** "24 h" is the weather run's age, not the time between issue and target. Each value
+is computed from the Open-Meteo run that started exactly 24 h before the target. A row is issued 0 to
+18 h before its target (the run is published about 6 h after it starts, so a target becomes issuable 18 h
+ahead). Both times are stored: `forecast_run_init_time` (target minus 24 h) and `issued_at` (the actual
+decision time of the run that issued the row).
+
+The correction also needs a recent station reading, the anchor. How far before the target it is differs
+by setup, and it is why the launch band is only a starting estimate:
+
+| Setup | Anchor reading is about | Where it is used |
+|---|---|---|
+| TEST | exactly 24 h before the target | The launch band is built from the TEST split |
+| Shadow collection | 12 h before the target | The shadow log the model was selected on |
+| Live (this stage) | up to 18 h before the target (less for a catch-up issue) | Every published row |
+
+**When a target is due.** Targets are the 00, 06, 12 and 18 UTC hours. A target is due from the hourly
+run at or after target minus 18 h until the target itself. The hourly runs at 06:05, 12:05, 18:05 and 00:05
+UTC (12:05 AM, 6:05 AM, 12:05 PM and 6:05 PM Central standard time, the time in force until March; in
+daylight time subtract 5 hours from UTC instead of 6) therefore normally issue one new target per city.
+The other hourly runs find nothing to do. About three targets per city are issued ahead at any time. The
+first run after go-live issues every target then due, up to 3 per city (12 rows in all), each with a
+different lead.
+
+**Catch-up (D-04).** The table is the only state. Each run reads which future targets already have a row
+and issues the missing due ones, earliest first, so a missed or failed run is repaired by the next hourly
+run with no marker file. A row is never rewritten: the first write wins, and a catch-up row simply carries
+a later `issued_at`, so a late value is visible.
+
+**Budget.** The stage starts only after the ratings are finished and the exit code is fixed. It runs one
+`backend/dlr_day_ahead.py` child per city, in `config.LOCATIONS` order, inside the same 1200 s child
+budget the ratings share (4 cities x 300 s). Each child is killed at `DAY_AHEAD_CITY_TIMEOUT_S` = 150 s or
+at the budget left, whichever is smaller, and a city is started only when at least
+`DAY_AHEAD_MIN_START_S` = 60 s of the shared budget remain; otherwise it is recorded `skipped_budget`
+and the next hourly run catches up. A healthy run takes seconds; if the ratings used the whole budget the
+stage starts nothing. The workflow file and its `timeout-minutes: 30` are unchanged.
+
+**Outcomes** (one per city, in `pipeline_run.day_ahead`):
+
+| Outcome | Meaning | What to do |
+|---|---|---|
+| none_due | Every due target already has a row (the usual state for most hours) | Nothing |
+| issued | Every missing due target got a row | Nothing |
+| partial | Some targets got a row and some did not (for example one weather run was not yet available) | Nothing; the next hour retries the rest. The reasons name each missing target |
+| error | The child failed, or refused for a named reason: the band file or a cooling model differs from the manifest, no anchor reading, the database could not be reached | Read the reason. A hash refusal means the files and the manifest disagree (section 9); an unreachable database is the Supabase pause row of section 11 |
+| timeout | The child outlived its time and was killed | Rows it wrote before the kill stand; the next hour catches up. Repeated timeouts point at a slow weather provider |
+| skipped_budget | Less than 60 s of the shared budget remained when the city was reached | The ratings ran long; the next hourly run catches up |
+
+**Where outcomes are recorded.** In `pipeline_run.day_ahead` (a private jsonb column, written by the stage
+as its own `pipeline_run` upsert, so it never touches the rating-stage columns): `started_at`,
+`finished_at`, `budget_s` and, per city, the outcome, the `due`, `issued` and `missing` targets, the
+redacted `reasons`, `band_sources`, `out_of_bounds`, the cooling model sha256, `exit_code` and `duration_s`.
+The step summary of each run shows a separate day-ahead table and its own `pipeline_run day_ahead: N
+writes, M failed` line next to the rating table and the `pipeline_run: N writes, M failed` line.
+
+```sql
+-- the day-ahead outcome of the latest runs
+select run_id, window_end, day_ahead -> 'cities' as cities
+from public.pipeline_run
+where day_ahead is not null
+order by window_end desc
+limit 24;
+```
+
+**Failure policy (D-15, D-16).** The day-ahead stage never turns a run red: a crash, a hang, a refusal or a
+failed write of its own record cannot change the exit code of `dlr_live_run.py`, the rating rows or the
+rating run log. If a value cannot be computed there is no value and no row for that target, and the reason is
+logged and recorded; no other method is used in its place. A value outside the city's rating bounds is
+still published as computed and listed under `out_of_bounds`. No exception text or provider message is
+ever placed in the table.
+
+**The band.** Each row carries a 5-95% band in amperes. At launch every band comes from the hashed TEST
+artifact (`band_source` test-split, 196 residuals per city and target hour, built from the TEST split, which
+is a starting estimate rather than a live calibration). Each band switches on its own to a live band
+(`live-rolling`) once 60 graded pairs exist for that city and UTC target hour, using the newest 120 pairs,
+and only when the live band brackets the value (its 5% offset below zero and its 95% offset above it);
+otherwise it keeps the TEST band. A graded pair is a day-ahead value and the weather-computed rating for the
+same city and hour, under the same `config_fingerprint` and the same cooling model sha256 (section 9).
+
+**A later conductor refit (D-13).** The served cooling model follows a new refit only through the promotion
+step in section 9: refit the city, bump `DAY_AHEAD_REFIT_VERSION` in `backend/day_ahead_forecast.py`
+together with the refit, regenerate the manifest, run the day-ahead tests and ask the owner before pushing.
+Until then the stage keeps serving the files the manifest names.
+
+**How to check it.**
+
+- After the first live run following the push, with the time just before the push (an ISO time in UTC),
+  from the repository root with `SUPABASE_DB_URL` in the git-ignored `.env`:
+
+  ```bash
+  PYTHONPATH=backend .venv/bin/python backend/day_ahead_verify.py --check-store --since <PUSH_TIME_UTC> --json-out <EVIDENCE_FILE>
+  ```
+
+  It only reads (one read-only transaction, rolled back), prints one PASS or FAIL line per named check and
+  one line per row, and exits 0 only when the first issuing run wrote every due target (up to 3 per city, 12
+  in all) with the right label, the TEST band, the manifest hashes, the code's config identity, a bracketing
+  band, a lead of at most 18 h and a `pipeline_run.day_ahead` record. Exit 1 means a check failed, 2 a missing
+  `SUPABASE_DB_URL` or a bad `--since`. The JSON never holds the connection URL, host or user.
+- To run one city locally without the database (a dry run: nothing is stored, the TEST band is used):
+
+  ```bash
+  PYTHONPATH=backend .venv/bin/python backend/dlr_day_ahead.py --city AUSTIN --output /tmp/da.json --no-store
+  ```
+
+- To run the ratings without the stage (a local run, for example when testing a rating change):
+  `PYTHONPATH=backend .venv/bin/python backend/dlr_live_run.py --no-day-ahead`. The scheduled workflow never
+  passes it.
+- The owner's one-query check of the write side after the migration is applied is
+  `supabase/ops/verify_day_ahead_store.sql` in the SQL editor: every `ok` must be true.

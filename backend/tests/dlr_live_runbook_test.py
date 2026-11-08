@@ -141,6 +141,24 @@ def test_runbook_minutes_section_covers_both_workflows():
         assert needle in section, needle
 
 
+def test_runbook_section_17_matches_the_day_ahead_stage_constants_and_tools():
+    # Phase 8 (08-06, T-08-19): the day-ahead section quotes the stage's constants, flags and tool
+    # names, so a change in the code that the runbook does not follow fails here.
+    section = _section(_runbook(), "Day-ahead forecast stage")
+
+    assert f"`DAY_AHEAD_CITY_TIMEOUT_S` = {dlr_live_run.DAY_AHEAD_CITY_TIMEOUT_S} s" in section
+    assert f"`DAY_AHEAD_MIN_START_S` = {dlr_live_run.DAY_AHEAD_MIN_START_S} s" in section
+    assert f"{dlr_live_run.DAY_AHEAD_SHARED_BUDGET_S} s" in section
+    for needle in (
+        "--no-day-ahead",
+        "pipeline_run.day_ahead",
+        "day_ahead_verify.py",
+        "DAY_AHEAD_REFIT_VERSION",
+        "weather run's age",
+    ):
+        assert needle in section, needle
+
+
 def test_phase5_files_contain_no_secret_values():
     # Control: each pattern fires on a planted line assembled at run time, so a pattern that
     # silently stopped matching cannot make the scan below pass vacuously.
