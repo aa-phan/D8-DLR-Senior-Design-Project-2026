@@ -653,32 +653,40 @@ if day_ahead:
 | A8 | Proposed requirement IDs DAY-01 to DAY-08 and their grouping | Phase requirements | Purely naming; the planner may regroup |
 | A9 | Open-Meteo's "4-6 hours" applies to `gfs_seamless` runs on the single-runs endpoint | Pattern 2 | The page names GFS in its example list but its GFS table did not render in my fetch; the 6 h repo constant and the hourly catch-up cover a slower model |
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+All six questions below are settled. Each carries one RESOLVED line naming the decision or plan that settles it.
 
 1. **Should day-ahead files be in the fatal part of the model pre-flight?**
    - What we know: the pre-flight runs before ratings and a failure stops the job (Pitfall 1). D-13 says the pre-flight verifies the cooling files and band; D-02 and D-15 say day-ahead must never block ratings.
    - What's unclear: whether the owner intended "verify and fail the run" or "verify and report".
    - Recommendation: warning tier in the pre-flight, hard refusal in the child, hard failure in an offline test. Needs one owner yes/no, phrased plainly: "If a day-ahead model file is damaged, should the hourly job still rate the lines? (Recommended: yes, and say so in the log.)"
+   - RESOLVED by the owner as D-13a (2026-11-08, CONTEXT.md): verify and report, never stop the ratings. 08-05 adds the non-fatal warning tier (any exception in that tier is also only a warning) and the offline hard-failure test; 08-04's child refuses a file whose hash does not match and records why.
 
 2. **What exactly does D-17's go-live check count?**
    - What we know: with catch-up the first run issues up to 12 rows (3 targets per city), each with a different lead; steady state is 4 rows every 6 hours.
    - What's unclear: whether the owner wants the first run capped to the newest target per city.
    - Recommendation: do not cap; word the check as "every due target has a row with the correct label, band source and hashes, and the parity test passed", and have a small read-only verify script print them (like `e2e_verify_readonly.py`).
+   - RESOLVED as recommended (no cap): DAY-08 in 08-02 words the check as "a row for every due target, up to 3 per city and 12 in all"; 08-06 builds the read-only `day_ahead_verify.py --check-store`; 08-08 runs it after the push as the go-live check.
 
 3. **Anchor-lead honesty.**
    - What we know: TEST anchors are 24 h before the target, the shadow reads about 12 h before, and this phase about 18 h or less. D-03 fixes the method (a "now" reading).
    - What's unclear: whether the owner wants the contract to mention it (recommended) or wants to delay issue to the shadow's 12 h lead (not recommended: it breaks "issue when available" and shrinks the lead consumers get).
    - Recommendation: record `anchor_observation_time` and `issued_at` per row and state the three leads in the contract text.
+   - RESOLVED as recommended (no delayed issue): 08-01 stores `issued_at`, `forecast_run_init_time` and `anchor_observation_time` on every row; 08-10's contract docs state that "24 h" is the weather run's age and that values are issued 0-18 h before their target.
 
 4. **Where does the band artifact live and who reviews it?**
    - What we know: `data/day_ahead/day_ahead_bands_v1.json` needs no `.gitignore` change; it is built from the tracked rows CSV.
    - Recommendation: build once offline, commit the JSON, add its hash to the live manifest, and add a test that rebuilds it byte for byte.
+   - RESOLVED as recommended: 08-01 builds and commits `data/day_ahead/day_ahead_bands_v1.json`; 08-03 adds the byte-for-byte rebuild test and the strict parser; 08-05 adds its hash to `data/models/LIVE_ARTIFACT_HASHES.sha256`. The owner sees it listed in 08-08's push note before approving the push.
 
 5. **Plausibility of the published value.**
    - What we know: `predict_cooling_correction` already refuses a non-positive convective term; nothing bounds the final amps.
    - Recommendation: DB CHECK `forecast_amps > 0 and < 'Infinity'`, log (do not suppress) a value outside the city's G4 bounds. Ask the owner only if they want out-of-bounds values withheld.
+   - RESOLVED as recommended (log, do not suppress; the owner has not asked for out-of-bounds values to be withheld, and D-16 publishes every value cooling produces): 08-01's write-side migration carries the `forecast_amps > 0 and < 'Infinity'` CHECK; 08-01 and 08-04 still insert an out-of-bounds value and list it in the child's `out_of_bounds` output, which 08-02 records in `pipeline_run.day_ahead`.
 
 6. **Supabase CLI is not installed on this machine** (`command -v supabase` returned nothing; `gh` 2.100.0, Node 26.9.0 and local Postgres 16.14 are present). The documented owner command is `supabase db push --db-url ...`. Keep the apply as an owner-gated `[BLOCKING]` step and let the plan name the alternative the owner already uses.
+   - RESOLVED as recommended: both applies are owner-gated `[BLOCKING]` human-action steps that use the owner's existing CLI at `~/tools/supabase-cli/node_modules/.bin/supabase` (dry run first, then push): 08-07 Task 3 for the write-side migration and 08-11 Task 3 for the expose migration. No test needs the CLI.
 
 ## Environment Availability
 
