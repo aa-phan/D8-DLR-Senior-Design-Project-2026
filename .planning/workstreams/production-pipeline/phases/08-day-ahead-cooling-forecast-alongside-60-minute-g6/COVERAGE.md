@@ -2,7 +2,7 @@
 
 > Full coverage by default. Opt-outs are explicit, reasoned decisions.
 > Scope: Phase 8 serves `ml_cooling_corrected` as a labelled day-ahead forecast alongside the 60-minute G6
-> forecast (plans 08-01 .. 08-11). Every external call for the value goes through the frozen shadow
+> forecast (plans 08-01 .. 08-12). Every external call for the value goes through the frozen shadow
 > functions unchanged (D-03); this phase adds no new provider client. Supabase surfaces extend the
 > Phase 4 writer and the Phase 6 read-only REST exposure. No new cron job (D-12).
 
@@ -40,5 +40,5 @@ Notes on the INTEGRATE rows:
 - `open_meteo.single_run_unavailable_handling`: the frozen retry policy; `StaleOrMissingDataError` means no row and a logged reason (D-16), retried by the next hourly run (D-04).
 - `station_anchor.tceq_with_synoptic_fallback`: `forecast_shadow_pipeline.fetch_live_anchor_observation`, once per city per run (08-04).
 - `supabase_postgres.*`: `public.day_ahead_forecast` insert with on conflict do nothing and select of existing keys and live band pairs (08-01, 08-03, 08-04); `pipeline_run.day_ahead` upsert of `{run_id, day_ahead}` (08-02); read-only checks `day_ahead_verify.py --check-store` and `verify_day_ahead_store.sql` (08-04, 08-06); two owner-applied migrations (08-07, 08-11).
-- `postgrest.*`: `GET /rest/v1/day_ahead_upcoming`, `/day_ahead_status`, `/day_ahead_forecast`, and `GET /rest/v1/rpc/assert_fresh` with the same signature (08-09, 08-10, 08-11).
+- `postgrest.*`: `GET /rest/v1/day_ahead_upcoming`, `/day_ahead_status`, `/day_ahead_forecast`, and `GET /rest/v1/rpc/assert_fresh` with the same signature (08-09, 08-10, 08-11); the two views are also read by the three consumer examples (curl, supabase-js, stdlib Python), extended in 08-12 and run live in 08-11 (D-18).
 - `cron_job_org.existing_alarm_job` and `github_actions.existing_hourly_workflow`: unchanged URL, key and workflow file; the stage runs inside `dlr_live_run.py` (08-02).

@@ -39,7 +39,7 @@ created: "2026-11-08"
 
 ## Per-Task Verification Map
 
-Filled by the planner from the research requirement map (DAY-01..DAY-08). `pytest ...` means
+Filled by the planner from the research requirement map (DAY-01..DAY-08) plus DAY-09 (D-18 consumer handoff, added after planning). `pytest ...` means
 `/Users/aphan/Senior_Design/.venv/bin/python -m pytest -q -p no:cacheprovider`, prefixed with
 `DLR_TEST_PG_AUTOSTART=1` for local-Postgres files.
 
@@ -57,7 +57,8 @@ Filled by the planner from the research requirement map (DAY-01..DAY-08). `pytes
 | DAY-08, DAY-01, DAY-04 | 08-08 T1-T3 | rehearsal at the pushed commit incl. parity; owner push; first-slot JSON all ok | full suite / manual + script | `pytest ... -rs` (full); `pytest ... backend/tests/day_ahead_forecast_test.py -k parity`; JSON parse one-liner | exists | ⬜ pending |
 | DAY-06, DAY-07 | 08-09 T1-T2 | expose migration: views, grants, status rule, `assert_fresh` same signature and armed clause; privilege sweep (29 checks); Phase 6 reapply test widened to the five published objects (T1 break window limited to three named tests, closed in T2) | local PG / text | `pytest ... -rs backend/tests/day_ahead_expose_test.py backend/tests/expose_migration_test.py backend/tests/soak_log_migration_test.py` | ❌ W0 / exists | ⬜ pending |
 | DAY-06, DAY-07 | 08-10 T1-T2 | contract docs parsed against the contract module; REST check (fake PostgREST); runbook section 14; section 16 permission re-check states the post-expose surface (five rows kept); section 3 dlr_writer grants match the migrations | text / unit | `pytest ... backend/tests/rest_api_doc_test.py backend/tests/day_ahead_verify_test.py backend/tests/dlr_live_runbook_test.py backend/tests/monitoring_runbook_test.py backend/tests/secret_scan_test.py` | exists, extend | ⬜ pending |
-| DAY-06, DAY-07, DAY-08 | 08-11 T1-T3 | rehearsal; owner expose decision; [BLOCKING] expose apply; live REST checks; publish push; sha256 pin | full suite / manual + script | `pytest ... -rs` (full); `pytest ... backend/tests/day_ahead_expose_test.py -k unchanged_after_apply`; JSON parse one-liner | exists | ⬜ pending |
+| DAY-06, DAY-08, DAY-09 | 08-12 T1-T3 | read_ratings.py day-ahead part on both interpreters (tracer), fake views, curl and supabase-js day-ahead reads, read-only and no-project-value checks, handoff docs guarded against the contract | unit (fake PostgREST, bash, node --check) / text | `pytest ... -rs backend/tests/example_read_ratings_test.py backend/tests/e2e_readonly_test.py backend/tests/e2e_trace_test.py`; `pytest ... backend/tests/day_ahead_consumer_docs_test.py backend/tests/rest_api_doc_test.py backend/tests/supabase_schema_doc_test.py backend/tests/secret_scan_test.py` | ❌ W0 / exists, extend | ⬜ pending |
+| DAY-06, DAY-07, DAY-08, DAY-09 | 08-11 T1-T3 | rehearsal; owner expose decision; [BLOCKING] expose apply; live REST checks; live run of the three extended examples (D-18); publish push; sha256 pin | full suite / manual + script | `pytest ... -rs` (full); `pytest ... backend/tests/day_ahead_expose_test.py -k unchanged_after_apply`; JSON parse one-liners for 08-11-live-checks.json and 08-11-examples.json | exists | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -73,6 +74,7 @@ Each test file is created by the task that first needs it (TDD inside the task),
 - [ ] `backend/tests/dlr_live_check_models_day_ahead_test.py` — 08-05 (D-13, D-13a)
 - [ ] `backend/tests/day_ahead_verify_test.py` — 08-06 (store mode), extended in 08-10 (REST mode) (DAY-08)
 - [ ] `backend/tests/day_ahead_expose_test.py` — 08-09 (DAY-06, DAY-07)
+- [ ] `backend/tests/day_ahead_consumer_docs_test.py` — 08-12 (DAY-09); `example_read_ratings_test.py` and `fake_postgrest.py` extended in 08-12
 - [ ] Shared offline fixtures copied per file (`_no_network`, `_no_database`, fake conn, `local_pg`, fake leaf fetches)
 
 ---
@@ -85,6 +87,7 @@ Each test file is created by the task that first needs it (TDD inside the task),
 | Push of live-CI changes | DAY-08 | Standing rule: ask before pushing live CI | Owner approves push |
 | First issue slot writes rows with correct label, band source and hashes | DAY-08 (D-17) | Needs live run | Owner runs the read-only verify script after the first due run |
 | Migration 2 applied (expose) and contract doc published | DAY-08 (D-17) | Owner-gated | Owner applies, live anon read/write checks |
+| Extended examples run as written on the live project before the publishing push | DAY-09 (D-18) | Needs the live views and the owner's publishable key | Owner runs curl.sh, read_ratings.py (two interpreters) and supabase_js.mjs; executor records 08-11-examples.json |
 
 ---
 

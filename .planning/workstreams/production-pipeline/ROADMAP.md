@@ -392,17 +392,18 @@ day-ahead costs about +23 A MAE, ~1.7% of rating, vs the 60-minute ml) and
 `docs/data-science/exploratory/2026-11-02_ml_vs_naive/REPORT.md`. Open questions for planning: issue
 times (the shadow method exists at 00/06/12/18 UTC), how the band is built and calibrated, storage
 and API exposure, and which conductor-dependent artifacts are served (AUSTIN refit under v3).
-**Plans:** 11 plans
+**Plans:** 12 plans
 
 Plans:
 *Go-live order (D-17, research Pitfall 4):* write-side code first (waves 1-3), then the owner confirms the
 contract and applies the write-side migration (08-07), pushes the code and verifies the first issue run
-(08-08); only then is the expose migration written (08-09, 08-10) and applied with the docs published
-(08-11), so the expose file is never pending while the write side is pushed.
+(08-08); only then is the expose migration written (08-09, 08-10), the consumer examples and handoff
+docs extended (08-12, D-18), and everything applied, run live and published (08-11), so the expose file
+is never pending while the write side is pushed.
 
 **Wave 1**
 - [ ] 08-01-PLAN.md — Tracer: one target through the frozen shadow functions, TEST band and first-write-wins insert on local Postgres; then every city and target, parity (D-03), no substitute (D-16), identity (DAY-01, DAY-02, DAY-03, DAY-05)
-- [ ] 08-02-PLAN.md — DAY-01..DAY-08 into REQUIREMENTS/ROADMAP; optional `pipeline_run.day_ahead` column; day-ahead stage in the runner after the exit code, child per city, shared budget (DAY-04, DAY-08)
+- [ ] 08-02-PLAN.md — DAY-01..DAY-09 into REQUIREMENTS/ROADMAP; optional `pipeline_run.day_ahead` column; day-ahead stage in the runner after the exit code, child per city, shared budget (DAY-04, DAY-08)
 
 **Wave 2** *(after 08-01; 08-04 also after 08-02)*
 - [ ] 08-03-PLAN.md — Band artifact guards, anti-peeking guard, live rolling band per city x target hour (DAY-03)
@@ -422,8 +423,11 @@ contract and applies the write-side migration (08-07), pushes the code and verif
 - [ ] 08-09-PLAN.md — Expose migration: `day_ahead_upcoming`, `day_ahead_status`, SELECT-only grants, `assert_fresh` day-ahead clause; privilege sweep (DAY-06, DAY-07)
 - [ ] 08-10-PLAN.md — Consumer contract docs (rest-api.md, day_ahead_forecast_v1.md, PSS/E pointer); REST check; runbook section 14 (DAY-06, DAY-07, DAY-08)
 
-**Wave 7** *(owner)*
-- [ ] 08-11-PLAN.md — Owner: expose decision, [BLOCKING] expose schema push, live consumer checks, publish push, sha256 pin (DAY-06, DAY-07, DAY-08)
+**Wave 7** *(after 08-10)*
+- [ ] 08-12-PLAN.md — Consumer handoff (D-18): the three examples also read `day_ahead_upcoming` and `day_ahead_status`; day-ahead sections in the Software handoff, the frontend API contract and the PSS/E note (DAY-06, DAY-08, DAY-09)
+
+**Wave 8** *(owner; after 08-09, 08-10, 08-12)*
+- [ ] 08-11-PLAN.md — Owner: expose decision, [BLOCKING] expose schema push, live consumer checks, live run of the extended examples, publish push, sha256 pin (DAY-06, DAY-07, DAY-08, DAY-09)
 
 ## Progress
 
@@ -436,4 +440,4 @@ contract and applies the write-side migration (08-07), pushes the code and verif
 | 5. Scheduled Live Runs | 8/8 | Complete    | 2026-10-26 |
 | 6. Exposure & E2E Verification | 13/13 | Complete    | 2026-11-01 |
 | 7. Per-City Conductors, Shadow Refit and Early Model Selection | 19/19 | Complete    | 2026-11-07 |
-| 8. Day-Ahead Cooling Forecast Alongside 60-Minute G6 | 0/11 | Planned | - |
+| 8. Day-Ahead Cooling Forecast Alongside 60-Minute G6 | 0/12 | Planned | - |
