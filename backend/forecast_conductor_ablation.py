@@ -37,7 +37,8 @@ choice is recorded in the report and flagged for the signing review.
 
 Run by a human offline: `PYTHONPATH=backend .venv/bin/python backend/forecast_conductor_ablation.py`. Cached
 frames only (the `_2024-01-20_2026-09-29_` files restricted to rows before 2026-03-17); the FRESH-dated
-experiment caches are never opened.
+experiment caches are never opened. The CLI refuses (exit 2, nothing written) unless the v4 signing copy is
+signed (`core.v4_signed()`); the gate is on the CLI only, so tests can drive `run_ablation` directly.
 """
 
 from __future__ import annotations
@@ -612,8 +613,8 @@ def main(argv=None) -> int:
     parser.add_argument("--n-resamples", type=int, default=core.N_RESAMPLES)
     args = parser.parse_args(argv)
     if not core.v4_signed():
-        print("error: protocol v4 is not signed; the ABLATION re-score runs only after the signed v4 (T-07-23)",
-              file=sys.stderr)
+        print(f"error: protocol v4 is not signed ({core.V4_SIGNING_COPY}); the ABLATION re-score runs only "
+              "after the signed v4", file=sys.stderr)
         return 2
     out_dir = args.out_dir or _default_out_dir()
 

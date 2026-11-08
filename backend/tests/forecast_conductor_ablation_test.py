@@ -598,6 +598,7 @@ def test_write_report_refuses_an_existing_directory_and_the_frozen_one(tmp_path,
 
 
 def test_main_runs_the_ablation_and_prints_the_veto_summary(tmp_path, dev_frame, fixture_counts, monkeypatch, capsys):
+    monkeypatch.setattr(core, "v4_signed", lambda repo_root=None: True)
     monkeypatch.setattr(fm, "load_city_frame", lambda city: _shifted(dev_frame, city))
     monkeypatch.setattr(abl, "BRACKETING_SET", (_BY_NAME["Drake-75"], _BY_NAME["Drake-100"]))
     out = tmp_path / "v4-ablation" / "run1"
