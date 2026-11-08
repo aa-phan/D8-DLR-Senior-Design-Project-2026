@@ -608,6 +608,15 @@ def test_main_runs_the_ablation_and_prints_the_veto_summary(tmp_path, dev_frame,
     assert sorted(os.listdir(out)) == ["ablation.json", "ablation.md"]
 
 
+def test_main_when_unsigned_exits_2_before_any_work(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(core, "v4_signed", lambda repo_root=None: False)
+    monkeypatch.setattr(abl, "run_ablation", lambda *a, **k: pytest.fail("ran while unsigned"))
+    out = tmp_path / "v4-ablation" / "run1"
+    rc = abl.main(["--cities", "AUSTIN", "--out-dir", str(out)])
+    assert rc == 2 and "not signed" in capsys.readouterr().err
+    assert not os.path.exists(out)
+
+
 def test_main_default_out_dir_is_a_timestamped_directory_outside_the_frozen_models():
     import re
     parser_default = abl._default_out_dir()

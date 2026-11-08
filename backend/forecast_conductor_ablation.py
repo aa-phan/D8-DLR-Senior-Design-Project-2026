@@ -611,6 +611,10 @@ def main(argv=None) -> int:
                         help="new directory (default: data/shadow/evaluation/v4-ablation/<UTC yyyymmddTHHMMSSZ>)")
     parser.add_argument("--n-resamples", type=int, default=core.N_RESAMPLES)
     args = parser.parse_args(argv)
+    if not core.v4_signed():
+        print("error: protocol v4 is not signed; the ABLATION re-score runs only after the signed v4 (T-07-23)",
+              file=sys.stderr)
+        return 2
     out_dir = args.out_dir or _default_out_dir()
 
     report = run_ablation(args.cities, frame_loader=_guarded_load_city_frame, variants=BRACKETING_SET,
