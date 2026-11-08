@@ -1,18 +1,18 @@
 ---
 gsd_state_version: "1.0"
 current_phase: 07
-current_plan: 18
+current_plan: 19
 status: executing
-stopped_at: Completed 07-15-PLAN.md
-last_updated: "2026-11-08T01:22:27.866Z"
+stopped_at: Completed 07-16-PLAN.md
+last_updated: "2026-11-08T01:30:47.417Z"
 last_activity: 2026-11-01
 last_activity_desc: Phase 07 execution started
-state_head: e5bfb9fb3dd6f78745986ec5b88d42fb279b3772
+state_head: 8016f2a18bbc76fdf4e221637016a29ecf410fa8
 progress:
   total_phases: 8
   completed_phases: 6
   total_plans: 66
-  completed_plans: 65
+  completed_plans: 66
   percent: 75
 milestone_name: Production Pipeline (Supabase + live ratings)
 workstream: production-pipeline
@@ -37,7 +37,7 @@ whoever owns that analysis; they are not work items here.
 
 **Status:** Ready to execute
 **Current Phase:** 07
-**Current Plan:** 18
+**Current Plan:** 19
 **Total Plans in Phase:** 19
 **Last Activity:** 2026-11-01 — Phase 07 execution started
 **Last Activity Description:** Phase 07 execution started
@@ -218,6 +218,7 @@ These block or affect stringing the system together and belong to the phases nam
 - [Phase 07]: 07-18: promotion pushed as fast-forward e970549..682801d after a clean merge of origin/main (teammate docs); live run 41543992876 verified four rows with v3-powersystems-2026-11-02 and is_provisional false; stored-row relabel not applicable (go-forward-only)
 - [Phase 07]: 07-15: read 2 (v4-read2) ran once per row source under signed v4 and also names no winner; no shadow model replaces ml, interim G6 method keeps running
 - 2026-11-08: 07-16 SEL-04 final decision (aaphan; decision_record.md, Read 2 section): option rule-outcome-keep-cooling. The signed O3 outcome is accepted (no shadow model, no day-ahead pick under the rule; interim G6 `ml` keeps running; 2026-11-24 stays retired; any later evaluation needs a new signed protocol), and the owner keeps `ml_cooling_corrected` as the day-ahead selection for Phase 8 as a continuing labelled engineering departure, never a rule pick or "validated" (read-2 best benefit 12.12 A vs 28.01 A bar, Holm p 0.29; read 2 re-grades read 1's rows). Live-system check (never decides): `ml_cooling_corrected` -0.01 A vs raw_forecast (2 of 4 cities), `ml_wind_corrected` +0.85 A.
+- [Phase 07]: 07-16: SEL-04 final decision recorded: owner accepted the signed O3 outcome after read 2 (no shadow model, interim G6 ml continues, 2026-11-24 stays retired) and keeps ml_cooling_corrected as a labelled engineering day-ahead selection for Phase 8 (continuing departure, not a rule pick, not validated)
 
 ## Open Decisions
 
@@ -243,9 +244,9 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 
 ## Session Continuity
 
-**Last session:** 2026-11-08T01:22:27.508Z
+**Last session:** 2026-11-08T01:30:47.051Z
 
-**Stopped At:** Completed 07-15-PLAN.md
+**Stopped At:** Completed 07-16-PLAN.md
 **Resume File:** None
 
 ## Performance Metrics
@@ -312,6 +313,7 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 | Phase 07 P17 | owner-gated, ~40min executor | 3 tasks | 12 files |
 | Phase 07 P18 | 15min | 3 tasks | 1 files |
 | Phase 07 P15 | 3min | 2 tasks | 3 files |
+| Phase 07 P16 | 2 sessions | 3 tasks | 4 files |
 
 ## Accumulated Context
 

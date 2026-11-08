@@ -162,7 +162,7 @@ proposals.
   - an ABLATION conductor-invariance re-score (fit on train, score on validation, under
     bracketing conductor configs);
   - per-city TEST-split scoring.
-- [ ] **SEL-04**: At or after 2026-11-01T00:00Z the v4 read 1 runs once. If it names no winner, the
+- [x] **SEL-04**: At or after 2026-11-01T00:00Z the v4 read 1 runs once. If it names no winner, the
   pre-registered conditional re-test runs once at or after 2026-11-08T00:00Z under the same rules,
   grading all rows including read 1's. A recorded owner decision names which shadow model, if any,
   replaces `ml`, and the interim G6 forecast method (OD-3 revisited). *(Amended 2026-10-25, Phase 7
@@ -232,5 +232,5 @@ proposals.
 | SEL-01 | Phase 7 | Complete |
 | SEL-02 | Phase 7 | Complete |
 | SEL-03 | Phase 7 | Complete |
-| SEL-04 | Phase 7 | Pending |
+| SEL-04 | Phase 7 | Complete |
 | REVAL-01 | Phase 7 | Complete |

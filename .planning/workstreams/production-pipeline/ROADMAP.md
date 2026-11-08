@@ -319,7 +319,7 @@ ml-modeling workstream's evaluation; record it in that workstream's STATE.md as 
 
      After that decision, B1, B2, B4 and B5 are closed, the Phase 3 validation is re-run on the same
      non-FRESH window, and a new go/no-go is signed. A GO lifts the provisional label on stored rows.
-**Plans**: 18/19 plans executed
+**Plans**: 19/19 plans executed
 
 Plans:
 *Waiting on owner gates:* while the v4 signature (07-02) is pending, 07-01, 07-03, 07-04, 07-08 and
@@ -363,7 +363,7 @@ instant and 07-14 waits for 07-12.
 - [x] 07-17-PLAN.md — Re-validation report, B1/B2/B4/B5 closures, owner-signed go/no-go and label text (REVAL-01)
 
 **Wave 10**
-- [ ] 07-16-PLAN.md — Read-2 results (or not-run note) and the owner's final SEL-04 decision (SEL-04)
+- [x] 07-16-PLAN.md — Read-2 results (or not-run note) and the owner's final SEL-04 decision (SEL-04)
 - [x] 07-18-PLAN.md — Owner-approved promotion push, first live run verified, optional owner-run relabel of stored rows (REVAL-01)
 
 ### Phase 8: Day-Ahead Cooling Forecast Alongside 60-Minute G6
@@ -399,5 +399,5 @@ Plans:
 | 4. Supabase Store & Writer | 12/12 | Complete    | 2026-10-24 |
 | 5. Scheduled Live Runs | 8/8 | Complete    | 2026-10-26 |
 | 6. Exposure & E2E Verification | 13/13 | Complete    | 2026-11-01 |
-| 7. Per-City Conductors, Shadow Refit and Early Model Selection | 18/19 | In Progress | - |
+| 7. Per-City Conductors, Shadow Refit and Early Model Selection | 19/19 | In Progress | - |
 | 8. Day-Ahead Cooling Forecast Alongside 60-Minute G6 | 0/0 | Not started | - |
