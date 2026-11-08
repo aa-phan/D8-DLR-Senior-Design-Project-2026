@@ -1,18 +1,18 @@
 ---
 gsd_state_version: "1.0"
 current_phase: 07
-current_plan: 17
+current_plan: 18
 status: executing
-stopped_at: Completed 07-18-PLAN.md
-last_updated: "2026-11-02T23:20:11.602Z"
+stopped_at: Completed 07-15-PLAN.md
+last_updated: "2026-11-08T01:22:27.866Z"
 last_activity: 2026-11-01
 last_activity_desc: Phase 07 execution started
-state_head: 2705bea2a694d3def833d030241a0916002ee6a8
+state_head: e5bfb9fb3dd6f78745986ec5b88d42fb279b3772
 progress:
   total_phases: 8
   completed_phases: 6
   total_plans: 66
-  completed_plans: 64
+  completed_plans: 65
   percent: 75
 milestone_name: Production Pipeline (Supabase + live ratings)
 workstream: production-pipeline
@@ -37,7 +37,7 @@ whoever owns that analysis; they are not work items here.
 
 **Status:** Ready to execute
 **Current Phase:** 07
-**Current Plan:** 17
+**Current Plan:** 18
 **Total Plans in Phase:** 19
 **Last Activity:** 2026-11-01 — Phase 07 execution started
 **Last Activity Description:** Phase 07 execution started
@@ -216,6 +216,7 @@ These block or affect stringing the system together and belong to the phases nam
 - 2026-11-02: 07-13 SEL-04 read 1 owner decision (aaphan; decision_record.md): rule's outcome accepted (no pick under signed v4); interim G6 = ml retrained on projected wind (B2, D-14, models commit e0a00a9), checked under D-15 at the go/no-go (07-17). Owner also selects `ml_cooling_corrected` for day-ahead as a labelled engineering choice, NOT a rule pick (best read-1 benefit 11.89 A vs 27.86 A bar, Holm p 0.36; departure recorded), as an additional output alongside the 60-minute forecast with the understanding it carries more error; serving it is a new phase after Phase 7. Read 2 (D-08) still runs at or after 2026-11-08T00:00:00Z (07-15). Nothing in live ratings changes now. SEL-04 stays open until read 2.
 - 2026-11-02: REVAL-01 re-validation go/no-go: GO, label mode go-forward-only (no stored-row relabel; backfill rows never relabelled), signed by aaphan, 2026-11-02 (UTC); D-15 interim G6 method kept as ml; B4 follow-up date 2026-11-30T00:00:00Z accepted; B1, B2, B4 and B5 closed, B3 and B6 not blocking (docs/data-science/decisions/real_data_validation_p7.md). config.RATING_BASIS and the schema doc's label section changed together (new text, no word "provisional"; RATING_CONFIG_VERSION unchanged at v3-powersystems-2026-11-02); latest_rating.is_provisional is false only for rows written with the new label, after the promotion push in 07-18 (nothing is pushed or applied to the live database yet).
 - [Phase 07]: 07-18: promotion pushed as fast-forward e970549..682801d after a clean merge of origin/main (teammate docs); live run 41543992876 verified four rows with v3-powersystems-2026-11-02 and is_provisional false; stored-row relabel not applicable (go-forward-only)
+- [Phase 07]: 07-15: read 2 (v4-read2) ran once per row source under signed v4 and also names no winner; no shadow model replaces ml, interim G6 method keeps running
 
 ## Open Decisions
 
@@ -241,9 +242,9 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 
 ## Session Continuity
 
-**Last session:** 2026-11-02T23:20:11.177Z
+**Last session:** 2026-11-08T01:22:27.508Z
 
-**Stopped At:** Completed 07-18-PLAN.md
+**Stopped At:** Completed 07-15-PLAN.md
 **Resume File:** None
 
 ## Performance Metrics
@@ -309,6 +310,7 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 | Phase 07 P13 | 120min | 3 tasks | 4 files |
 | Phase 07 P17 | owner-gated, ~40min executor | 3 tasks | 12 files |
 | Phase 07 P18 | 15min | 3 tasks | 1 files |
+| Phase 07 P15 | 3min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
