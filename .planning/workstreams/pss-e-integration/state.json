@@ -1,0 +1,28 @@
+{
+  "contract": "1.0.0",
+  "flavor": "core",
+  "milestone": "v1.6 \u00e2\u20ac\u201d PSS/E Integration",
+  "phases": [
+    {
+      "number": "1",
+      "name": "Result-Table Spec and Rating I/O",
+      "status": "complete"
+    },
+    {
+      "number": "2",
+      "name": "Study on Power Systems' Case",
+      "status": "complete"
+    },
+    {
+      "number": "3",
+      "name": "Laptop Run and Handover",
+      "status": "in_progress"
+    }
+  ],
+  "next": {
+    "command": "/gsd-execute-phase 3 --ws pss-e-integration",
+    "label": "Execute 03-07 at the laptop",
+    "reason": "Phase 3 of 3 \u00b7 plans 03-07 and 03-08 need the licensed laptop"
+  },
+  "updated_at": "2026-10-28T11:21:28.832Z"
+}

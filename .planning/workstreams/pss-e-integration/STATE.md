@@ -2,19 +2,19 @@
 gsd_state_version: "1.0"
 milestone: v1.6
 milestone_name: PSS/E Integration
-current_phase: 1
-current_phase_name: Result-Table Spec and Rating I/O
-status: verifying
-stopped_at: Completed 01-05-PLAN.md
+current_phase: 3
+current_phase_name: Laptop Run and Handover
+status: waiting_on_laptop
+stopped_at: Completed 03-09-PLAN.md (gap closure); 03-07 resumes at step 2 on the laptop, then 03-08
 last_updated: "2026-10-28T11:21:39.116Z"
 last_activity: 2026-10-28
-last_activity_desc: Phase 1 execution started
+last_activity_desc: Plans 03-01 to 03-06 executed; 03-07 and 03-08 wait for the laptop
 state_head: 6b8cc5e88371736055be0a125a4ba86d62f13024
 progress:
   total_phases: 3
-  completed_phases: 0
-  total_plans: 5
-  completed_plans: 5
+  completed_phases: 2
+  total_plans: 20
+  completed_plans: 19
 ---
 
 # Project State
@@ -26,16 +26,16 @@ See: .planning/PROJECT.md (shared; PSS/E integration moves in scope at milestone
 **Core value:** Each city's rating reaches PSS/E and PSS/E's results come back to the database,
 every hour the host is on, and a rating that can't be trusted never reaches a study as anything
 higher than the static rating.
-**Current focus:** Phase 1 — Result-Table Spec and Rating I/O
+**Current focus:** Phase 3 — Laptop Run and Handover (plans 07 and 08 need the licensed laptop)
 
 ## Current Position
 
-Phase: 1 (Result-Table Spec and Rating I/O) — EXECUTING
-Plan: 5 of 5
-Status: Phase complete — ready for verification
-Last activity: 2026-10-28 — Phase 1 execution started
+Phase: 3 (Laptop Run and Handover) — EXECUTING
+Plan: 03-01 to 03-06 and gap-closure 03-09 done; 03-07 (laptop, resume at step 2) then 03-08
+Status: Waiting for the laptop; Phases 1 and 2 verified (human_needed)
+Last activity: 2026-11-08 — 03-09 recorded; state refreshed
 
-Progress: [██████████] 100%
+Progress: [█████████░] 95%
 
 ## Performance Metrics
 
@@ -100,6 +100,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-28T11:21:39.073Z
-Stopped at: Completed 01-05-PLAN.md
+Last session: 2026-11-08
+Stopped at: Awaiting laptop for 03-07 step 2 re-run (last completed 03-09-PLAN.md: psse3604 helper import before psspy)
 Resume file: None

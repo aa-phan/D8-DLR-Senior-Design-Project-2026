@@ -27,8 +27,8 @@ the third needs Phase 6 live, Power Systems' case file and the laptop.
 
 ## Phases
 
-- [ ] **Phase 1: Result-Table Spec and Rating I/O** - Spec to Phase 6; rating selection with static fallback; run record and all-or-nothing write
-- [ ] **Phase 2: Study on Power Systems' Case** - Branch mapping, unit conversion, load flow, N-1, voltage margin, dispatched capacity, proven on the Mac with a fake `psspy`
+- [x] **Phase 1: Result-Table Spec and Rating I/O** - Spec to Phase 6; rating selection with static fallback; run record and all-or-nothing write
+- [x] **Phase 2: Study on Power Systems' Case** - Branch mapping, unit conversion, load flow, N-1, voltage margin, dispatched capacity, proven on the Mac with a fake `psspy`
 - [ ] **Phase 3: Laptop Run and Handover** - Real run on the laptop, scoped credential, hourly schedule with visible gaps, setup guide
 
 ## Phase Details
