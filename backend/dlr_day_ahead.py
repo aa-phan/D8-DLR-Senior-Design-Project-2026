@@ -66,9 +66,9 @@ log = logging.getLogger("dlr_day_ahead")
 _TS_FMT = "%Y-%m-%dT%H:%M:%SZ"
 _REASON_LIMIT = 300
 _MIN_SECRET_CHARS = 4
-# Provider credentials and the database URLs: their values are removed from every reason.
+# Provider credentials and the database URLs: their values are removed from every reason (the store's
+# redaction also reads the two database URLs from the environment on its own).
 _SECRET_ENV = ("SYNOPTIC_TOKEN", "NREL_API_KEY", "NREL_API_EMAIL", "SUPABASE_DB_URL", "SUPABASE_ADMIN_DB_URL")
-_DB_URL_ENV = ("SUPABASE_DB_URL", "SUPABASE_ADMIN_DB_URL")
 
 
 def _utc(value) -> pd.Timestamp:
@@ -81,15 +81,17 @@ def _iso(value) -> str:
 
 
 def _redact(text) -> str:
-    """`text` with the environment's secrets and every URL or key=value secret removed, then cut."""
-    secrets = []
+    """
+    `text` with the provider credentials of the environment removed, then the store's redaction
+    (database URLs and their passwords, `key=value` secrets), then cut. The cut comes last, so a
+    longer text never lets a secret through.
+    """
+    text = "" if text is None else str(text)
     for name in _SECRET_ENV:
         value = (os.environ.get(name) or "").strip()
         if len(value) >= _MIN_SECRET_CHARS:
-            secrets.append(value)
-    for name in _DB_URL_ENV:
-        secrets.extend(supabase_store._url_secrets(os.environ.get(name)))
-    return supabase_store.redact(text, secrets, limit=_REASON_LIMIT)
+            text = text.replace(value, "REDACTED")
+    return supabase_store.redact(text, limit=_REASON_LIMIT)
 
 
 def _reason(step: str, exc: BaseException) -> str:
