@@ -170,9 +170,44 @@ def parse_band_artifact(data: bytes) -> dict:
         raise BandArtifactError("band artifact is not a JSON object")
     if artifact.get("schema") != ARTIFACT_SCHEMA:
         raise BandArtifactError(f"band artifact schema {artifact.get('schema')!r} is not {ARTIFACT_SCHEMA}")
-    if not isinstance(artifact.get("bands"), dict):
+    if artifact.get("method") != contract.FORECAST_METHOD:
+        raise BandArtifactError(
+            f"band artifact method {artifact.get('method')!r} is not {contract.FORECAST_METHOD!r}"
+        )
+    if artifact.get("quantiles") != list(config.FORECAST_BACKTEST_QUANTILES):
+        raise BandArtifactError(
+            f"band artifact quantiles {artifact.get('quantiles')!r} are not {list(config.FORECAST_BACKTEST_QUANTILES)}"
+        )
+    bands = artifact.get("bands")
+    if not isinstance(bands, dict):
         raise BandArtifactError("band artifact has no 'bands' object")
+    for city in config.LOCATIONS:
+        if not isinstance(bands.get(city), dict):
+            raise BandArtifactError(f"band artifact has no bands for city {city}")
+        for hour in contract.TARGET_HOURS_UTC:
+            _check_band(city, hour, bands[city].get(str(hour)))
     return artifact
+
+
+def _check_band(city: str, hour: int, band) -> None:
+    """One band must hold an integer n > 0 and finite offsets with lower <= upper, or BandArtifactError."""
+    where = f"band artifact band {city} at {hour:02d} UTC"
+    if not isinstance(band, dict):
+        raise BandArtifactError(f"{where} is missing or not an object (key {str(hour)!r})")
+    n = band.get("n")
+    if isinstance(n, bool) or not isinstance(n, int) or n <= 0:
+        raise BandArtifactError(f"{where}: field n {n!r} is not a positive integer")
+    offsets = {}
+    for field in ("lower_offset_amps", "upper_offset_amps"):
+        value = band.get(field)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not np.isfinite(value):
+            raise BandArtifactError(f"{where}: field {field} {value!r} is not a finite number")
+        offsets[field] = float(value)
+    if offsets["lower_offset_amps"] > offsets["upper_offset_amps"]:
+        raise BandArtifactError(
+            f"{where}: field lower_offset_amps {offsets['lower_offset_amps']} is above upper_offset_amps "
+            f"{offsets['upper_offset_amps']}"
+        )
 
 
 def load_verified_band(path: str = BAND_ARTIFACT_PATH,
