@@ -251,3 +251,259 @@ def test_anti_peek_no_day_ahead_module_names_the_embargoed_data_or_imports_a_sha
             assert needle not in text, f"{os.path.basename(path)} contains {needle!r}"
         offending = _imported_modules(ast.parse(text)) & _FORBIDDEN_IMPORTS
         assert not offending, f"{os.path.basename(path)} imports {sorted(offending)}"
+
+
+# --------------------------------------------------------------------------------------------------
+# The live rolling band (local Postgres)
+# --------------------------------------------------------------------------------------------------
+
+_FINGERPRINT = "ab" * 32  # local_pg.rating_row's default config_fingerprint
+_OTHER_FINGERPRINT = "ef" * 32
+_MODEL_SHA = "cd" * 32
+_OTHER_MODEL_SHA = "12" * 32
+_START = pd.Timestamp("2027-01-01T00:00:00Z")
+_DECISION = pd.Timestamp("2028-01-01T00:05:00Z")
+_POINT = 1700.0
+_CITY = "AUSTIN"
+_HOUR = 12
+
+
+@pytest.fixture(scope="module")
+def pg_url(tmp_path_factory):
+    local_pg.require_local_pg()
+    with local_pg.cluster(tmp_path_factory) as url:
+        paths = [p for p in local_pg.migration_files() if os.path.basename(p) <= _STORE_MIGRATION]
+        assert os.path.basename(paths[-1]) == _STORE_MIGRATION, [os.path.basename(p) for p in paths]
+        local_pg.apply_migrations(url, paths=paths)
+        yield url
+
+
+@pytest.fixture
+def admin(pg_url):
+    """An administrator connection with both tables emptied, for seeding."""
+    import psycopg
+
+    with psycopg.connect(pg_url, autocommit=True) as conn:
+        conn.execute("truncate public.city_rating, public.day_ahead_forecast")
+        yield conn
+
+
+@pytest.fixture
+def writer(pg_url, admin):
+    """The runner's own connection: role dlr_writer, UTC session."""
+    import psycopg
+
+    conn = psycopg.connect(pg_url, autocommit=True)
+    conn.execute("set timezone = 'UTC'")
+    conn.execute("set role dlr_writer")
+    yield conn
+    conn.close()
+
+
+def _valid_time(hour, index):
+    """The index-th daily target at `hour` UTC, counted from _START."""
+    return _START + pd.Timedelta(days=index, hours=hour)
+
+
+def _forecast_row(city, valid_time, forecast_amps, **overrides):
+    issued = valid_time - pd.Timedelta(hours=12)
+    row = {
+        "city": city, "valid_time": valid_time.to_pydatetime(), "issued_at": issued.to_pydatetime(),
+        "forecast_run_init_time": (valid_time - pd.Timedelta(hours=24)).to_pydatetime(),
+        "horizon_minutes": 1440, "forecast_amps": forecast_amps,
+        "forecast_ci_lower_amps": forecast_amps - 200.0, "forecast_ci_upper_amps": forecast_amps + 250.0,
+        "band_source": "test-split", "band_n": 196, "band_pairs_through": None,
+        "band_artifact_sha256": "ab" * 32, "forecast_method": contract.FORECAST_METHOD,
+        "cooling_model_sha256": _MODEL_SHA, "cooling_model_source": "refit",
+        "anchor_observation_time": (issued - pd.Timedelta(minutes=5)).to_pydatetime(),
+        "anchor_source": "tceq", "label": contract.DAY_AHEAD_LABEL,
+        "config_version": config.RATING_CONFIG_VERSION, "config_fingerprint": _FINGERPRINT,
+        "run_id": "test-run", "run_attempt": 1, "pipeline_version": "test000", "schema_version": 1,
+    }
+    row.update(overrides)
+    return row
+
+
+def _insert_forecast(conn, row):
+    columns = list(contract.INSERT_COLUMNS)
+    assert sorted(row) == sorted(columns)
+    conn.execute(
+        f"insert into {contract.TABLE} ({', '.join(columns)}) values ({', '.join(['%s'] * len(columns))})",
+        [row[c] for c in columns],
+    )
+
+
+def _seed(admin, residuals, *, city=_CITY, hour=_HOUR, first_index=0, rating_overrides=None,
+          forecast_overrides=None):
+    """
+    One graded pair per residual, at consecutive daily targets: the forecast is _POINT and the weather
+    computed rating is _POINT + residual, so the pair's residual (rating minus forecast) is exactly it.
+    """
+    for offset, residual in enumerate(residuals):
+        valid_time = _valid_time(hour, first_index + offset)
+        local_pg.insert_rows(admin, [local_pg.rating_row(
+            city, valid_time.to_pydatetime(), rating_amps=_POINT + float(residual),
+            **(rating_overrides or {}),
+        )])
+        _insert_forecast(admin, _forecast_row(city, valid_time, _POINT, **(forecast_overrides or {})))
+
+
+def _band(conn, *, city=_CITY, hour=_HOUR, decision_time=_DECISION, fingerprint=_FINGERPRINT,
+          model_sha=_MODEL_SHA, point=_POINT, conn_override="use"):
+    artifact = _committed_artifact()
+    return day_ahead_band.band_for(
+        conn if conn_override == "use" else conn_override, city, _valid_time(hour, 400), point, artifact,
+        "a" * 64, config_fingerprint=fingerprint, cooling_model_sha256=model_sha,
+        decision_time=decision_time,
+    )
+
+
+def _spread(count):
+    """Residuals that straddle zero, so a band built from them has lower < 0 < upper."""
+    return np.linspace(-80.0, 120.0, count)
+
+
+def _expected_offsets(residuals):
+    q_lo, q_hi = config.FORECAST_BACKTEST_QUANTILES
+    return float(np.quantile(residuals, q_lo)), float(np.quantile(residuals, q_hi))
+
+
+def test_live_59_pairs_keep_the_test_band_and_60_switch(admin, writer):
+    _seed(admin, _spread(59))
+    choice = _band(writer)
+    assert choice.source == "test-split" and choice.n == 196 and choice.pairs_through is None
+    admin.execute("truncate public.city_rating, public.day_ahead_forecast")
+    _seed(admin, _spread(60))
+    assert _band(writer).source == "live-rolling"
+
+
+def test_live_60_pairs_record_the_size_the_newest_pair_and_np_quantile_offsets(admin, writer):
+    residuals = _spread(60)
+    _seed(admin, residuals)
+    choice = _band(writer)
+    lower, upper = _expected_offsets(residuals)
+    assert choice.source == "live-rolling" and choice.n == 60
+    assert choice.pairs_through == _valid_time(_HOUR, 59)
+    assert choice.lower_amps == pytest.approx(_POINT + lower, abs=1e-9)
+    assert choice.upper_amps == pytest.approx(_POINT + upper, abs=1e-9)
+    assert choice.artifact_sha256 == "a" * 64  # the TEST artifact stays the recorded fallback (D-05)
+
+
+def test_live_only_the_newest_120_of_150_pairs_are_used(admin, writer):
+    residuals = _spread(150)
+    _seed(admin, residuals)
+    choice = _band(writer)
+    lower, upper = _expected_offsets(residuals[30:])
+    assert choice.source == "live-rolling" and choice.n == contract.LIVE_BAND_WINDOW == 120
+    assert choice.pairs_through == _valid_time(_HOUR, 149)
+    assert choice.lower_amps == pytest.approx(_POINT + lower, abs=1e-9)
+    assert choice.upper_amps == pytest.approx(_POINT + upper, abs=1e-9)
+    all_lower, _ = _expected_offsets(residuals)
+    assert lower != pytest.approx(all_lower)  # the oldest 30 pairs really are left out
+
+
+def test_live_offsets_are_empirical_quantiles_not_a_normal_approximation(admin, writer):
+    residuals = np.array([-5.0] * 55 + [500.0] * 5)  # heavily skewed: mean +/- k sigma would differ
+    _seed(admin, residuals)
+    choice = _band(writer)
+    lower, upper = _expected_offsets(residuals)
+    assert choice.source == "live-rolling"
+    assert choice.lower_amps == pytest.approx(_POINT + lower, abs=1e-9)
+    assert choice.upper_amps == pytest.approx(_POINT + upper, abs=1e-9)
+
+
+def test_per_band_sixty_pairs_do_not_switch_another_hour_or_another_city(admin, writer):
+    _seed(admin, _spread(60), city="AUSTIN", hour=12)
+    assert _band(writer, city="AUSTIN", hour=12).source == "live-rolling"
+    other_hour = _band(writer, city="AUSTIN", hour=18)
+    other_city = _band(writer, city="MIDLAND", hour=12)
+    assert other_hour.source == "test-split" and other_hour.n == 196
+    assert other_city.source == "test-split" and other_city.n == 196
+
+
+def test_per_band_each_band_counts_only_its_own_pairs(admin, writer):
+    _seed(admin, _spread(40), city="AUSTIN", hour=12)
+    _seed(admin, _spread(40), city="AUSTIN", hour=18)
+    _seed(admin, _spread(40), city="MIDLAND", hour=12)
+    for city, hour in (("AUSTIN", 12), ("AUSTIN", 18), ("MIDLAND", 12)):
+        assert _band(writer, city=city, hour=hour).source == "test-split"
+
+
+@pytest.mark.parametrize("rating_overrides, forecast_overrides, decision", [
+    ({"status": "fallback"}, {}, _DECISION),
+    ({"fallback": True}, {}, _DECISION),
+    ({"exhausted": True}, {}, _DECISION),
+    ({"origin": "backfill"}, {}, _DECISION),
+    ({"config_fingerprint": _OTHER_FINGERPRINT}, {}, _DECISION),
+    ({}, {"config_fingerprint": _OTHER_FINGERPRINT}, _DECISION),
+    ({}, {"cooling_model_sha256": _OTHER_MODEL_SHA}, _DECISION),
+    ({}, {}, _valid_time(_HOUR, 59)),
+    ({}, {}, _valid_time(_HOUR, 59) - pd.Timedelta(hours=1)),
+], ids=["status_fallback", "fallback_flag", "exhausted", "origin_backfill", "rating_fingerprint",
+        "forecast_fingerprint", "model_sha", "target_at_decision_time", "target_after_decision_time"])
+def test_filters_an_excluded_pair_is_not_counted(admin, writer, rating_overrides, forecast_overrides, decision):
+    """59 good pairs plus one excluded pair is still 59: the TEST band stays."""
+    _seed(admin, _spread(59))
+    _seed(admin, [10.0], first_index=59, rating_overrides=rating_overrides, forecast_overrides=forecast_overrides)
+    assert _band(writer, decision_time=decision).source == "test-split"
+
+
+def test_filters_the_same_pair_counts_when_nothing_excludes_it(admin, writer):
+    """The control for the filter cases: 59 good plus one good pair is 60 and switches."""
+    _seed(admin, _spread(59))
+    _seed(admin, [10.0], first_index=59)
+    assert _band(writer).source == "live-rolling"
+
+
+def test_filters_a_live_set_uses_only_pairs_of_the_callers_fingerprint_and_model(admin, writer):
+    _seed(admin, _spread(60))
+    other = _band(writer, fingerprint=_OTHER_FINGERPRINT)
+    other_model = _band(writer, model_sha=_OTHER_MODEL_SHA)
+    assert other.source == "test-split" and other_model.source == "test-split"
+
+
+def test_straddle_a_live_set_that_never_brackets_zero_keeps_the_test_band_and_says_why(admin, writer, caplog):
+    residuals = np.linspace(10.0, 90.0, 60)  # every actual above the forecast: the 5% offset is positive
+    _seed(admin, residuals)
+    with caplog.at_level(logging.INFO, logger=day_ahead_band.logger.name):
+        choice = _band(writer)
+    assert choice.source == "test-split" and choice.n == 196 and choice.pairs_through is None
+    assert any("straddle" in record.getMessage() or "bracket" in record.getMessage()
+               for record in caplog.records)
+
+
+def test_straddle_a_live_set_that_is_entirely_below_the_forecast_keeps_the_test_band(admin, writer):
+    _seed(admin, np.linspace(-90.0, -10.0, 60))
+    assert _band(writer).source == "test-split"
+
+
+def test_sign_residual_is_rating_minus_forecast_so_a_forecast_50_amps_low_gives_offsets_near_plus_50(
+        admin, writer):
+    # Every actual rating is about 50 A above the forecast, with enough spread that the live band
+    # still brackets zero. The offsets are centred near +50, not -50.
+    residuals = 50.0 + np.linspace(-140.0, 140.0, 60)
+    _seed(admin, residuals)
+    choice = _band(writer)
+    lower, upper = _expected_offsets(residuals)
+    assert choice.source == "live-rolling"
+    assert choice.lower_amps == pytest.approx(_POINT + lower, abs=1e-9)
+    assert choice.upper_amps == pytest.approx(_POINT + upper, abs=1e-9)
+    assert (lower + upper) / 2.0 == pytest.approx(50.0, abs=1.0)
+
+
+def test_live_pairs_returns_newest_first_with_the_residual_sign(admin, writer):
+    _seed(admin, [50.0, 60.0, 70.0])
+    pairs = day_ahead_band.live_pairs(
+        writer, _CITY, _HOUR, config_fingerprint=_FINGERPRINT, cooling_model_sha256=_MODEL_SHA,
+        decision_time=_DECISION, limit=2,
+    )
+    assert [residual for _, residual in pairs] == [70.0, 60.0]
+    assert [pd.Timestamp(valid_time) for valid_time, _ in pairs] == [_valid_time(_HOUR, 2), _valid_time(_HOUR, 1)]
+
+
+def test_conn_none_returns_the_test_band_without_a_database():
+    choice = _band(None)
+    offsets = _committed_artifact()["bands"][_CITY][str(_HOUR)]
+    assert choice.source == "test-split" and choice.n == offsets["n"] and choice.pairs_through is None
+    assert choice.lower_amps == pytest.approx(_POINT + offsets["lower_offset_amps"])
+    assert choice.upper_amps == pytest.approx(_POINT + offsets["upper_offset_amps"])

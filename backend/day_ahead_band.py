@@ -19,8 +19,9 @@ Anti-peeking (protocol): the builder reads ONLY the tracked TEST rows CSV of the
 report and refuses any row outside the TEST window. It never opens the shadow prediction logs, the
 shadow-log reader, or any cache dated after the TEST window ends.
 
-This task implements the TEST-split branch of `band_for`. Plan 08-03 adds the live-rolling branch
-behind the same signature.
+`band_for` picks the band per city and target hour (D-05, D-06): the TEST band at launch, then the
+live rolling band of the forecast's own recent misses against the weather-computed rating once 60
+graded pairs exist (D-08). It computes the two quantile offsets a band needs and no skill statistic.
 
 CLI (run from the repository root, PYTHONPATH=backend):
     python backend/day_ahead_band.py --build    # write the artifact
@@ -264,26 +265,108 @@ def _utc_hour(valid_time) -> int:
     return int((stamp.tz_localize("UTC") if stamp.tzinfo is None else stamp.tz_convert("UTC")).hour)
 
 
+def _utc_datetime(value):
+    """A timezone-aware python datetime (UTC) for a database parameter."""
+    stamp = pd.Timestamp(value)
+    stamp = stamp.tz_localize("UTC") if stamp.tzinfo is None else stamp.tz_convert("UTC")
+    return stamp.to_pydatetime()
+
+
+# D-08: a graded pair is a day-ahead value joined to the weather-computed rating for the same city
+# and hour. Only a rating computed from weather counts (status ok, not a fallback, not exhausted, a
+# live run rather than a backfill), under the same rating configuration, and only for a value issued
+# by the same cooling model. The target must be before the decision time, so a pair is always an
+# outcome that has already happened. residual = rating_amps - forecast_amps, amperes, the sign of the
+# TEST artifact. Bound parameters only; every identifier is fixed text.
+_LIVE_PAIRS_SQL = """
+select d.valid_time, c.rating_amps - d.forecast_amps as residual
+from public.day_ahead_forecast d
+join public.city_rating c on c.city = d.city and c.valid_time = d.valid_time
+where d.city = %(city)s
+  and extract(hour from d.valid_time at time zone 'UTC') = %(hour)s
+  and d.valid_time < %(decision_time)s
+  and c.status = 'ok'
+  and c.fallback = false
+  and c.exhausted = false
+  and c.origin = 'live'
+  and c.config_fingerprint = %(fingerprint)s
+  and d.config_fingerprint = %(fingerprint)s
+  and d.cooling_model_sha256 = %(model_sha)s
+order by d.valid_time desc
+limit %(limit)s
+"""
+
+
+def live_pairs(conn, city: str, hour: int, *, config_fingerprint: str, cooling_model_sha256: str,
+               decision_time, limit: int) -> list[tuple]:
+    """
+    The newest `limit` graded pairs for one band (city x UTC target hour), newest first, as
+    (valid_time, residual) with valid_time a UTC pandas Timestamp and residual in amperes. Computed on
+    the fly from the two tables; nothing is stored. See _LIVE_PAIRS_SQL for the D-08 filters.
+    """
+    rows = conn.execute(_LIVE_PAIRS_SQL, {
+        "city": city, "hour": int(hour), "decision_time": _utc_datetime(decision_time),
+        "fingerprint": config_fingerprint, "model_sha": cooling_model_sha256, "limit": int(limit),
+    }).fetchall()
+    return [(pd.Timestamp(valid_time).tz_convert("UTC"), float(residual)) for valid_time, residual in rows]
+
+
+def _live_offsets(conn, city: str, hour: int, *, config_fingerprint: str, cooling_model_sha256: str,
+                  decision_time):
+    """
+    (lower_offset, upper_offset, n, newest_valid_time) from the live rolling pairs of one band, or
+    None when there are fewer than LIVE_BAND_MIN_PAIRS or the empirical band does not bracket zero.
+    Only the two quantile offsets the band needs are computed, no skill figure (anti-peeking).
+    """
+    pairs = live_pairs(
+        conn, city, hour, config_fingerprint=config_fingerprint, cooling_model_sha256=cooling_model_sha256,
+        decision_time=decision_time, limit=contract.LIVE_BAND_WINDOW,
+    )
+    if len(pairs) < contract.LIVE_BAND_MIN_PAIRS:
+        return None
+    q_lo, q_hi = config.FORECAST_BACKTEST_QUANTILES
+    residuals = np.array([residual for _, residual in pairs], dtype=float)
+    lower_offset = float(np.quantile(residuals, q_lo))
+    upper_offset = float(np.quantile(residuals, q_hi))
+    if not (lower_offset < 0.0 < upper_offset):
+        logger.info(
+            "band_for: live band for %s at %02d UTC does not bracket zero (offsets %.3f, %.3f from %d pairs, "
+            "the straddle rule) -- keeping the TEST band", city, hour, lower_offset, upper_offset, len(pairs),
+        )
+        return None
+    return lower_offset, upper_offset, len(pairs), pairs[0][0]
+
+
 def band_for(conn, city: str, valid_time, point_amps: float, artifact: dict, artifact_sha256: str, *,
              config_fingerprint: str, cooling_model_sha256: str, decision_time) -> BandChoice:
     """
-    The band for one point forecast. This is the TEST-split branch: the offsets of
-    artifact["bands"][city][str(UTC hour)], source "test-split", no live pairs. Plan 08-03 adds the
-    live-rolling branch behind this signature, which is why the connection, the identity arguments
-    and the decision time are already part of it.
+    The band for one point forecast (D-05, D-06). Each band (city x UTC target hour) starts on the
+    TEST artifact's offsets, source "test-split". It switches on its own, independently of the
+    others, to the live rolling band, source "live-rolling", once LIVE_BAND_MIN_PAIRS graded pairs
+    exist (the newest LIVE_BAND_WINDOW are used) and only when the live 5% offset is below zero and
+    the 95% offset above it; otherwise it keeps the TEST band. The TEST artifact's sha256 is always
+    recorded: it stays the fallback. `conn` None (a local run with no store) is the TEST band.
     """
+    hour = _utc_hour(valid_time)
     try:
-        offsets = artifact["bands"][city][str(_utc_hour(valid_time))]
+        offsets = artifact["bands"][city][str(hour)]
         lower_offset = float(offsets["lower_offset_amps"])
         upper_offset = float(offsets["upper_offset_amps"])
         n = int(offsets["n"])
     except (KeyError, TypeError, ValueError) as exc:
-        raise BandArtifactError(
-            f"band artifact has no usable band for {city} at {_utc_hour(valid_time):02d} UTC"
-        ) from exc
+        raise BandArtifactError(f"band artifact has no usable band for {city} at {hour:02d} UTC") from exc
+    source, pairs_through = "test-split", None
+    if conn is not None:
+        live = _live_offsets(
+            conn, city, hour, config_fingerprint=config_fingerprint,
+            cooling_model_sha256=cooling_model_sha256, decision_time=decision_time,
+        )
+        if live is not None:
+            lower_offset, upper_offset, n, pairs_through = live
+            source = "live-rolling"
     lower, upper = apply_band(float(point_amps), lower_offset, upper_offset)
     return BandChoice(
-        lower_amps=lower, upper_amps=upper, source="test-split", n=n, pairs_through=None,
+        lower_amps=lower, upper_amps=upper, source=source, n=n, pairs_through=pairs_through,
         artifact_sha256=artifact_sha256,
     )
 
