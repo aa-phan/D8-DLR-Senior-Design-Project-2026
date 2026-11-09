@@ -203,20 +203,20 @@ proposals.
   `day-ahead-24h; engineering-selection; not-validated`. `dlr_writer` may select and insert only.
   anon and authenticated get nothing until the expose step, and RLS is on. `city_rating`,
   `latest_rating` and its 34-column contract are unchanged (D-09, D-11).
-- [ ] **DAY-06**: A second additive migration exposes read-only `day_ahead_upcoming` (every future
+- [x] **DAY-06**: A second additive migration exposes read-only `day_ahead_upcoming` (every future
   target with a value, ordered by city then target) and `day_ahead_status` (one row per city with the
   missing/late flag), SELECT only. The contract docs state the owner-approved label paragraph, the
   band and late rules and that "24 h" is the weather run's age, with doc column tables guarded by
   tests (D-09, D-10, D-11, D-12).
-- [ ] **DAY-07**: The permanent freshness alarm's `rpc/assert_fresh` (same signature and URL) also
+- [x] **DAY-07**: The permanent freshness alarm's `rpc/assert_fresh` (same signature and URL) also
   fails with HTTP 503 when a grid target in the next 12 h has no row, armed once the table has its
   first row. No new cron job (D-12).
-- [ ] **DAY-08**: Go-live is owner-gated in this order: contract confirmed, write-side migration
+- [x] **DAY-08**: Go-live is owner-gated in this order: contract confirmed, write-side migration
   applied, code pushed, the first hourly run after the push verified (a row for every due target, up
   to 3 per city and 12 in all, with the right label, band source and hashes, and the parity test
   passed at the pushed commit), then the expose migration applied and the contract doc published
   (D-17).
-- [ ] **DAY-09**: Consumer handoff: the three examples in docs/integration/examples (curl.sh,
+- [x] **DAY-09**: Consumer handoff: the three examples in docs/integration/examples (curl.sh,
   supabase_js.mjs, read_ratings.py) also read the upcoming day-ahead targets per city and the
   per-city status. They stay read-only, read only SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY from the
   environment, keep read_ratings.py standard-library Python 3.7+, and contain no project value. They
@@ -293,7 +293,7 @@ proposals.
 | DAY-03 | Phase 8 | Complete |
 | DAY-04 | Phase 8 | Complete |
 | DAY-05 | Phase 8 | Complete |
-| DAY-06 | Phase 8 | Pending |
-| DAY-07 | Phase 8 | Pending |
-| DAY-08 | Phase 8 | Pending |
-| DAY-09 | Phase 8 | Pending |
+| DAY-06 | Phase 8 | Complete |
+| DAY-07 | Phase 8 | Complete |
+| DAY-08 | Phase 8 | Complete |
+| DAY-09 | Phase 8 | Complete |
