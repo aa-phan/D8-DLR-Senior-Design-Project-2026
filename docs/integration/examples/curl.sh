@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
-# Read the current dynamic line rating of every city, and one city's history, with curl.
+# Read the current dynamic line rating of every city, one city's history, and the day-ahead
+# forecast, with curl.
 #
 # 1. The current row of each city from the view latest_rating.
 # 2. One city's rows between START and END from the table city_rating, read in pages of 1000
 #    rows (the service returns at most 1000 per request), ordered by valid_time ascending so no
 #    row repeats or is skipped, after one HEAD request that reads the total row count.
+# 3. The day-ahead forecast: the upcoming targets of every city from the view day_ahead_upcoming
+#    (one value per city at each 00, 06, 12 and 18 UTC target, ordered by city then target time),
+#    then one status row per city from the view day_ahead_status (upcoming_count, is_late and
+#    missing_targets). Day-ahead values carry the label
+#    day-ahead-24h; engineering-selection; not-validated, are not the live rating, and never gate it.
 #
 # Environment (the Data Science owner gives you both values; never write them into a file):
 #   SUPABASE_URL              the project URL
@@ -51,3 +57,11 @@ while [ "$offset" -lt "$total" ]; do
   echo
   offset=$((offset + PAGE))
 done
+
+echo "== Day-ahead forecast: upcoming targets (view day_ahead_upcoming) =="
+curl -fsS "${BASE}/day_ahead_upcoming?select=city,valid_time,issued_at,lead_minutes,forecast_amps,forecast_ci_lower_amps,forecast_ci_upper_amps,band_source,band_n,label&order=city,valid_time" "${H[@]}"
+echo
+
+echo "== Day-ahead status per city (view day_ahead_status) =="
+curl -fsS "${BASE}/day_ahead_status?select=city,next_target_time,upcoming_count,newest_issued_at,missing_targets,is_late&order=city" "${H[@]}"
+echo

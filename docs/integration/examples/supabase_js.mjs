@@ -1,4 +1,5 @@
-// Read the current dynamic line rating of every city, and one city's history, with supabase-js.
+// Read the current dynamic line rating of every city, one city's history, and the day-ahead
+// forecast, with supabase-js.
 //
 // 1. The current row of each city from the view latest_rating.
 // 2. One city's rows between START and END from the table city_rating, in pages of 1000 rows
@@ -73,3 +74,40 @@ for (let from = 0; ; from += PAGE) {
   rows.push(...data)
 }
 console.log(`${CITY} rows from ${START} to ${END}: ${rows.length}`)
+
+// (3) the day-ahead forecast: upcoming targets, then the per-city status (not the live rating)
+const upcoming = await supabase
+  .from('day_ahead_upcoming')
+  .select('city,valid_time,issued_at,lead_minutes,forecast_amps,forecast_ci_lower_amps,forecast_ci_upper_amps,band_source,band_n,label')
+  .order('city')
+  .order('valid_time', { ascending: true })
+if (upcoming.error) {
+  console.error(upcoming.error.message)
+  process.exitCode = 1
+} else {
+  console.log('Day-ahead forecast: upcoming targets (view day_ahead_upcoming)')
+  console.log('label:', [...new Set(upcoming.data.map((row) => row.label))].join(' | ') || 'day-ahead-24h; engineering-selection; not-validated')
+  console.log('this is not the live rating: it never sets or checks it, and it is not validated')
+  if (upcoming.data.length === 0) console.log('no upcoming day-ahead values')
+  else console.table(upcoming.data)
+}
+
+const dayAheadStatus = await supabase
+  .from('day_ahead_status')
+  .select('city,next_target_time,upcoming_count,newest_issued_at,missing_targets,is_late')
+  .order('city')
+if (dayAheadStatus.error) {
+  console.error(dayAheadStatus.error.message)
+  process.exitCode = 1
+} else {
+  console.log('Day-ahead status per city (view day_ahead_status)')
+  console.table(dayAheadStatus.data)
+  const lateCities = dayAheadStatus.data.filter((row) => row.is_late)
+  if (lateCities.length > 0) {
+    console.log(`day-ahead feed is LATE for ${lateCities.map((row) => row.city).join(', ')}`)
+  }
+  if (dayAheadStatus.data.length !== 4) {
+    console.error(`expected 4 cities in day_ahead_status, got ${dayAheadStatus.data.length}`)
+    process.exitCode = 1
+  }
+}
