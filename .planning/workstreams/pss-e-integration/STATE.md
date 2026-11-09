@@ -103,3 +103,8 @@ Items acknowledged and deferred at milestone close, most recent first:
 Last session: 2026-11-08
 Stopped at: Awaiting laptop for 03-07 step 2 re-run (last completed 03-09-PLAN.md: psse3604 helper import before psspy)
 Resume file: None
+
+## Session note 2026-11-08 (end of day)
+
+No laptop access. Done today: STATE refreshed and committed; Python 3.13 to 3.14 row added to the guide's decision table (commit 02e4f0f). Nothing else in this workstream is possible without the laptop.
+Tomorrow: (1) send POWER-SYSTEMS-EMAIL-DRAFT.md (case is the IEEE 39-bus New England system, already on the laptop; only a saved .sav on the laptop is needed, plus the city-to-branch mapping and laptop session); (2) raise with production-pipeline owner that Phase 6's 13 plans do not yet include the four psse_* tables and the dlr_psse_writer grant (hand-off: docs/data-science/decisions/psse_results_phase6_handoff.md); (3) get the dlr_psse_writer URL, SUPABASE_URL and publishable key from the DS owner; (4) at the laptop resume 03-07 at step 2 (selftest with and without PSSE_BIN_DIR, U33 and U07).
