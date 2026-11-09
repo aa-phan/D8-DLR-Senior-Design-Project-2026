@@ -18,6 +18,8 @@ import re
 import shutil
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -27,6 +29,8 @@ import config
 import secret_scan_test as scan
 import supabase_rest
 from fake_postgrest import FakePostgrest, make_rating_rows
+import day_ahead_contract
+from fake_postgrest import make_day_ahead_view_rows
 
 REPO = Path(__file__).resolve().parents[2]
 EXAMPLES = REPO / "docs" / "integration" / "examples"
@@ -371,3 +375,149 @@ def test_examples_carry_no_url_or_key():
         text = path.read_text(encoding="utf-8")
         assert "SUPABASE_URL" in text and "SUPABASE_PUBLISHABLE_KEY" in text
         assert not re.search(r"https?://[A-Za-z0-9-]{20}\.", text)
+
+
+# ---------------------------------------------------------------------------
+# Phase 8 (D-18): the day-ahead part of the Python example
+# ---------------------------------------------------------------------------
+
+DA_NOW = NEWEST + timedelta(minutes=20)  # the fake's clock in _fake()
+_DA_TARGET_LINE = re.compile(r"^  ([A-Z_]+)\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s")
+_DA_STATUS_LINE = re.compile(r"^  ([A-Z_]+)\s+upcoming (\d+)\b")
+
+
+def _da_parts(stdout):
+    """(the lines after the 'rows from' line, the whole output split into lines)."""
+    lines = stdout.splitlines()
+    start = next(i for i, line in enumerate(lines) if " rows from " in line)
+    return lines[start + 1:], lines
+
+
+def _run_example(example, monkeypatch, fake, argv=None):
+    monkeypatch.setenv("SUPABASE_URL", fake.url)
+    monkeypatch.setenv("SUPABASE_PUBLISHABLE_KEY", KEY)
+    return example.main(argv or ["--city", "AUSTIN", "--start", START, "--end", END])
+
+
+def _select_set(text):
+    return [c for c in text.split(",") if c]
+
+
+@pytest.mark.parametrize("interpreter", INTERPRETERS)
+def test_day_ahead_tracer_read_ratings_prints_targets_and_status(interpreter, tmp_path):
+    with _fake() as fake:
+        done = _run([interpreter, "-I", str(PY_EXAMPLE), "--city", "AUSTIN", "--start", START, "--end", END],
+                    _env(fake), tmp_path)
+        requests = list(fake.requests)
+    assert done.returncode == 0, done.stderr
+    assert done.stderr == ""
+    after, _ = _da_parts(done.stdout)
+    text = "\n".join(after)
+    assert "day_ahead_upcoming" in text and "day_ahead_status" in text
+    assert day_ahead_contract.DAY_AHEAD_LABEL in text
+    assert "not the live rating" in text
+    targets = [m.groups() for m in (_DA_TARGET_LINE.match(line) for line in after) if m]
+    assert len(targets) == 12
+    expected_cities = [c for c in config.LOCATIONS for _ in range(3)]
+    assert [city for city, _ in targets] == expected_cities
+    for city in config.LOCATIONS:
+        stamps = [stamp for c, stamp in targets if c == city]
+        assert stamps == sorted(stamps)
+        assert all(stamp.endswith("Z") for stamp in stamps)
+    assert [stamp for _, stamp in targets][:3] == ["2026-10-26T18:00:00Z", "2026-10-27T00:00:00Z", "2026-10-27T06:00:00Z"]
+    status = [m.groups() for m in (_DA_STATUS_LINE.match(line) for line in after) if m]
+    assert [city for city, _ in status] == list(config.LOCATIONS)
+    assert all(count == "3" for _, count in status)
+    # the rating parts print exactly as before: the city lines of Part 1 are still the only matches
+    cities = [m.group(1) for m in (re.match(r"^([A-Z_]+)\s+[\d.]+ A ", line) for line in done.stdout.splitlines()) if m]
+    assert cities == list(config.LOCATIONS)
+    day_ahead = [r for r in requests if r["path"].endswith(("/day_ahead_upcoming", "/day_ahead_status"))]
+    assert [r["method"] for r in day_ahead] == ["GET", "GET"]
+    assert [r["path"] for r in day_ahead] == ["/rest/v1/day_ahead_upcoming", "/rest/v1/day_ahead_status"]
+    assert dict(day_ahead[0]["query"])["order"] == "city,valid_time"
+    assert dict(day_ahead[1]["query"])["order"] == "city"
+    assert sorted(os.listdir(str(tmp_path))) == []  # no local file written
+
+
+def test_day_ahead_select_lists_are_subsets_of_the_contract(example):
+    upcoming = _select_set(example.DAY_AHEAD_UPCOMING_SELECT)
+    status = _select_set(example.DAY_AHEAD_STATUS_SELECT)
+    assert upcoming and status
+    assert set(upcoming) <= set(day_ahead_contract.UPCOMING_COLUMNS)
+    assert set(status) <= set(day_ahead_contract.STATUS_COLUMNS)
+    assert len(set(upcoming)) == len(upcoming) and len(set(status)) == len(status)
+
+
+def test_day_ahead_empty_upcoming_prints_a_notice_and_exits_0(example, monkeypatch, capsys):
+    _, status = make_day_ahead_view_rows(DA_NOW)
+    with _fake(day_ahead_upcoming=[], day_ahead_status=status) as fake:
+        code = _run_example(example, monkeypatch, fake)
+    captured = capsys.readouterr()
+    assert code == 0, captured.err
+    after, _ = _da_parts(captured.out)
+    assert any(line.startswith("no upcoming day-ahead values") for line in after)
+    assert [m.group(1) for m in (_DA_STATUS_LINE.match(line) for line in after) if m] == list(config.LOCATIONS)
+    assert not [line for line in after if _DA_TARGET_LINE.match(line)]
+
+
+def test_day_ahead_late_city_is_printed_and_is_not_an_error(example, monkeypatch, capsys):
+    upcoming, status = make_day_ahead_view_rows(DA_NOW)
+    late_target = datetime(2026, 10, 26, 12, 0, tzinfo=timezone.utc)
+    for row in status:
+        if row["city"] == "MIDLAND":
+            row["is_late"] = True
+            row["missing_targets"] = [late_target.strftime("%Y-%m-%dT%H:%M:%S+00:00")]
+    with _fake(day_ahead_upcoming=upcoming, day_ahead_status=status) as fake:
+        code = _run_example(example, monkeypatch, fake)
+    captured = capsys.readouterr()
+    assert code == 0, captured.err
+    assert captured.err == ""
+    late = [line for line in captured.out.splitlines() if line.startswith("day-ahead feed is LATE for")]
+    assert len(late) == 1
+    assert "MIDLAND" in late[0] and "2026-10-26T12:00:00Z" in late[0]
+    assert "AUSTIN" not in late[0]
+
+
+def test_day_ahead_status_missing_a_city_exits_1_and_names_it(example, monkeypatch, capsys):
+    upcoming, status = make_day_ahead_view_rows(DA_NOW)
+    status = [row for row in status if row["city"] != "EL_PASO"]
+    assert len(status) == 3
+    with _fake(day_ahead_upcoming=upcoming, day_ahead_status=status) as fake:
+        code = _run_example(example, monkeypatch, fake)
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "EL_PASO" in captured.err and "day_ahead_status" in captured.err
+
+
+def test_day_ahead_http_error_on_upcoming_exits_1_after_the_rating_parts(example, monkeypatch, capsys):
+    override = {"day_ahead_upcoming": (404, {"code": "PGRST205", "message": "not found"})}
+    with _fake(route_overrides=override) as fake:
+        code = _run_example(example, monkeypatch, fake)
+        url = fake.url
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "HTTP 404 from day_ahead_upcoming" in captured.err
+    assert "Current rating per city" in captured.out
+    assert "AUSTIN rows from %s to %s: 2500" % (START, END) in captured.out
+    for text in (captured.out, captured.err):
+        assert KEY not in text and url not in text
+
+
+def test_day_ahead_fake_views_have_every_contract_column_and_refuse_writes():
+    upcoming, status = make_day_ahead_view_rows(DA_NOW)
+    assert len(upcoming) == 12 and len(status) == 4
+    for row in upcoming:
+        assert tuple(row) == day_ahead_contract.UPCOMING_COLUMNS
+        assert row["label"] == day_ahead_contract.DAY_AHEAD_LABEL
+        assert row["lead_minutes"] > 0
+    for row in status:
+        assert tuple(row) == day_ahead_contract.STATUS_COLUMNS
+        assert row["is_late"] is False and row["missing_targets"] == []
+    assert all(not scan._scan_line(str(value)) for row in upcoming for value in row.values())
+    with _fake() as fake:
+        for relation in ("day_ahead_upcoming", "day_ahead_status"):
+            request = urllib.request.Request(fake.url + "/rest/v1/" + relation, data=b"{}", headers={"apikey": KEY})
+            with pytest.raises(urllib.error.HTTPError) as refused:
+                urllib.request.urlopen(request, timeout=10)
+            assert refused.value.code == 401
+            assert b"42501" in refused.value.read()

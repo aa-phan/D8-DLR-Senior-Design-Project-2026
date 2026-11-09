@@ -11,6 +11,12 @@ thread. It serves
   GET/HEAD  city_rating       select, eq./neq./gt./gte./lt./lte./in. filters (repeated filters
                               are ANDed), order, limit/offset, the Range header, Prefer
                               count=exact -> Content-Range, and the `max_rows` cap
+  GET/HEAD  day_ahead_upcoming, day_ahead_status
+                              the Phase 8 views (08-12): defaults built from the fake's clock by
+                              `make_day_ahead_view_rows`, or the lists given as
+                              `day_ahead_upcoming=` / `day_ahead_status=`; same select, filter,
+                              order, limit/offset, Range and `max_rows` handling as city_rating;
+                              writes answer 401 42501 permission denied
   GET       rpc/assert_fresh  200 JSON, or 503 with code PT503 (`fresh=False`)
   pipeline_run                401 42501 permission denied
   any other Accept-Profile    406 PGRST106; unknown relation 404 PGRST205
@@ -40,11 +46,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qsl, urlsplit
 
 import config
+import day_ahead_contract
 import latest_rating_contract as contract
 import supabase_rest
 
 DEFAULT_KEY = "sb_" + "publishable_" + "FakeKey0123456789abcdef"
-_TS_COLUMNS = frozenset({"valid_time", "observation_time", "computed_at", "first_written_at"})
+_TS_COLUMNS = frozenset({"valid_time", "observation_time", "computed_at", "first_written_at",
+                         "issued_at", "forecast_run_init_time", "anchor_observation_time",
+                         "checked_at", "next_target_time", "newest_issued_at"})
+_DAY_AHEAD_RELATIONS = ("day_ahead_upcoming", "day_ahead_status")
 _RESERVED = frozenset({"select", "order", "limit", "offset", "on_conflict", "columns"})
 _VIEW_NOT_UPDATABLE = {
     "code": "55000",
@@ -116,6 +126,68 @@ def make_rating_rows(slots, cities=config.LOCATIONS, newest=None, **overrides):
             row.update(overrides)
             rows.append(row)
     return rows
+
+
+def make_day_ahead_view_rows(now, cities=config.LOCATIONS, per_city=3):
+    """
+    (upcoming, status) as the Phase 8 views show them at `now`, built from day_ahead_contract.
+
+    `upcoming` has, per city, the next `per_city` 6-hour UTC grid targets strictly after `now`, every
+    UPCOMING_COLUMNS key filled with plausible values (ISO +00:00 timestamps; the hash columns are
+    64 lower-case hex characters built from repeated digits, so the secret scan cannot match them).
+    `status` has one not-late row per city with the STATUS_COLUMNS keys and no missing targets.
+    """
+    now = now.astimezone(timezone.utc)
+    grid = day_ahead_contract.GRID_HOURS
+    first = now.replace(minute=0, second=0, microsecond=0)
+    first = first - timedelta(hours=first.hour % grid) + timedelta(hours=grid)
+    targets = [first + timedelta(hours=grid * i) for i in range(per_city)]
+    upcoming = []
+    status = []
+    for city_index, city in enumerate(cities):
+        amps = 1200.0 + 10.0 * city_index
+        issued = now.replace(minute=0, second=0, microsecond=0)
+        for target in targets:
+            lead = -((now - target).total_seconds() // 60)  # ceiling of the minutes to the target
+            row = {
+                "city": city,
+                "valid_time": _iso(target),
+                "issued_at": _iso(issued),
+                "forecast_run_init_time": _iso(target - timedelta(minutes=day_ahead_contract.HORIZON_MINUTES)),
+                "horizon_minutes": day_ahead_contract.HORIZON_MINUTES,
+                "forecast_amps": amps,
+                "forecast_ci_lower_amps": amps - 60.0,
+                "forecast_ci_upper_amps": amps + 60.0,
+                "band_source": "test-split",
+                "band_n": 196,
+                "band_pairs_through": _iso(target - timedelta(days=30)),
+                "band_artifact_sha256": "12" * 32,
+                "forecast_method": day_ahead_contract.FORECAST_METHOD,
+                "cooling_model_sha256": "34" * 32,
+                "cooling_model_source": "fake-cooling-model",
+                "anchor_observation_time": _iso(issued - timedelta(minutes=5)),
+                "anchor_source": "station",
+                "label": day_ahead_contract.DAY_AHEAD_LABEL,
+                "config_version": config.RATING_CONFIG_VERSION,
+                "config_fingerprint": "56" * 32,
+                "run_id": "fake-day-ahead-%s" % issued.strftime("%Y%m%d%H"),
+                "run_attempt": 1,
+                "pipeline_version": "fake0001",
+                "schema_version": 1,
+                "first_written_at": _iso(issued + timedelta(minutes=6)),
+                "lead_minutes": int(lead),
+            }
+            upcoming.append({column: row[column] for column in day_ahead_contract.UPCOMING_COLUMNS})
+        status.append({
+            "city": city,
+            "checked_at": _iso(now),
+            "next_target_time": _iso(targets[0]),
+            "upcoming_count": len(targets),
+            "newest_issued_at": _iso(issued),
+            "missing_targets": [],
+            "is_late": False,
+        })
+    return upcoming, status
 
 
 def _json_default(value):
@@ -220,7 +292,8 @@ class FakePostgrest(object):
     def __init__(self, rows=None, key=DEFAULT_KEY, max_rows=1000, now=None, fresh=True,
                  write_mode="revoked", rpc_available=True, require_key=True, latest_override=None,
                  route_overrides=None, table_write_response=None, view_write_response=None,
-                 count_override=None, before_request=None):
+                 count_override=None, before_request=None, day_ahead_upcoming=None,
+                 day_ahead_status=None):
         if write_mode not in ("revoked", "rls_only", "open"):
             raise ValueError("write_mode must be revoked, rls_only or open")
         self.rows = [dict(r) for r in (rows or [])]
@@ -237,6 +310,8 @@ class FakePostgrest(object):
         self.view_write_response = view_write_response
         self.count_override = count_override
         self.before_request = before_request
+        self.day_ahead_upcoming = None if day_ahead_upcoming is None else [dict(r) for r in day_ahead_upcoming]
+        self.day_ahead_status = None if day_ahead_status is None else [dict(r) for r in day_ahead_status]
         self.requests = []
         self.lock = threading.RLock()
         self._server = None
@@ -296,6 +371,14 @@ class FakePostgrest(object):
             view.append(shown)
         return view
 
+    def day_ahead_view_rows(self, relation):
+        """What day_ahead_upcoming or day_ahead_status shows: the lists given, else the defaults at now."""
+        given = self.day_ahead_upcoming if relation == "day_ahead_upcoming" else self.day_ahead_status
+        if given is not None:
+            return [dict(r) for r in given]
+        upcoming, status = make_day_ahead_view_rows(self._now())
+        return upcoming if relation == "day_ahead_upcoming" else status
+
     # -- routing -----------------------------------------------------------
 
     def dispatch(self, record):
@@ -327,6 +410,11 @@ class FakePostgrest(object):
             if method in ("GET", "HEAD"):
                 return self._read(relation, record)
             return self._write(relation, record)
+        if relation in _DAY_AHEAD_RELATIONS:
+            if method in ("GET", "HEAD"):
+                return self._read(relation, record)
+            return 401, {}, {"code": "42501", "details": None, "hint": None,
+                             "message": "permission denied for view %s" % relation}
         return 404, {}, {"code": "PGRST205", "message": "Could not find the table 'public.%s' in the schema cache" % relation}
 
     def _assert_fresh(self):
@@ -350,7 +438,12 @@ class FakePostgrest(object):
 
     def _read(self, relation, record):
         query = record["query"]
-        rows = self.latest_view_rows() if relation == "latest_rating" else [dict(r) for r in self.rows]
+        if relation == "latest_rating":
+            rows = self.latest_view_rows()
+        elif relation in _DAY_AHEAD_RELATIONS:
+            rows = self.day_ahead_view_rows(relation)
+        else:
+            rows = [dict(r) for r in self.rows]
         try:
             rows = self._filter(rows, query)
         except ValueError as exc:
@@ -360,6 +453,8 @@ class FakePostgrest(object):
                 rows = self._order(rows, text)
         if relation == "latest_rating" and not any(n == "order" for n, _ in query):
             rows.sort(key=lambda r: str(r.get("city")))
+        if relation in _DAY_AHEAD_RELATIONS and not any(n == "order" for n, _ in query):
+            rows = self._order(rows, "city,valid_time" if relation == "day_ahead_upcoming" else "city")
         total = len(rows)
         offset, limit = 0, None
         for name, text in query:
