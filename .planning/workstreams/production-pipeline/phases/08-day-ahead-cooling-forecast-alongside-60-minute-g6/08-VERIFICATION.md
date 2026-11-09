@@ -1,9 +1,10 @@
 ---
 phase: 08-day-ahead-cooling-forecast-alongside-60-minute-g6
-verified: 2026-11-09T12:00:00Z
+verified: 2026-11-09T18:30:00Z
 status: passed
 score: 5/5 must-haves verified
 covered_files:
+  - ".github/workflows/day_ahead_manifest_check.yml"
   - ".planning/workstreams/production-pipeline/phases/08-day-ahead-cooling-forecast-alongside-60-minute-g6/08-01-PLAN.md"
   - ".planning/workstreams/production-pipeline/phases/08-day-ahead-cooling-forecast-alongside-60-minute-g6/08-01-SUMMARY.md"
   - ".planning/workstreams/production-pipeline/phases/08-day-ahead-cooling-forecast-alongside-60-minute-g6/08-02-PLAN.md"
@@ -39,6 +40,7 @@ covered_files:
   - "backend/supabase_store.py"
   - "data/day_ahead/day_ahead_bands_v1.json"
   - "data/models/LIVE_ARTIFACT_HASHES.sha256"
+  - "docs/data-science/decisions/dlr_live_runbook.md"
   - "docs/data-science/decisions/pss_e_handoff.md"
   - "docs/data-science/schema/day_ahead_forecast_v1.md"
   - "docs/integration/examples/curl.sh"
@@ -48,17 +50,25 @@ covered_files:
   - "docs/integration/software-team-handoff.md"
   - "supabase/migrations/20261108120000_day_ahead_forecast_store.sql"
   - "supabase/migrations/20261108120100_expose_day_ahead_forecast.sql"
-covered_digest: "v3:sha256:626f4284dde5b703e5bd11e30e4005bb9162dcab19c330e0404e07ee677a330e"
+  - "supabase/ops/verify_day_ahead_store.sql"
+  - "supabase/ops/verify_exposure.sql"
+covered_digest: "v3:sha256:cb397fed19b15056181e853091fd6d8ac0175a6010c0e5848ed2699c2cde07a3"
 behavior_unverified: 0
 overrides_applied: 0
+re_verification:
+  previous_status: passed
+  previous_score: 5/5
+  gaps_closed: []
+  gaps_remaining: []
+  regressions: []
 ---
 
 # Phase 8: Day-Ahead Cooling Forecast Alongside 60-Minute G6 Verification Report
 
-**Phase Goal:** Production serves a day-ahead (24 h) ampacity forecast per city from `ml_cooling_corrected` as an additional output alongside the 60-minute G6 forecast, which stays `ml` and keeps gating G6. The day-ahead value is labelled as a higher-error future forecast, with its own uncertainty band, and never replaces or gates the live rating.
+**Phase Goal:** Production serves a day-ahead (24 h) ampacity forecast per city from `ml_cooling_corrected` as an additional output alongside the 60-minute G6 forecast, which stays `ml` and keeps gating G6. The day-ahead value is labelled as a higher-error future forecast (it carries more error because it is further ahead, like any forecast), with its own uncertainty band, and never replaces or gates the live rating.
 **Verified:** 2026-11-09
-**Status:** passed (5 non-blocking warnings, all carried from 08-REVIEW.md; none undermines the goal)
-**Re-verification:** No, initial verification
+**Status:** passed (1 non-blocking warning, WR-06, a comment-wording issue; 14 info items carried from 08-REVIEW.md)
+**Re-verification:** Yes. The earlier report (covering 08-01..08-12) was stale because the code-review fixes WR-01..WR-05 and two follow-ups changed covered files. This run re-read the code at HEAD (d2942dc) and re-ran the day-ahead tests; it did not trust SUMMARY.md, the earlier report or the review text. The previous report had no `gaps:`, so every truth was re-checked against the current code, with extra weight on the files the fixes touched.
 
 ## Goal Achievement
 
@@ -66,11 +76,11 @@ overrides_applied: 0
 
 | # | Truth | Status | Evidence |
 |---|-------|--------|----------|
-| 1 | Every hourly run after go-live issues each due target per city from the 24 h-old run through the unchanged shadow functions under the production conductor, parity-tested, and publishes nothing when cooling cannot produce a value | VERIFIED | `day_ahead_forecast.compute_value` calls only `shadow.fetch_live_forecast_for_valid_time`, `validate_and_prepare_shadow_row`, `_enrich_city_frame_for_correction`, `CoolingCorrectionShadowMethod.predict` under `city_point.production_city_point`; model via hash-verified `fcr.make_headline_loader`. Every failure becomes `DayAheadNotIssued` (no substitute method, no row). `due_targets` gives (now, now+18 h] on the 6 h grid; `dlr_day_ahead._execute` issues `missing = due - existing` (table is the state, so catch-up works). Parity tests `test_parity_production_equals_the_shadow_path_where_the_conductor_matches[x4]` and `test_parity_austin_...` exist and pass (re-run by me: 268 passed across the day-ahead suites with local Postgres). Live: run 42543631399 wrote 12 rows (3 per city) and 10/10 first-slot checks passed (08-08-first-slot.json: weather run 24 h before target, ml_cooling_corrected, horizon 1440, model sha equals manifest). Workflow runs `dlr_live_run.py`, whose `main()` turns the stage on. |
-| 2 | Every row carries a 5-95% band (TEST artifact at launch, live rolling per band once 60 graded pairs exist), its source and size, model and band hashes, config identity, issue time and the label | VERIFIED | `build_row` emits exactly `contract.INSERT_COLUMNS` (band_source, band_n, band_pairs_through, band_artifact_sha256, cooling_model_sha256/source, config_version/fingerprint, issued_at, label). Migration CHECKs enforce label non-empty, sha formats, band contains point, band_pairs_through NULL iff live-rolling. `band_for` switches per (city x UTC hour) to live rolling at `LIVE_BAND_MIN_PAIRS`=60 using newest 120, only when 5% offset < 0 < 95% offset; `_LIVE_PAIRS_SQL` excludes fallback/exhausted/non-ok/non-live ratings and mismatched fingerprint/model. Live rows in 08-08-first-slot.json: test-split, n=196, artifact sha equals manifest entry, label D-11. Live path covered by Postgres-backed `day_ahead_band_test.py` (passed); not yet exercised in production (needs ~60 days of pairs; expected). |
-| 3 | Live ratings, G6 `ml` forecast, exit code, `city_rating` and the 34-column `latest_rating` are unchanged; a day-ahead failure or bad file never stops or reddens a run and is recorded in `pipeline_run.day_ahead` | VERIFIED | `git diff 01c383d..HEAD` touches no rating, orchestrator, forecast-gate, workflow or `city_rating`/`latest_rating` migration file. `grep day_ahead` finds nothing in `dlr_orchestrator.py`, rating or config modules. In `run_live`, `state["exit_code"]` is fixed (dlr_live_run.py:628) before `_day_ahead_after_ratings`, which sits in its own `except Exception`, never assigns exit_code/cities/run_log, and writes only `{run_id, day_ahead}`. Behavioral tests pass: `test_a_crashing_hanging_or_silent_day_ahead_child_never_changes_the_rating_result`, `test_no_day_ahead_child_starts_before_the_ratings_finished_and_the_exit_code_was_set`, `test_a_failing_day_ahead_write_is_counted_separately...`, `test_a_stage_that_raises_as_a_whole...`. Shared budget 4 x 300 s; workflow `timeout-minutes: 30` unchanged. Live: run 42543631399 green, `pipeline_run.day_ahead` record equals its rows (check 10/10). |
-| 4 | After the first live issue run is verified, anon reads the upcoming targets and a four-row status and nothing else new, writes are refused, and the permanent alarm also fails for a stalled feed | VERIFIED | Expose migration: SELECT-only grants, `day_ahead_upcoming` (26 cols), `day_ahead_status` (4 rows, 7 cols), `assert_fresh` same signature with `day_ahead_late` PT503 clause armed by first row; `pipeline_run` stays private. Order honoured: first run verified (08-08) before expose applied (08-11). Live evidence 08-11-live-checks.json: 8/8 REST checks ok (12 future ordered rows, 26 columns, 4 cities none late, `assert_fresh` 200 and `day_ahead_armed` true, anon INSERT refused 401/42501, view PATCH refused, `pipeline_run` hidden). Offline: `day_ahead_expose_test.py` passed; the 503 stall path is covered by those Postgres tests, not exercised live (a live stall would be a real incident). |
-| 5 | The contract states label, owner-approved paragraph, band and late rules and the meaning of "24 h", and is published only after the expose step, together with the three consumer examples (which also read day-ahead and ran live first) and the Software and PSS/E handoff notes | VERIFIED | `docs/integration/rest-api.md` "Day-ahead forecast" section carries the label, the "more error ... because it looks further ahead" paragraph, band rule, late rule, "What '24 h' means" (age of the weather run, issued 0-18 h before target) and both column tables. Three examples read `day_ahead_upcoming` and `day_ahead_status`; env reads are only SUPABASE_URL / SUPABASE_PUBLISHABLE_KEY, no project value. Live runs of curl.sh, read_ratings.py (system 3.9 and venv 3.12) and supabase_js.mjs all exit 0 with the label seen (08-11-examples.json). Software handoff, api-contract and PSS/E notes extended. `origin/main` is at 4008477 and contains the expose migration and rest-api.md day-ahead section (publishing push done after expose apply). |
+| 1 | Every hourly run after go-live issues each due target per city from the 24 h-old weather run through the unchanged shadow functions under the production conductor, parity-tested, and publishes nothing when cooling cannot produce a value | VERIFIED | `day_ahead_forecast.compute_value` (read in full) calls only `shadow.fetch_live_forecast_for_valid_time`, `validate_and_prepare_shadow_row`, `_enrich_city_frame_for_correction` and `CoolingCorrectionShadowMethod(model).predict(frame, point)`, with `point = city_point.production_city_point(city)`. The model comes from hash-verified `fcr.make_headline_loader` (`make_model_loader`). Every failure is wrapped by `_step` into `DayAheadNotIssued`; no other method is named (a source-scan test enforces it). `due_targets` returns the 6 h grid targets in (now, now + 24 h - publication lag]; `dlr_day_ahead._execute` issues `missing = due - existing`, so a missed target is caught up by a later run, and a target in the past is never due. `forecast_run_init_time = valid_time - 1440 min`, enforced again by a DB CHECK. Tests present and passing in my run: `test_parity_production_equals_the_shadow_path_where_the_conductor_matches[CORPUS_CHRISTI/MIDLAND/EL_PASO]`, `test_parity_austin_equals_the_same_chain_with_the_refit_model_and_differs_from_drake`, nine `test_no_substitute_*` tests in `day_ahead_forecast_test.py` and five in `dlr_day_ahead_test.py`. `dlr_live_run.main()` passes `day_ahead=MAIN_RUNS_DAY_AHEAD and not args.no_day_ahead`, and `MAIN_RUNS_DAY_AHEAD = True`. Live evidence (recorded file, not re-contacted): `08-08-first-slot.json` shows run 42543631399 wrote 12 rows, ml_cooling_corrected, horizon 1440, model sha equal to the manifest. |
+| 2 | Every row carries a 5-95% band (TEST artifact at launch, live rolling per band once 60 graded pairs exist), its source and size, model and band hashes, config identity, issue time and the label | VERIFIED | `build_row` emits exactly `contract.INSERT_COLUMNS` (and raises if the keys differ): `band_source`, `band_n`, `band_pairs_through`, `band_artifact_sha256`, `cooling_model_sha256`/`source`, `config_version`/`config_fingerprint`, `issued_at`, `label = DAY_AHEAD_LABEL`. Migration CHECKs enforce label non-empty, sha formats (64 lowercase hex), band contains the point, `band_pairs_through` NULL iff `live-rolling`, `issued_at < valid_time`. `band_for` starts on the hashed TEST offsets (`data/day_ahead/day_ahead_bands_v1.json`, sha256 19b9c522... equals the manifest entry, checked by hand), switches per (city x UTC hour) to `live-rolling` at `LIVE_BAND_MIN_PAIRS = 60` using the newest `LIVE_BAND_WINDOW = 120` pairs, only when the 5% offset < 0 < the 95% offset. `_LIVE_PAIRS_SQL` keeps only status ok, not fallback, not exhausted, origin live, same fingerprint and model, target before the decision time. WR-01 fix verified in code: `band_for` wraps `_live_offsets` in `try/except Exception`, keeps the TEST band, logs only the exception type; the connection is autocommit (`supabase_store.connect`), so a failed query cannot poison the following insert. Pinned by `test_a_failing_live_query_falls_back_to_the_test_band_and_logs_only_the_exception_type` and an end-to-end test in `dlr_day_ahead_test.py` (both passed against local Postgres). The live-rolling switch has only been exercised on local Postgres (production has no 60 pairs yet; expected). |
+| 3 | Live ratings, G6 `ml` forecast, exit code, `city_rating` and the 34-column `latest_rating` are unchanged; a day-ahead failure or bad file never stops or reddens a run and is recorded in `pipeline_run.day_ahead` | VERIFIED | `git diff 01c383d..HEAD` (code, non-docs) shows no change to `ampacity_forecast.py`, `city_pipeline.py`, `config.py`, `dlr_orchestrator.py` or `.github/workflows/dlr_live.yml`, and `grep day_ahead` finds nothing in them. The only edits to shared files are additive: `supabase_store.upsert_run` accepts an optional `day_ahead` column that the rating-stage rows never name, `live_run_log.build_day_ahead_run_row` (own `{run_id, day_ahead}` write), and `supabase_smoke` (narrowed a policy lookup to the two original tables). In `run_live`, `state["exit_code"]` is set at line 628 and the comment at 631 states nothing after may assign it; `_day_ahead_after_ratings` has its own `except Exception` around the stage and around the write, and never assigns `exit_code`, `cities` or `run_log`. Per-city children run under the shared 4 x 300 s budget, killed at `min(DAY_AHEAD_CITY_TIMEOUT_S, remaining)`. The write-side migration only adds `pipeline_run.day_ahead jsonb` (`add column if not exists`); no `city_rating`/`latest_rating` migration is edited. The stage tests (`dlr_live_day_ahead_stage_test.py`) passed in my run. |
+| 4 | After the first live issue run is verified, anon reads the upcoming targets and a four-row status and nothing else new, writes are refused, and the permanent alarm also fails for a stalled feed | VERIFIED | Expose migration read in full: `day_ahead_upcoming` (25 stored columns + `lead_minutes` = 26, `valid_time > now()`, ordered), `day_ahead_status` (7 columns, four hard-coded cities, so always four rows), both `security_invoker`, `revoke all` then `grant select` only, one SELECT policy on the table; `dlr_writer` holds select + insert only (write-side migration); `assert_fresh` has the same signature and adds a `day_ahead_late` clause that raises PT503 only when `exists(select 1 from day_ahead_forecast)` (armed by the first row) and a city has a target missing within 12 h. No new cron job. "Nothing else new" holds with one documented reading: the base table `day_ahead_forecast` is also anon-readable (OD-6 owner decision: full history public; the security_invoker views need it, same pattern as `city_rating` + `latest_rating`); the contract doc lists it as a read endpoint. Order honoured (first run verified in 08-08 before the expose migration applied in 08-11). Recorded live evidence `08-11-live-checks.json`: 8/8 checks ok (12 future ordered rows, 26 columns, four cities none late, `assert_fresh` 200 with `day_ahead_armed` true, anon INSERT refused 42501, view write refused, `pipeline_run` hidden). `day_ahead_expose_test.py` passed in my run, including the full-message pin for the PT503 case (WR-04 fix). The 503 stall path is exercised on local Postgres only; a live stall would be a real incident. |
+| 5 | The contract states the label, the owner-approved paragraph, the band and late rules and the meaning of "24 h", and is published only after the expose step, together with the three consumer examples (which also read the day-ahead targets and status and ran live first) and the Software and PSS/E handoff notes | VERIFIED | `docs/integration/rest-api.md` carries the label, the paragraph ("It has more error than the 60-minute forecast because it looks further ahead ... never sets or checks the live rating"), band and late rules, "24 h" as the weather run's age, and the column tables (guarded by `rest_api_doc_test.py`, passed). WR-02 fix present in the consumer docs: they state the 18 h lookahead and at most three upcoming targets per city. All three examples read `day_ahead_upcoming` and `day_ahead_status` and print the label (`curl.sh` lines 62-71, `supabase_js.mjs` 80-110, `read_ratings.py` 183-262, the 49131d4 fix confirmed). Required env is only `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY`; the optional `CITY`/`START`/`END` knobs are pre-existing (identical at 01c383d) and not secrets. `grep` for project URLs/keys in the examples finds none; `read_ratings.py` header states Python 3.7+ standard library. Live runs recorded in `08-11-examples.json` (exit 0). The expose-before-publish order is recorded in the 08-11 summary and pre-flight; I did not re-contact git remotes or the live service. |
 
 **Score:** 5/5 truths verified (0 present, behavior-unverified)
 
@@ -78,90 +88,85 @@ overrides_applied: 0
 
 | Artifact | Expected | Status | Details |
 |----------|----------|--------|---------|
-| `backend/day_ahead_forecast.py` | due targets, value, row, insert | VERIFIED | 299 lines, substantive, wired via `dlr_day_ahead.py` |
-| `backend/day_ahead_band.py` | TEST artifact guards, live rolling band | VERIFIED | `band_for`/`live_pairs` real SQL, wired in `_issue` |
-| `backend/dlr_day_ahead.py` | per-city child | VERIFIED | invoked by `dlr_live_run.day_ahead_child_argv` |
-| `backend/dlr_live_run.py` (stage) | stage after exit code | VERIFIED | see truth 3 |
-| `backend/live_run_log.py` / `supabase_store.py` | `pipeline_run.day_ahead` write | VERIFIED | optional column, separate upsert |
-| `backend/dlr_live_check_models.py` + `data/models/LIVE_ARTIFACT_HASHES.sha256` | manifest lists 4 cooling files and band artifact; warn-only pre-flight tier | VERIFIED | manifest diff adds band JSON, AUSTIN refit, 3 frozen shadow cooling models |
-| `supabase/migrations/20261108120000_*` | write-side table, RLS, writer select+insert only | VERIFIED | applied live, pinned by sha256 test |
-| `supabase/migrations/20261108120100_*` | views, SELECT-only grants, assert_fresh clause | VERIFIED | applied live, pinned |
-| `backend/day_ahead_verify.py`, `supabase/ops/verify_*.sql` | owner checks | VERIFIED | used live (10/10, 29/29, 7/7, 8/8) |
-| `docs/integration/examples/*`, docs | consumer handoff | VERIFIED | live-run and published |
+| `backend/day_ahead_forecast.py` | due targets, value, row, insert | VERIFIED | 299 lines, read in full; real logic, wired via `dlr_day_ahead._issue` |
+| `backend/day_ahead_band.py` | TEST artifact guards, live rolling band, WR-01 fallback | VERIFIED | 420 lines; `load_verified_band` hashes before parsing; `band_for` fallback present |
+| `backend/dlr_day_ahead.py` | per-city child | VERIFIED | 303 lines; started by `dlr_live_run.day_ahead_child_argv` |
+| `backend/dlr_live_run.py` (stage) | stage after exit code | VERIFIED | `_day_ahead_after_ratings`, `run_day_ahead_stage`, budget constants |
+| `backend/live_run_log.py`, `backend/supabase_store.py` | `pipeline_run.day_ahead` write | VERIFIED | additive, optional column, separate upsert |
+| `data/models/LIVE_ARTIFACT_HASHES.sha256`, `data/day_ahead/day_ahead_bands_v1.json` | manifest lists the band file, AUSTIN refit and 3 frozen cooling models | VERIFIED | diff read; band file sha matches its manifest line |
+| `backend/dlr_live_check_models.py` | warn-only pre-flight tier | VERIFIED | `dlr_live_check_models_day_ahead_test.py` passed |
+| `.github/workflows/day_ahead_manifest_check.yml` | offline guard in CI (WR-05) | VERIFIED | read in full; runs the guard test, fails on any skip, `contents: read`, no secrets; reported green on GitHub (33 passed) |
+| `supabase/migrations/20261108120000_*` | write-side table, RLS, writer select+insert only | VERIFIED | read in full |
+| `supabase/migrations/20261108120100_*` | views, SELECT-only grants, `assert_fresh` clause | VERIFIED | read in full |
+| `backend/day_ahead_verify.py`, `supabase/ops/verify_*.sql` | owner checks | VERIFIED | covered by `day_ahead_verify_test.py` (passed) |
+| `docs/integration/examples/*`, rest-api, handoff docs | consumer handoff | VERIFIED | see truth 5 |
 
 ### Key Link Verification
 
 | From | To | Via | Status |
 |------|----|-----|--------|
-| `.github/workflows/dlr_live.yml` | `dlr_live_run.main()` -> `run_live(day_ahead=True)` | `MAIN_RUNS_DAY_AHEAD` | WIRED (workflow file unchanged) |
-| `run_live` | `dlr_day_ahead.py` child per city | `run_day_ahead_stage` | WIRED |
-| child | `public.day_ahead_forecast` | `insert_row` ON CONFLICT DO NOTHING | WIRED (12 live rows) |
-| runner | `pipeline_run.day_ahead` | `build_day_ahead_run_row` + `upsert_run` | WIRED (live check 10/10) |
-| `day_ahead_status` | `assert_fresh` | `public.day_ahead_status` in the function | WIRED (`day_ahead_armed` true live) |
-| band | live city_rating | `_LIVE_PAIRS_SQL` join | WIRED (tested; not yet live-exercised) |
+| `dlr_live.yml` | `dlr_live_run.main()` then `run_live(day_ahead=True)` | `MAIN_RUNS_DAY_AHEAD` | WIRED (workflow file unchanged since 01c383d) |
+| `run_live` | `dlr_day_ahead.py` child per city | `run_day_ahead_stage` / `day_ahead_child_argv` | WIRED |
+| child | `public.day_ahead_forecast` | `insert_row`, `ON CONFLICT (city, valid_time) DO NOTHING` | WIRED |
+| runner | `pipeline_run.day_ahead` | `build_day_ahead_run_row` + `upsert_run` | WIRED |
+| `day_ahead_status` | `assert_fresh` | `from public.day_ahead_status` in the function body | WIRED |
+| band | `city_rating` | `_LIVE_PAIRS_SQL` join | WIRED (tested on local Postgres; not yet live-exercised) |
+| band artifact | manifest | `load_verified_band` (hash before parse) and CI guard | WIRED |
 
 ### Data-Flow Trace (Level 4)
 
-| Artifact | Data | Source | Real data | Status |
-|----------|------|--------|-----------|--------|
-| `day_ahead_upcoming` rows | forecast_amps and band | shadow cooling model on live Open-Meteo run + station anchor | Yes, 12 live rows with anchors (synoptic), distinct amps | FLOWING |
-| `day_ahead_status` | missing_targets / is_late | table contents | Yes, 4 rows, none late live | FLOWING |
+| Artifact | Data Variable | Source | Produces Real Data | Status |
+|----------|---------------|--------|--------------------|--------|
+| `day_ahead_upcoming` rows | `forecast_amps`, band edges | shadow cooling model on the 24 h-old Open-Meteo run + station anchor, band from the hashed TEST artifact | Yes (12 live rows with distinct amps in `08-08-first-slot.json`) | FLOWING |
+| `day_ahead_status` | `missing_targets`, `is_late` | table contents | Yes (four rows live, none late in `08-11-live-checks.json`) | FLOWING |
 
 ### Behavioral Spot-Checks
 
 | Behavior | Command | Result | Status |
 |----------|---------|--------|--------|
-| Day-ahead suites (forecast, band, child, stage, expose, migration, docs, pre-flight, examples) | `DLR_TEST_PG_AUTOSTART=1 .venv/bin/python -m pytest <9 day-ahead test files> -q` from repo root | 268 passed | PASS |
-| Full suite (established this session, not re-run by me) | full suite at HEAD with Postgres autostart | 3000 passed, 0 failed, 0 skipped | PASS (reported) |
-| Live first slot / expose / examples | evidence JSON files 08-08-first-slot, 08-11-live-checks, 08-11-examples | all ok, exit 0 | PASS (reviewed artifacts; no live service re-contacted) |
-
-Note: running the day-ahead tests from `backend/` instead of the repo root errors on a relative `data/day_ahead/...` path; the suite is designed for repo-root execution. Not a defect.
+| Day-ahead, live-runner, REST doc, examples, expose, runbook, conductor and parity tests | `DLR_TEST_PG_AUTOSTART=1 .venv/bin/python -m pytest backend/tests -k "day_ahead or dlr_live or rest_api or example or expose or runbook or production_conductor or parity" -q -p no:cacheprovider` | 529 passed, 0 skipped, 0 failed (2473 deselected) | PASS |
+| Full suite (reported by the caller, not re-run by me) | `DLR_TEST_PG_AUTOSTART=1 .venv/bin/python -m pytest backend/tests` at HEAD | 3002 passed, 0 skipped, 0 failed (reported) | PASS (reported) |
+| Live first slot / expose / examples / UAT | recorded evidence `08-08-first-slot.json`, `08-11-live-checks.json`, `08-11-examples.json`, `08-UAT.md` (53/53 passed) | all ok | PASS (recorded artifacts; no live service or `.env` touched by me) |
 
 ### Probe Execution
 
-No probe scripts declared by the phase plans. Step 7c: SKIPPED (not applicable).
+No probe scripts are declared by the phase plans. Step 7c: SKIPPED (not applicable).
 
 ### Requirements Coverage
 
-Every `requirements:` ID in the 12 PLAN frontmatters maps to REQUIREMENTS.md; none orphaned (REQUIREMENTS.md maps exactly DAY-01..DAY-09 to Phase 8 and all nine are claimed).
+Every `requirements:` ID in the 12 PLAN frontmatters is in REQUIREMENTS.md, and REQUIREMENTS.md maps exactly DAY-01..DAY-09 to Phase 8. None are orphaned. The traceability table marks all nine Complete.
 
 | Requirement | Source plans | Status | Evidence |
 |-------------|--------------|--------|----------|
-| DAY-01 per-target issue, catch-up, nothing after target | 08-01, 08-04, 08-08 | SATISFIED | `due_targets`, `missing_targets`, `existing_targets`; CHECK `issued_at < valid_time`; live 12 rows |
-| DAY-02 shadow functions unchanged, hash-verified loader, parity, manifest, warn-only pre-flight | 08-01, 08-04, 08-05 | SATISFIED | `compute_value`, parity tests, manifest diff, `dlr_live_check_models` day-ahead tier |
-| DAY-03 5-95% band, TEST then live rolling, source and n recorded | 08-01, 08-03 | SATISFIED | `band_for`; live rows test-split n=196 |
-| DAY-04 never delays/changes ratings; exit code fixed first; `pipeline_run.day_ahead`; shared budget | 08-02, 08-05, 08-06, 08-08 | SATISFIED | runner diff, stage tests, live run green |
-| DAY-05 additive store migration, writer select+insert, RLS, unchanged `city_rating`/`latest_rating` | 08-01, 08-04, 08-07 | SATISFIED | migration 20261108120000, store checks 10/10 live |
-| DAY-06 expose views and contract docs | 08-09, 08-10, 08-11, 08-12 | SATISFIED | migration 20261108120100, rest-api.md, verify_exposure 29/29 |
-| DAY-07 `assert_fresh` day-ahead 503 clause | 08-09, 08-10, 08-11 | SATISFIED | function body; live 200 with `day_ahead_armed` true; stall path tested offline |
-| DAY-08 owner-gated go-live order | 08-02, 08-06..08-11 | SATISFIED | git order: write migration (08-07) -> push 1088392 -> first run verified (08-08) -> expose applied and docs pushed (08-11) |
-| DAY-09 consumer examples and handoff docs, run live before publishing push | 08-11, 08-12 | SATISFIED | 08-11-examples.json (4 runs, exit 0); origin/main 4008477 |
+| DAY-01 per-target issue, catch-up, nothing after the target | 08-01, 08-04, 08-08 | SATISFIED | `due_targets`, `missing_targets`, `existing_targets`; CHECK `issued_at < valid_time`; 12 live rows |
+| DAY-02 unchanged shadow functions, hash-verified loader, parity, manifest, warn-only pre-flight, offline mismatch test | 08-01, 08-04, 08-05 | SATISFIED | `compute_value`, parity tests, manifest diff, day-ahead pre-flight tier, CI workflow |
+| DAY-03 5-95% band, TEST then live rolling, source and n recorded | 08-01, 08-03 | SATISFIED | `band_for`, `_LIVE_PAIRS_SQL`; live rows test-split n=196 |
+| DAY-04 never delays/changes ratings; exit code fixed first; `pipeline_run.day_ahead`; shared budget | 08-02, 08-05, 08-06, 08-08 | SATISFIED | `run_live` ordering, `_day_ahead_after_ratings`, stage tests |
+| DAY-05 additive store migration, writer select+insert, RLS, unchanged `city_rating`/`latest_rating` | 08-01, 08-04, 08-07 | SATISFIED | migration 20261108120000 read in full |
+| DAY-06 expose views and contract docs | 08-09, 08-10, 08-11, 08-12 | SATISFIED | migration 20261108120100, rest-api.md |
+| DAY-07 `assert_fresh` day-ahead 503 clause, armed by first row, no new cron | 08-09, 08-10, 08-11 | SATISFIED | function body; `day_ahead_expose_test.py`; live 200 with `day_ahead_armed` true |
+| DAY-08 owner-gated go-live order | 08-02, 08-06..08-11 | SATISFIED | summaries and evidence files record write migration, push, first-run verification (08-08), then expose and publish (08-11); not independently re-derived from the remote |
+| DAY-09 consumer examples and handoff docs, run live before the publishing push | 08-11, 08-12 | SATISFIED | examples read in full; `08-11-examples.json` exit 0; docs tests passed |
 
 ### Anti-Patterns Found
 
-TBD/FIXME/XXX scan over the phase's Python and SQL files: none unreferenced (no debt-marker blocker). The code review (0 critical, 5 warnings, 10 info) found no blocker.
+TBD/FIXME/XXX scan over the phase's Python, SQL, workflow, example and doc files: none. TODO/HACK/PLACEHOLDER scan over the day-ahead modules: none. The `except Exception` blocks in the stage and band fallback are deliberate, named, and log only exception types or redacted text. No stubs or hollow props.
 
-### Warnings (non-blocking; carried from 08-REVIEW.md, independently weighed)
+### Warnings (non-blocking)
 
 | ID | Concern | Weighs on goal? |
 |----|---------|-----------------|
-| WR-01 | A failing live-band query blocks publication rather than falling back to the TEST band (`band_for` has no guard around `live_pairs`). Latent: every band is `test-split` today; live pairs exist only after ~60 days. Fails closed (no row, alarm fires at T-12 h), never publishes a wrong value, never touches ratings. | No, but fix before live pairs accrue (~Jan 2027). |
-| WR-02 | Handoff docs and example headers say "next-day" and can be read as four values per city; `day_ahead_upcoming` holds at most 3 future targets per city (issued from T-18 h). `rest-api.md` states the 18 h rule and 0-18 h issue range correctly; PSS/E "Empty or late targets" advice misleads for targets >18 h away. | No (goal and contract hold); documentation fix. |
-| WR-03 | Runbook section 17 says every `verify_day_ahead_store.sql` check must be true; one (`..._not_readable_by_anon_or_authenticated`) is false by design after the expose. Risk: an owner could revoke the public grant during an incident. | No; fix runbook wording. |
-| WR-04 | The permanent alarm now also fails (PT503) for a late day-ahead feed and the 503 message changed. Owner-chosen (D-12) and documented in rest-api.md. | No; owner's call (optional separate RPC or doc note). |
-| WR-05 | The "fails hard before a push" offline test is not enforced by any CI workflow; manifest/band drift would first show as the 12 h late alarm. | No; add a CI/pre-push step or drop the claim. |
+| WR-06 | The CI workflow header and one test comment say a manifest mismatch "fails hard, before it reaches main". The job also runs on direct pushes to main, and nothing blocks a merge until the owner sets "Day-ahead manifest check" as a required status check. The code and the workflow behave correctly; only the comment overstates. | No. Comment rewording; optional runbook checklist item. |
 
-Info items IN-01..IN-10 are cosmetic, doc or hardening notes; none affects a must-have.
+Info items IN-01..IN-14 in 08-REVIEW.md are cosmetic, doc or hardening notes; none affects a must-have. Two worth keeping in view: the `missing` field reads empty for timeout/crash day-ahead records (IN-01), and the live-rolling band and 503 stall paths have only local-Postgres evidence.
 
 ### Human Verification Required
 
-None required for status. Informational follow-ups for the owner: (a) the live-rolling band switch and the 503 stall path have been tested only on a local Postgres, not in production, and will first occur when pairs exist or a feed stalls; (b) later local commits (evidence/pin/summary/review) are not yet pushed, which is expected.
+None. 08-UAT.md is complete (53/53 passed, including the owner running the live curl example and the 8/8 REST check). Informational only: the live-rolling band switch (first possible when 60 graded pairs exist, about January 2027) and the 503 stall path have not occurred in production.
 
 ### Gaps Summary
 
-No gaps. The goal is achieved in the codebase and on the live project: a day-ahead `ml_cooling_corrected` value per city, labelled as a higher-error forecast with its own band, is issued by a separate post-ratings stage, stored in its own table, exposed read-only, covered by the permanent alarm, and documented. The rating path (G6 `ml`, exit code, `city_rating`, `latest_rating`) is untouched by the diff and structurally isolated by the exit-code-first ordering, with tests and live evidence.
-
-Schema-drift gate note: the bypass (false positive, owner-approved after a live dry run found nothing pending) is accepted; the live evidence (applied migrations, 29/29 and 7/7 checks, pinned sha256 tests matching the applied files) supports it.
+No gaps. The goal is achieved in the codebase: a day-ahead `ml_cooling_corrected` value per city, labelled as a higher-error, engineering-selected, not-validated forecast with its own empirical 5-95% band, is issued by a separate post-ratings stage through the unchanged shadow functions, stored in its own table (first write wins), exposed read-only, covered by the permanent alarm, and documented. The rating path (G6 `ml`, exit code, `city_rating`, `latest_rating`) is untouched by the diff and structurally isolated by the exit-code-first ordering, with tests and recorded live evidence. The code-review fixes WR-01..WR-05 are present in the code and each is pinned by a passing test or a read-through of the changed file.
 
 ---
 
