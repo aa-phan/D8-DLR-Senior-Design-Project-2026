@@ -359,5 +359,17 @@
       "detail": "canlogin=true, super=false, createrole=false, createdb=false, bypassrls=false, replication=false"
     }
   ],
+  "role_login": {
+    "connected": true,
+    "attempts": 1,
+    "current_user": "dlr_psse_writer",
+    "psse_select_ok": true,
+    "psse_run_rows": 0,
+    "insert_privilege_on_all_four": true,
+    "any_update_delete_truncate": false,
+    "city_rating_refused": true,
+    "conn_file_mode": "600",
+    "conn_format": "session pooler; user dlr_psse_writer.<project_ref>; host = the project's pooler host (same as SUPABASE_DB_URL); port 5432; database postgres; sslmode=require"
+  },
   "redaction_scan": "clean"
 }
