@@ -354,8 +354,8 @@ def test_upcoming_shows_only_future_targets_ordered_with_a_positive_lead(pg_url)
 
 
 def test_upcoming_lead_counts_started_minutes(pg_url):
-    # A target 5 h 59 min 30 s away is 360 minutes (the half minute counts as started), one second
-    # past the hour is 361 would-be minutes of the next hour: pinned on the view expression itself.
+    # The lead is rounded up: a partly elapsed minute counts as started, so the value is the ceiling
+    # of the exact minutes to the target (the transaction's now() carries microseconds).
     with _session(pg_url) as conn:
         now = _db_now(conn)
         target = _grid_after(now, 1)[0]
