@@ -831,3 +831,17 @@ def test_rest_help_names_the_flag(capsys):
         verify.main(["--help"])
     assert stop.value.code == 0
     assert "--check-rest" in capsys.readouterr().out
+
+
+def test_rest_a_hostile_value_inside_a_row_is_redacted_in_the_report_and_the_json(rest_env, tmp_path, capsys):
+    """The report layer redacts on its own, not only the request layer (a served value can echo anything)."""
+    fake = FakeRest()
+    fake.upcoming[0]["city"] = "%s %s" % (_REST_URL, _REST_KEY)
+    fake.upcoming[0]["valid_time"] = _pgts(_REST_NOW - timedelta(hours=6))
+    code, out, err, report = _run_rest(fake, tmp_path, capsys)
+    assert code == 1
+    saved = (tmp_path / "rest.json").read_text(encoding="utf-8")
+    assert "REDACTED" in out and "REDACTED" in saved
+    for text in (out, err, saved):
+        for secret in (_REST_URL, _REST_HOST, _REST_REF, _REST_KEY):
+            assert secret not in text, secret

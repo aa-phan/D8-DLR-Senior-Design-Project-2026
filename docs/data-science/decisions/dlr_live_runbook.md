@@ -91,7 +91,7 @@ runner stops before starting any city if one is unset or empty, and logs the nam
 | `SYNOPTIC_TOKEN` | Synoptic station observations (OD-2). The same secret Shadow Collection uses |
 | `NREL_API_KEY` | NSRDB solar data (OD-2) |
 | `NREL_API_EMAIL` | The email NSRDB requires with the key |
-| `SUPABASE_DB_URL` | Phase 4's writer connection: the session pooler URL (port 5432) for the `dlr_writer` role, which has SELECT, INSERT and UPDATE on the two tables and nothing else |
+| `SUPABASE_DB_URL` | Phase 4's writer connection: the session pooler URL (port 5432) for the `dlr_writer` role. Its table grants, as the migrations define them: SELECT, INSERT and UPDATE on the ratings table (`city_rating`) and the run log (`pipeline_run`), from Phase 4; SELECT on the soak log (`ops.freshness_log`), from Phase 6; SELECT and INSERT on the day-ahead table (`day_ahead_forecast`), from Phase 8, with no UPDATE so an issued value is never rewritten. It has no DELETE on any table. These were checked against the migrations (20261019000000, 20261026204258 and the 20261108120000 store migration) and a test derives them again, so a later grant fails it until this row is updated |
 
 `gh secret list` shows secret names only, never values. To check that all four exist without reading
 anything sensitive, run it and look for the four names.
@@ -508,7 +508,7 @@ database job: the 5-minute log job of section 15 is the soak's record, this alar
 | URL | `<SUPABASE_URL>/rest/v1/rpc/assert_fresh` (typed into cron-job.org only; the default `max_age_minutes` is 90) |
 | Method | GET |
 | Header `apikey` | `<SUPABASE_PUBLISHABLE_KEY>`: the publishable key only, never the secret key (D-10) |
-| Expected result | HTTP 200. HTTP 503 with code `PT503` means a city is missing or stale; 400 means a bad `max_age_minutes` |
+| Expected result | HTTP 200. HTTP 503 with code `PT503` means a city is missing or stale, or (once the day-ahead expose migration is applied) a day-ahead target is late (`day_ahead_late=...`); 400 means a bad `max_age_minutes` |
 | Schedule | every 15 minutes, time zone UTC (`*/15 * * * *`) |
 | Timeout | 30 s (cron-job.org's own limit) |
 | Notify on failure | after 2 failures (the "failures required before a notification is sent" option) |
@@ -525,6 +525,21 @@ report apply (OD-4): a rating exactly 90 minutes old is fresh, one second more i
 first failing check follows within 15 minutes and the second 15 minutes after that, so the email arrives
 about 105-120 minutes after the missed hour began. One slow hour (a rating that lands 30 or more minutes
 late) can trip it for the same reason.
+
+**The day-ahead clause (Phase 8).** After the owner applies the day-ahead expose migration
+(`20261108120100_expose_day_ahead_forecast.sql`), the same alarm URL also fails when a 6-hourly
+day-ahead target that is due within the next 12 hours has no value for a city. The clause is armed by
+the first value: until the day-ahead table holds its first row it cannot raise a false alarm, and from
+then on a gap does. The 503 `details` then read `missing=... stale=... day_ahead_late=CITY@time` (for
+example `AUSTIN@2026-11-09T12:00:00Z`), and the 200 body shows `day_ahead_armed` (true once armed). There
+is no new cron job and no new setting in cron-job.org: the job, its schedule and its notification rules
+stay as in the table above. When only `day_ahead_late` is filled in (`missing=` and `stale=` empty), the
+ratings are fine and the day-ahead stage is behind. What to do: read `pipeline_run.day_ahead` of the
+newest runs for the reason (section 17), and check that the hourly runs are happening, because each
+hourly catch-up retries a missing target until its time passes. A target that is not issued keeps the
+alarm failing until its time passes, at most 12 hours, and then it leaves the window. The alarm is one
+URL for both parts, so pausing the pipeline pauses both (section 6); pause and resume the alarm job as
+described below.
 
 **It stays on after the soak.** At soak end only the 5-minute log job is removed (section 15). Leave
 this alarm running. This runbook is where the owner records that it is permanent.
@@ -654,17 +669,32 @@ PYTHONPATH=backend .venv/bin/python backend/e2e_verify_readonly.py --check-read 
 |---|---|---|
 | Read | `e2e_verify_readonly.py --check-read` | With only the public key you see exactly one current rating per city, with the documented columns |
 | Hidden tables | `e2e_verify_readonly.py --check-hidden` | The private run log and the soak log cannot be read with the public key |
-| Writes | `e2e_verify_readonly.py --check-writes` | Trying to add, change or delete data with the public key is refused, and the data afterwards is identical |
-| Database permission list | `supabase/ops/verify_exposure.sql` in the SQL editor | The database's own list says the public key can read the ratings table and the view and nothing else |
-| Writer smoke | `supabase_smoke.py`, check `consumers_cannot_write` (owner command in its docstring, with `--report <RECHECK_SMOKE_FILE>`) | The public roles hold no write privilege on either table, checked as the CI writer role |
+| Writes | `e2e_verify_readonly.py --check-writes` | Trying to add, change or delete data in the ratings table (`city_rating`) and its view (`latest_rating`) with the public key is refused, and the data afterwards is identical; the day-ahead objects are probed by the day-ahead check below the table |
+| Database permission list | `supabase/ops/verify_exposure.sql` in the SQL editor | The database's own list says the public key can read exactly the ratings table and its view (`city_rating`, `latest_rating`) and the day-ahead table and its two views (`day_ahead_forecast`, `day_ahead_upcoming`, `day_ahead_status`), can write nothing, and can call only `assert_fresh`: 29 rows, all ok |
+| Writer smoke | `supabase_smoke.py`, check `consumers_cannot_write` (owner command in its docstring, with `--report <RECHECK_SMOKE_FILE>`) | The public roles hold no write privilege on the two tables it checks, the ratings table (`city_rating`) and the run log (`pipeline_run`), checked as the CI writer role; the day-ahead table's write refusal is covered by `verify_exposure.sql` and the day-ahead check |
 
 ```bash
 PYTHONPATH=backend .venv/bin/python -c "from dotenv import load_dotenv; load_dotenv('.env'); import sys, supabase_smoke; sys.exit(supabase_smoke.main(['--report', '<RECHECK_SMOKE_FILE>']))"
 ```
 
-Compare the result with 06-09's live evidence. Any difference (a check that passed then and fails now, a
-new column, a grant that appeared or went away) is a discrepancy to bring to the owner; do not fix it
-silently. Run `--check-writes` only when no backfill load or past-slot re-run is in progress (section 15).
+Since Phase 8 the public surface also includes the day-ahead forecast: once the owner has applied the
+expose migration (08-11), the public key can read the day-ahead table and its two views, and nothing else
+is added. This check reads them the way a consumer does and proves the public key still cannot write to
+them and cannot read the run log. It sends one harmless write attempt at a year-2000 key of the table and
+one at the same key of the upcoming view; both must be refused, and if one is ever accepted the output
+prints the SQL that removes it. It uses the same two shell values as the first block above and never
+prints either of them:
+
+```bash
+PYTHONPATH=backend .venv/bin/python backend/day_ahead_verify.py --check-rest --json-out <RECHECK_DAY_AHEAD_FILE>
+```
+
+Compare the Phase 6 checks with 06-09's live evidence, and compare the day-ahead rows of
+`verify_exposure.sql` and the `--check-rest` result with 08-11's evidence (`08-11-live-checks.json` and
+`08-11-SUMMARY.md`). SELECT on the three day-ahead objects is expected since 08-11 and is not a
+discrepancy. Any other difference (a check that passed then and fails now, a new column, a grant that
+appeared or went away) is a discrepancy to bring to the owner; do not fix it silently. Run
+`--check-writes` only when no backfill load or past-slot re-run is in progress (section 15).
 
 ## 17. Day-ahead forecast stage (Phase 8)
 

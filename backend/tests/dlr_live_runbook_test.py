@@ -332,7 +332,7 @@ def test_secrets_section_states_the_writer_grants_from_the_migrations():
     for name in grants:
         assert "`%s`" % name in detail, name
     # each clause starts with the privilege phrase and names the objects that hold exactly that set
-    clauses = [c.strip() for c in detail.split(":", 1)[1].split(";")]
+    clauses = [c.strip() for c in detail.split("define them:", 1)[1].split(";")]
     by_phrase = {}
     for name, privileges in grants.items():
         by_phrase.setdefault(_privilege_phrase(privileges), []).append(name)
