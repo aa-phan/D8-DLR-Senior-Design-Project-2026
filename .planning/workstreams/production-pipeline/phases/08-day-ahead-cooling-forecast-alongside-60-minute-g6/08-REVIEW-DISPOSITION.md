@@ -9,11 +9,11 @@ findings:
     title: "A failing live-band query blocks publication; it does not fall back to the TEST band"
   - id: WR-02
     severity: warning
-    disposition: open
+    disposition: fixed
     title: "Consumer docs describe a \"next-day\" horizon the data does not have, and conflate \"not yet issued\" with \"late\""
   - id: WR-03
     severity: warning
-    disposition: open
+    disposition: fixed
     title: "The standing runbook says `verify_day_ahead_store.sql` must be all-true, but one check is false by design after the exposure"
   - id: WR-04
     severity: warning
@@ -63,9 +63,9 @@ findings:
     severity: info
     disposition: open
     title: "A test fixture and a doc anecdote are inconsistent with the contract"
-open: 12
+open: 10
 total: 15
-recorded: 2026-11-09T06:40:43.624Z
+recorded: 2026-11-09T06:41:01.711Z
 ---
 
 # Phase 08: Code Review Disposition
@@ -73,8 +73,8 @@ recorded: 2026-11-09T06:40:43.624Z
 | Finding | Severity | Disposition | Source |
 |---------|----------|-------------|--------|
 | WR-01 | warning | fixed | 08-REVIEW-FIX.md |
-| WR-02 | warning | open | - |
-| WR-03 | warning | open | - |
+| WR-02 | warning | fixed | 08-REVIEW-FIX.md |
+| WR-03 | warning | fixed | 08-REVIEW-FIX.md |
 | WR-04 | warning | fixed | 08-REVIEW-FIX.md |
 | WR-05 | warning | fixed | 08-REVIEW-FIX.md |
 | IN-01 | info | open | - |
