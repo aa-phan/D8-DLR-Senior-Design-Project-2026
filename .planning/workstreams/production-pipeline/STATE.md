@@ -240,6 +240,7 @@ These block or affect stringing the system together and belong to the phases nam
 - [Phase 08]: 08-10: --check-rest and --check-store are separate runs; an empty upcoming view or table answer fails instead of passing vacuously
 - [Phase 08]: 08-12: a late day-ahead feed is printed by the examples and exits 0; only a failed read or a status missing a city exits 1
 - [Phase 08]: 08-11: owner chose expose-and-publish; expose migration applied live 2026-11-09 and sha256-pinned (253a539e...)
+- 2026-11-09: Phase 08 close-out: code review WR-01..WR-05 fixed (re-review: WR-06 comment wording and IN-01..IN-14 open, none blocking; 08-REVIEW-DISPOSITION.md); UAT 53/53 pass (owner ran the live curl example and --check-rest 8/8, accepted the WR-01 TEST-band fallback); 08-SECURITY.md verified, 46/46 threats closed (T-08-42 closed by 49131d4, secret-scan regression fixed by 1047814); full suite 3002 passed; re-verification passed 5/5. New CI job day_ahead_manifest_check.yml is green; make it a required status check to block merges.
 
 ## Open Decisions
 
@@ -265,9 +266,9 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 
 ## Session Continuity
 
-**Last session:** 2026-11-09T05:48:05.543Z
+**Last session:** 2026-11-09T10:09:08Z
 
-**Stopped At:** Phase 08 complete — all phases complete
+**Stopped At:** Phase 08 complete and closed out (UAT, security, re-verification) — all phases complete
 **Resume File:** None
 
 ## Performance Metrics

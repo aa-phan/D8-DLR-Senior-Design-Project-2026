@@ -87,6 +87,7 @@ ethical commitment, not a nice-to-have).
 - ✓ DB-01..DB-06: Postgres on Supabase is the production system of record for per-city ratings — two committed migrations (`city_rating`, `pipeline_run`, `dlr_writer` role, RLS; UTC-evaluated hour check), `--store postgres` pipeline path reading history from and upserting to Postgres, Phase 3 backfill loaded (504 rows per city, parity checked), writer secret only in `.env`/GitHub secrets with redaction on every log and report path, consumer contract `docs/data-science/schema/city_rating_v1.md`, per-row config/model identity — production-pipeline Phase 4 (all 19 code-review findings fixed; live smoke on the real project and GitHub Actions run 40035268724)
 - ✓ PIPE-02, SCHED-01, SCHED-02: Ratings accrue in Supabase hourly with no human involved — dispatch-only `dlr_live.yml` triggered by cron-job.org at hh:05 UTC, one orchestrator child per city with a 300 s kill and a per-run `pipeline_run` row, SHA-256-checked committed models, fault drill isolated to one city, runbook with measured Actions minutes (free while the repository is public) — production-pipeline Phase 5 (24/24 slot window passed; 14 code-review findings dispositioned, 0 open)
 - ✓ COND-01, COND-02, SEL-01..SEL-04, REVAL-01: Per-city production conductor configs with a source per value (AUSTIN on Drake ACSR at 100 °C), frozen Drake shadow path proven byte-identical, signed protocol v4 with two FRESH reads (both no winner), NO-GO blockers B1/B2/B4/B5 closed and a signed GO that lifts the provisional label on rows written after the promotion push — production-pipeline Phase 7 (verification 9/9, UAT 2/2, 41/41 threats closed)
+- ✓ DAY-01..DAY-09: A day-ahead (24 h) `ml_cooling_corrected` forecast per city at 00/06/12/18 UTC, labelled `day-ahead-24h; engineering-selection; not-validated` with its own 5-95% band, issued by a separate post-ratings stage that never changes the live rating or the 60-minute G6 `ml` forecast; stored in `day_ahead_forecast`, exposed read-only through `day_ahead_upcoming` and `day_ahead_status`, covered by the `assert_fresh` alarm, documented for the software and PSS/E teams — production-pipeline Phase 8 (verification 5/5, UAT 53/53, 46/46 threats closed)
 
 ### Active
 
@@ -204,4 +205,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-11-08 after production-pipeline Phase 7*
+*Last updated: 2026-11-09 after production-pipeline Phase 8*
