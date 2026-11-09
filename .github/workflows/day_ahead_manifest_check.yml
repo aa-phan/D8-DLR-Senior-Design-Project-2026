@@ -1,0 +1,60 @@
+name: Day-ahead Manifest Check
+
+# The offline guard behind the day-ahead tier of the live pre-flight (production-pipeline
+# Phase 8, DAY-04, D-13a). The live pre-flight only WARNS about a day-ahead model or band file
+# that does not match data/models/LIVE_ARTIFACT_HASHES.sha256 (a day-ahead problem must never
+# stop the live ratings), so this job is the place where such a mismatch fails hard, before it
+# reaches main.
+#
+# It runs backend/tests/dlr_live_check_models_day_ahead_test.py. That file needs no database,
+# no secret and no network, so the job has no environment and no secret. It also fails if any
+# test in the file is skipped: a skipped guard proves nothing.
+#
+# Runs on every pull request and on every push to main. Manual dispatch is allowed too:
+#   gh workflow run day_ahead_manifest_check.yml --ref <branch>
+# To make it block a merge, add "Day-ahead manifest check" as a required status check in the
+# GitHub branch protection settings (an owner setting, not something this file can do).
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: day-ahead-manifest-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  manifest:
+    name: Day-ahead manifest check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Check the day-ahead manifest, model files and band artifact
+        run: |
+          set -o pipefail
+          python -m pytest backend/tests/dlr_live_check_models_day_ahead_test.py -q -rs 2>&1 | tee pytest_out.txt
+          if grep -Eq '[0-9]+ skipped' pytest_out.txt; then
+            echo "::error::a test of the day-ahead manifest guard was skipped; a skipped guard proves nothing"
+            exit 1
+          fi

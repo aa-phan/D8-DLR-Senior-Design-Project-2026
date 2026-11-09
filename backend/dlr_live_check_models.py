@@ -41,7 +41,9 @@ before any load, so nothing day-ahead is unpickled while a day-ahead hash proble
 open). Their problems are only GitHub `::warning::` lines: the exit code comes from the
 eight live models alone, so a day-ahead problem can never stop live ratings. The
 day-ahead stage refuses a mismatched file itself, and an offline test fails hard on any
-mismatch between the committed manifest and the committed files, before a push. The
+mismatch between the committed manifest and the committed files. That test runs in CI
+(.github/workflows/day_ahead_manifest_check.yml) on every pull request and every push to
+main, and the job fails if any of its tests is skipped. The
 whole tier runs inside one guard (it catches Exception and SystemExit, not
 KeyboardInterrupt), so no error inside it can change the exit code.
 """
