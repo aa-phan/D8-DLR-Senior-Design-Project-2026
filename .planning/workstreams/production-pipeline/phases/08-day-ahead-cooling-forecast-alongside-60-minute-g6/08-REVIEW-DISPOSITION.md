@@ -3,26 +3,10 @@ phase: 08
 review: 08-REVIEW.md
 titles: json
 findings:
-  - id: WR-01
+  - id: WR-06
     severity: warning
-    disposition: fixed
-    title: "A failing live-band query blocks publication; it does not fall back to the TEST band"
-  - id: WR-02
-    severity: warning
-    disposition: fixed
-    title: "Consumer docs describe a \"next-day\" horizon the data does not have, and conflate \"not yet issued\" with \"late\""
-  - id: WR-03
-    severity: warning
-    disposition: fixed
-    title: "The standing runbook says `verify_day_ahead_store.sql` must be all-true, but one check is false by design after the exposure"
-  - id: WR-04
-    severity: warning
-    disposition: fixed
-    title: "The permanent freshness alarm is coupled to the day-ahead feed, and its 503 message changed"
-  - id: WR-05
-    severity: warning
-    disposition: fixed
-    title: "The \"fails hard before a push\" safety net is not enforced anywhere"
+    disposition: open
+    title: "The CI guard is described as running \"before it reaches main\", but it also triggers on direct pushes to main, and nothing blocks a merge"
   - id: IN-01
     severity: info
     disposition: open
@@ -63,20 +47,52 @@ findings:
     severity: info
     disposition: open
     title: "A test fixture and a doc anecdote are inconsistent with the contract"
-open: 10
-total: 15
-recorded: 2026-11-09T06:41:01.711Z
+  - id: IN-11
+    severity: info
+    disposition: open
+    title: "The TEST-band fallback is silent in the stored data and the run log"
+  - id: IN-12
+    severity: info
+    disposition: open
+    title: "Consumer docs still call the feed \"next-day\" next to an 18 h lookahead"
+  - id: IN-13
+    severity: info
+    disposition: open
+    title: "`curl.sh` hard-codes the label that `read_ratings.py` reads from the data"
+  - id: IN-14
+    severity: info
+    disposition: open
+    title: "Actions in the new workflow are pinned by tag, while `supabase_smoke.yml` pins by SHA"
+  - id: WR-01
+    severity: warning
+    disposition: fixed
+    title: "A failing live-band query blocks publication; it does not fall back to the TEST band"
+  - id: WR-02
+    severity: warning
+    disposition: fixed
+    title: "Consumer docs describe a \"next-day\" horizon the data does not have, and conflate \"not yet issued\" with \"late\""
+  - id: WR-03
+    severity: warning
+    disposition: fixed
+    title: "The standing runbook says `verify_day_ahead_store.sql` must be all-true, but one check is false by design after the exposure"
+  - id: WR-04
+    severity: warning
+    disposition: fixed
+    title: "The permanent freshness alarm is coupled to the day-ahead feed, and its 503 message changed"
+  - id: WR-05
+    severity: warning
+    disposition: fixed
+    title: "The \"fails hard before a push\" safety net is not enforced anywhere"
+open: 15
+total: 20
+recorded: 2026-11-09T09:48:09.043Z
 ---
 
 # Phase 08: Code Review Disposition
 
 | Finding | Severity | Disposition | Source |
 |---------|----------|-------------|--------|
-| WR-01 | warning | fixed | 08-REVIEW-FIX.md |
-| WR-02 | warning | fixed | 08-REVIEW-FIX.md |
-| WR-03 | warning | fixed | 08-REVIEW-FIX.md |
-| WR-04 | warning | fixed | 08-REVIEW-FIX.md |
-| WR-05 | warning | fixed | 08-REVIEW-FIX.md |
+| WR-06 | warning | open | - |
 | IN-01 | info | open | - |
 | IN-02 | info | open | - |
 | IN-03 | info | open | - |
@@ -87,6 +103,15 @@ recorded: 2026-11-09T06:41:01.711Z
 | IN-08 | info | open | - |
 | IN-09 | info | open | - |
 | IN-10 | info | open | - |
+| IN-11 | info | open | - |
+| IN-12 | info | open | - |
+| IN-13 | info | open | - |
+| IN-14 | info | open | - |
+| WR-01 | warning | fixed | 08-REVIEW-FIX.md (not in the current review) |
+| WR-02 | warning | fixed | 08-REVIEW-FIX.md (not in the current review) |
+| WR-03 | warning | fixed | 08-REVIEW-FIX.md (not in the current review) |
+| WR-04 | warning | fixed | 08-REVIEW-FIX.md (not in the current review) |
+| WR-05 | warning | fixed | 08-REVIEW-FIX.md (not in the current review) |
 
 Dispositions: `open` (recorded, not yet triaged), `fixed`, `skipped`, `deferred`.
 Set `deferred` by hand and put the reason in the Source cell; both are preserved. A `|` in the reason is kept as prose and escaped on the next run.
