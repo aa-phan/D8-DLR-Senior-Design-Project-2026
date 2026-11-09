@@ -14,23 +14,25 @@ from pathlib import Path
 
 import pytest
 
+import day_ahead_contract as da
 import secret_scan_test as scan
 from latest_rating_contract import LATEST_COLUMNS
 
 REPO = Path(__file__).resolve().parents[2]
 DOC = REPO / "docs" / "integration" / "rest-api.md"
 COLUMNS_HEADING = "## `latest_rating` columns"
-ALLOWED_TYPES = {"text", "timestamptz", "double precision", "boolean", "text[]", "integer"}
+ALLOWED_TYPES = {"text", "timestamptz", "double precision", "boolean", "text[]", "integer", "timestamptz[]"}
 
 
 def _text():
     return DOC.read_text(encoding="utf-8")
 
 
-def _column_rows():
-    """(name, type, unit, meaning) for every row of the table under the `latest_rating` columns heading."""
-    lines = _text().splitlines()
-    start = lines.index(COLUMNS_HEADING)
+def _column_rows(heading=COLUMNS_HEADING, path=None):
+    """(name, type, unit, meaning) for every row of the table under `heading` (default: the `latest_rating` columns)."""
+    text = _text() if path is None else path.read_text(encoding="utf-8")
+    lines = text.splitlines()
+    start = lines.index(heading)
     rows = []
     in_table = False
     for line in lines[start + 1:]:
@@ -302,3 +304,174 @@ def test_consumer_docs_state_the_live_interface():
     assert "a Python stdlib example is planned there" not in pss
     assert "no consumer has access" not in pss
     assert pss.rstrip().endswith("recorded as a standalone note per the user's request.*")
+
+
+# ---------------------------------------------------------------------------
+# Phase 8 (08-10, D-09 to D-12): the day-ahead consumer contract. The two REST column tables and the
+# schema doc's table are compared with the contract module, so a column added to the contract
+# without the docs fails here. Nothing here touches the network.
+# ---------------------------------------------------------------------------
+
+DAY_AHEAD_SCHEMA = REPO / "docs" / "data-science" / "schema" / "day_ahead_forecast_v1.md"
+UPCOMING_HEADING = "## `day_ahead_upcoming` columns"
+STATUS_HEADING = "## `day_ahead_status` columns"
+TABLE_HEADING = "## Columns: public.day_ahead_forecast"
+HORIZON_REPORT = "docs/data-science/exploratory/2026-11-02_horizon_comparison/REPORT.md"
+OWNER_PARAGRAPH = (
+    "A 24-hour-ahead estimate from ml_cooling_corrected. It has more error than the 60-minute forecast "
+    "because it looks further ahead. On past data (TEST window, Mar-Sep 2026) its typical error was about "
+    "23 A (~1.7% of rating) larger. It is the owner's engineering choice, not picked by the signed "
+    "selection rule, and it never sets or checks the live rating."
+)
+SCHEMA_HEADINGS = [
+    "## What it is",
+    "## Where the data lives",
+    TABLE_HEADING,
+    "## Views",
+    "## When values appear",
+    "## Uncertainty band",
+    "## Stall flag and alarm",
+    "## Identity and label",
+    "## Run log: pipeline_run.day_ahead (operational, not for consumers)",
+    "## Versioning",
+]
+
+
+def _names(rows):
+    return [re.fullmatch(r"`([a-z_0-9]+)`", row[0]).group(1) for row in rows]
+
+
+def _check_rows(rows, expected):
+    assert _names(rows) == list(expected)
+    for name, kind, unit, meaning in rows:
+        assert unit and meaning, name
+        assert kind in ALLOWED_TYPES, (name, kind)
+    return {re.sub("`", "", row[0]): row[1] for row in rows}
+
+
+def _day_ahead_docs():
+    return {"rest-api.md": _text(), "day_ahead_forecast_v1.md": DAY_AHEAD_SCHEMA.read_text(encoding="utf-8")}
+
+
+def test_doc_upcoming_table_matches_the_contract():
+    types = _check_rows(_column_rows(UPCOMING_HEADING), da.UPCOMING_COLUMNS)
+    assert len(types) == 26
+    assert types["lead_minutes"] == "integer" and types["horizon_minutes"] == "integer"
+    assert types["forecast_amps"] == "double precision" and types["valid_time"] == "timestamptz"
+    assert types["band_pairs_through"] == "timestamptz"
+
+
+def test_doc_status_table_matches_the_contract():
+    types = _check_rows(_column_rows(STATUS_HEADING), da.STATUS_COLUMNS)
+    assert len(types) == 7
+    assert types["missing_targets"] == "timestamptz[]" and types["is_late"] == "boolean"
+    assert types["upcoming_count"] == "integer" and types["newest_issued_at"] == "timestamptz"
+
+
+def test_schema_doc_table_matches_the_contract():
+    types = _check_rows(_column_rows(TABLE_HEADING, path=DAY_AHEAD_SCHEMA), da.TABLE_COLUMNS)
+    assert len(types) == 25
+    assert types["run_attempt"] == "integer" and types["schema_version"] == "integer"
+    assert types["first_written_at"] == "timestamptz"
+    rows = {row[0].strip("`"): row for row in _column_rows(TABLE_HEADING, path=DAY_AHEAD_SCHEMA)}
+    assert rows["forecast_amps"][2].startswith("A, per conductor")
+    assert "5%" in rows["forecast_ci_lower_amps"][3] and "95%" in rows["forecast_ci_upper_amps"][3]
+
+
+def test_schema_doc_has_its_headings_in_order():
+    text = DAY_AHEAD_SCHEMA.read_text(encoding="utf-8")
+    lines = text.splitlines()
+    assert [h for h in lines if h.startswith("## ")] == SCHEMA_HEADINGS
+
+
+def test_day_ahead_docs_carry_the_label_and_the_owner_paragraph():
+    for name, text in _day_ahead_docs().items():
+        flat = " ".join(text.split())
+        assert da.DAY_AHEAD_LABEL in text, name
+        assert OWNER_PARAGRAPH in flat, name
+        assert flat.count(OWNER_PARAGRAPH) == 1, name
+        # the evidence behind the "about 23 A" is cited, and marked as exploratory
+        cited = [line for line in text.splitlines() if "horizon_comparison/REPORT.md" in line]
+        assert cited and any("exploratory" in line.lower() for line in cited), name
+        assert "](" in cited[0], name
+        assert "not validated" in flat.lower() or "not-validated" in flat, name
+
+
+def test_day_ahead_docs_say_what_24_h_means_and_state_the_band_and_late_rules():
+    for name, text in _day_ahead_docs().items():
+        flat = " ".join(text.split())
+        for needle in (
+            "weather run", "issued_at", "forecast_run_init_time", "anchor_observation_time",
+            "0 to 18 hours",                                  # issue lead (Pitfall 8)
+            "5-95%", "reanalysis", "station-composed rating",  # band basis (Pitfall 11)
+            "60 graded pairs", "newest 120",                  # live band switch-over
+            "12 hours", "armed by the first value",           # late rule and its arming
+            "day_ahead_late",
+            "no safety role",
+        ):
+            assert needle in flat, (name, needle)
+        # the lead is the weather run's age, never a promise about how early a value is issued
+        assert "age of the weather run" in flat, name
+    schema = _day_ahead_docs()["day_ahead_forecast_v1.md"]
+    for needle in ("band_source", "band_n", "band_pairs_through", "band_artifact_sha256", "is_late", "missing_targets",
+                   "line_voltage_kv", "power_factor", "never renamed or dropped"):
+        assert needle in schema, needle
+    # out-of-range values are published as computed (08-08 live observation), stated rather than hidden
+    assert "outside the rating bounds" in " ".join(schema.split())
+
+
+def test_rest_doc_lists_the_day_ahead_endpoints_and_the_alarm_clause():
+    text = _text()
+    rows = [line for line in text.splitlines() if line.startswith("| `GET /rest/v1/")]
+    for call in ("day_ahead_upcoming", "day_ahead_status", "day_ahead_forecast"):
+        matching = [line for line in rows if line.startswith("| `GET /rest/v1/%s" % call)]
+        assert len(matching) == 1, call
+    assert "day_ahead_late" in text and "day_ahead_armed" in text
+    bullet = next(line for line in text.splitlines() if line.startswith("- **`rpc/assert_fresh`**"))
+    assert "day_ahead_late" in bullet and "day_ahead_armed" in bullet and "first value" in bullet
+    pt503 = next(line for line in text.splitlines() if line.startswith("| 503 | `PT503`"))
+    assert "day_ahead_late" in pt503 and "armed" in pt503
+    monitoring = text.split("## Monitoring", 1)[1].split("\n## ", 1)[0]
+    assert "day_ahead_late" in monitoring and "no new" in monitoring.lower()
+    # the new sections come after the original ones, so the original order test still holds
+    order = [text.index(h) for h in ("## Monitoring", "## Day-ahead forecast", UPCOMING_HEADING, STATUS_HEADING)]
+    assert order == sorted(order)
+    assert "never sets or checks the live rating" in text.split("## Day-ahead forecast", 1)[1]
+
+
+def test_day_ahead_docs_link_to_each_other_and_to_the_pss_e_note():
+    schema = DAY_AHEAD_SCHEMA.read_text(encoding="utf-8")
+    pss = PSS_E.read_text(encoding="utf-8")
+    for label, text, base in (("schema", schema, DAY_AHEAD_SCHEMA), ("pss_e", pss, PSS_E)):
+        targets = re.findall(r"\]\(([^)\s]*integration/rest-api\.md)\)", text)
+        assert targets, label
+        for target in targets:
+            assert (base.parent / target).resolve() == DOC.resolve(), label
+    assert "](../data-science/schema/day_ahead_forecast_v1.md)" in _text()
+    assert "day_ahead_forecast_v1.md" in pss
+    # every relative link of the new doc resolves
+    for target in re.findall(r"\]\(([^)\s]+)\)", schema):
+        if target.startswith(("http://", "https://", "#")):
+            continue
+        assert (DAY_AHEAD_SCHEMA.parent / target.split("#", 1)[0]).resolve().exists(), target
+    # the PSS/E note: new section after "Still open" and before the footer the older test pins
+    heading = "## Day-ahead forecast (2026-11)"
+    lines = pss.splitlines()
+    assert heading in lines
+    assert lines.index("## Still open with Power Systems") < lines.index(heading) < lines.index("---")
+    section = _section(PSS_E, heading)
+    for needle in ("not validated", "no safety role", "rest-api.md", "day_ahead_forecast_v1.md"):
+        assert needle in section, needle
+    assert pss.rstrip().endswith("recorded as a standalone note per the user's request.*")
+
+
+def test_day_ahead_docs_contain_no_connection_details():
+    host_marker = "." + "supa" + "base" + "."
+    for name, text in _day_ahead_docs().items():
+        for number, line in enumerate(text.splitlines(), start=1):
+            assert scan._scan_line(line) == [], (name, number)
+            assert host_marker not in line.lower(), (name, number)
+            assert not re.search(r"https?://[A-Za-z0-9-]{20}\.", line), (name, number)
+            assert not re.search(r"\beyJ[A-Za-z0-9_-]{7,}\.", line), (name, number)
+            assert not re.search(r"\b[0-9a-f]{40,}\b", line), (name, number)
+        assert "postgres" + "://" not in text.lower(), name
