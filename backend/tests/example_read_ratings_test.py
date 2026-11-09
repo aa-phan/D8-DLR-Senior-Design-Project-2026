@@ -13,6 +13,7 @@ backend/tests/secret_scan_test.py never matches this file.
 
 import ast
 import importlib.util
+import json
 import os
 import re
 import shutil
@@ -261,7 +262,7 @@ def test_curl_example_pages_past_the_cap(tmp_path):
     assert "set -euo pipefail" in text
     code = [line for line in text.splitlines() if not line.lstrip().startswith("#")]
     invocations = [line for line in code if re.search(r"\bcurl\b", line)]
-    assert len(invocations) == 3  # latest_rating, the HEAD count, and the paging loop
+    assert len(invocations) == 5  # latest_rating, the HEAD count, the paging loop, day_ahead_upcoming, day_ahead_status
     assert all(re.search(r"\bcurl -fsS", line) for line in invocations)  # -f: an HTTP error stops the script
     with _fake() as fake:
         env = _env(fake, CITY="AUSTIN", START=START, END=END)
@@ -521,3 +522,110 @@ def test_day_ahead_fake_views_have_every_contract_column_and_refuse_writes():
                 urllib.request.urlopen(request, timeout=10)
             assert refused.value.code == 401
             assert b"42501" in refused.value.read()
+
+
+# ---------------------------------------------------------------------------
+# Phase 8 (D-18): the day-ahead part of curl.sh and supabase_js.mjs
+# ---------------------------------------------------------------------------
+
+_NEEDS_BASH_CURL = pytest.mark.skipif(not (shutil.which("bash") and shutil.which("curl")),
+                                      reason="bash and curl are required")
+
+
+def _curl_selects(text):
+    """{relation: (select list, order)} for the day-ahead curl lines of curl.sh."""
+    found = {}
+    for relation in ("day_ahead_upcoming", "day_ahead_status"):
+        match = re.search(r"/%s\?select=([A-Za-z0-9_,]+)&order=([A-Za-z0-9_.,]+)" % relation, text)
+        assert match, relation
+        found[relation] = (match.group(1), match.group(2))
+    return found
+
+
+def _js_selects(text):
+    """{relation: select list} from the supabase-js calls."""
+    found = {}
+    for relation in ("day_ahead_upcoming", "day_ahead_status"):
+        match = re.search(r"\.from\('%s'\)\s*\.select\('([A-Za-z0-9_,]+)'\)" % relation, text)
+        assert match, relation
+        found[relation] = match.group(1)
+    return found
+
+
+def _sections(stdout):
+    """{heading: the text under it} for the '== heading ==' blocks of curl.sh."""
+    parts = re.split(r"^== (.*?) ==$", stdout, flags=re.MULTILINE)
+    return {parts[i]: parts[i + 1] for i in range(1, len(parts) - 1, 2)}
+
+
+@_NEEDS_BASH_CURL
+def test_curl_day_ahead_reads_upcoming_and_status_after_the_paging_output(tmp_path):
+    subprocess.run(["bash", "-n", str(CURL_EXAMPLE)], check=True)
+    with _fake() as fake:
+        done = _run(["bash", str(CURL_EXAMPLE)], _env(fake, CITY="AUSTIN", START=START, END=END), tmp_path)
+        requests = list(fake.requests)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.index("total rows: 2500") < done.stdout.index("== Day-ahead forecast")
+    sections = _sections(done.stdout)
+    upcoming_title = next(t for t in sections if t.startswith("Day-ahead forecast"))
+    status_title = next(t for t in sections if t.startswith("Day-ahead status"))
+    assert "day_ahead_upcoming" in upcoming_title and "day_ahead_status" in status_title
+    upcoming = json.loads(sections[upcoming_title])
+    status = json.loads(sections[status_title])
+    assert len(upcoming) == 12 and len(status) == 4
+    assert {row["label"] for row in upcoming} == {day_ahead_contract.DAY_AHEAD_LABEL}
+    assert day_ahead_contract.DAY_AHEAD_LABEL in done.stdout
+    day_ahead = [r for r in requests if r["path"].endswith(("/day_ahead_upcoming", "/day_ahead_status"))]
+    assert [(r["method"], r["path"]) for r in day_ahead] == [
+        ("GET", "/rest/v1/day_ahead_upcoming"), ("GET", "/rest/v1/day_ahead_status")]
+    assert dict(day_ahead[0]["query"])["order"] == "city,valid_time"
+    assert dict(day_ahead[1]["query"])["order"] == "city"
+    assert {r["method"] for r in requests} <= {"GET", "HEAD"}
+    assert sorted(os.listdir(str(tmp_path))) == []
+
+
+def test_curl_and_js_day_ahead_select_lists_are_subsets_of_the_contract(example):
+    curl = _curl_selects(CURL_EXAMPLE.read_text(encoding="utf-8"))
+    js = _js_selects(JS_EXAMPLE.read_text(encoding="utf-8"))
+    contract_columns = {"day_ahead_upcoming": set(day_ahead_contract.UPCOMING_COLUMNS),
+                        "day_ahead_status": set(day_ahead_contract.STATUS_COLUMNS)}
+    same_as_python = {"day_ahead_upcoming": example.DAY_AHEAD_UPCOMING_SELECT,
+                      "day_ahead_status": example.DAY_AHEAD_STATUS_SELECT}
+    assert curl["day_ahead_upcoming"][1] == "city,valid_time" and curl["day_ahead_status"][1] == "city"
+    for relation, columns in contract_columns.items():
+        assert set(_select_set(curl[relation][0])) <= columns, relation
+        assert set(_select_set(js[relation])) <= columns, relation
+        assert curl[relation][0] == same_as_python[relation] == js[relation], relation
+
+
+@_NEEDS_BASH_CURL
+def test_curl_day_ahead_error_on_the_status_view_exits_non_zero(tmp_path):
+    override = {"day_ahead_status": (404, {"code": "PGRST205", "message": "not found"})}
+    with _fake(route_overrides=override) as fake:
+        done = _run(["bash", str(CURL_EXAMPLE)], _env(fake, CITY="AUSTIN", START=START, END=END), tmp_path)
+    assert done.returncode != 0  # curl -f turns the 404 into a failure and set -e stops the script
+    assert KEY not in done.stdout + done.stderr
+
+
+def test_supabase_js_day_ahead_part_contract():
+    text = JS_EXAMPLE.read_text(encoding="utf-8")
+    assert "'day_ahead_upcoming'" in text and "'day_ahead_status'" in text
+    assert re.search(r"\.order\('city'\)\s*\.order\('valid_time',\s*\{\s*ascending:\s*true\s*\}\)", text)
+    status_call = text[text.index(".from('day_ahead_status')"):]
+    assert ".order('city')" in status_call
+    assert "process.exitCode = 1" in status_call
+    assert re.search(r"\.length\s*!==\s*4", status_call)
+    assert day_ahead_contract.DAY_AHEAD_LABEL in text
+    assert "not the live rating" in text and "late" in status_call.lower()
+    # the part comes after the paging part, and the existing parts are still there
+    assert text.index(".from('city_rating')") < text.index(".from('day_ahead_upcoming')")
+    assert ".range(" in text and "@2" in text
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not on PATH")
+    done = subprocess.run([node, "--check", str(JS_EXAMPLE)], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          universal_newlines=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+    for stray in ("package.json", "node_modules", "package-lock.json"):
+        assert not (REPO / stray).exists()
+        assert not (EXAMPLES / stray).exists()
