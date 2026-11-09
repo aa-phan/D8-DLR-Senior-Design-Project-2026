@@ -2,66 +2,66 @@
 phase: 08-day-ahead-cooling-forecast-alongside-60-minute-g6
 reviewed: 2026-11-09T00:00:00Z
 depth: standard
-files_reviewed: 42
-diff_base: 01c383d
+files_reviewed: 13
+diff_base: d195943
+files_reviewed_list:
+  - .github/workflows/day_ahead_manifest_check.yml
+  - backend/day_ahead_band.py
+  - backend/dlr_live_check_models.py
+  - backend/tests/day_ahead_band_test.py
+  - backend/tests/day_ahead_expose_test.py
+  - backend/tests/dlr_day_ahead_test.py
+  - docs/data-science/decisions/dlr_live_runbook.md
+  - docs/data-science/decisions/pss_e_handoff.md
+  - docs/integration/examples/curl.sh
+  - docs/integration/examples/read_ratings.py
+  - docs/integration/rest-api.md
+  - docs/integration/software-team-handoff.md
+  - supabase/ops/verify_day_ahead_store.sql
 findings:
   critical: 0
-  warning: 5
-  info: 10
+  warning: 1
+  info: 14
   total: 15
 status: issues_found
 ---
 
-# Phase 8: Code Review Report
+# Phase 8: Code Review Report (incremental re-review)
 
-**Depth:** standard. **Status:** issues_found. **Scope:** `git diff 01c383d..HEAD` (42 files: day-ahead modules, runner stage, pre-flight, store, both migrations, ops SQL, examples, consumer docs, tests).
+**Reviewed:** 2026-11-09
+**Depth:** standard
+**Files Reviewed:** 13
+**Status:** issues_found
+**Scope:** `git diff d195943..HEAD` of the 13 files above (the fix commits 1d090de, 41ac760, 558157f, 73949c2, 88eb5f7, c04c1d6, 1047814, 49131d4). The first review's WR-01..WR-05 are fixed and dropped; its Info findings IN-01..IN-10 are carried over. New findings start at WR-06 and IN-11.
 
 ## Summary
 
-No blocker. The exit-code invariant holds: `run_live` fixes `state["exit_code"]` (`backend/dlr_live_run.py:628`) before `_day_ahead_after_ratings` runs (632-633). The stage and its own `pipeline_run` write are each wrapped in `except Exception`, and nothing there assigns `exit_code`, `cities` or `run_log`; the step-summary and JSON paths guard the day-ahead part. The stage shares the 1200 s budget from `t0`, and the final write is bounded by `connect_timeout=10` and `statement_timeout=30s`, so the 30-minute job envelope holds.
+All five earlier warnings are fixed correctly, and the fixes introduced no blocker and no new defect in code.
 
-The migrations match the Python twin: `INSERT_COLUMNS` and the CHECKs line up, including NaN and Infinity; the late rule agrees with `due_targets` (issuable at T-18 h, alarmed at T-12 h); the `pipeline_run` upsert of `{run_id, day_ahead}` satisfies NOT NULL through column defaults. No SQL injection or secret leak found.
+- **WR-01 (live-band fallback), correct.**
+  - `band_for` wraps only the `_live_offsets` call. The `BandArtifactError` for a missing TEST band is raised before the guard, so it still propagates.
+  - The runner opens its connection with `autocommit=True` (`supabase_store.connect`), so a failed query leaves no aborted transaction that would break the following `insert_row`.
+  - Only `type(exc).__name__` is logged. The new tests check that the fallback row is `test-split` with `pairs_through` None and `n` taken from the artifact. They also check that neither the secret nor the message text is logged. The connection string is assembled at run time, so `secret_scan_test` passes.
+- **WR-02, WR-03, WR-04 (docs), correct.**
+  - The 18 h lookahead and "at most three per city" agree with `due_targets`.
+  - The runbook and the SQL header now say that `day_ahead_forecast_not_readable_by_anon_or_authenticated` is false by design after `20261108120100`. None of the other checks in `verify_day_ahead_store.sql` depends on the public grant.
+  - The pinned PT503 text `stale or missing city rating or late day-ahead forecast` matches `20261108120100_expose_day_ahead_forecast.sql:208` exactly.
+  - The `rest-api.md` reading rule (empty `missing=`/`stale=` means the ratings are fine) matches the test's `missing={}` / `stale={}` assertions.
+- **WR-05 (CI), mostly correct.**
+  - The job needs no secret and runs with `contents: read`.
+  - `fetch-depth: 0` is needed by `test_the_eight_live_entries_are_unchanged`. Without it the test would skip, and the skip grep would then fail the job.
+  - Model files, manifest and band artifact are all tracked, so no LFS checkout is needed.
+  - `pipefail` plus the `[0-9]+ skipped` grep correctly catch a failing or skipped guard.
+  - One overstatement remains (WR-06 below).
 
-The warnings concern design and documentation:
-- a failing live-band query blocks publication instead of falling back to the TEST band;
-- the consumer docs overstate the forecast horizon;
-- one standing runbook step is wrong after the exposure;
-- the permanent alarm is coupled to the day-ahead feed;
-- no CI step enforces the guard the docs rely on.
-
-Both migrations are applied live and pinned by sha256 tests. Any finding against them needs a new additive migration, not an edit.
-
-Reviewer runs: the offline day-ahead tests (67 passed, 36 skipped as Postgres-only) and the Postgres-backed suites on a throwaway local cluster (264 passed). No live service was contacted.
+Reviewer runs: `dlr_live_check_models_day_ahead_test.py` (33 passed, 0 skipped), then `day_ahead_band_test.py`, `dlr_day_ahead_test.py`, `day_ahead_expose_test.py` and `secret_scan_test.py` (47 passed, 54 skipped as Postgres-only). I did not run the Postgres-backed tests here. No live service, GitHub or `.env` was touched.
 
 ## Warnings
 
-### WR-01: A failing live-band query blocks publication; it does not fall back to the TEST band
-**File:** `backend/day_ahead_band.py:314-337, 359-366`; `backend/dlr_day_ahead.py:165-194`
-**Issue:** `band_for` calls `_live_offsets` → `live_pairs` with no guard around the database call. Any psycopg error there (statement timeout, a future `city_rating` change, a transient fault) escapes `band_for`, `_issue` catches it as unexpected, and the target gets no row. The contract says the TEST artifact "is the fallback band". This is latent today, because every band is `test-split`. Once live pairs exist (about 60 days in), a persistent live-query failure would silently stop all publication until the D-12 alarm fires, even with a valid TEST band in hand.
-**Fix:** In `band_for`, wrap `_live_offsets` in `try/except Exception`, log the redacted type and keep the TEST offsets with `source="test-split"`. Add a test that makes `live_pairs` raise and asserts a `test-split` row is still issued.
-
-### WR-02: Consumer docs describe a "next-day" horizon the data does not have, and conflate "not yet issued" with "late"
-**File:** `docs/integration/software-team-handoff.md` (Day-ahead section and table row); `docs/data-science/decisions/pss_e_handoff.md` ("Which target hour to use", "Empty or late targets"); `docs/integration/examples/read_ratings.py:12-14`; `docs/integration/examples/curl.sh:9-10`
-**Issue:** `due_targets` issues only targets in (now, now+18 h], so `day_ahead_upcoming` holds at most 3 future rows per city (`lead_minutes` ≤ 1080). A next-day panel or study cannot get a value for an hour more than 18 h away.
-- The PSS/E doc says to read `day_ahead_status` when a target is missing. For a target beyond 18 h, `is_late` stays false and `missing_targets` is empty, so that advice misleads.
-- The examples say "one value per city at each 00, 06, 12 and 18 UTC target", which reads as four per city.
-
-**Fix:** State the lookahead: values appear about 18 h before the target, the view shows at most three targets per city, and a target further out is not late, only not yet due.
-
-### WR-03: The standing runbook says `verify_day_ahead_store.sql` must be all-true, but one check is false by design after the exposure
-**File:** `docs/data-science/decisions/dlr_live_runbook.md:814-815`; `supabase/ops/verify_day_ahead_store.sql:80-91`
-**Issue:** `day_ahead_forecast_not_readable_by_anon_or_authenticated` is false once `20261108120100` is applied, and it now is. Runbook section 17 says "every `ok` must be true" with no caveat. An owner re-running the check during an incident would see a FAIL and might revoke the public grant, taking the consumer endpoint down.
-**Fix:** Change the runbook: run it once, after the store migration and before the exposure; after the exposure that one check is expected false, so use `verify_exposure.sql`. Optionally add a header note to the SQL file, which is an ops script, not a pinned migration.
-
-### WR-04: The permanent freshness alarm is coupled to the day-ahead feed, and its 503 message changed
-**File:** `supabase/migrations/20261108120100_expose_day_ahead_forecast.sql:169-221` (applied; any change needs a new additive migration)
-**Issue:** The replaced `assert_fresh` now raises `PT503` for a late day-ahead city, and the 503 message changed from `stale or missing city rating` to `... or late day-ahead forecast`. A consumer or monitor that treats `PT503` as "ratings are stale", or matches the old text, would misread a day-ahead stall as a rating outage. `rest-api.md` section 5 documents this RPC to consumers. This follows the D-12 owner decision, so it is a risk note, not a defect to revert.
-**Fix (owner's call):** Either add a separate `assert_day_ahead_fresh()` in a new migration, or have `rest-api.md` state that a 503 with an empty `missing=`/`stale=` means the ratings are fine. At minimum, add a test that pins the full message string.
-
-### WR-05: The "fails hard before a push" safety net is not enforced anywhere
-**File:** `backend/dlr_live_check_models.py:36-46` (docstring); `.github/workflows/`
-**Issue:** The docstring says an offline test fails hard on any manifest or file mismatch before a push, because the live pre-flight only warns for the day-ahead tier. No workflow runs pytest, so model, band or manifest drift reaches `main` silently. The day-ahead stage then refuses the files, and the first signal is the 12 h late alarm. The tests also skip without Postgres.
-**Fix:** Add a CI job or pre-push hook that runs `dlr_live_check_models_day_ahead_test.py` and fails on skips, or drop the "before a push" claim.
+### WR-06: The CI guard is described as running "before it reaches main", but it also triggers on direct pushes to main, and nothing blocks a merge
+**File:** `.github/workflows/day_ahead_manifest_check.yml:3-6, 12-17`; `backend/tests/dlr_live_check_models_day_ahead_test.py` (committed-tree group comment, "fails here, offline, before any push")
+**Issue:** The header says a mismatch "fails hard, before it reaches main", and the test file says "before any push". The job triggers on `pull_request` and on `push` to `main`. This repo commits straight to `main` (see the recent history). A direct push runs the job after the bad manifest or model is already on `main`. The day-ahead stage then refuses the files on the next hourly run, and the first operational signal is still the 12 h late alarm. The header does say that blocking a merge needs branch protection, which only the owner can set. As written, the "before" claim is true only if that rule is configured and every change goes through a PR.
+**Fix:** Reword both comments to say what is true. For example: "fails hard on every pull request and on every push to main (red check); it blocks a merge only once 'Day-ahead manifest check' is a required status check". Optionally add `.github/workflows/day_ahead_manifest_check.yml` to the owner checklist in the runbook, so the required-check setting is not forgotten.
 
 ## Info
 
@@ -102,7 +102,7 @@ Reviewer runs: the offline day-ahead tests (67 passed, 36 skipped as Postgres-on
 
 ### IN-07: `verify_exposure.sql` raises instead of returning false when a day-ahead object is missing
 **File:** `supabase/ops/verify_exposure.sql` (`day_ahead_status_has_the_four_cities`, `anon_can_select_day_ahead_*`)
-**Issue:** These checks reference `public.day_ahead_status` and `'public.day_ahead_forecast'` directly. On a database without the expose migration the whole query errors, which hides the Phase 6 rows too and breaks the "missing turns false" convention.
+**Issue:** These checks reference `public.day_ahead_status` and `'public.day_ahead_forecast'` directly. On a database without the expose migration the whole query errors, which hides the Phase 6 rows too and breaks the "missing turns false" convention. This matters more now, because the runbook sends owners to this file after the exposure.
 **Fix:** Guard them with `to_regclass(...)`, as the store check does.
 
 ### IN-08: `apply_band` discards a valid edge when only one edge is bad
@@ -116,11 +116,32 @@ Reviewer runs: the offline day-ahead tests (67 passed, 36 skipped as Postgres-on
 **Fix:** Also require `minute == second == 0`.
 
 ### IN-10: A test fixture and a doc anecdote are inconsistent with the contract
-**File:** `backend/tests/fake_postgrest.py` (`make_day_ahead_view_rows`); `docs/integration/rest-api.md:186`
+**File:** `backend/tests/fake_postgrest.py` (`make_day_ahead_view_rows`); `docs/integration/rest-api.md:188`
 **Issue:** The fake's default upcoming rows set `band_source="test-split"` with a non-null `band_pairs_through`, but the contract (and a DB CHECK) requires NULL for `test-split`. The consumer contract also embeds a dated anecdote ("on the first live run two MIDLAND values were below 1250 A").
 **Fix:** Set `band_pairs_through` to None in the fixture, and move the anecdote out of the contract.
 
+### IN-11: The TEST-band fallback is silent in the stored data and the run log
+**File:** `backend/day_ahead_band.py:361-374`; `backend/dlr_day_ahead.py:178-190`
+**Issue:** When the live query fails, `band_for` returns the same `test-split` choice that it returns when fewer than `LIVE_BAND_MIN_PAIRS` pairs exist. The only trace of the fault is one `logger.warning` line in the runner log. Rows are first-write-wins and never rewritten, so a transient fault permanently stamps that target with the TEST band, even though a live band was available. `band_sources` in the run output cannot tell "not enough pairs" from "query failed". This is acceptable, because the fallback is the contract, but a persistent fault would be invisible until someone reads the log.
+**Fix:** Optionally return a flag on `BandChoice` (for example `live_query_failed`). Carry it into `run.refuse`-style notes or the `pipeline_run.day_ahead` JSON, so the summary can show "n targets on the TEST band after a live-query fault".
+
+### IN-12: Consumer docs still call the feed "next-day" next to an 18 h lookahead
+**File:** `docs/integration/software-team-handoff.md:56`; `docs/data-science/decisions/pss_e_handoff.md:83`
+**Issue:** The fixes added the 18 h lookahead, but the table row still names the use "The next-day panel", and the PSS/E text still says "For a next-day study". A reader who stops at those phrases still expects a value for a hour 24 h or more away. The new qualifying sentences appear only after them.
+**Fix:** Say "the next-18-hours panel" or "the coming-hours panel", and "for a study within the next 18 hours", or add "(only the coming 18 hours)" to the phrase itself.
+
+### IN-13: `curl.sh` hard-codes the label that `read_ratings.py` reads from the data
+**File:** `docs/integration/examples/curl.sh:70-72`
+**Issue:** The new "Day-ahead note" block echoes a constant label. `read_ratings.py` prints the `label` values the service returned (falling back to the constant). If the label ever changes, the curl example would keep printing the old text, and a copied script would display a label the data no longer carries. The `label` column is already in the `day_ahead_upcoming` select above, so the label is on screen anyway.
+**Fix:** Keep the note, but add a comment that it is a reminder and that the authoritative text is the `label` field above. Or drop the label echo and keep only the "not the live rating" line.
+
+### IN-14: Actions in the new workflow are pinned by tag, while `supabase_smoke.yml` pins by SHA
+**File:** `.github/workflows/day_ahead_manifest_check.yml:38, 45`
+**Issue:** `actions/checkout@v4` and `actions/setup-python@v5` follow a moving tag. This matches `dlr_live.yml` and `shadow_collect.yml`, and this job holds no secret and has `contents: read` only, so the risk is low. It is inconsistent with the one workflow that pins by commit.
+**Fix:** Optionally pin both to the same commit SHAs as `supabase_smoke.yml`.
+
 ---
+
 _Reviewed: 2026-11-09_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_
