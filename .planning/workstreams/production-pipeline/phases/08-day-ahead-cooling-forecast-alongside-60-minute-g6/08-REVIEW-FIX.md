@@ -31,13 +31,13 @@ status: all_fixed
 **Status:** fixed: requires human verification (logic change)
 **Applied fix:** `band_for` now wraps the `_live_offsets` call in `try/except Exception`. On failure it keeps the TEST offsets with `source="test-split"` and logs a warning naming only the exception type (the message could carry the database URL). Two tests added: an offline one that makes `live_pairs` raise (with a URL and "statement timeout" in the message) and asserts a `test-split` band is returned and neither string is logged; and an end-to-end one in `dlr_day_ahead_test.py` that makes `live_pairs` raise and asserts all three due targets are still issued with `band_source == "test-split"` in the table. Both ran against local Postgres and passed (no skips).
 
-### WR-02: Consumer docs describe a "next-day" horizon the data does not have
+### WR-02: Consumer docs describe a "next-day" horizon the data does not have, and conflate "not yet issued" with "late"
 
 **Files modified:** `docs/integration/software-team-handoff.md`, `docs/data-science/decisions/pss_e_handoff.md`, `docs/integration/examples/read_ratings.py`, `docs/integration/examples/curl.sh`
 **Commit:** 41ac760
 **Applied fix:** The docs now say a value appears about 18 hours before its target, the view holds at most three upcoming targets per city, and a target further out is not late, only not yet due (`is_late` stays false). The PSS/E "Which target hour to use" and "Empty or late targets" sections were corrected to match, and the two example headers no longer read as four values per city. The consumer-docs, REST-doc and example tests pass (the examples still parse; `bash -n` clean).
 
-### WR-03: Runbook says `verify_day_ahead_store.sql` must be all-true, but one check is false by design after the exposure
+### WR-03: The standing runbook says `verify_day_ahead_store.sql` must be all-true, but one check is false by design after the exposure
 
 **Files modified:** `docs/data-science/decisions/dlr_live_runbook.md`, `supabase/ops/verify_day_ahead_store.sql`
 **Commit:** 558157f
