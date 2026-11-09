@@ -73,6 +73,8 @@ Case setup used: the public IEEE 39-bus New England system (39 buses, 34 lines, 
 
 The runbook's registration command, `Register-ScheduledTask -Xml` with the file read as a UTF-8 string, fails on this laptop: the template's declaration says `encoding="UTF-8"` while the in-memory string is UTF-16. Rewriting the declaration to `encoding="UTF-16"` in the string (a `-replace` on the first line, no file edited) lets the XML register. The runbook command is updated. Open: whether the renderer should emit a UTF-16 declaration itself (a code change for a later gap-closure plan; the replace works meanwhile). Registration worked for the laptop's own account; the account has administrator rights, so U15 (a standard user can register) is not isolated. `NextRunTime` came back 15 seconds past :15, not exactly :15; to be compared with the actual start times.
 
+First scheduled run: the task started at :15:15 (15:15:15 local), `LastTaskResult 0`, no missed run, so the exit code reaches the scheduler (U18, first of three runs). The log file did not change: a successful dry run logs nothing (the launcher's file handler is attached for every mode, but the only log calls on the run path are a run's own record and warnings), so the runbook now names `LastRunTime` and `LastTaskResult` as the evidence for the dry-run task.
+
 ## Claims cleared
 
 Cleared on the real PSS/E 36.4, Python 3.14.0, free Xplore edition:
