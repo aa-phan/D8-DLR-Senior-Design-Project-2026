@@ -1,18 +1,18 @@
 ---
 gsd_state_version: "1.0"
 current_phase: 08
-current_plan: 10
+current_plan: 11
 status: executing
-stopped_at: Completed 08-09-PLAN.md
-last_updated: "2026-11-09T01:26:07.253Z"
+stopped_at: Completed 08-10-PLAN.md
+last_updated: "2026-11-09T01:42:13.810Z"
 last_activity: 2026-11-08
 last_activity_desc: Phase 08 execution started
-state_head: 6b7e5ae76d6df5224c89267345c876dd6018705b
+state_head: a83316cbe5815525e7284bed992b23f3a3c4b79a
 progress:
   total_phases: 8
   completed_phases: 7
   total_plans: 78
-  completed_plans: 75
+  completed_plans: 76
   percent: 88
 milestone_name: Production Pipeline (Supabase + live ratings)
 workstream: production-pipeline
@@ -37,7 +37,7 @@ whoever owns that analysis; they are not work items here.
 
 **Status:** Ready to execute
 **Current Phase:** 08
-**Current Plan:** 10
+**Current Plan:** 11
 **Total Plans in Phase:** 12
 **Last Activity:** 2026-11-08 — Phase 08 execution started
 **Last Activity Description:** Phase 08 execution started
@@ -236,6 +236,8 @@ These block or affect stringing the system together and belong to the phases nam
 - [Phase 08]: 08-07: write-side migration 20261108120000_day_ahead_forecast_store.sql applied live and pinned at sha256 fb5337a6...bf8f1; never edited again
 - [Phase 08]: 08-08: Owner approved pushing the day-ahead stage (approve-push); main pushed fast-forward b6e910f..1088392; first issuing run 42543631399 verified, 12 rows, 10/10 first-slot checks PASS; expose step unblocked
 - [Phase 08]: 08-09: one day-ahead late rule lives in public.day_ahead_status and assert_fresh (same signature) reads it; armed by the first row, 12 h window on a UTC date_bin grid
+- [Phase 08]: 08-10: the day-ahead docs state that out-of-range values are published as computed (not withheld), and --check-rest classifies its write probes with the e2e privilege classifiers
+- [Phase 08]: 08-10: --check-rest and --check-store are separate runs; an empty upcoming view or table answer fails instead of passing vacuously
 
 ## Open Decisions
 
@@ -261,9 +263,9 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 
 ## Session Continuity
 
-**Last session:** 2026-11-09T01:26:06.752Z
+**Last session:** 2026-11-09T01:42:13.375Z
 
-**Stopped At:** Completed 08-09-PLAN.md
+**Stopped At:** Completed 08-10-PLAN.md
 **Resume File:** None
 
 ## Performance Metrics
@@ -340,6 +342,7 @@ None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner deci
 | Phase 08 P07 | 13h elapsed (owner gates) | 3 tasks | 2 files |
 | Phase 08 P08 | about 1h elapsed (owner gates) | 3 tasks | 2 files |
 | Phase 08 P09 | 12 min | 2 tasks | 4 files |
+| Phase 08 P10 | 14 min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
