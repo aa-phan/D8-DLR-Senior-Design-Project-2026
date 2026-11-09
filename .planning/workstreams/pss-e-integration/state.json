@@ -21,8 +21,8 @@
   ],
   "next": {
     "command": "/gsd-execute-phase 3 --ws pss-e-integration",
-    "label": "Execute 03-07 at the laptop",
-    "reason": "Phase 3 of 3 \u00b7 plans 03-07 and 03-08 need the licensed laptop"
+    "label": "Finish 03-07 step 6, then 03-08",
+    "reason": "Phase 3 of 3 \u00b7 03-07 steps 2 to 5 passed on the laptop; 03-08 waits on the psse_* tables and writer login"
   },
-  "updated_at": "2026-10-28T11:21:28.832Z"
+  "updated_at": "2026-11-09T22:00:00.000Z"
 }

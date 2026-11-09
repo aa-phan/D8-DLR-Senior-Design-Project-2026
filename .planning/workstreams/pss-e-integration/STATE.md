@@ -4,11 +4,11 @@ milestone: v1.6
 milestone_name: PSS/E Integration
 current_phase: 3
 current_phase_name: Laptop Run and Handover
-status: waiting_on_laptop
-stopped_at: Completed 03-09-PLAN.md (gap closure); 03-07 resumes at step 2 on the laptop, then 03-08
-last_updated: "2026-10-28T11:21:39.116Z"
-last_activity: 2026-10-28
-last_activity_desc: Plans 03-01 to 03-06 executed; 03-07 and 03-08 wait for the laptop
+status: laptop_steps_2_to_5_passed
+stopped_at: 03-07 steps 2 to 5 passed on the laptop (session B, 2026-11-09); step 6 pending; 03-08 waits on the psse_* tables and writer login
+last_updated: "2026-11-09T22:00:00.000Z"
+last_activity: 2026-11-09
+last_activity_desc: Laptop session B - selftest, probe, write check and dry run (live ratings read) all pass on the 39-bus case
 state_head: 6b8cc5e88371736055be0a125a4ba86d62f13024
 progress:
   total_phases: 3
@@ -31,9 +31,9 @@ higher than the static rating.
 ## Current Position
 
 Phase: 3 (Laptop Run and Handover) — EXECUTING
-Plan: 03-01 to 03-06 and gap-closure 03-09 done; 03-07 (laptop, resume at step 2) then 03-08
-Status: Waiting for the laptop; Phases 1 and 2 verified (human_needed)
-Last activity: 2026-11-08 — 03-09 recorded; state refreshed
+Plan: 03-01 to 03-06 and gap-closure 03-09 done; 03-07 steps 2 to 5 passed on the laptop (step 6, the Task Scheduler dry-run task, pending), then 03-08
+Status: Laptop available; 03-08 and a real run wait on the psse_* tables and dlr_psse_writer login (production-pipeline owner) and on Power Systems' real mapping. Phases 1 and 2 verified (human_needed)
+Last activity: 2026-11-09 — laptop session B recorded in 03-07-LAPTOP-RECORD.md
 
 Progress: [█████████░] 95%
 
@@ -85,9 +85,9 @@ None yet.
 
 ### Blockers/Concerns
 
-- Deadline is about 2026-11-02 and production-pipeline Phase 6 is still unbuilt (13 plans, none done). The result-table spec (Phase 1, criterion 1) must reach Phase 6 before it finalizes its migration. Phase 3's real run needs that migration applied, and applying it is the owner's step.
-- Power Systems has not yet supplied the case file, the city-to-branch mapping or laptop access. Phase 2 builds against a placeholder mapping and a fake `psspy`; Phase 3 cannot finish without the real ones.
-- Every `city_rating` row is provisional until production-pipeline Phase 7's go, so studies in this milestone run on static ratings.
+- The deadline (about 2026-11-02) has passed. Production-pipeline Phases 6, 7 and 8 are complete and archived on main (merged into this branch 2026-11-09), and none of them added the four `psse_*` tables or the `dlr_psse_writer` role (a search of main finds no `psse_run`, `dlr_psse_writer` or related migration). Phase 3's real run and plan 03-08 need that migration, a new follow-on one. The request to the owner is in `docs/data-science/decisions/psse_message_to_aaron.md`; the user will ask in person.
+- Power Systems has not yet supplied the real city-to-branch mapping or confirmed the case. The laptop is available and the job has run end to end (dry run) on the public 39-bus case with a throwaway mapping. The real case must be an unconverted saved case and fit within the free edition's 50 buses. The user will raise the mapping in person; the email draft will not be sent.
+- The 2026-11-09 dry run read four live `city_rating` rows with outcome `ok`, so ratings are no longer all static or provisional at the read. Production-pipeline Phase 7's go was recorded on main; this has not been re-checked row by row.
 - REQUIREMENTS.md said 17 v1 requirements; it defines 16. Corrected to 16 in its Traceability section on 2026-10-26.
 
 ## Deferred Items
@@ -100,11 +100,16 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-11-08
-Stopped at: Awaiting laptop for 03-07 step 2 re-run (last completed 03-09-PLAN.md: psse3604 helper import before psspy)
+Last session: 2026-11-09
+Stopped at: 03-07 steps 2 to 5 passed on the laptop; next is step 6 (Task Scheduler dry-run task), then 03-08 once the psse_* tables and writer login exist
 Resume file: None
 
 ## Session note 2026-11-08 (end of day)
 
 No laptop access. Done today: STATE refreshed and committed; Python 3.13 to 3.14 row added to the guide's decision table (commit 02e4f0f). Nothing else in this workstream is possible without the laptop.
 Tomorrow: (1) send POWER-SYSTEMS-EMAIL-DRAFT.md (case is the IEEE 39-bus New England system, already on the laptop; only a saved .sav on the laptop is needed, plus the city-to-branch mapping and laptop session); (2) raise with production-pipeline owner that Phase 6's 13 plans do not yet include the four psse_* tables and the dlr_psse_writer grant (hand-off: docs/data-science/decisions/psse_results_phase6_handoff.md); (3) get the dlr_psse_writer URL, SUPABASE_URL and publishable key from the DS owner; (4) at the laptop resume 03-07 at step 2 (selftest with and without PSSE_BIN_DIR, U33 and U07).
+
+## Session note 2026-11-09 (laptop session B)
+
+Laptop reached. Done: pushed the three docs commits and merged main into the branch (clean, tests pass); on the laptop selftest (6 PASS), probe (27 PASS) and probe with the write check (29 PASS) pass, and a dry run on the public 39-bus case with a throwaway mapping completes with live ratings (outcome ok, 28 of 28 contingencies). Found: a converted (cnv) case fails the load flow; use an unconverted case (runbook step 3 note). Full record: phases/03-laptop-run-and-handover/03-07-LAPTOP-RECORD.md.
+Next: (1) laptop: git pull, then runbook step 6 (Task Scheduler dry-run task); (2) ask the production-pipeline owner for the psse_* migration and the dlr_psse_writer login (message already in the repo, updated 2026-11-09); (3) in person with Power Systems: real mapping and confirm the case is unconverted and within 50 buses; (4) then 03-08 (credential proof, proof write, real task).

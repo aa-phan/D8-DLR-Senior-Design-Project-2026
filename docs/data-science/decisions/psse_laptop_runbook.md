@@ -160,7 +160,7 @@ The first laptop session saw this step stop on PSS/E 36.4 with `PSS/E could not 
 
 The row to watch is `signature:branch_chng_3`: its parameter list is unconfirmed (Phase 2 left it open) `[UNVERIFIED until step 3]` (U10). A FAIL there is expected-risk, not a surprise: the fix is in the adapter, on the Mac.
 
-**Stop if:** any FAIL. Open a gap-closure plan for the Phase 2 adapter; do not edit on the laptop.
+**Stop if:** any FAIL. Open a gap-closure plan for the Phase 2 adapter; do not edit on the laptop. One FAIL has a known cause that is not an adapter bug: `load_flow` failing with `fnsl ierr 2: generators are converted` means the case was saved after PSS/E converted it for dynamics (a case whose name often ends in `cnv`). Every other probe row passes on such a case and the exit code is 6. Use the same system saved before conversion; the second laptop session saw 26 PASS and 1 FAIL on a converted case and 27 PASS and 0 FAIL on the unconverted one. The case Power Systems supplies must be unconverted for the same reason. The free Xplore edition also limits a case to 50 buses (the banner reads "50 BUS POWER SYSTEM SIMULATOR"); the 39-bus case fits.
 
 ### Step 4: probe with the write check
 
