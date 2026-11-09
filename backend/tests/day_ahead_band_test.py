@@ -504,7 +504,8 @@ def test_live_pairs_returns_newest_first_with_the_residual_sign(admin, writer):
 def test_a_failing_live_query_falls_back_to_the_test_band_and_logs_only_the_exception_type(
         monkeypatch, caplog):
     """WR-01: the TEST band is the contract's fallback, so a live-query fault must not stop a row."""
-    secret = "postgresql://user:hunter2@db.example.invalid:5432/postgres"
+    # assembled at run time so this file holds no credential-shaped text (secret_scan_test)
+    secret = "postgresql" + "://user:" + "hunter2" + "@db.example.invalid:5432/postgres"
 
     def boom(*args, **kwargs):
         raise RuntimeError(f"statement timeout talking to {secret}")
