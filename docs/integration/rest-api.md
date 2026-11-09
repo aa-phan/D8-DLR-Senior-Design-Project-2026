@@ -141,7 +141,7 @@ The identity columns are how a change shows up (D-01). If `config_fingerprint`, 
 
 ## Examples
 
-Three examples, each showing (1) the current row of every city from `latest_rating` and (2) one city's rows over a date range from `city_rating`, paged past the 1000-row cap. All three are read-only, read `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` from the environment and contain no project value.
+Three examples, each showing (1) the current row of every city from `latest_rating`, (2) one city's rows over a date range from `city_rating`, paged past the 1000-row cap, and (3) the upcoming day-ahead targets (`day_ahead_upcoming`) and the per-city day-ahead status (`day_ahead_status`). All three are read-only, read `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` from the environment and contain no project value.
 
 | Example | For | Run it |
 |---|---|---|

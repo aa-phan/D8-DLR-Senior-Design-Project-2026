@@ -18,6 +18,7 @@ What the key can and cannot do:
 |---|---|
 | Reads `latest_rating` (view) and `city_rating` (table) | Allowed |
 | Calls `rpc/assert_fresh` | Allowed |
+| Reads `day_ahead_upcoming` and `day_ahead_status` (views) and `day_ahead_forecast` (table) | Allowed |
 | Inserts, updates or deletes anything | Refused by privilege (HTTP 401 or 403, code `42501`) |
 | Reads the run log `pipeline_run` or the freshness log `ops.freshness_log` | Refused |
 
@@ -52,6 +53,9 @@ Expect four rows, one per city. Complete, runnable versions, including history p
 |---|---|---|
 | `latest_rating` | View. Always four rows, the newest row of each city, with 34 columns. | Anything that shows "now": the status page, current values, freshness badges. |
 | `city_rating` | Table. One row per city per hour, every stored column. Backfill rows (`origin` = `backfill`) cover 2026-09-08 to 2026-09-28; live rows follow from go-live, so expect a gap between the two. | Charts and history: DLR against static over time, forecast bands, gate history, weather inputs. |
+| `day_ahead_upcoming` | View. The day-ahead targets that are still to come, one row per city and per 00, 06, 12 and 18 UTC target, with 26 columns. | The next-day panel: the expected current with its band and its label. |
+| `day_ahead_status` | View. Always four rows, one per city, with 7 columns. | A feed status badge: on time or late, and which targets are missing. |
+| `day_ahead_forecast` | Table. Every day-ahead value ever issued, one row per city and target, with 25 columns. | History of past day-ahead values, for example to compare them with what happened. |
 | `rpc/assert_fresh` | Function. HTTP 200 when all four cities are fresh, HTTP 503 naming the stale or missing ones. | An optional health check. The Data Science owner already runs it as a permanent alarm. |
 
 `latest_rating` carries three computed columns that `city_rating` does not: `age_minutes`, `is_stale` and `is_provisional`. `city_rating` also carries diagnostic columns that `latest_rating` leaves out:
@@ -100,6 +104,32 @@ Each rule below is stated in full in the contract section named in brackets.
 - **Expect the current hour to change** ("Freshness"). A retry within the same hour overwrites that hour's row, and `computed_at` moves. This is not an error.
 - **Ignore columns you do not know** ("Compatibility"). Columns are only ever appended after the last one; none is renamed or dropped in v1. Select the columns you use by name.
 
+## Day-ahead forecast
+
+Besides the live rating, the database holds a second, separate value for each city: a day-ahead forecast of the current the line can carry, one value for each 00, 06, 12 and 18 UTC hour. It is meant for looking at the next day. Every value carries the label `day-ahead-24h; engineering-selection; not-validated`, which says three things: it comes from a forecast made about a day ahead, it is the owner's engineering choice rather than a model picked by a signed rule, and it has not been validated.
+
+What to read:
+
+- **`day_ahead_upcoming`** (view) to display values: the targets still to come, soonest first within each city.
+- **`day_ahead_status`** (view) for the badge: always four rows, one per city, saying whether the feed is late.
+- **`day_ahead_forecast`** (table) for history: every value ever issued, never rewritten.
+
+| Dashboard view | Read from | Columns |
+|---|---|---|
+| Next-day panel per city | `day_ahead_upcoming`, ordered by `city` then `valid_time` | `city`, `valid_time`, `forecast_amps`, `forecast_ci_lower_amps`, `forecast_ci_upper_amps`, `lead_minutes`, `issued_at`, `band_source`, `label` |
+| Feed status badge | `day_ahead_status` | `is_late`, `missing_targets`, `next_target_time` |
+
+The easy mistakes:
+
+- **It is not the live rating, and it never gates it.** Do not show it in place of `rating_amps`, do not use it to colour the status page, and do not feed it back into any gate or alarm. It never sets or checks the live rating.
+- **Always show the band and the label next to the value.** `forecast_ci_lower_amps` and `forecast_ci_upper_amps` are the 5-95% band; a bare `forecast_amps` hides the uncertainty. `band_source` says how the band was measured. Show `label` as it is.
+- **"24 h" is the age of the weather run, not how early you get the value.** A value is issued 0-18 h before its target, so `issued_at` and `valid_time` differ by less than a day.
+- **Values exist only at 00/06/12/18 UTC.** Do not draw a line between them as if they were hourly. Convert to local time in the client, as for every timestamp.
+- **An empty or late target stays empty.** Show it as missing; never fill it from another hour or city. A target that has passed is not filled afterwards.
+- **`is_late` is the stall flag.** It turns true when a target due within the next 12 hours has no value; `missing_targets` lists them. A late feed is a status to show, not an error to throw.
+
+Values change about every 6 hours, so hourly polling is enough. The rules and every column are in [`rest-api.md`](rest-api.md) ("Day-ahead forecast") and in [`day_ahead_forecast_v1.md`](../data-science/schema/day_ahead_forecast_v1.md). The three examples in [`examples/`](examples/) each print the upcoming targets and the status as their last part.
+
 ## Cadence and polling
 
 - A scheduled run writes one row per city each hour. The external scheduler dispatches it at five minutes past the hour.
@@ -114,7 +144,7 @@ Each rule below is stated in full in the contract section named in brackets.
 | 401 | none | The `apikey` header is missing or wrong. |
 | 401 or 403 | `42501` | A write, or a read of `pipeline_run`. |
 | 404 | `PGRST205` | A misspelled table name, or the service is reloading its schema; retry shortly. |
-| 503 | `PT503` | `rpc/assert_fresh` found a stale or missing city. |
+| 503 | `PT503` | `rpc/assert_fresh` found a stale or missing city, or (`day_ahead_late` in the details) a day-ahead target that is overdue. |
 
 The full table is "Status codes" in the contract.
 

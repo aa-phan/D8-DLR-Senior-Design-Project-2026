@@ -32,6 +32,9 @@ These are the artifact families an API could serve. Paths are relative to the re
 | `rate_city(...)` return dict | `city_rating.rate_city` (per-city contract) | Section 4 | n/a (in-process only) | No file or HTTP form |
 | `public.city_rating` (Supabase Postgres) | `dlr_orchestrator --store postgres` (scheduled, Phase 5) | [`city_rating_v1.md`](../../data-science/schema/city_rating_v1.md) | n/a (database) | Versioned contract (v1, additive-only) |
 | `public.latest_rating` (Supabase view) | view over `public.city_rating`: the newest row per city, with `age_minutes`, `is_stale`, `is_provisional` | [`rest-api.md`](../../integration/rest-api.md) | n/a (database) | Versioned contract (v1, additive-only) |
+| `public.day_ahead_forecast` (Supabase table) | the day-ahead stage of the hourly live job (Phase 8): one value per city and 00/06/12/18 UTC target | [`day_ahead_forecast_v1.md`](../../data-science/schema/day_ahead_forecast_v1.md) | n/a (database) | Versioned contract (v1, additive-only) |
+| `public.day_ahead_upcoming` (Supabase view) | view over `public.day_ahead_forecast`: the targets still to come, with `lead_minutes` | [`rest-api.md`](../../integration/rest-api.md) | n/a (database) | Versioned contract (v1, additive-only) |
+| `public.day_ahead_status` (Supabase view) | view over `public.day_ahead_forecast`: one row per city, with `upcoming_count`, `missing_targets` and `is_late` | [`rest-api.md`](../../integration/rest-api.md) | n/a (database) | Versioned contract (v1, additive-only) |
 
 City identifiers are the keys of `config.LOCATIONS`: `AUSTIN`, `CORPUS_CHRISTI`, `MIDLAND`, `EL_PASO`. There are no corridor identifiers any more. The names `AUSTIN_CORPUS_CHRISTI` and `MIDLAND_EL_PASO` survive only as legacy shadow-log file names and in `config.LEGACY_CORRIDOR_ENDPOINTS`, which is reserved for a frozen historical experiment and is not for API use.
 
