@@ -37,6 +37,11 @@ _END = "-- END psse_results_v1"
 # at commit 30ec2d6 of origin/feature/pss-e-integration.
 _REGION_SHA256 = "955f349d2df66394dbec4378ddcc2d9eb61f7e37bd4eda8de4b70de16c3a6643"
 
+# Applied to the live project on 2026-11-09 (quick 261109-o6v); the file may not be edited afterwards.
+_APPLIED_PSSE_MIGRATION_SHA256 = {
+    "20261109233541_psse_results.sql": "08e7e103eda9a77653d482ba67aea4844641d0d77f1e6d6f97213b83ccc13bd7",
+}
+
 _TABLES = ("psse_run", "psse_dispatched_capacity", "psse_voltage_margin", "psse_contingency_result")
 
 _PSSE_VERIFY_CHECKS = (
@@ -68,6 +73,13 @@ def _lines(path=None):
 # --------------------------------------------------------------------------------------------------
 # text: what the files say
 # --------------------------------------------------------------------------------------------------
+
+def test_psse_migration_is_unchanged_after_apply():
+    # The file is applied to the live project; a later edit would make the repo disagree with it.
+    for name, expected in _APPLIED_PSSE_MIGRATION_SHA256.items():
+        with open(os.path.join(_MIGRATIONS_DIR, name), "rb") as handle:
+            assert hashlib.sha256(handle.read()).hexdigest() == expected, name
+
 
 def test_text_there_is_one_psse_migration_named_by_utc_timestamp_and_it_sorts_last():
     paths = _psse_paths()
