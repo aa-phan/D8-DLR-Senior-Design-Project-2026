@@ -66,3 +66,7 @@ echo
 echo "== Day-ahead status per city (view day_ahead_status) =="
 curl -fsS "${BASE}/day_ahead_status?select=city,next_target_time,upcoming_count,newest_issued_at,missing_targets,is_late&order=city" "${H[@]}"
 echo
+
+echo "== Day-ahead note =="
+echo "label: day-ahead-24h; engineering-selection; not-validated"
+echo "this is not the live rating: it never sets or checks it, and it is not validated"
