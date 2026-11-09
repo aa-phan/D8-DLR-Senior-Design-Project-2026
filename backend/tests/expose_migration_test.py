@@ -305,13 +305,24 @@ _OLD_LIVE_BASIS = (
 _MANIFEST = os.path.join(local_pg.REPO_ROOT, "docs", "data-science", "decisions", "real_data_validation",
                          "manifest.json")
 
+# Phase 6 checks (18, one renamed in Phase 8) plus the eleven Phase 8 day-ahead checks: 29 in all.
 _VERIFY_CHECKS = (
-    "anon_authenticated_grants_are_select_on_two_objects_only",
+    "anon_authenticated_grants_are_select_on_published_objects_only",
     "anon_authenticated_hold_no_write_or_column_privilege_in_public",
     "anon_can_select_city_rating",
+    "anon_can_select_day_ahead_forecast",
+    "anon_can_select_day_ahead_status",
+    "anon_can_select_day_ahead_upcoming",
     "anon_can_select_latest_rating",
     "anon_executable_public_functions_are_assert_fresh_only",
+    "assert_fresh_has_one_signature",
     "city_rating_rls_enabled",
+    "day_ahead_forecast_rls_enabled",
+    "day_ahead_status_has_the_four_cities",
+    "day_ahead_status_is_security_invoker",
+    "day_ahead_upcoming_is_security_invoker",
+    "day_ahead_upcoming_matches_the_contract",
+    "day_ahead_view_columns_all_commented",
     "index_city_rating_city_valid_desc_present",
     "is_provisional_matches_the_labels",
     "is_stale_matches_age_minutes",
@@ -324,6 +335,7 @@ _VERIFY_CHECKS = (
     "no_write_policy_for_anon_or_authenticated",
     "pipeline_run_not_readable_by_anon",
     "read_policy_city_rating_public_read",
+    "read_policy_day_ahead_forecast_public_read",
 )
 
 
@@ -611,20 +623,32 @@ def test_expose_migration_reapplies_cleanly(pg_url):
 
     with _session(pg_url) as conn:
         before = _exposure_snapshot(conn)
-    with open(_expose_path(), encoding="utf-8") as handle:
-        sql_text = handle.read()
-    with psycopg.connect(pg_url) as conn:
-        conn.execute(sql_text)  # the second (and a third) apply of an already-applied migration
-        conn.execute(sql_text)
+    # Re-apply the Phase 6 expose file together with every later migration, in name order, twice: the
+    # Phase 6 file on its own revokes every public grant and restores the Phase 6 assert_fresh body,
+    # so only the whole chain in order leaves the exposure unchanged (and the module database in the
+    # state every migration produces, for the tests that run after this one).
+    expose_name = os.path.basename(_expose_path())
+    chain = [path for path in local_pg.migration_files() if os.path.basename(path) >= expose_name]
+    assert os.path.basename(chain[0]) == expose_name and len(chain) >= 3
+    for _ in range(2):  # the second (and a third) apply of an already-applied migration
+        for path in chain:
+            with open(path, encoding="utf-8") as handle:
+                sql_text = handle.read()
+            with psycopg.connect(pg_url) as conn:
+                conn.execute(sql_text)
     with _session(pg_url) as conn:
         after = _exposure_snapshot(conn)
     assert after == before
     grants, policies, _, _, _ = after
-    # anon and authenticated hold SELECT on exactly the two objects, nothing else.
+    # anon and authenticated hold SELECT on exactly the five published objects, nothing else.
+    published = ("city_rating", "latest_rating", "day_ahead_forecast", "day_ahead_upcoming", "day_ahead_status")
     assert sorted({(r[0], r[2], r[3]) for r in grants}) == sorted(
-        (relation, role, "SELECT") for relation in ("city_rating", "latest_rating") for role in ("anon", "authenticated"))
+        (relation, role, "SELECT") for relation in published for role in ("anon", "authenticated"))
+    assert len({(r[0], r[2], r[3]) for r in grants}) == 10
     assert [p for p in policies if p[0] == "city_rating_public_read"] == [
         ("city_rating_public_read", "SELECT", "{anon,authenticated}")]
+    assert [p for p in policies if p[0] == "day_ahead_forecast_public_read"] == [
+        ("day_ahead_forecast_public_read", "SELECT", "{anon,authenticated}")]
 
 
 def test_every_view_column_has_a_comment(pg_url):
@@ -657,7 +681,7 @@ def test_verify_exposure_sql_reports_every_check_ok(pg_url):
         conn.execute("grant select on public.pipeline_run to authenticated")
         conn.execute("create function public.sneaky() returns integer language sql as 'select 1'")
         bad = {r["check_name"] for r in local_pg.run_select_file(conn, _VERIFY_SQL) if r["ok"] is not True}
-    assert bad == {"anon_authenticated_grants_are_select_on_two_objects_only",
+    assert bad == {"anon_authenticated_grants_are_select_on_published_objects_only",
                    "anon_authenticated_hold_no_write_or_column_privilege_in_public",
                    "anon_executable_public_functions_are_assert_fresh_only",
                    "pipeline_run_not_readable_by_anon"}
@@ -687,6 +711,63 @@ def test_verify_exposure_sql_sees_column_level_and_inherited_privileges(pg_url):
         conn.execute("grant verify_writer to anon")
         bad = {r["check_name"] for r in local_pg.run_select_file(conn, _VERIFY_SQL) if r["ok"] is not True}
     assert bad == only_hold_check
+
+
+_GRANTS_CHECK = "anon_authenticated_grants_are_select_on_published_objects_only"
+_DAY_AHEAD_SABOTAGE = (
+    # (case, statements run as the superuser in a rolled-back transaction, the checks that must turn false)
+    ("rls_off", ["alter table public.day_ahead_forecast disable row level security"],
+     {"day_ahead_forecast_rls_enabled"}),
+    ("read_policy_dropped", ["drop policy day_ahead_forecast_public_read on public.day_ahead_forecast"],
+     {"read_policy_day_ahead_forecast_public_read"}),
+    ("upcoming_not_invoker", ["alter view public.day_ahead_upcoming set (security_invoker = false)"],
+     {"day_ahead_upcoming_is_security_invoker"}),
+    ("status_not_invoker", ["alter view public.day_ahead_status set (security_invoker = false)"],
+     {"day_ahead_status_is_security_invoker"}),
+    ("anon_loses_forecast", ["revoke select on public.day_ahead_forecast from anon"],
+     {"anon_can_select_day_ahead_forecast", _GRANTS_CHECK}),
+    ("anon_loses_upcoming", ["revoke select on public.day_ahead_upcoming from anon"],
+     {"anon_can_select_day_ahead_upcoming", _GRANTS_CHECK}),
+    ("anon_loses_status", ["revoke select on public.day_ahead_status from anon"],
+     {"anon_can_select_day_ahead_status", _GRANTS_CHECK}),
+    ("upcoming_column_renamed", ["alter view public.day_ahead_upcoming rename column lead_minutes to lead_min"],
+     {"day_ahead_upcoming_matches_the_contract"}),
+    ("upcoming_column_uncommented", ["comment on column public.day_ahead_upcoming.lead_minutes is null"],
+     {"day_ahead_view_columns_all_commented"}),
+    ("status_column_blank_comment", ["comment on column public.day_ahead_status.is_late is '  '"],
+     {"day_ahead_view_columns_all_commented"}),
+    ("second_assert_fresh_signature",
+     ["create function public.assert_fresh(a text) returns integer language sql as 'select 1'"],
+     {"assert_fresh_has_one_signature"}),
+    ("anon_may_write_the_table", ["grant insert on public.day_ahead_forecast to anon"],
+     {_GRANTS_CHECK, "anon_authenticated_hold_no_write_or_column_privilege_in_public"}),
+    ("authenticated_may_update_a_view", ["grant update on public.day_ahead_status to authenticated"],
+     {_GRANTS_CHECK, "anon_authenticated_hold_no_write_or_column_privilege_in_public"}),
+    ("write_policy_on_the_table",
+     ["create policy sneaky_day_ahead on public.day_ahead_forecast for insert to anon with check (true)"],
+     {"no_write_policy_for_anon_or_authenticated"}),
+)
+
+
+@pytest.mark.parametrize("case, statements, expected", _DAY_AHEAD_SABOTAGE, ids=[c[0] for c in _DAY_AHEAD_SABOTAGE])
+def test_verify_exposure_sql_catches_each_day_ahead_sabotage(pg_url, case, statements, expected):
+    with _session(pg_url) as conn:
+        for statement in statements:
+            conn.execute(statement)
+        bad = {r["check_name"] for r in local_pg.run_select_file(conn, _VERIFY_SQL) if r["ok"] is not True}
+    assert bad == expected, case
+
+
+def test_verify_exposure_sql_catches_a_status_view_that_loses_a_city(pg_url):
+    # Replace the status view with one that hides EL_PASO: the four-cities check turns false (the
+    # replacement also lacks the original's comments, so other checks may follow; this one must).
+    with _session(pg_url) as conn:
+        conn.execute("alter view public.day_ahead_status rename to day_ahead_status_orig")
+        conn.execute("create view public.day_ahead_status with (security_invoker = true) as "
+                     "select * from public.day_ahead_status_orig where city <> 'EL_PASO'")
+        conn.execute("grant select on public.day_ahead_status to anon, authenticated")
+        bad = {r["check_name"] for r in local_pg.run_select_file(conn, _VERIFY_SQL) if r["ok"] is not True}
+    assert "day_ahead_status_has_the_four_cities" in bad
 
 
 def test_phase6_migrations_are_unchanged_after_apply():
