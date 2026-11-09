@@ -261,6 +261,11 @@ def _sqlstate(error):
     return getattr(error.value, "sqlstate", None)
 
 
+# The full PT503 message of the replaced assert_fresh. It was "stale or missing city rating" before
+# the exposure; the day-ahead part was added to the same text (D-12).
+_ALARM_MESSAGE = "stale or missing city rating or late day-ahead forecast"
+
+
 def _row(city, valid_time, **overrides):
     """A complete valid day_ahead_forecast row, derived from `valid_time`."""
     row = {
@@ -484,7 +489,9 @@ def test_alarm_armed_with_a_late_city_raises_pt503_naming_the_city_and_target(pg
             detail = late.value.diag.message_detail
             assert "day_ahead_late=" in detail and "EL_PASO@" + due[0].strftime("%Y-%m-%dT%H:%M:%SZ") in detail, detail
             assert "AUSTIN" not in detail and "missing={}" in detail and "stale={}" in detail, detail
-            assert "late day-ahead" in late.value.diag.message_primary
+            # The whole message is pinned: monitors and consumers see this text (WR-04). A PT503 whose
+            # missing= and stale= are both empty means the ratings are fine and only the feed is late.
+            assert late.value.diag.message_primary == _ALARM_MESSAGE
             conn.execute("reset role")
 
 
@@ -497,6 +504,7 @@ def test_alarm_still_names_missing_and_stale_ratings_and_rejects_out_of_range(pg
             conn.execute("select public.assert_fresh(0)")
         assert _sqlstate(stale) == "PT503"
         assert "stale=" in stale.value.diag.message_detail and "missing=" in stale.value.diag.message_detail
+        assert stale.value.diag.message_primary == _ALARM_MESSAGE
         for bad in ("-1", "10081", "null"):
             with pytest.raises(psycopg.Error) as out_of_range, conn.transaction():
                 conn.execute(f"select public.assert_fresh({bad})")
