@@ -10,8 +10,9 @@ settings, not rationale; the rationale is in the Phase 5 plans and `REQUIREMENTS
 holds a secret value: tokens and keys live in cron-job.org and in GitHub's Actions secrets, never in
 this repository.
 
-Last updated 2026-10-26 (plan 05-08: measured Actions minutes for a full 24 h of hourly live runs and
-the same day of shadow runs, section 12). Earlier: 2026-10-24 (plan 05-06: owner's Actions quota recorded
+Last updated 2026-10-26 (plan 06-07: the permanent freshness alarm, soak monitoring and the
+post-2026-10-30 permission re-check, sections 14 to 16). Earlier: 2026-10-26 (plan 05-08: measured
+Actions minutes for a full 24 h of hourly live runs and the same day of shadow runs, section 12). Earlier: 2026-10-24 (plan 05-06: owner's Actions quota recorded
 in section 12; the repository was made public the same day, so Actions minutes are free going forward).
 
 ## 1. Purpose and scope
@@ -90,7 +91,7 @@ runner stops before starting any city if one is unset or empty, and logs the nam
 | `SYNOPTIC_TOKEN` | Synoptic station observations (OD-2). The same secret Shadow Collection uses |
 | `NREL_API_KEY` | NSRDB solar data (OD-2) |
 | `NREL_API_EMAIL` | The email NSRDB requires with the key |
-| `SUPABASE_DB_URL` | Phase 4's writer connection: the session pooler URL (port 5432) for the `dlr_writer` role, which has SELECT, INSERT and UPDATE on the two tables and nothing else |
+| `SUPABASE_DB_URL` | Phase 4's writer connection: the session pooler URL (port 5432) for the `dlr_writer` role. Its table grants, as the migrations define them: SELECT, INSERT and UPDATE on the ratings table (`city_rating`) and the run log (`pipeline_run`), from Phase 4; SELECT on the soak log (`ops.freshness_log`), from Phase 6; SELECT and INSERT on the day-ahead table (`day_ahead_forecast`), from Phase 8, with no UPDATE so an issued value is never rewritten. It has no DELETE on any table. These were checked against the migrations (20261019000000, 20261026204258 and the 20261108120000 store migration) and a test derives them again, so a later grant fails it until this row is updated |
 
 `gh secret list` shows secret names only, never values. To check that all four exist without reading
 anything sensitive, run it and look for the four names.
@@ -104,10 +105,17 @@ Steps, in order (`.github/workflows/dlr_live.yml`, job `rate`, runner `ubuntu-la
 3. Install `requirements.txt`.
 4. Model pre-flight (`backend/dlr_live_check_models.py`, no secrets): fails the run before any city is
    rated if one of the eight model files is missing, differs from its recorded SHA-256 or will not load.
+   It also checks the four day-ahead cooling files and the day-ahead band artifact (section 9), as
+   warnings only (D-13a): a problem there prints a `::warning::` line, never turns the run red and never
+   stops a rating. Only the eight live models can fail the pre-flight.
 5. Run `backend/dlr_live_run.py`: one `dlr_orchestrator.py` child process per city, one after another in
    `config.LOCATIONS` order, all sharing one window end. Each child rates its city with the composed
    providers and the ML forecast and writes its own rating row. Each child has a hard budget of
    `CITY_TIMEOUT_S` = 300 s and is killed at that point.
+6. After the ratings and the exit code are settled, the day-ahead stage runs (section 17). It
+   publishes a separate day-ahead forecast table, never sets or checks a rating and never changes the
+   exit code. From Phase 8 on, `finished_at` in the run log means "the ratings finished": the
+   day-ahead stage runs after it and records its own outcome in `pipeline_run.day_ahead`.
 
 **Timeout.** `timeout-minutes: 30`. At the cap, 4 cities x 300 s = 1200 s (20 minutes) of children plus
 at most 10 minutes for checkout, install, the pre-flight and the run-log writes. That is shorter than
@@ -155,7 +163,8 @@ the previous hour's row stays the latest one for that city.
 Only the runner writes it; the children run with `--no-run-row`. It is inserted before the first city
 starts, updated after each city and finished at the end:
 
-- `finished_at` null means the run did not finish, for example the job timeout killed it.
+- `finished_at` null means the run did not finish, for example the job timeout killed it. It is the
+  moment the ratings finished; the day-ahead stage (section 17) runs after it.
 - `cities_ok`: the cities whose row was written with a healthy ML path, in `config.LOCATIONS` order.
 - `cities_failed`: an object per other city with `outcome` (`error`, `timeout` or `degraded`),
   `written`, `exit_code`, `duration_s`, `forecast_status`, `forecast_error`, `detector_model_loaded`,
@@ -193,10 +202,19 @@ choose Disable workflow. If the workflow is disabled while the cron-job.org job 
 cron-job.org receives errors and may disable its own job after repeated failures; check its state
 after resuming.
 
-**Resume.** Re-enable the cron-job.org job (and the workflow, if it was disabled). Nothing needs to be
-reset: there is no state outside the database. Missed slots are not back-filled. The gap stays in
-`city_rating` until it is filled by hand with a local run for that slot (section 8), and Phase 6's
-freshness check will show the gap while it exists.
+**Pausing the pipeline also pauses the freshness alarm (section 14).** Switch off the cron-job.org job
+named "DLR freshness alarm" at the same time as the dispatch job. A paused pipeline writes no new
+ratings, so within 90 minutes every city is stale and the alarm would fail on every check. It would
+email once, then keep failing, and cron-job.org disables a job that fails more than 25 times in a row
+(about 6.5 hours at 15 minutes); a disabled alarm stays off until someone switches it back on.
+
+**Resume.** Re-enable the cron-job.org dispatch job (and the workflow, if it was disabled). Nothing
+needs to be reset: there is no state outside the database. Resuming re-enables both jobs: switch the
+freshness alarm back on too, then check that the alarm job is enabled and that its next execution
+answers HTTP 200 once the first new hourly rating has landed (an alarm switched on earlier fails until
+then). Missed slots are not back-filled. The gap stays in `city_rating` until it is filled by hand with
+a local run for that slot (section 8), and the freshness alarm (section 14) will fire while the newest
+rating is older than 90 minutes.
 
 ## 7. Change cadence
 
@@ -264,6 +282,33 @@ the manifest disagree, so an unpromoted retrain (files changed, manifest not) tu
 any city is rated. Running `backend/dlr_live_check_models.py` with no argument performs the same check
 locally.
 
+**The 13 manifest entries.** Since Phase 8 the manifest lists thirteen files, in three groups:
+
+| Group | Entries | Pre-flight tier |
+|---|---|---|
+| Live models (8) | `forecast_{CITY}.joblib` and `anomaly_{CITY}.joblib` for the four cities | Fatal: a problem fails the run before any city is rated |
+| Day-ahead cooling models (4) | The served `ml_cooling_corrected` file of each city: the AUSTIN refit file under `data/models/conductor_refit/` and the three frozen files under `data/shadow/models/` | Warning only |
+| Day-ahead band (1) | `data/day_ahead/day_ahead_bands_v1.json`, the launch band artifact | Warning only |
+
+The day-ahead child checks the hash of a cooling file and of the band artifact itself before it loads or
+parses them, and publishes nothing for a target whose file does not match (section 17). The warning tier
+is the early notice.
+
+**Promoting a later conductor refit (D-13).** If the Power Systems team answers with a different
+conductor for a city, the day-ahead forecast follows only through this step, never by itself:
+
+1. Refit that city's cooling model as in Phase 7.
+2. Bump `DAY_AHEAD_REFIT_VERSION` in `backend/day_ahead_forecast.py` together with the refit, so the
+   served path points at the new refit folder.
+3. Regenerate the manifest with `PYTHONPATH=backend .venv/bin/python backend/dlr_live_check_models.py --write-manifest`.
+4. Run the day-ahead tests (`backend/tests/day_ahead_forecast_test.py`, `dlr_day_ahead_test.py`,
+   `dlr_live_check_models_day_ahead_test.py`).
+5. Ask the owner before pushing, as for any model promotion.
+
+After a config or model change the live band starts again from the launch band: a graded pair counts only
+when its forecast and the rating it is compared with share the same `config_fingerprint` and the same
+cooling model sha256, so the 60-pair count for the live band restarts from zero.
+
 ## 10. NSRDB
 
 NSRDB is skipped for windows in the current UTC year: `NSRDB_SKIP_YEARS_BEFORE_CURRENT = 0` in
@@ -278,7 +323,7 @@ year, set the constant to 1 so the previous year is skipped too, and set it back
 |---|---|---|
 | A run is red (a city errored, timed out or was degraded, a `pipeline_run` write failed) | The Actions run is red and GitHub's failure notification goes to the account that owns the dispatch token, per its notification settings. The step summary and `cities_failed` name the city | Section 13 counts red runs as visible |
 | A dispatch fails, for example an expired token | Nothing starts and nothing in the repository reports it | cron-job.org failure notifications |
-| The cron-job.org job is disabled, misconfigured or its token has expired | No run starts and nothing in the repository reports it | cron-job.org failure notifications and Phase 6's freshness check (a city whose latest `valid_time` is older than 90 minutes) |
+| The cron-job.org job is disabled, misconfigured or its token has expired | No run starts and nothing in the repository reports it | cron-job.org failure notifications and the freshness alarm (section 14): a city whose latest `valid_time` is older than 90 minutes |
 | Supabase free-tier pause | Every child fails to connect; red runs | Unpause the project in Supabase, then confirm with the next run |
 | A model file is missing or altered | The pre-flight fails and the run is red before any city is rated | Section 9 |
 | GitHub Actions minutes exhausted | No workflow in the account starts. Not expected while the repository is public (hosted-runner minutes are free); it applies again if the repository is made private | Section 12 |
@@ -445,3 +490,330 @@ its first row was written, leaves no such entry and still counts as a red run; t
 a run it excluded ("fault-drill run ... not counted"), so a slot that shows `failed-visible` right after
 a drill dispatch should be checked against the drill's run id by hand. Its rating rows (when it got that
 far) still count toward the slot, and its minutes are still billed.
+
+## 14. Freshness alarm (permanent)
+
+In plain English: every 15 minutes a cron-job.org job asks the database whether every city's current
+rating is at most 90 minutes old. If one is not, the job fails and, after 2 failures in a row, an email
+goes to the owner. When the ratings are fresh again a recovery email follows. The alarm is permanent
+(D-13): it stays on after the 72 h soak is over and the soak's own log job has been removed.
+
+**What it is.** A cron-job.org job titled "DLR freshness alarm". It is separate from the dispatch job
+(section 2) and from the Shadow Collection job; those two are never changed for it. It is not a
+database job: the 5-minute log job of section 15 is the soak's record, this alarm is not.
+
+| Setting | Value |
+|---|---|
+| Title | DLR freshness alarm |
+| URL | `<SUPABASE_URL>/rest/v1/rpc/assert_fresh` (typed into cron-job.org only; the default `max_age_minutes` is 90) |
+| Method | GET |
+| Header `apikey` | `<SUPABASE_PUBLISHABLE_KEY>`: the publishable key only, never the secret key (D-10) |
+| Expected result | HTTP 200. HTTP 503 with code `PT503` means a city is missing or stale, or (once the day-ahead expose migration is applied) a day-ahead target is late (`day_ahead_late=...`); 400 means a bad `max_age_minutes` |
+| Schedule | every 15 minutes, time zone UTC (`*/15 * * * *`) |
+| Timeout | 30 s (cron-job.org's own limit) |
+| Notify on failure | after 2 failures (the "failures required before a notification is sent" option) |
+| Notify on success after a failure | on (the recovery email) |
+| Notify when the job is disabled | on |
+| Emails go to | the owner's cron-job.org account only (D-15); there is no team address yet |
+
+The URL and the key are entered in cron-job.org and nowhere else: not in this repository, not in a
+`.env`, not in a message (D-10). The key is the one the dashboard and PSS/E teams use, so it can only
+read; the secret key is never used here. The same 90 minutes as `latest_rating.is_stale` and the soak
+report apply (OD-4): a rating exactly 90 minutes old is fresh, one second more is stale.
+
+**How soon it tells you.** A city-hour that is lost goes stale 90 minutes after its slot starts. The
+first failing check follows within 15 minutes and the second 15 minutes after that, so the email arrives
+about 105-120 minutes after the missed hour began. One slow hour (a rating that lands 30 or more minutes
+late) can trip it for the same reason.
+
+**The day-ahead clause (Phase 8).** After the owner applies the day-ahead expose migration
+(`20261108120100_expose_day_ahead_forecast.sql`), the same alarm URL also fails when a 6-hourly
+day-ahead target that is due within the next 12 hours has no value for a city. The clause is armed by
+the first value: until the day-ahead table holds its first row it cannot raise a false alarm, and from
+then on a gap does. The 503 `details` then read `missing=... stale=... day_ahead_late=CITY@time` (for
+example `AUSTIN@2026-11-09T12:00:00Z`), and the 200 body shows `day_ahead_armed` (true once armed). There
+is no new cron job and no new setting in cron-job.org: the job, its schedule and its notification rules
+stay as in the table above. When only `day_ahead_late` is filled in (`missing=` and `stale=` empty), the
+ratings are fine and the day-ahead stage is behind. What to do: read `pipeline_run.day_ahead` of the
+newest runs for the reason (section 17), and check that the hourly runs are happening, because each
+hourly catch-up retries a missing target until its time passes. A target that is not issued keeps the
+alarm failing until its time passes, at most 12 hours, and then it leaves the window. The alarm is one
+URL for both parts, so pausing the pipeline pauses both (section 6); pause and resume the alarm job as
+described below.
+
+**It stays on after the soak.** At soak end only the 5-minute log job is removed (section 15). Leave
+this alarm running. This runbook is where the owner records that it is permanent.
+
+**To pause the alarm.** Open the job in cron-job.org and switch it off. Pause it whenever the pipeline
+is paused (section 6): with no new ratings it would fail on every check. To resume, switch it back on and
+check that the next execution answers 200.
+
+**When it fires.** Work from the cause towards the data:
+
+1. Read the newest `pipeline_run` rows and the `cities_failed` of each (the query in section 5): which
+   city failed, with what `outcome` and redacted error.
+2. Look at the Actions history for the live workflow: `gh run list --workflow dlr_live.yml --limit 6`.
+   A missing run points at the dispatch job (section 2: expired token, disabled job); a red run points
+   at the run's log.
+3. Check what consumers see: `PYTHONPATH=backend .venv/bin/python backend/e2e_verify_readonly.py --check-read`
+   prints each city's age and `latest_rating.is_stale`.
+
+Then follow the matching row of section 11. Fresh ratings end the alarm on their own: the next check
+answers 200 and the recovery email arrives.
+
+**The 25-failure auto-disable.** cron-job.org disables a job that fails more than 25 times in a row,
+which at 15 minutes is a continuous outage of about 6.5 hours. The "job disabled" email is on for that
+case. To recover: fix the cause (above), then re-enable the job in cron-job.org (a disabled job does not
+come back by itself) and check that its next execution answers 200.
+
+## 15. Soak monitoring (Phase 6)
+
+In plain English: for three days a database job writes down every five minutes how old each city's
+current rating is. At the end one report lists every time a rating was older than 90 minutes, with a
+cause for each, and every deploy that happened in that time. The soak passes when the window is at least
+72 h long, the log has no gap longer than 11 minutes and every breach has a cause or an owner annotation.
+
+**Start (owner, after the dry-soak review, D-07).**
+
+1. Enable the Cron integration once: Supabase dashboard, Integrations, Cron.
+2. Run `supabase/ops/soak_cron_schedule.sql` in the SQL editor. It creates one job, `dlr-soak-freshness`,
+   that calls `ops.log_freshness()` every five minutes (`*/5 * * * *`). Running it again changes nothing.
+3. After 15 to 20 minutes run `supabase/ops/soak_probe_smoke.sql`: every row must be `ok` before the
+   72 h clock starts.
+4. Run `supabase/ops/verify_monitoring.sql`: every row must be `ok` (the public key cannot read the log).
+
+**The dry soak (before the clock, D-07).** It measures how late each hourly rating really lands, from
+rows already written, so nobody waits a fresh 12-24 hours:
+
+```bash
+PYTHONPATH=backend .venv/bin/python backend/e2e_soak_report.py export --mode dry --since 2026-10-25T00:00:00Z --until <DRY_END_UTC> --out-dir <DRY_DIR>
+PYTHONPATH=backend .venv/bin/python backend/e2e_soak_report.py report --mode dry --in-dir <DRY_DIR> --out <DRY_DIR>/dry_report.md --json-out <DRY_DIR>/dry_report.json
+```
+
+**The 72 h soak.** `<G>` is the start of the clock (a 5-minute boundary) and `<U>` is at least 72 hours
+later. The 72 h window never overlaps the dry-soak window. `export` is read-only and runs from the
+owner's main checkout (it needs `SUPABASE_DB_URL` in `.env` and `gh` signed in); `report` is offline and
+gives the same bytes for the same files:
+
+```bash
+PYTHONPATH=backend .venv/bin/python backend/e2e_soak_report.py export --mode soak --since <G> --until <U> --out-dir <SOAK_DIR>
+PYTHONPATH=backend .venv/bin/python backend/e2e_soak_report.py report --mode soak --in-dir <SOAK_DIR> --annotations <SOAK_DIR>/annotations.json --out <SOAK_DIR>/soak_report.md --json-out <SOAK_DIR>/soak_report.json
+```
+
+It exits 0 only when the window is at least 72 h (`--min-hours`), probes are present and every breach
+and probe gap is explained; 1 otherwise; 2 when a file or `annotations.json` is missing or malformed.
+Run it during the soak as often as you like; a run before 72 h have passed fails on length only.
+
+**Reading the report.**
+
+- A write breach is an exact interval in which a city's current rating was older than 90 minutes,
+  computed from when each row was first written (a same-hour retry cannot move it). Its id is
+  `write:<city>:<start>`. A probe breach (`probe:`) is one the probe log saw that no write interval
+  explains; a probe gap (`probe-gap:ALL:`) is a hole in the log longer than 11 minutes, window edges
+  included.
+- The cause is derived, not guessed: no workflow run for the slot (dispatch missing); a run that
+  concluded failure; the city listed as failed in that run's `pipeline_run` row (with its redacted
+  error). A row first written more than 30 minutes after its slot is named as a "late run", but that is
+  the same condition as the 90-minute limit being passed, so it does not excuse the breach. A breach
+  none of the other causes explains, or that only a late run explains, needs an owner annotation.
+- Deploys are derived from the data (D-08): any slot where a city's `pipeline_version`,
+  `config_fingerprint`, model hashes, `forecast_method` or `config_version` differs from its previous
+  row, classified with `git diff --name-only <old> <new>` as model, config, workflow, code or no runtime
+  change. If the commit is not in the local clone the report says so: run `git fetch` and report again.
+  A deploy within two hours before a breach is shown beside it as context. A deploy never excuses a
+  breach, and the soak is not paused or restarted for one.
+
+**annotations.json.** Only the owner writes it; nothing is written on the owner's behalf. Breach ids come
+from the report. The text is printed verbatim with its author and date. Events are things the data cannot
+show (a cron-job.org edit, an owner pause, an incident):
+
+```json
+{
+  "breaches": {
+    "write:EL_PASO:2026-10-29T06:30:00Z": {
+      "explanation": "<what happened, in the owner's words>",
+      "by": "<owner name>",
+      "date": "2026-10-30"
+    }
+  },
+  "events": [
+    {"time": "2026-10-29T10:00:00Z", "what": "<what changed>", "by": "<owner name>"}
+  ]
+}
+```
+
+An annotation whose id matches no breach is listed as a warning and excuses nothing.
+
+**No writes during the write check.** Run `--check-writes` (section 16) with no backfill load and no
+past-slot re-run in progress: those are the only legitimate writers of old rows, and a changed row would
+look like an accepted write. The hourly run is harmless; it writes only the current slot.
+
+**Teardown at soak end (D-13).** After the soak record has been exported and the owner has signed off,
+run `supabase/ops/soak_cron_unschedule.sql` in the SQL editor: it removes the job `dlr-soak-freshness`
+and shows `remaining_jobs`, which must be 0. The alarm stays: section 14 is permanent. `ops.freshness_log`
+keeps its rows as the frozen soak record; there is no retention job and nothing deletes them.
+
+## 16. Permission re-check after 2026-10-30
+
+In plain English: Supabase changes the default permissions of new tables on 2026-10-30 (existing projects
+included). Ours are written out explicitly, so nothing should change, and this re-check proves it. Run
+it on or after 2026-10-31. It also closes Phase 4's carried item T-04-22 (the `consumers_cannot_write`
+smoke after 10-30). The two values below go in your shell, never in a file:
+
+```bash
+export SUPABASE_URL=<SUPABASE_URL> SUPABASE_PUBLISHABLE_KEY=<SUPABASE_PUBLISHABLE_KEY>
+PYTHONPATH=backend .venv/bin/python backend/e2e_verify_readonly.py --check-read --check-hidden --check-writes --json-out <RECHECK_FILE>
+```
+
+| Check | Command | What it means |
+|---|---|---|
+| Read | `e2e_verify_readonly.py --check-read` | With only the public key you see exactly one current rating per city, with the documented columns |
+| Hidden tables | `e2e_verify_readonly.py --check-hidden` | The private run log and the soak log cannot be read with the public key |
+| Writes | `e2e_verify_readonly.py --check-writes` | Trying to add, change or delete data in the ratings table (`city_rating`) and its view (`latest_rating`) with the public key is refused, and the data afterwards is identical; the day-ahead objects are probed by the day-ahead check below the table |
+| Database permission list | `supabase/ops/verify_exposure.sql` in the SQL editor | The database's own list says the public key can read exactly the ratings table and its view (`city_rating`, `latest_rating`) and the day-ahead table and its two views (`day_ahead_forecast`, `day_ahead_upcoming`, `day_ahead_status`), can write nothing, and can call only `assert_fresh`: 29 rows, all ok |
+| Writer smoke | `supabase_smoke.py`, check `consumers_cannot_write` (owner command in its docstring, with `--report <RECHECK_SMOKE_FILE>`) | The public roles hold no write privilege on the two tables it checks, the ratings table (`city_rating`) and the run log (`pipeline_run`), checked as the CI writer role; the day-ahead table's write refusal is covered by `verify_exposure.sql` and the day-ahead check |
+
+```bash
+PYTHONPATH=backend .venv/bin/python -c "from dotenv import load_dotenv; load_dotenv('.env'); import sys, supabase_smoke; sys.exit(supabase_smoke.main(['--report', '<RECHECK_SMOKE_FILE>']))"
+```
+
+Since Phase 8 the public surface also includes the day-ahead forecast: once the owner has applied the
+expose migration (08-11), the public key can read the day-ahead table and its two views, and nothing else
+is added. This check reads them the way a consumer does and proves the public key still cannot write to
+them and cannot read the run log. It sends one harmless write attempt at a year-2000 key of the table and
+one at the same key of the upcoming view; both must be refused, and if one is ever accepted the output
+prints the SQL that removes it. It uses the same two shell values as the first block above and never
+prints either of them:
+
+```bash
+PYTHONPATH=backend .venv/bin/python backend/day_ahead_verify.py --check-rest --json-out <RECHECK_DAY_AHEAD_FILE>
+```
+
+Compare the Phase 6 checks with 06-09's live evidence, and compare the day-ahead rows of
+`verify_exposure.sql` and the `--check-rest` result with 08-11's evidence (`08-11-live-checks.json` and
+`08-11-SUMMARY.md`). SELECT on the three day-ahead objects is expected since 08-11 and is not a
+discrepancy. Any other difference (a check that passed then and fails now, a new column, a grant that
+appeared or went away) is a discrepancy to bring to the owner; do not fix it silently. Run
+`--check-writes` only when no backfill load or past-slot re-run is in progress (section 15).
+
+## 17. Day-ahead forecast stage (Phase 8)
+
+In plain English: besides rating each line now (and 60 minutes ahead), the hourly job also publishes a
+separate, higher-error day-ahead forecast of each city's ampacity in amperes. It never sets or checks a
+rating, and it never gates the 60-minute forecast (G6). Every row carries the label
+`day-ahead-24h; engineering-selection; not-validated`: it is an engineering-selected forecast that has
+not been validated. It is stored in its own table, `public.day_ahead_forecast`, one row per city and
+target hour, and it is not readable with the public key until the expose migration (D-17) is applied.
+
+**What "24 h" means.** "24 h" is the weather run's age, not the time between issue and target. Each value
+is computed from the Open-Meteo run that started exactly 24 h before the target. A row is issued 0 to
+18 h before its target (the run is published about 6 h after it starts, so a target becomes issuable 18 h
+ahead). Both times are stored: `forecast_run_init_time` (target minus 24 h) and `issued_at` (the actual
+decision time of the run that issued the row).
+
+The correction also needs a recent station reading, the anchor. How far before the target it is differs
+by setup, and it is why the launch band is only a starting estimate:
+
+| Setup | Anchor reading is about | Where it is used |
+|---|---|---|
+| TEST | exactly 24 h before the target | The launch band is built from the TEST split |
+| Shadow collection | 12 h before the target | The shadow log the model was selected on |
+| Live (this stage) | up to 18 h before the target (less for a catch-up issue) | Every published row |
+
+**When a target is due.** Targets are the 00, 06, 12 and 18 UTC hours. A target is due from the hourly
+run at or after target minus 18 h until the target itself. The hourly runs at 06:05, 12:05, 18:05 and 00:05
+UTC (12:05 AM, 6:05 AM, 12:05 PM and 6:05 PM Central standard time, the time in force until March; in
+daylight time subtract 5 hours from UTC instead of 6) therefore normally issue one new target per city.
+The other hourly runs find nothing to do. About three targets per city are issued ahead at any time. The
+first run after go-live issues every target then due, up to 3 per city (12 rows in all), each with a
+different lead.
+
+**Catch-up (D-04).** The table is the only state. Each run reads which future targets already have a row
+and issues the missing due ones, earliest first, so a missed or failed run is repaired by the next hourly
+run with no marker file. A row is never rewritten: the first write wins, and a catch-up row simply carries
+a later `issued_at`, so a late value is visible.
+
+**Budget.** The stage starts only after the ratings are finished and the exit code is fixed. It runs one
+`backend/dlr_day_ahead.py` child per city, in `config.LOCATIONS` order, inside the same 1200 s child
+budget the ratings share (4 cities x 300 s). Each child is killed at `DAY_AHEAD_CITY_TIMEOUT_S` = 150 s or
+at the budget left, whichever is smaller, and a city is started only when at least
+`DAY_AHEAD_MIN_START_S` = 60 s of the shared budget remain; otherwise it is recorded `skipped_budget`
+and the next hourly run catches up. A healthy run takes seconds; if the ratings used the whole budget the
+stage starts nothing. The workflow file and its `timeout-minutes: 30` are unchanged.
+
+**Outcomes** (one per city, in `pipeline_run.day_ahead`):
+
+| Outcome | Meaning | What to do |
+|---|---|---|
+| none_due | Every due target already has a row (the usual state for most hours) | Nothing |
+| issued | Every missing due target got a row | Nothing |
+| partial | Some targets got a row and some did not (for example one weather run was not yet available) | Nothing; the next hour retries the rest. The reasons name each missing target |
+| error | The child failed, or refused for a named reason: the band file or a cooling model differs from the manifest, no anchor reading, the database could not be reached | Read the reason. A hash refusal means the files and the manifest disagree (section 9); an unreachable database is the Supabase pause row of section 11 |
+| timeout | The child outlived its time and was killed | Rows it wrote before the kill stand; the next hour catches up. Repeated timeouts point at a slow weather provider |
+| skipped_budget | Less than 60 s of the shared budget remained when the city was reached | The ratings ran long; the next hourly run catches up |
+
+**Where outcomes are recorded.** In `pipeline_run.day_ahead` (a private jsonb column, written by the stage
+as its own `pipeline_run` upsert, so it never touches the rating-stage columns): `started_at`,
+`finished_at`, `budget_s` and, per city, the outcome, the `due`, `issued` and `missing` targets, the
+redacted `reasons`, `band_sources`, `out_of_bounds`, the cooling model sha256, `exit_code` and `duration_s`.
+The step summary of each run shows a separate day-ahead table and its own `pipeline_run day_ahead: N
+writes, M failed` line next to the rating table and the `pipeline_run: N writes, M failed` line.
+
+```sql
+-- the day-ahead outcome of the latest runs
+select run_id, window_end, day_ahead -> 'cities' as cities
+from public.pipeline_run
+where day_ahead is not null
+order by window_end desc
+limit 24;
+```
+
+**Failure policy (D-15, D-16).** The day-ahead stage never turns a run red: a crash, a hang, a refusal or a
+failed write of its own record cannot change the exit code of `dlr_live_run.py`, the rating rows or the
+rating run log. If a value cannot be computed there is no value and no row for that target, and the reason is
+logged and recorded; no other method is used in its place. A value outside the city's rating bounds is
+still published as computed and listed under `out_of_bounds`. No exception text or provider message is
+ever placed in the table.
+
+**The band.** Each row carries a 5-95% band in amperes. At launch every band comes from the hashed TEST
+artifact (`band_source` test-split, 196 residuals per city and target hour, built from the TEST split, which
+is a starting estimate rather than a live calibration). Each band switches on its own to a live band
+(`live-rolling`) once 60 graded pairs exist for that city and UTC target hour, using the newest 120 pairs,
+and only when the live band brackets the value (its 5% offset below zero and its 95% offset above it);
+otherwise it keeps the TEST band. A graded pair is a day-ahead value and the weather-computed rating for the
+same city and hour, under the same `config_fingerprint` and the same cooling model sha256 (section 9).
+
+**A later conductor refit (D-13).** The served cooling model follows a new refit only through the promotion
+step in section 9: refit the city, bump `DAY_AHEAD_REFIT_VERSION` in `backend/day_ahead_forecast.py`
+together with the refit, regenerate the manifest, run the day-ahead tests and ask the owner before pushing.
+Until then the stage keeps serving the files the manifest names.
+
+**How to check it.**
+
+- After the first live run following the push, with the time just before the push (an ISO time in UTC),
+  from the repository root with `SUPABASE_DB_URL` in the git-ignored `.env`:
+
+  ```bash
+  PYTHONPATH=backend .venv/bin/python backend/day_ahead_verify.py --check-store --since <PUSH_TIME_UTC> --json-out <EVIDENCE_FILE>
+  ```
+
+  It only reads (one read-only transaction, rolled back), prints one PASS or FAIL line per named check and
+  one line per row, and exits 0 only when the first issuing run wrote every due target (up to 3 per city, 12
+  in all) with the right label, the TEST band, the manifest hashes, the code's config identity, a bracketing
+  band, a lead of at most 18 h and a `pipeline_run.day_ahead` record. Exit 1 means a check failed, 2 a missing
+  `SUPABASE_DB_URL` or a bad `--since`. The JSON never holds the connection URL, host or user.
+- To run one city locally without the database (a dry run: nothing is stored, the TEST band is used):
+
+  ```bash
+  PYTHONPATH=backend .venv/bin/python backend/dlr_day_ahead.py --city AUSTIN --output /tmp/da.json --no-store
+  ```
+
+- To run the ratings without the stage (a local run, for example when testing a rating change):
+  `PYTHONPATH=backend .venv/bin/python backend/dlr_live_run.py --no-day-ahead`. The scheduled workflow never
+  passes it.
+- The owner's one-query check of the write side is `supabase/ops/verify_day_ahead_store.sql` in the SQL
+  editor. Run it once, right after the store migration is applied and before the exposure migration
+  (`20261108120100`); at that point every `ok` must be true. After the exposure, the check
+  `day_ahead_forecast_not_readable_by_anon_or_authenticated` is false on purpose, because the public keys
+  are now allowed to read the table. Do not revoke the public grant because of it. To check the live
+  setup after the exposure, use `supabase/ops/verify_exposure.sql` instead.

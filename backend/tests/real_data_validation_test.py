@@ -203,7 +203,7 @@ def _record(city, hour, temp=15.0, wind=3.0, solar=300.0, wind_raw=4.0, **overri
     safety monitor the way `rate_city` does (G5 off, the city's own bounds), so
     the rating, fallback flag and gate come from the production gates.
     """
-    point = city_point.city_point(city)
+    point = city_point.production_city_point(city)
     monitor = DLRSafetyMonitor(
         static_rating=point.static_rating, conductor=point.conductor,
         rating_bounds=point.rating_bounds, delta_fraction=float("inf"), logger=lambda msg: None)
@@ -230,7 +230,7 @@ def _record(city, hour, temp=15.0, wind=3.0, solar=300.0, wind_raw=4.0, **overri
 
 
 def _exhausted_record(city, hour):
-    point = city_point.city_point(city)
+    point = city_point.production_city_point(city)
     record = _record(city, hour, observation=None, observation_hour=None, sources=None,
                      rating_a=point.static_rating, status="fallback", fallback=True,
                      exhausted=True, archived=False, fallback_gates=["EXHAUSTED"],
@@ -321,6 +321,25 @@ def test_computed_amps_matches_the_safety_monitor(city):
     assert abs(float(computed) - record["rating_a"]) < 1e-6
 
 
+def test_computed_amps_expectation_follows_production_table(monkeypatch):
+    """
+    The expected rating in `_record` and `computed_amps` both read the per-city production table, so a
+    change to the table moves both together (they no longer silently track the shadow Drake resolver).
+    """
+    before_record = _record("AUSTIN", 0)
+    before = float(real_data_validation.computed_amps("AUSTIN", 15.0, 3.0, 300.0))
+
+    monkeypatch.setitem(
+        config.PRODUCTION_CONDUCTORS, "AUSTIN", {**config.PRODUCTION_CONDUCTORS["AUSTIN"], "max_temp_c": 125.0})   # AUSTIN holds 100 C since v3
+    after_record = _record("AUSTIN", 0)
+    after = float(real_data_validation.computed_amps("AUSTIN", 15.0, 3.0, 300.0))
+
+    assert after > before
+    assert after_record["status"] == "ok"  # still inside AUSTIN's plausibility bounds
+    assert after_record["rating_a"] > before_record["rating_a"]
+    assert abs(after - after_record["rating_a"]) < 1e-6
+
+
 def test_classify_steps_counts_every_expected_step_once(tmp_path):
     records = [
         _record("AUSTIN", 0),                                  # ok, warm-up
@@ -401,7 +420,9 @@ def test_report_is_byte_identical_across_runs_and_ordered_by_locations(tmp_path)
         "val01_outliers.csv", "val01_ratings_by_city.csv",
         # added by plan 03-03 (VAL-02)
         "val02_coverage_by_residuals.csv", "val02_detector_by_city.csv",
-        "val02_forecast_by_city.csv", "val02_g6_trips.csv"])
+        "val02_forecast_by_city.csv", "val02_g6_trips.csv",
+        # added by plan 07-08 (B5, D-18)
+        "val02_g6_band_by_city.csv"])
     for name in names:
         assert (first / name).read_bytes() == (second / name).read_bytes(), name
     cities = list(pd.read_csv(first / "val01_ratings_by_city.csv")["city"])
@@ -509,7 +530,11 @@ def test_missing_input_exits_two_naming_the_path(tmp_path, capsys):
     assert not (tmp_path / "out").exists()
 
 
-def test_amps_round_to_one_decimal_and_rates_to_four(tmp_path):
+def test_amps_round_to_one_decimal_and_rates_to_four(tmp_path, monkeypatch):
+    # The expected figures are for AUSTIN at the model-default Drake 75 C; pin that point so this rounding test
+    # does not move with the live production table (AUSTIN holds 100 C since v3, which rates 1880.3 A here).
+    monkeypatch.setitem(
+        config.PRODUCTION_CONDUCTORS, "AUSTIN", {**config.PRODUCTION_CONDUCTORS["AUSTIN"], "max_temp_c": 75.0})
     # Three scored steps (hours 2-4): two ok (1614.9 A, below the 1825 A static) and one G4
     # fallback that reports exactly the static rating.
     records = [_record("AUSTIN", 0), _record("AUSTIN", 1), _record("AUSTIN", 2),

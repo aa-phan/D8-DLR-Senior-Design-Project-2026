@@ -1,0 +1,4954 @@
+{
+  "basis": "development",
+  "cities": [
+    "AUSTIN",
+    "CORPUS_CHRISTI",
+    "MIDLAND",
+    "EL_PASO"
+  ],
+  "conductor_basis": {
+    "config_version": "v2-provisional-2026-11-02",
+    "differing": [],
+    "headline": "the 12 frozen artifacts under the frozen Drake configuration (every city on Drake)",
+    "name": "frozen-drake"
+  },
+  "config": {
+    "cities": [
+      "AUSTIN",
+      "CORPUS_CHRISTI",
+      "MIDLAND",
+      "EL_PASO"
+    ],
+    "conductor_basis": {
+      "config_version": "v2-provisional-2026-11-02",
+      "differing": [],
+      "headline": "the 12 frozen artifacts under the frozen Drake configuration (every city on Drake)",
+      "name": "frozen-drake"
+    },
+    "evidence_root": "data/shadow/evaluation/v4-test",
+    "fetch_window": [
+      "2026-09-28",
+      "2026-10-24"
+    ],
+    "frame_provider": "injected",
+    "model_loader": "injected",
+    "model_source": "the 12 frozen per-city artifacts (PD-01); not a train-only refit, so the development (train-only) numbers are not directly comparable",
+    "params": {
+      "block_lengths": [
+        1,
+        4,
+        8,
+        28
+      ],
+      "consistency_min_cities": 3,
+      "decision_margin_amps": 5.0,
+      "min_paired_rows": 8,
+      "n_resamples": 10000,
+      "power": 0.8,
+      "relative_margin_fraction": 0.02,
+      "seed": 20260929
+    },
+    "point_resolver": "city_point (frozen Drake)",
+    "protocol_status": "signed",
+    "rating_config_version": "v2-provisional-2026-11-02",
+    "round": "v4-read1",
+    "scored_window": [
+      "2026-03-18T00:00:00+00:00",
+      "2026-09-30T00:00:00+00:00"
+    ],
+    "secondary": null,
+    "vetoes": null
+  },
+  "decision": null,
+  "decision_note": "TEST vetoes only (D-02): no pick or decision is made from this basis",
+  "diagnostics": {
+    "AUSTIN": {
+      "archive_vs_frame_truth": {
+        "archive_null_hours_dropped": [],
+        "max_abs_diff_truth_amps": 0.0,
+        "max_abs_diff_weather": 0.0,
+        "n_hours_compared": 784,
+        "tolerance": 0.0
+      },
+      "candidate_failed_rows": {
+        "ml_cooling_corrected": 0,
+        "ml_wind_corrected": 0,
+        "persistence_24h": 0,
+        "raw_forecast": 0
+      },
+      "frame_fetch": {
+        "cache_path": "data/experiment/anchored_pair_frame_AUSTIN_2024-01-20_2026-09-29_lead24_previous_runs.csv",
+        "cache_sha256": "dbe2ad2207b933730e45bc960922b8fef4199d73af923e8ed9a2623be0c228c5",
+        "city": "AUSTIN",
+        "fetch_window": [
+          "2024-01-20",
+          "2026-09-29"
+        ],
+        "provider": "cached_test_provider"
+      },
+      "leakage_probe": {
+        "arms_checked": [
+          "raw_forecast",
+          "persistence_24h",
+          "ml_wind_corrected",
+          "ml_cooling_corrected"
+        ],
+        "oracle_changed": true,
+        "oracle_max_abs_change_amps": 936.3715933274034,
+        "passed": true,
+        "sabotage": "truth_air_temp +10, truth_wind_speed +5, truth_wind_direction +90 mod 360, truth_solar_radiation +100, every *_dlr_amps column NaN",
+        "status": "passed"
+      },
+      "missing_slots": [],
+      "preparation": {
+        "anchor_after_fit_end": true,
+        "artifact_fit_window_end": "2026-03-16",
+        "min_anchor_datetime_utc": "2026-03-17T00:00:00+00:00",
+        "n_expected_slots": 784,
+        "n_frame_rows": 23592,
+        "n_missing_from_reconstruction": 0,
+        "n_rows_dropped_null_weather": 0,
+        "n_scored_slots": 784,
+        "window": [
+          "2026-03-18T00:00:00+00:00",
+          "2026-09-30T00:00:00+00:00"
+        ]
+      },
+      "reference_feature_gaps": {
+        "n_rows": 0,
+        "valid_times": []
+      },
+      "reference_target": "the valid time by construction (features at anchor = valid - 24 h)",
+      "unavailable_reasons": {}
+    },
+    "CORPUS_CHRISTI": {
+      "archive_vs_frame_truth": {
+        "archive_null_hours_dropped": [],
+        "max_abs_diff_truth_amps": 0.0,
+        "max_abs_diff_weather": 0.0,
+        "n_hours_compared": 784,
+        "tolerance": 0.0
+      },
+      "candidate_failed_rows": {
+        "ml_cooling_corrected": 0,
+        "ml_wind_corrected": 0,
+        "persistence_24h": 0,
+        "raw_forecast": 0
+      },
+      "frame_fetch": {
+        "cache_path": "data/experiment/anchored_pair_frame_CORPUS_CHRISTI_2024-01-20_2026-09-29_lead24_previous_runs.csv",
+        "cache_sha256": "585bf24623747bf9c21051b4b2e9674c2e5888707f23b267efa6caaddbb78043",
+        "city": "CORPUS_CHRISTI",
+        "fetch_window": [
+          "2024-01-20",
+          "2026-09-29"
+        ],
+        "provider": "cached_test_provider"
+      },
+      "leakage_probe": {
+        "arms_checked": [
+          "raw_forecast",
+          "persistence_24h",
+          "ml_wind_corrected",
+          "ml_cooling_corrected"
+        ],
+        "oracle_changed": true,
+        "oracle_max_abs_change_amps": 933.5597144325751,
+        "passed": true,
+        "sabotage": "truth_air_temp +10, truth_wind_speed +5, truth_wind_direction +90 mod 360, truth_solar_radiation +100, every *_dlr_amps column NaN",
+        "status": "passed"
+      },
+      "missing_slots": [],
+      "preparation": {
+        "anchor_after_fit_end": true,
+        "artifact_fit_window_end": "2026-03-16",
+        "min_anchor_datetime_utc": "2026-03-17T00:00:00+00:00",
+        "n_expected_slots": 784,
+        "n_frame_rows": 23592,
+        "n_missing_from_reconstruction": 0,
+        "n_rows_dropped_null_weather": 0,
+        "n_scored_slots": 784,
+        "window": [
+          "2026-03-18T00:00:00+00:00",
+          "2026-09-30T00:00:00+00:00"
+        ]
+      },
+      "reference_feature_gaps": {
+        "n_rows": 0,
+        "valid_times": []
+      },
+      "reference_target": "the valid time by construction (features at anchor = valid - 24 h)",
+      "unavailable_reasons": {}
+    },
+    "EL_PASO": {
+      "archive_vs_frame_truth": {
+        "archive_null_hours_dropped": [],
+        "max_abs_diff_truth_amps": 0.0,
+        "max_abs_diff_weather": 0.0,
+        "n_hours_compared": 784,
+        "tolerance": 0.0
+      },
+      "candidate_failed_rows": {
+        "ml_cooling_corrected": 0,
+        "ml_wind_corrected": 0,
+        "persistence_24h": 0,
+        "raw_forecast": 0
+      },
+      "frame_fetch": {
+        "cache_path": "data/experiment/anchored_pair_frame_EL_PASO_2024-01-20_2026-09-29_lead24_previous_runs.csv",
+        "cache_sha256": "32ea0bab4dee2d462926b40b831c42d7f44e13adb3e3c8b990fae8f838dc82e4",
+        "city": "EL_PASO",
+        "fetch_window": [
+          "2024-01-20",
+          "2026-09-29"
+        ],
+        "provider": "cached_test_provider"
+      },
+      "leakage_probe": {
+        "arms_checked": [
+          "raw_forecast",
+          "persistence_24h",
+          "ml_wind_corrected",
+          "ml_cooling_corrected"
+        ],
+        "oracle_changed": true,
+        "oracle_max_abs_change_amps": 1003.1854075113325,
+        "passed": true,
+        "sabotage": "truth_air_temp +10, truth_wind_speed +5, truth_wind_direction +90 mod 360, truth_solar_radiation +100, every *_dlr_amps column NaN",
+        "status": "passed"
+      },
+      "missing_slots": [],
+      "preparation": {
+        "anchor_after_fit_end": true,
+        "artifact_fit_window_end": "2026-03-16",
+        "min_anchor_datetime_utc": "2026-03-17T00:00:00+00:00",
+        "n_expected_slots": 784,
+        "n_frame_rows": 23592,
+        "n_missing_from_reconstruction": 0,
+        "n_rows_dropped_null_weather": 0,
+        "n_scored_slots": 784,
+        "window": [
+          "2026-03-18T00:00:00+00:00",
+          "2026-09-30T00:00:00+00:00"
+        ]
+      },
+      "reference_feature_gaps": {
+        "n_rows": 0,
+        "valid_times": []
+      },
+      "reference_target": "the valid time by construction (features at anchor = valid - 24 h)",
+      "unavailable_reasons": {}
+    },
+    "MIDLAND": {
+      "archive_vs_frame_truth": {
+        "archive_null_hours_dropped": [],
+        "max_abs_diff_truth_amps": 0.0,
+        "max_abs_diff_weather": 0.0,
+        "n_hours_compared": 784,
+        "tolerance": 0.0
+      },
+      "candidate_failed_rows": {
+        "ml_cooling_corrected": 0,
+        "ml_wind_corrected": 0,
+        "persistence_24h": 0,
+        "raw_forecast": 0
+      },
+      "frame_fetch": {
+        "cache_path": "data/experiment/anchored_pair_frame_MIDLAND_2024-01-20_2026-09-29_lead24_previous_runs.csv",
+        "cache_sha256": "a29edcf31480749b72c1a873157f0c349b34ea10bdf0071610e8fbca7c9b0cef",
+        "city": "MIDLAND",
+        "fetch_window": [
+          "2024-01-20",
+          "2026-09-29"
+        ],
+        "provider": "cached_test_provider"
+      },
+      "leakage_probe": {
+        "arms_checked": [
+          "raw_forecast",
+          "persistence_24h",
+          "ml_wind_corrected",
+          "ml_cooling_corrected"
+        ],
+        "oracle_changed": true,
+        "oracle_max_abs_change_amps": 927.6876014986183,
+        "passed": true,
+        "sabotage": "truth_air_temp +10, truth_wind_speed +5, truth_wind_direction +90 mod 360, truth_solar_radiation +100, every *_dlr_amps column NaN",
+        "status": "passed"
+      },
+      "missing_slots": [],
+      "preparation": {
+        "anchor_after_fit_end": true,
+        "artifact_fit_window_end": "2026-03-16",
+        "min_anchor_datetime_utc": "2026-03-17T00:00:00+00:00",
+        "n_expected_slots": 784,
+        "n_frame_rows": 23592,
+        "n_missing_from_reconstruction": 0,
+        "n_rows_dropped_null_weather": 0,
+        "n_scored_slots": 784,
+        "window": [
+          "2026-03-18T00:00:00+00:00",
+          "2026-09-30T00:00:00+00:00"
+        ]
+      },
+      "reference_feature_gaps": {
+        "n_rows": 0,
+        "valid_times": []
+      },
+      "reference_target": "the valid time by construction (features at anchor = valid - 24 h)",
+      "unavailable_reasons": {}
+    }
+  },
+  "evidence": [],
+  "evidence_dir": "data/shadow/evaluation/v4-test/reconstructed_frames_20261102T085108Z",
+  "exclusions": {
+    "AUSTIN": {
+      "accounting": {
+        "expected_slots_equals_scored_plus_missing": true,
+        "per_candidate_scored_plus_exclusions_equals_rows": {
+          "ml_cooling_corrected": true,
+          "ml_wind_corrected": true,
+          "persistence_24h": true,
+          "raw_forecast": true,
+          "reference_ml_refit_24h": true
+        }
+      },
+      "candidate_level": {
+        "ml_cooling_corrected": {},
+        "ml_wind_corrected": {},
+        "persistence_24h": {},
+        "raw_forecast": {},
+        "reference_ml_refit_24h": {}
+      },
+      "row_level": {
+        "missing_from_reconstruction": 0
+      },
+      "rows_dropped_null_weather": 0
+    },
+    "CORPUS_CHRISTI": {
+      "accounting": {
+        "expected_slots_equals_scored_plus_missing": true,
+        "per_candidate_scored_plus_exclusions_equals_rows": {
+          "ml_cooling_corrected": true,
+          "ml_wind_corrected": true,
+          "persistence_24h": true,
+          "raw_forecast": true,
+          "reference_ml_refit_24h": true
+        }
+      },
+      "candidate_level": {
+        "ml_cooling_corrected": {},
+        "ml_wind_corrected": {},
+        "persistence_24h": {},
+        "raw_forecast": {},
+        "reference_ml_refit_24h": {}
+      },
+      "row_level": {
+        "missing_from_reconstruction": 0
+      },
+      "rows_dropped_null_weather": 0
+    },
+    "EL_PASO": {
+      "accounting": {
+        "expected_slots_equals_scored_plus_missing": true,
+        "per_candidate_scored_plus_exclusions_equals_rows": {
+          "ml_cooling_corrected": true,
+          "ml_wind_corrected": true,
+          "persistence_24h": true,
+          "raw_forecast": true,
+          "reference_ml_refit_24h": true
+        }
+      },
+      "candidate_level": {
+        "ml_cooling_corrected": {},
+        "ml_wind_corrected": {},
+        "persistence_24h": {},
+        "raw_forecast": {},
+        "reference_ml_refit_24h": {}
+      },
+      "row_level": {
+        "missing_from_reconstruction": 0
+      },
+      "rows_dropped_null_weather": 0
+    },
+    "MIDLAND": {
+      "accounting": {
+        "expected_slots_equals_scored_plus_missing": true,
+        "per_candidate_scored_plus_exclusions_equals_rows": {
+          "ml_cooling_corrected": true,
+          "ml_wind_corrected": true,
+          "persistence_24h": true,
+          "raw_forecast": true,
+          "reference_ml_refit_24h": true
+        }
+      },
+      "candidate_level": {
+        "ml_cooling_corrected": {},
+        "ml_wind_corrected": {},
+        "persistence_24h": {},
+        "raw_forecast": {},
+        "reference_ml_refit_24h": {}
+      },
+      "row_level": {
+        "missing_from_reconstruction": 0
+      },
+      "rows_dropped_null_weather": 0
+    }
+  },
+  "failed_cities": {},
+  "family": {
+    "comparisons": [
+      {
+        "a": "ml_wind_corrected",
+        "b": "ml_cooling_corrected",
+        "cities_favoring_a": 0,
+        "cities_with_data": 4,
+        "flags": [
+          "V4_reanalysis_truth_shared_weather"
+        ],
+        "headline": {
+          "analytic_design_effect_n": 3063.645491081712,
+          "block_lengths_run": [
+            1,
+            4,
+            8,
+            28
+          ],
+          "block_lengths_skipped": [],
+          "ci95_widest": [
+            -14.565034167378812,
+            -1.145500798254013
+          ],
+          "ci_bonferroni_widest": [
+            -18.293716310052293,
+            0.11279047069714879
+          ],
+          "cities_with_data": 4,
+          "holm_rejected": true,
+          "mdd": 12.674460083648757,
+          "n_degenerate_resamples": 0,
+          "n_eff_bootstrap": 484.70980698253476,
+          "n_paired": 3136,
+          "n_slots": 784,
+          "outcome": "favors_B",
+          "p_headline": 0.006999300069993001,
+          "p_holm_adjusted": 0.020997900209979003,
+          "p_min_over_runs": 0.00019998000199980003,
+          "point_margin": -6.943616768796316,
+          "reason": null,
+          "rho_bar": 0.007872376131519594,
+          "rows_needed_for_5A": 20151,
+          "schemes": {
+            "city_cluster_two_stage": {
+              "1": {
+                "ci95": [
+                  -14.529833881161835,
+                  -1.281515202303412
+                ],
+                "ci_bonferroni": [
+                  -18.293716310052293,
+                  -0.05352188605744038
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.004999500049995001,
+                "sd": 3.5065184556080156
+              },
+              "28": {
+                "ci95": [
+                  -13.800888966603612,
+                  -1.145500798254013
+                ],
+                "ci_bonferroni": [
+                  -17.235056653012805,
+                  0.059531482545387183
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.006799320067993201,
+                "sd": 3.367350810978891
+              },
+              "4": {
+                "ci95": [
+                  -14.565034167378812,
+                  -1.2991003119988336
+                ],
+                "ci_bonferroni": [
+                  -18.17126927303627,
+                  0.11279047069714879
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.006999300069993001,
+                "sd": 3.486235751770268
+              },
+              "8": {
+                "ci95": [
+                  -14.28876591706623,
+                  -1.2792030209935783
+                ],
+                "ci_bonferroni": [
+                  -17.705549427446243,
+                  -0.04212488519100489
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.0047995200479952005,
+                "sd": 3.442542796071292
+              }
+            },
+            "joint_time_block": {
+              "1": {
+                "ci95": [
+                  -9.636918082649249,
+                  -4.299443396628282
+                ],
+                "ci_bonferroni": [
+                  -10.84557417681555,
+                  -3.2164962910746344
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 1.3620392899569556
+              },
+              "28": {
+                "ci95": [
+                  -9.605122842830644,
+                  -3.528962960227233
+                ],
+                "ci_bonferroni": [
+                  -10.856152519480823,
+                  -2.362575979321424
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 1.5566041241016952
+              },
+              "4": {
+                "ci95": [
+                  -9.785932778036129,
+                  -4.129869995787406
+                ],
+                "ci_bonferroni": [
+                  -11.066464313192537,
+                  -2.7171932322658434
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 1.4404422246658322
+              },
+              "8": {
+                "ci95": [
+                  -9.613558844167628,
+                  -4.004391013136908
+                ],
+                "ci_bonferroni": [
+                  -10.799290170850245,
+                  -2.8414411146864396
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 1.4325249954946717
+              }
+            }
+          },
+          "se_boot": 3.5065184556080156
+        },
+        "id": "ml_wind_corrected__vs__ml_cooling_corrected",
+        "mae_a": 112.77644847477846,
+        "mae_b": 105.83283170598214,
+        "n_nominal": 3136,
+        "n_paired": 3136,
+        "per_city": {
+          "AUSTIN": {
+            "block_lengths_run": [
+              1,
+              4,
+              8,
+              28
+            ],
+            "block_lengths_skipped": [],
+            "ci95_by_block_length": {
+              "1": [
+                -23.717547414492145,
+                -12.180621065949962
+              ],
+              "28": [
+                -23.58954756837986,
+                -10.99641494833134
+              ],
+              "4": [
+                -23.503932988179667,
+                -12.213955965167704
+              ],
+              "8": [
+                -23.616767812678756,
+                -11.764074761535491
+              ]
+            },
+            "label": "descriptive, uncorrected",
+            "mae_a": 109.24350437848572,
+            "mae_b": 91.29007732578009,
+            "mdd": 9.032493421039906,
+            "n_eff_acf": 784.0,
+            "n_paired": 784,
+            "outcome": "favors_B",
+            "point_margin": -17.953427052705678,
+            "reason": null,
+            "rows_needed_for_5A": 2559,
+            "se_boot": 3.2240652051711702
+          },
+          "CORPUS_CHRISTI": {
+            "block_lengths_run": [
+              1,
+              4,
+              8,
+              28
+            ],
+            "block_lengths_skipped": [],
+            "ci95_by_block_length": {
+              "1": [
+                -6.231455704550043,
+                1.731916376621101
+              ],
+              "28": [
+                -6.205146360979134,
+                1.1884419248850215
+              ],
+              "4": [
+                -6.463062403982381,
+                1.7901413688103007
+              ],
+              "8": [
+                -6.390130947940596,
+                1.7090123209239694
+              ]
+            },
+            "label": "descriptive, uncorrected",
+            "mae_a": 88.0623686269552,
+            "mae_b": 85.78453896367502,
+            "mdd": 5.892397817437045,
+            "n_eff_acf": 784.0,
+            "n_paired": 784,
+            "outcome": "inconclusive",
+            "point_margin": -2.277829663280176,
+            "reason": "crosses_zero",
+            "rows_needed_for_5A": 1089,
+            "se_boot": 2.1032370457058307
+          },
+          "EL_PASO": {
+            "block_lengths_run": [
+              1,
+              4,
+              8,
+              28
+            ],
+            "block_lengths_skipped": [],
+            "ci95_by_block_length": {
+              "1": [
+                -11.32894550924417,
+                2.239097513058698
+              ],
+              "28": [
+                -10.839941349898233,
+                2.74387180068483
+              ],
+              "4": [
+                -11.25415708209355,
+                2.4794111870200437
+              ],
+              "8": [
+                -10.958904249014166,
+                2.575783104478139
+              ]
+            },
+            "label": "descriptive, uncorrected",
+            "mae_a": 130.84296141080662,
+            "mae_b": 126.33238900294066,
+            "mdd": 9.849332716726332,
+            "n_eff_acf": 784.0,
+            "n_paired": 784,
+            "outcome": "inconclusive",
+            "point_margin": -4.5105724078659595,
+            "reason": "crosses_zero",
+            "rows_needed_for_5A": 3043,
+            "se_boot": 3.515628456720811
+          },
+          "MIDLAND": {
+            "block_lengths_run": [
+              1,
+              4,
+              8,
+              28
+            ],
+            "block_lengths_skipped": [],
+            "ci95_by_block_length": {
+              "1": [
+                -7.416606408817858,
+                1.3351052181329268
+              ],
+              "28": [
+                -6.849350818547367,
+                1.4978804502722198
+              ],
+              "4": [
+                -7.946498247292563,
+                1.402209930097786
+              ],
+              "8": [
+                -7.729770717809521,
+                1.190620528409976
+              ]
+            },
+            "label": "descriptive, uncorrected",
+            "mae_a": 122.95695948286628,
+            "mae_b": 119.92432153153284,
+            "mdd": 6.717494533191188,
+            "n_eff_acf": 656.7813506940113,
+            "n_paired": 784,
+            "outcome": "inconclusive",
+            "point_margin": -3.0326379513334505,
+            "reason": "crosses_zero",
+            "rows_needed_for_5A": 1416,
+            "se_boot": 2.397747707176944
+          }
+        },
+        "per_city_margins": {
+          "AUSTIN": -17.953427052705678,
+          "CORPUS_CHRISTI": -2.277829663280176,
+          "EL_PASO": -4.5105724078659595,
+          "MIDLAND": -3.0326379513334505
+        },
+        "point_margin": -6.943616768796316,
+        "relative_mae_reduction": -0.06560928831694324,
+        "row_source": "reconstructed_frames"
+      },
+      {
+        "a": "ml_wind_corrected",
+        "b": "reference_ml_refit_24h",
+        "cities_favoring_a": 3,
+        "cities_with_data": 4,
+        "flags": [
+          "V4_reanalysis_truth_shared_weather"
+        ],
+        "headline": {
+          "analytic_design_effect_n": 2984.3970845841154,
+          "block_lengths_run": [
+            1,
+            4,
+            8,
+            28
+          ],
+          "block_lengths_skipped": [],
+          "ci95_widest": [
+            -2.114308684892549,
+            44.59650097720251
+          ],
+          "ci_bonferroni_widest": [
+            -8.103653391394069,
+            55.630219997979175
+          ],
+          "cities_with_data": 4,
+          "holm_rejected": false,
+          "mdd": 44.00552354197065,
+          "n_degenerate_resamples": 0,
+          "n_eff_bootstrap": 105.90342910152508,
+          "n_paired": 3136,
+          "n_slots": 784,
+          "outcome": "inconclusive",
+          "p_headline": 0.08999100089991001,
+          "p_holm_adjusted": 0.17998200179982002,
+          "p_min_over_runs": 0.00019998000199980003,
+          "point_margin": 17.89734214962628,
+          "reason": "block_length_sensitive",
+          "rho_bar": 0.01693283557997788,
+          "rows_needed_for_5A": 242913,
+          "schemes": {
+            "city_cluster_two_stage": {
+              "1": {
+                "ci95": [
+                  -2.084301458067931,
+                  43.302231863561154
+                ],
+                "ci_bonferroni": [
+                  -8.103653391394069,
+                  54.71258904219484
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.08999100089991001,
+                "sd": 11.763525620656434
+              },
+              "28": {
+                "ci95": [
+                  -1.8373777245819896,
+                  44.59650097720251
+                ],
+                "ci_bonferroni": [
+                  -7.3272383894947675,
+                  55.630219997979175
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.08839116088391161,
+                "sd": 12.174576228906394
+              },
+              "4": {
+                "ci95": [
+                  -2.114308684892549,
+                  43.275921413245065
+                ],
+                "ci_bonferroni": [
+                  -7.783643261335557,
+                  54.265702670305096
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.0887911208879112,
+                "sd": 11.709082474943573
+              },
+              "8": {
+                "ci95": [
+                  -1.9332380738202208,
+                  43.152957683894556
+                ],
+                "ci_bonferroni": [
+                  -7.338401352861489,
+                  54.18163368000927
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.0851914808519148,
+                "sd": 11.757513027772605
+              }
+            },
+            "joint_time_block": {
+              "1": {
+                "ci95": [
+                  13.478415052188796,
+                  22.23880592148441
+                ],
+                "ci_bonferroni": [
+                  11.47815180894745,
+                  23.827526759500493
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 2.237895410666969
+              },
+              "28": {
+                "ci95": [
+                  12.341901889156734,
+                  25.33173910382225
+                ],
+                "ci_bonferroni": [
+                  10.145463865579762,
+                  27.957186437096816
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 3.293179825643951
+              },
+              "4": {
+                "ci95": [
+                  13.360254972069093,
+                  22.820102304498484
+                ],
+                "ci_bonferroni": [
+                  11.170870788486747,
+                  24.786466602852713
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 2.411376734007509
+              },
+              "8": {
+                "ci95": [
+                  13.115764632217854,
+                  23.117809400344722
+                ],
+                "ci_bonferroni": [
+                  10.69341996139369,
+                  25.238760048872827
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 2.5573448878307525
+              }
+            }
+          },
+          "se_boot": 12.174576228906394
+        },
+        "id": "ml_wind_corrected__vs__reference_ml_refit_24h",
+        "mae_a": 112.77644847477846,
+        "mae_b": 130.67379062440475,
+        "n_nominal": 3136,
+        "n_paired": 3136,
+        "per_city": {
+          "AUSTIN": {
+            "block_lengths_run": [
+              1,
+              4,
+              8,
+              28
+            ],
+            "block_lengths_skipped": [],
+            "ci95_by_block_length": {
+              "1": [
+                -15.099807654909146,
+                -0.21754290804236198
+              ],
+              "28": [
+                -14.93808625338769,
+                0.09873670437218568
+              ],
+              "4": [
+                -14.731759369225934,
+                -0.06820053499624619
+              ],
+              "8": [
+                -14.90740094770315,
+                0.32176857288407307
+              ]
+            },
+            "label": "descriptive, uncorrected",
+            "mae_a": 109.24350437848572,
+            "mae_b": 101.73015408888655,
+            "mdd": 10.999109628068668,
+            "n_eff_acf": 784.0,
+            "n_paired": 784,
+            "outcome": "inconclusive",
+            "point_margin": -7.513350289599191,
+            "reason": "block_length_sensitive",
+            "rows_needed_for_5A": 3794,
+            "se_boot": 3.926030718950328
+          },
+          "CORPUS_CHRISTI": {
+            "block_lengths_run": [
+              1,
+              4,
+              8,
+              28
+            ],
+            "block_lengths_skipped": [],
+            "ci95_by_block_length": {
+              "1": [
+                6.5272141324219985,
+                19.948390556373184
+              ],
+              "28": [
+                6.022908653734101,
+                19.751707266153403
+              ],
+              "4": [
+                6.266156521799973,
+                20.07111844883219
+              ],
+              "8": [
+                6.472317769118185,
+                20.28818508379874
+              ]
+            },
+            "label": "descriptive, uncorrected",
+            "mae_a": 88.0623686269552,
+            "mae_b": 101.34309635345555,
+            "mdd": 9.830183324337563,
+            "n_eff_acf": 739.8857440377724,
+            "n_paired": 784,
+            "outcome": "favors_A",
+            "point_margin": 13.280727726500345,
+            "reason": null,
+            "rows_needed_for_5A": 3031,
+            "se_boot": 3.5087932577538252
+          },
+          "EL_PASO": {
+            "block_lengths_run": [
+              1,
+              4,
+              8,
+              28
+            ],
+            "block_lengths_skipped": [],
+            "ci95_by_block_length": {
+              "1": [
+                2.2140009152834805,
+                18.828861728440984
+              ],
+              "28": [
+                2.8938127133359246,
+                19.349934727089728
+              ],
+              "4": [
+                2.553621026352045,
+                19.44318291739667
+              ],
+              "8": [
+                2.7234823597043047,
+                19.43765099530844
+              ]
+            },
+            "label": "descriptive, uncorrected",
+            "mae_a": 130.84296141080662,
+            "mae_b": 141.41946426666962,
+            "mdd": 12.1110306061599,
+            "n_eff_acf": 703.7398261714534,
+            "n_paired": 784,
+            "outcome": "favors_A",
+            "point_margin": 10.576502855862993,
+            "reason": null,
+            "rows_needed_for_5A": 4600,
+            "se_boot": 4.322920655013089
+          },
+          "MIDLAND": {
+            "block_lengths_run": [
+              1,
+              4,
+              8,
+              28
+            ],
+            "block_lengths_skipped": [],
+            "ci95_by_block_length": {
+              "1": [
+                43.98334276582947,
+                66.35774972313993
+              ],
+              "28": [
+                42.465703574801495,
+                72.76738508634438
+              ],
+              "4": [
+                43.35614451125154,
+                67.57614167132915
+              ],
+              "8": [
+                42.51802227169459,
+                68.10696386702844
+              ]
+            },
+            "label": "descriptive, uncorrected",
+            "mae_a": 122.95695948286628,
+            "mae_b": 178.20244778860726,
+            "mdd": 21.617055945383154,
+            "n_eff_acf": 393.4220892768584,
+            "n_paired": 784,
+            "outcome": "favors_A",
+            "point_margin": 55.24548830574098,
+            "reason": null,
+            "rows_needed_for_5A": 14655,
+            "se_boot": 7.7160087102199615
+          }
+        },
+        "per_city_margins": {
+          "AUSTIN": -7.513350289599191,
+          "CORPUS_CHRISTI": 13.280727726500345,
+          "EL_PASO": 10.576502855862993,
+          "MIDLAND": 55.24548830574098
+        },
+        "point_margin": 17.89734214962628,
+        "relative_mae_reduction": 0.13696198804753856,
+        "row_source": "reconstructed_frames"
+      },
+      {
+        "a": "ml_cooling_corrected",
+        "b": "reference_ml_refit_24h",
+        "cities_favoring_a": 4,
+        "cities_with_data": 4,
+        "flags": [
+          "V4_reanalysis_truth_shared_weather"
+        ],
+        "headline": {
+          "analytic_design_effect_n": 2981.957853022172,
+          "block_lengths_run": [
+            1,
+            4,
+            8,
+            28
+          ],
+          "block_lengths_skipped": [],
+          "ci95_widest": [
+            10.656328262761733,
+            48.402337087129055
+          ],
+          "ci_bonferroni_widest": [
+            8.621169153957556,
+            58.05586658938105
+          ],
+          "cities_with_data": 4,
+          "holm_rejected": true,
+          "mdd": 37.23563426086496,
+          "n_degenerate_resamples": 0,
+          "n_eff_bootstrap": 89.36189045376801,
+          "n_paired": 3136,
+          "n_slots": 784,
+          "outcome": "favors_A",
+          "p_headline": 0.00019998000199980003,
+          "p_holm_adjusted": 0.0017998200179982003,
+          "p_min_over_runs": 0.00019998000199980003,
+          "point_margin": 24.840958918422594,
+          "reason": null,
+          "rho_bar": 0.017219352136014544,
+          "rows_needed_for_5A": 173922,
+          "schemes": {
+            "city_cluster_two_stage": {
+              "1": {
+                "ci95": [
+                  11.081330905129652,
+                  47.29562826675997
+                ],
+                "ci_bonferroni": [
+                  9.440789809980545,
+                  58.05586658938105
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 9.86912763902639
+              },
+              "28": {
+                "ci95": [
+                  10.656328262761733,
+                  48.402337087129055
+                ],
+                "ci_bonferroni": [
+                  8.621169153957556,
+                  57.93638985966132
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 10.301617416463946
+              },
+              "4": {
+                "ci95": [
+                  11.098875183209696,
+                  47.45758087505324
+                ],
+                "ci_bonferroni": [
+                  9.202968301255,
+                  57.036288509478645
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 9.881872485304712
+              },
+              "8": {
+                "ci95": [
+                  11.11608791829758,
+                  47.395127707647916
+                ],
+                "ci_bonferroni": [
+                  9.149954448319962,
+                  56.843524403856705
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 9.947288098112564
+              }
+            },
+            "joint_time_block": {
+              "1": {
+                "ci95": [
+                  21.483690536232128,
+                  28.234847363301085
+                ],
+                "ci_bonferroni": [
+                  19.9951311666993,
+                  29.527589172168238
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 1.7354500824561399
+              },
+              "28": {
+                "ci95": [
+                  20.072730403214525,
+                  30.30337054999693
+                ],
+                "ci_bonferroni": [
+                  18.435681969634107,
+                  32.63214597516783
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 2.5972370266729685
+              },
+              "4": {
+                "ci95": [
+                  21.163906386927675,
+                  28.727034665509912
+                ],
+                "ci_bonferroni": [
+                  19.47966901119885,
+                  30.355899410064406
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 1.9408492208259462
+              },
+              "8": {
+                "ci95": [
+                  20.764122335172498,
+                  29.018887106332613
+                ],
+                "ci_bonferroni": [
+                  18.958619192847387,
+                  30.660485920177898
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 2.0930415302848653
+              }
+            }
+          },
+          "se_boot": 10.301617416463946
+        },
+        "id": "ml_cooling_corrected__vs__reference_ml_refit_24h",
+        "mae_a": 105.83283170598214,
+        "mae_b": 130.67379062440475,
+        "n_nominal": 3136,
+        "n_paired": 3136,
+        "per_city": {
+          "AUSTIN": {
+            "block_lengths_run": [
+              1,
+              4,
+              8,
+              28
+            ],
+            "block_lengths_skipped": [],
+            "ci95_by_block_length": {
+              "1": [
+                5.538064368359309,
+                15.144510710694162
+              ],
+              "28": [
+                4.304664374007041,
+                15.037171977350134
+              ],
+              "4": [
+                5.534195355284949,
+                15.356236249331834
+              ],
+              "8": [
+                5.091435634500951,
+                15.595591185237971
+              ]
+            },
+            "label": "descriptive, uncorrected",
+            "mae_a": 91.29007732578009,
+            "mae_b": 101.73015408888655,
+            "mdd": 7.801421015772283,
+            "n_eff_acf": 784.0,
+            "n_paired": 784,
+            "outcome": "favors_A",
+            "point_margin": 10.440076763106482,
+            "reason": null,
+            "rows_needed_for_5A": 1909,
+            "se_boot": 2.7846452663064083
+          },
+          "CORPUS_CHRISTI": {
+            "block_lengths_run": [
+              1,
+              4,
+              8,
+              28
+            ],
+            "block_lengths_skipped": [],
+            "ci95_by_block_length": {
+              "1": [
+                9.849645583724856,
+                21.086769176381903
+              ],
+              "28": [
+                9.351396419501976,
+                21.246526447473492
+              ],
+              "4": [
+                9.62696222792522,
+                21.50079809228805
+              ],
+              "8": [
+                9.534379950816442,
+                21.811319625257305
+              ]
+            },
+            "label": "descriptive, uncorrected",
+            "mae_a": 85.78453896367502,
+            "mae_b": 101.34309635345555,
+            "mdd": 8.690488272078873,
+            "n_eff_acf": 613.4709931247337,
+            "n_paired": 784,
+            "outcome": "favors_A",
+            "point_margin": 15.55855738978052,
+            "reason": null,
+            "rows_needed_for_5A": 2369,
+            "se_boot": 3.1019896221227303
+          },
+          "EL_PASO": {
+            "block_lengths_run": [
+              1,
+              4,
+              8,
+              28
+            ],
+            "block_lengths_skipped": [],
+            "ci95_by_block_length": {
+              "1": [
+                9.890207977160538,
+                20.478740648143308
+              ],
+              "28": [
+                10.021355161420418,
+                20.18214075628511
+              ],
+              "4": [
+                9.898476833192726,
+                20.74845182190528
+              ],
+              "8": [
+                9.678117331414398,
+                20.538241846538703
+              ]
+            },
+            "label": "descriptive, uncorrected",
+            "mae_a": 126.33238900294066,
+            "mae_b": 141.41946426666962,
+            "mdd": 7.856242297308048,
+            "n_eff_acf": 753.7671792504459,
+            "n_paired": 784,
+            "outcome": "favors_A",
+            "point_margin": 15.08707526372895,
+            "reason": null,
+            "rows_needed_for_5A": 1936,
+            "se_boot": 2.8042132170442016
+          },
+          "MIDLAND": {
+            "block_lengths_run": [
+              1,
+              4,
+              8,
+              28
+            ],
+            "block_lengths_skipped": [],
+            "ci95_by_block_length": {
+              "1": [
+                48.4903016658463,
+                67.82888224410718
+              ],
+              "28": [
+                46.83434722487276,
+                73.30924955174206
+              ],
+              "4": [
+                47.919362571811696,
+                69.15235883891225
+              ],
+              "8": [
+                47.02313344767461,
+                69.81062637010396
+              ]
+            },
+            "label": "descriptive, uncorrected",
+            "mae_a": 119.92432153153284,
+            "mae_b": 178.20244778860726,
+            "mdd": 18.99162440243844,
+            "n_eff_acf": 537.1532551362047,
+            "n_paired": 784,
+            "outcome": "favors_A",
+            "point_margin": 58.27812625707442,
+            "reason": null,
+            "rows_needed_for_5A": 11311,
+            "se_boot": 6.778885139617638
+          }
+        },
+        "per_city_margins": {
+          "AUSTIN": 10.440076763106482,
+          "CORPUS_CHRISTI": 15.55855738978052,
+          "EL_PASO": 15.08707526372895,
+          "MIDLAND": 58.27812625707442
+        },
+        "point_margin": 24.840958918422594,
+        "relative_mae_reduction": 0.19009901526330475,
+        "row_source": "reconstructed_frames"
+      },
+      {
+        "a": "ml_wind_corrected",
+        "b": "raw_forecast",
+        "cities_favoring_a": 4,
+        "cities_with_data": 4,
+        "flags": [
+          "V4_reanalysis_truth_shared_weather"
+        ],
+        "headline": {
+          "analytic_design_effect_n": 3302.636786016442,
+          "block_lengths_run": [
+            1,
+            4,
+            8,
+            28
+          ],
+          "block_lengths_skipped": [],
+          "ci95_widest": [
+            5.3377828473945295,
+            32.27032800399919
+          ],
+          "ci_bonferroni_widest": [
+            3.39450813031393,
+            37.8808702899505
+          ],
+          "cities_with_data": 4,
+          "holm_rejected": true,
+          "mdd": 24.795528863504927,
+          "n_degenerate_resamples": 0,
+          "n_eff_bootstrap": 185.81206006659482,
+          "n_paired": 3136,
+          "n_slots": 784,
+          "outcome": "favors_A",
+          "p_headline": 0.00019998000199980003,
+          "p_holm_adjusted": 0.0017998200179982003,
+          "p_min_over_runs": 0.00019998000199980003,
+          "point_margin": 17.95952619637072,
+          "reason": null,
+          "rho_bar": -0.016818560119598137,
+          "rows_needed_for_5A": 77123,
+          "schemes": {
+            "city_cluster_two_stage": {
+              "1": {
+                "ci95": [
+                  5.3377828473945295,
+                  32.00895878150761
+                ],
+                "ci_bonferroni": [
+                  3.461853423626586,
+                  37.282257589831985
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 6.858279062416122
+              },
+              "28": {
+                "ci95": [
+                  5.996879055628001,
+                  32.256050615479054
+                ],
+                "ci_bonferroni": [
+                  3.799441950179241,
+                  37.66819084244502
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 6.740076434637539
+              },
+              "4": {
+                "ci95": [
+                  5.38512888361504,
+                  32.01140280434001
+                ],
+                "ci_bonferroni": [
+                  3.39450813031393,
+                  37.8808702899505
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 6.859935571426017
+              },
+              "8": {
+                "ci95": [
+                  5.53686809627643,
+                  32.27032800399919
+                ],
+                "ci_bonferroni": [
+                  3.52691979370317,
+                  37.47801631338897
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 6.842068307973568
+              }
+            },
+            "joint_time_block": {
+              "1": {
+                "ci95": [
+                  14.76756325318886,
+                  21.0737355235919
+                ],
+                "ci_bonferroni": [
+                  13.500039784606264,
+                  22.2727537242784
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 1.6126218144284419
+              },
+              "28": {
+                "ci95": [
+                  14.40575740750365,
+                  22.201162984664514
+                ],
+                "ci_bonferroni": [
+                  12.68168498329422,
+                  23.783522384248606
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 2.0192180231927903
+              },
+              "4": {
+                "ci95": [
+                  14.719607494680746,
+                  21.376701552008395
+                ],
+                "ci_bonferroni": [
+                  13.390031071470714,
+                  22.5867658075288
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 1.7050147728025673
+              },
+              "8": {
+                "ci95": [
+                  14.53135507765892,
+                  21.64145107208394
+                ],
+                "ci_bonferroni": [
+                  13.1961432121276,
+                  22.845593405448263
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 1.8007127321312055
+              }
+            }
+          },
+          "se_boot": 6.859935571426017
+        },
+        "id": "ml_wind_corrected__vs__raw_forecast",
+        "mae_a": 112.77644847477846,
+        "mae_b": 130.7359746711492,
+        "n_nominal": 3136,
+        "n_paired": 3136,
+        "per_city": {
+          "AUSTIN": {
+            "block_lengths_run": [
+              1,
+              4,
+              8,
+              28
+            ],
+            "block_lengths_skipped": [],
+            "ci95_by_block_length": {
+              "1": [
+                -0.9490333659778409,
+                11.386686436257088
+              ],
+              "28": [
+                -0.4669049109356471,
+                13.669583302702646
+              ],
+              "4": [
+                -0.569354884969375,
+                11.37969571079039
+              ],
+              "8": [
+                -0.611964025042798,
+                11.855251203162034
+              ]
+            },
+            "label": "descriptive, uncorrected",
+            "mae_a": 109.24350437848572,
+            "mae_b": 114.45821338381691,
+            "mdd": 10.140092857730554,
+            "n_eff_acf": 765.8251723426129,
+            "n_paired": 784,
+            "outcome": "inconclusive",
+            "point_margin": 5.214709005331179,
+            "reason": "crosses_zero",
+            "rows_needed_for_5A": 3225,
+            "se_boot": 3.619412606895642
+          },
+          "CORPUS_CHRISTI": {
+            "block_lengths_run": [
+              1,
+              4,
+              8,
+              28
+            ],
+            "block_lengths_skipped": [],
+            "ci95_by_block_length": {
+              "1": [
+                18.188483505406136,
+                27.061809763386343
+              ],
+              "28": [
+                19.089385379997278,
+                26.838393887599896
+              ],
+              "4": [
+                18.661813330610382,
+                27.130313679541537
+              ],
+              "8": [
+                18.614211907380444,
+                27.289860657324567
+              ]
+            },
+            "label": "descriptive, uncorrected",
+            "mae_a": 88.0623686269552,
+            "mae_b": 110.76124114904852,
+            "mdd": 6.283746241258927,
+            "n_eff_acf": 784.0,
+            "n_paired": 784,
+            "outcome": "favors_A",
+            "point_margin": 22.69887252209332,
+            "reason": null,
+            "rows_needed_for_5A": 1239,
+            "se_boot": 2.2429252555420742
+          },
+          "EL_PASO": {
+            "block_lengths_run": [
+              1,
+              4,
+              8,
+              28
+            ],
+            "block_lengths_skipped": [],
+            "ci95_by_block_length": {
+              "1": [
+                27.903103390775936,
+                47.99976583059841
+              ],
+              "28": [
+                26.059454326579942,
+                49.4743746623679
+              ],
+              "4": [
+                27.676757282578624,
+                47.98727402764062
+              ],
+              "8": [
+                27.003600027093647,
+                48.385616444074046
+              ]
+            },
+            "label": "descriptive, uncorrected",
+            "mae_a": 130.84296141080662,
+            "mae_b": 168.6322464293769,
+            "mdd": 16.66819911995546,
+            "n_eff_acf": 575.7066290979074,
+            "n_paired": 784,
+            "outcome": "favors_A",
+            "point_margin": 37.789285018570254,
+            "reason": null,
+            "rows_needed_for_5A": 8713,
+            "se_boot": 5.94955991778914
+          },
+          "MIDLAND": {
+            "block_lengths_run": [
+              1,
+              4,
+              8,
+              28
+            ],
+            "block_lengths_skipped": [],
+            "ci95_by_block_length": {
+              "1": [
+                2.575070318867008,
+                9.58765082205771
+              ],
+              "28": [
+                2.3668397375609733,
+                9.892250487505002
+              ],
+              "4": [
+                2.4662328087823253,
+                9.674931651782517
+              ],
+              "8": [
+                2.247411808274284,
+                9.81367810671969
+              ]
+            },
+            "label": "descriptive, uncorrected",
+            "mae_a": 122.95695948286628,
+            "mae_b": 129.09219772235443,
+            "mdd": 5.411756451511966,
+            "n_eff_acf": 734.8857726775672,
+            "n_paired": 784,
+            "outcome": "favors_A",
+            "point_margin": 6.135238239488134,
+            "reason": null,
+            "rows_needed_for_5A": 919,
+            "se_boot": 1.9316765438807895
+          }
+        },
+        "per_city_margins": {
+          "AUSTIN": 5.214709005331179,
+          "CORPUS_CHRISTI": 22.69887252209332,
+          "EL_PASO": 37.789285018570254,
+          "MIDLAND": 6.135238239488134
+        },
+        "point_margin": 17.95952619637072,
+        "relative_mae_reduction": 0.13737248864779406,
+        "row_source": "reconstructed_frames"
+      },
+      {
+        "a": "ml_cooling_corrected",
+        "b": "raw_forecast",
+        "cities_favoring_a": 4,
+        "cities_with_data": 4,
+        "flags": [
+          "V4_reanalysis_truth_shared_weather"
+        ],
+        "headline": {
+          "analytic_design_effect_n": 3107.8189456441787,
+          "block_lengths_run": [
+            1,
+            4,
+            8,
+            28
+          ],
+          "block_lengths_skipped": [],
+          "ci95_widest": [
+            12.983935618883592,
+            37.08021391582889
+          ],
+          "ci_bonferroni_widest": [
+            9.176018660762885,
+            41.76393983544537
+          ],
+          "cities_with_data": 4,
+          "holm_rejected": true,
+          "mdd": 21.802863409764644,
+          "n_degenerate_resamples": 0,
+          "n_eff_bootstrap": 188.0854785588019,
+          "n_paired": 3136,
+          "n_slots": 784,
+          "outcome": "favors_A",
+          "p_headline": 0.00019998000199980003,
+          "p_holm_adjusted": 0.0017998200179982003,
+          "p_min_over_runs": 0.00019998000199980003,
+          "point_margin": 24.903142965167035,
+          "reason": null,
+          "rho_bar": 0.0030225971813575467,
+          "rows_needed_for_5A": 59630,
+          "schemes": {
+            "city_cluster_two_stage": {
+              "1": {
+                "ci95": [
+                  13.283610744743742,
+                  37.08021391582889
+                ],
+                "ci_bonferroni": [
+                  9.620374888628403,
+                  41.35137068878282
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 6.0319841971076045
+              },
+              "28": {
+                "ci95": [
+                  12.983935618883592,
+                  36.84045691745491
+                ],
+                "ci_bonferroni": [
+                  9.176018660762885,
+                  41.15500369044343
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 6.018467867459883
+              },
+              "4": {
+                "ci95": [
+                  13.430650420416434,
+                  36.97632950964202
+                ],
+                "ci_bonferroni": [
+                  9.952616185208205,
+                  41.76393983544537
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 6.00377069479519
+              },
+              "8": {
+                "ci95": [
+                  13.317869718561372,
+                  36.826686221860115
+                ],
+                "ci_bonferroni": [
+                  9.648482184002821,
+                  41.60036072568057
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 5.982144576243457
+              }
+            },
+            "joint_time_block": {
+              "1": {
+                "ci95": [
+                  22.018333168421808,
+                  27.759161436756195
+                ],
+                "ci_bonferroni": [
+                  20.89014233559761,
+                  28.92518823828582
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 1.4616810984635724
+              },
+              "28": {
+                "ci95": [
+                  21.234245659969247,
+                  28.749151479008532
+                ],
+                "ci_bonferroni": [
+                  19.755080718623983,
+                  30.386032172212786
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 1.9170890766655568
+              },
+              "4": {
+                "ci95": [
+                  21.861252842642838,
+                  28.10344598393508
+                ],
+                "ci_bonferroni": [
+                  20.702049536917226,
+                  29.295575976034325
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 1.589886009208984
+              },
+              "8": {
+                "ci95": [
+                  21.486071310182,
+                  28.307901892692524
+                ],
+                "ci_bonferroni": [
+                  20.01587177190698,
+                  29.525702410736862
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 1.7378165358221962
+              }
+            }
+          },
+          "se_boot": 6.0319841971076045
+        },
+        "id": "ml_cooling_corrected__vs__raw_forecast",
+        "mae_a": 105.83283170598214,
+        "mae_b": 130.7359746711492,
+        "n_nominal": 3136,
+        "n_paired": 3136,
+        "per_city": {
+          "AUSTIN": {
+            "block_lengths_run": [
+              1,
+              4,
+              8,
+              28
+            ],
+            "block_lengths_skipped": [],
+            "ci95_by_block_length": {
+              "1": [
+                18.081236972129695,
+                28.37037865349965
+              ],
+              "28": [
+                18.076113131485457,
+                29.46172840451788
+              ],
+              "4": [
+                18.189857733528545,
+                28.421003529246583
+              ],
+              "8": [
+                18.257605814979343,
+                28.54016676693741
+              ]
+            },
+            "label": "descriptive, uncorrected",
+            "mae_a": 91.29007732578009,
+            "mae_b": 114.45821338381691,
+            "mdd": 8.196592566995745,
+            "n_eff_acf": 724.5904045331317,
+            "n_paired": 784,
+            "outcome": "favors_A",
+            "point_margin": 23.16813605803685,
+            "reason": null,
+            "rows_needed_for_5A": 2107,
+            "se_boot": 2.925698106201685
+          },
+          "CORPUS_CHRISTI": {
+            "block_lengths_run": [
+              1,
+              4,
+              8,
+              28
+            ],
+            "block_lengths_skipped": [],
+            "ci95_by_block_length": {
+              "1": [
+                20.00525834436296,
+                29.936900814847387
+              ],
+              "28": [
+                21.17024422781242,
+                29.922232487527264
+              ],
+              "4": [
+                20.651221761094977,
+                29.801555596070365
+              ],
+              "8": [
+                20.398071917686675,
+                30.034547200728966
+              ]
+            },
+            "label": "descriptive, uncorrected",
+            "mae_a": 85.78453896367502,
+            "mae_b": 110.76124114904852,
+            "mdd": 7.084686421722029,
+            "n_eff_acf": 784.0,
+            "n_paired": 784,
+            "outcome": "favors_A",
+            "point_margin": 24.976702185373494,
+            "reason": null,
+            "rows_needed_for_5A": 1575,
+            "se_boot": 2.528813464576309
+          },
+          "EL_PASO": {
+            "block_lengths_run": [
+              1,
+              4,
+              8,
+              28
+            ],
+            "block_lengths_skipped": [],
+            "ci95_by_block_length": {
+              "1": [
+                34.32735619161955,
+                50.28794848785299
+              ],
+              "28": [
+                32.82454099747941,
+                50.71931862479029
+              ],
+              "4": [
+                33.685318966957404,
+                50.58848609551379
+              ],
+              "8": [
+                33.070137818904065,
+                50.74252859310131
+              ]
+            },
+            "label": "descriptive, uncorrected",
+            "mae_a": 126.33238900294066,
+            "mae_b": 168.6322464293769,
+            "mdd": 12.717928506917673,
+            "n_eff_acf": 610.3425159399438,
+            "n_paired": 784,
+            "outcome": "favors_A",
+            "point_margin": 42.29985742643621,
+            "reason": null,
+            "rows_needed_for_5A": 5073,
+            "se_boot": 4.539547262276013
+          },
+          "MIDLAND": {
+            "block_lengths_run": [
+              1,
+              4,
+              8,
+              28
+            ],
+            "block_lengths_skipped": [],
+            "ci95_by_block_length": {
+              "1": [
+                5.043601695490506,
+                13.233519108926673
+              ],
+              "28": [
+                4.527190885316833,
+                12.772810965972791
+              ],
+              "4": [
+                5.191128913687969,
+                13.434888581563964
+              ],
+              "8": [
+                4.903615021727559,
+                13.423654530767664
+              ]
+            },
+            "label": "descriptive, uncorrected",
+            "mae_a": 119.92432153153284,
+            "mae_b": 129.09219772235443,
+            "mdd": 6.086386913800198,
+            "n_eff_acf": 773.6174450922862,
+            "n_paired": 784,
+            "outcome": "favors_A",
+            "point_margin": 9.167876190821586,
+            "reason": null,
+            "rows_needed_for_5A": 1162,
+            "se_boot": 2.172479664173748
+          }
+        },
+        "per_city_margins": {
+          "AUSTIN": 23.16813605803685,
+          "CORPUS_CHRISTI": 24.976702185373494,
+          "EL_PASO": 42.29985742643621,
+          "MIDLAND": 9.167876190821586
+        },
+        "point_margin": 24.903142965167035,
+        "relative_mae_reduction": 0.19048424144775722,
+        "row_source": "reconstructed_frames"
+      },
+      {
+        "a": "reference_ml_refit_24h",
+        "b": "raw_forecast",
+        "cities_favoring_a": 3,
+        "cities_with_data": 4,
+        "flags": [
+          "V4_reanalysis_truth_shared_weather"
+        ],
+        "headline": {
+          "analytic_design_effect_n": 3039.3294598146554,
+          "block_lengths_run": [
+            1,
+            4,
+            8,
+            28
+          ],
+          "block_lengths_skipped": [],
+          "ci95_widest": [
+            -34.64339619208189,
+            23.172742537348974
+          ],
+          "ci_bonferroni_widest": [
+            -48.753815551840574,
+            27.567818511064374
+          ],
+          "cities_with_data": 4,
+          "holm_rejected": false,
+          "mdd": 55.247776542047944,
+          "n_degenerate_resamples": 0,
+          "n_eff_bootstrap": 84.90214892354605,
+          "n_paired": 3136,
+          "n_slots": 784,
+          "outcome": "inconclusive",
+          "p_headline": 0.9985001499850015,
+          "p_holm_adjusted": 0.9985001499850015,
+          "p_min_over_runs": 0.9517048295170483,
+          "point_margin": 0.06218404674444391,
+          "reason": "crosses_zero",
+          "rho_bar": 0.010602178480867919,
+          "rows_needed_for_5A": 382883,
+          "schemes": {
+            "city_cluster_two_stage": {
+              "1": {
+                "ci95": [
+                  -33.43434552698175,
+                  23.170554784312955
+                ],
+                "ci_bonferroni": [
+                  -48.6803834511366,
+                  27.077260338122738
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.9517048295170483,
+                "sd": 14.778725103559069
+              },
+              "28": {
+                "ci95": [
+                  -34.64339619208189,
+                  23.172742537348974
+                ],
+                "ci_bonferroni": [
+                  -48.753815551840574,
+                  27.567818511064374
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.9645035496450355,
+                "sd": 15.284860009612968
+              },
+              "4": {
+                "ci95": [
+                  -33.416374152200206,
+                  22.768482234169685
+                ],
+                "ci_bonferroni": [
+                  -47.716900404955965,
+                  27.277936077840693
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.9649035096490352,
+                "sd": 14.762487053747316
+              },
+              "8": {
+                "ci95": [
+                  -33.35645843832938,
+                  22.849105503605024
+                ],
+                "ci_bonferroni": [
+                  -48.025555352230825,
+                  27.145712950798668
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.9585041495850415,
+                "sd": 14.83277224467469
+              }
+            },
+            "joint_time_block": {
+              "1": {
+                "ci95": [
+                  -4.675789469955295,
+                  4.93325038477969
+                ],
+                "ci_bonferroni": [
+                  -6.820662021586229,
+                  7.086911920648209
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.9985001499850015,
+                "sd": 2.479614554200349
+              },
+              "28": {
+                "ci95": [
+                  -8.120182910190161,
+                  7.520858985832724
+                ],
+                "ci_bonferroni": [
+                  -11.499064820099548,
+                  10.436898334022061
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.9857014298570143,
+                "sd": 3.995989791771773
+              },
+              "4": {
+                "ci95": [
+                  -5.510743569824872,
+                  5.600160462965573
+                ],
+                "ci_bonferroni": [
+                  -7.682819328981843,
+                  7.993468546892129
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.9905009499050095,
+                "sd": 2.8471566475607966
+              },
+              "8": {
+                "ci95": [
+                  -6.281468879391709,
+                  6.3971030500936275
+                ],
+                "ci_bonferroni": [
+                  -8.73439175313184,
+                  8.971509762224798
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.9975002499750025,
+                "sd": 3.2128080876138636
+              }
+            }
+          },
+          "se_boot": 15.284860009612968
+        },
+        "id": "reference_ml_refit_24h__vs__raw_forecast",
+        "mae_a": 130.67379062440475,
+        "mae_b": 130.7359746711492,
+        "n_nominal": 3136,
+        "n_paired": 3136,
+        "per_city": {
+          "AUSTIN": {
+            "block_lengths_run": [
+              1,
+              4,
+              8,
+              28
+            ],
+            "block_lengths_skipped": [],
+            "ci95_by_block_length": {
+              "1": [
+                5.0181279798110845,
+                20.70253005317349
+              ],
+              "28": [
+                4.973995720500832,
+                23.23503612056955
+              ],
+              "4": [
+                4.800420644731759,
+                20.974944828851623
+              ],
+              "8": [
+                4.67444351691706,
+                21.418659921628617
+              ]
+            },
+            "label": "descriptive, uncorrected",
+            "mae_a": 101.73015408888655,
+            "mae_b": 114.45821338381691,
+            "mdd": 12.974468120052599,
+            "n_eff_acf": 736.9806978186382,
+            "n_paired": 784,
+            "outcome": "favors_A",
+            "point_margin": 12.728059294930368,
+            "reason": null,
+            "rows_needed_for_5A": 5280,
+            "se_boot": 4.631116710699831
+          },
+          "CORPUS_CHRISTI": {
+            "block_lengths_run": [
+              1,
+              4,
+              8,
+              28
+            ],
+            "block_lengths_skipped": [],
+            "ci95_by_block_length": {
+              "1": [
+                1.3990140695298057,
+                17.373417896857124
+              ],
+              "28": [
+                2.694834610643045,
+                17.711409788565867
+              ],
+              "4": [
+                1.9273121830454534,
+                17.53397685813759
+              ],
+              "8": [
+                1.6606341622150325,
+                17.556378337077227
+              ]
+            },
+            "label": "descriptive, uncorrected",
+            "mae_a": 101.34309635345555,
+            "mae_b": 110.76124114904852,
+            "mdd": 11.484808613080467,
+            "n_eff_acf": 784.0,
+            "n_paired": 784,
+            "outcome": "favors_A",
+            "point_margin": 9.418144795592974,
+            "reason": null,
+            "rows_needed_for_5A": 4137,
+            "se_boot": 4.0993964912536764
+          },
+          "EL_PASO": {
+            "block_lengths_run": [
+              1,
+              4,
+              8,
+              28
+            ],
+            "block_lengths_skipped": [],
+            "ci95_by_block_length": {
+              "1": [
+                16.88312254156084,
+                37.51282829815598
+              ],
+              "28": [
+                15.112790032996024,
+                38.18318159767859
+              ],
+              "4": [
+                15.720913860968736,
+                37.88272852311784
+              ],
+              "8": [
+                14.872914478120832,
+                38.278735465034515
+              ]
+            },
+            "label": "descriptive, uncorrected",
+            "mae_a": 141.41946426666962,
+            "mae_b": 168.6322464293769,
+            "mdd": 16.608141770806387,
+            "n_eff_acf": 605.7055626143316,
+            "n_paired": 784,
+            "outcome": "favors_A",
+            "point_margin": 27.212782162707263,
+            "reason": null,
+            "rows_needed_for_5A": 8651,
+            "se_boot": 5.928123001017597
+          },
+          "MIDLAND": {
+            "block_lengths_run": [
+              1,
+              4,
+              8,
+              28
+            ],
+            "block_lengths_skipped": [],
+            "ci95_by_block_length": {
+              "1": [
+                -60.57125240258203,
+                -37.76736724950889
+              ],
+              "28": [
+                -67.47848630451253,
+                -35.42485508574204
+              ],
+              "4": [
+                -61.666904342055325,
+                -36.85711449465211
+              ],
+              "8": [
+                -62.66462261124872,
+                -35.867138915641576
+              ]
+            },
+            "label": "descriptive, uncorrected",
+            "mae_a": 178.20244778860726,
+            "mae_b": 129.09219772235443,
+            "mdd": 22.769138593049387,
+            "n_eff_acf": 370.0952721160334,
+            "n_paired": 784,
+            "outcome": "favors_B",
+            "point_margin": -49.11025006625283,
+            "reason": null,
+            "rows_needed_for_5A": 16259,
+            "se_boot": 8.127233983760714
+          }
+        },
+        "per_city_margins": {
+          "AUSTIN": 12.728059294930368,
+          "CORPUS_CHRISTI": 9.418144795592974,
+          "EL_PASO": 27.212782162707263,
+          "MIDLAND": -49.11025006625283
+        },
+        "point_margin": 0.06218404674444391,
+        "relative_mae_reduction": 0.0004756460255171957,
+        "row_source": "reconstructed_frames"
+      },
+      {
+        "a": "ml_wind_corrected",
+        "b": "persistence_24h",
+        "cities_favoring_a": 4,
+        "cities_with_data": 4,
+        "flags": [
+          "V4_reanalysis_truth_shared_weather"
+        ],
+        "headline": {
+          "analytic_design_effect_n": 2968.1126062250723,
+          "block_lengths_run": [
+            1,
+            4,
+            8,
+            28
+          ],
+          "block_lengths_skipped": [],
+          "ci95_widest": [
+            18.232355022171138,
+            70.9923381905934
+          ],
+          "ci_bonferroni_widest": [
+            11.597124552395718,
+            82.7577901647712
+          ],
+          "cities_with_data": 4,
+          "holm_rejected": true,
+          "mdd": 49.27890691050315,
+          "n_degenerate_resamples": 0,
+          "n_eff_bootstrap": 121.21833373392127,
+          "n_paired": 3136,
+          "n_slots": 784,
+          "outcome": "favors_A",
+          "p_headline": 0.00019998000199980003,
+          "p_holm_adjusted": 0.0017998200179982003,
+          "p_min_over_runs": 0.00019998000199980003,
+          "point_margin": 41.5663404650776,
+          "reason": null,
+          "rho_bar": 0.018854562483334187,
+          "rows_needed_for_5A": 304620,
+          "schemes": {
+            "city_cluster_two_stage": {
+              "1": {
+                "ci95": [
+                  18.232355022171138,
+                  69.28364060755166
+                ],
+                "ci_bonferroni": [
+                  11.80062042802105,
+                  80.54627237830437
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 13.277146210361934
+              },
+              "28": {
+                "ci95": [
+                  18.78620294736218,
+                  70.9923381905934
+                ],
+                "ci_bonferroni": [
+                  13.140668349130324,
+                  82.7577901647712
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 13.63351144060121
+              },
+              "4": {
+                "ci95": [
+                  18.369609849779547,
+                  69.41216600105716
+                ],
+                "ci_bonferroni": [
+                  11.597124552395718,
+                  81.60195768680272
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 13.30502028373139
+              },
+              "8": {
+                "ci95": [
+                  18.261599596459085,
+                  69.09747909346436
+                ],
+                "ci_bonferroni": [
+                  11.731025049982618,
+                  81.6560847944165
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 13.295277885602756
+              }
+            },
+            "joint_time_block": {
+              "1": {
+                "ci95": [
+                  36.26678371020061,
+                  46.91468388804886
+                ],
+                "ci_bonferroni": [
+                  34.19425182117183,
+                  48.95427329900033
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 2.718826544354015
+              },
+              "28": {
+                "ci95": [
+                  33.618587396340644,
+                  51.54713295469321
+                ],
+                "ci_bonferroni": [
+                  30.52489164106773,
+                  55.68309411869147
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 4.596819049709721
+              },
+              "4": {
+                "ci95": [
+                  35.54248940163426,
+                  48.038619139772166
+                ],
+                "ci_bonferroni": [
+                  32.91190824608402,
+                  50.7671264796563
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 3.20450299272449
+              },
+              "8": {
+                "ci95": [
+                  34.47060202452039,
+                  48.823529345047604
+                ],
+                "ci_bonferroni": [
+                  31.33444127239213,
+                  52.08995867737708
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 3.642220404755221
+              }
+            }
+          },
+          "se_boot": 13.63351144060121
+        },
+        "id": "ml_wind_corrected__vs__persistence_24h",
+        "mae_a": 112.77644847477846,
+        "mae_b": 154.3427889398561,
+        "n_nominal": 3136,
+        "n_paired": 3136,
+        "per_city": {
+          "AUSTIN": {
+            "block_lengths_run": [
+              1,
+              4,
+              8,
+              28
+            ],
+            "block_lengths_skipped": [],
+            "ci95_by_block_length": {
+              "1": [
+                3.7380723465122365,
+                20.896067241397958
+              ],
+              "28": [
+                3.8756304482071813,
+                22.124313649329903
+              ],
+              "4": [
+                3.9508951766594316,
+                20.798016443487906
+              ],
+              "8": [
+                3.853498391505451,
+                21.173047424871267
+              ]
+            },
+            "label": "descriptive, uncorrected",
+            "mae_a": 109.24350437848572,
+            "mae_b": 121.40873898169195,
+            "mdd": 12.940722833678903,
+            "n_eff_acf": 758.1767918232993,
+            "n_paired": 784,
+            "outcome": "favors_A",
+            "point_margin": 12.16523460320622,
+            "reason": null,
+            "rows_needed_for_5A": 5252,
+            "se_boot": 4.619071642016743
+          },
+          "CORPUS_CHRISTI": {
+            "block_lengths_run": [
+              1,
+              4,
+              8,
+              28
+            ],
+            "block_lengths_skipped": [],
+            "ci95_by_block_length": {
+              "1": [
+                22.26013960171525,
+                38.331834514020855
+              ],
+              "28": [
+                20.704063798323222,
+                38.67787194270719
+              ],
+              "4": [
+                21.268633694087804,
+                38.89685057386335
+              ],
+              "8": [
+                20.97837903435115,
+                38.957780419265994
+              ]
+            },
+            "label": "descriptive, uncorrected",
+            "mae_a": 88.0623686269552,
+            "mae_b": 118.38018358497831,
+            "mdd": 12.919750695445323,
+            "n_eff_acf": 565.3316199946483,
+            "n_paired": 784,
+            "outcome": "favors_A",
+            "point_margin": 30.31781495802312,
+            "reason": null,
+            "rows_needed_for_5A": 5235,
+            "se_boot": 4.61158583073462
+          },
+          "EL_PASO": {
+            "block_lengths_run": [
+              1,
+              4,
+              8,
+              28
+            ],
+            "block_lengths_skipped": [],
+            "ci95_by_block_length": {
+              "1": [
+                31.054518566974266,
+                51.39817565583907
+              ],
+              "28": [
+                31.997466412373086,
+                53.86912701647003
+              ],
+              "4": [
+                31.245778808946092,
+                51.8444157666141
+              ],
+              "8": [
+                31.31697154283805,
+                52.748796734258924
+              ]
+            },
+            "label": "descriptive, uncorrected",
+            "mae_a": 130.84296141080662,
+            "mae_b": 171.93027906142632,
+            "mdd": 15.742275414830763,
+            "n_eff_acf": 714.6830858167567,
+            "n_paired": 784,
+            "outcome": "favors_A",
+            "point_margin": 41.08731765061967,
+            "reason": null,
+            "rows_needed_for_5A": 7772,
+            "se_boot": 5.619059992554539
+          },
+          "MIDLAND": {
+            "block_lengths_run": [
+              1,
+              4,
+              8,
+              28
+            ],
+            "block_lengths_skipped": [],
+            "ci95_by_block_length": {
+              "1": [
+                69.27246276266207,
+                96.33899912684322
+              ],
+              "28": [
+                64.66588006950235,
+                104.28285680289173
+              ],
+              "4": [
+                67.72039499395311,
+                98.4277179892062
+              ],
+              "8": [
+                65.75683016553468,
+                99.03833297339666
+              ]
+            },
+            "label": "descriptive, uncorrected",
+            "mae_a": 122.95695948286628,
+            "mae_b": 205.65195413132773,
+            "mdd": 28.29255758018242,
+            "n_eff_acf": 330.64591382601986,
+            "n_paired": 784,
+            "outcome": "favors_A",
+            "point_margin": 82.69499464846139,
+            "reason": null,
+            "rows_needed_for_5A": 25103,
+            "se_boot": 10.098767439685135
+          }
+        },
+        "per_city_margins": {
+          "AUSTIN": 12.16523460320622,
+          "CORPUS_CHRISTI": 30.31781495802312,
+          "EL_PASO": 41.08731765061967,
+          "MIDLAND": 82.69499464846139
+        },
+        "point_margin": 41.5663404650776,
+        "relative_mae_reduction": 0.2693118399025114,
+        "row_source": "reconstructed_frames"
+      },
+      {
+        "a": "ml_cooling_corrected",
+        "b": "persistence_24h",
+        "cities_favoring_a": 4,
+        "cities_with_data": 4,
+        "flags": [
+          "V4_reanalysis_truth_shared_weather"
+        ],
+        "headline": {
+          "analytic_design_effect_n": 2856.7109416675244,
+          "block_lengths_run": [
+            1,
+            4,
+            8,
+            28
+          ],
+          "block_lengths_skipped": [],
+          "ci95_widest": [
+            30.140154302592613,
+            74.35245112797759
+          ],
+          "ci_bonferroni_widest": [
+            27.024305547421477,
+            84.64536422478136
+          ],
+          "cities_with_data": 4,
+          "holm_rejected": true,
+          "mdd": 42.63024875710304,
+          "n_degenerate_resamples": 0,
+          "n_eff_bootstrap": 117.17525435298171,
+          "n_paired": 3136,
+          "n_slots": 784,
+          "outcome": "favors_A",
+          "p_headline": 0.00019998000199980003,
+          "p_holm_adjusted": 0.0017998200179982003,
+          "p_min_over_runs": 0.00019998000199980003,
+          "point_margin": 48.50995723387392,
+          "reason": null,
+          "rho_bar": 0.03258864991189814,
+          "rows_needed_for_5A": 227967,
+          "schemes": {
+            "city_cluster_two_stage": {
+              "1": {
+                "ci95": [
+                  30.60617719311112,
+                  73.52459612994033
+                ],
+                "ci_bonferroni": [
+                  27.968929969339968,
+                  83.20594858184745
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 11.391971953108927
+              },
+              "28": {
+                "ci95": [
+                  30.140154302592613,
+                  74.35245112797759
+                ],
+                "ci_bonferroni": [
+                  27.024305547421477,
+                  84.64536422478136
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 11.794092454225371
+              },
+              "4": {
+                "ci95": [
+                  30.459533180262813,
+                  73.66443439094617
+                ],
+                "ci_bonferroni": [
+                  27.798381575969458,
+                  84.10747122541845
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 11.483567821872434
+              },
+              "8": {
+                "ci95": [
+                  30.262233861029113,
+                  73.15365325144639
+                ],
+                "ci_bonferroni": [
+                  27.31251804455294,
+                  84.32072968636264
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 11.480047574227815
+              }
+            },
+            "joint_time_block": {
+              "1": {
+                "ci95": [
+                  43.98650688738835,
+                  53.14047857520797
+                ],
+                "ci_bonferroni": [
+                  42.083110168595894,
+                  54.93324979909433
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 2.3414406987696657
+              },
+              "28": {
+                "ci95": [
+                  40.52725768214793,
+                  57.40151464177675
+                ],
+                "ci_bonferroni": [
+                  37.421755060273576,
+                  60.95828526485328
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 4.319674615932269
+              },
+              "4": {
+                "ci95": [
+                  42.926301243839646,
+                  54.26944165875121
+                ],
+                "ci_bonferroni": [
+                  40.61648143008475,
+                  56.66114713747402
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 2.8761267089886853
+              },
+              "8": {
+                "ci95": [
+                  41.9919433177875,
+                  54.98359920640921
+                ],
+                "ci_bonferroni": [
+                  38.87789942805144,
+                  57.92263555475508
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 3.3242329954177023
+              }
+            }
+          },
+          "se_boot": 11.794092454225371
+        },
+        "id": "ml_cooling_corrected__vs__persistence_24h",
+        "mae_a": 105.83283170598214,
+        "mae_b": 154.3427889398561,
+        "n_nominal": 3136,
+        "n_paired": 3136,
+        "per_city": {
+          "AUSTIN": {
+            "block_lengths_run": [
+              1,
+              4,
+              8,
+              28
+            ],
+            "block_lengths_skipped": [],
+            "ci95_by_block_length": {
+              "1": [
+                23.66743873346364,
+                37.18153935807722
+              ],
+              "28": [
+                22.48071582011326,
+                38.1566907613465
+              ],
+              "4": [
+                23.423153124192055,
+                37.073921766405654
+              ],
+              "8": [
+                23.303470457862748,
+                37.103407031902094
+              ]
+            },
+            "label": "descriptive, uncorrected",
+            "mae_a": 91.29007732578009,
+            "mae_b": 121.40873898169195,
+            "mdd": 11.148660484982495,
+            "n_eff_acf": 729.2663208652075,
+            "n_paired": 784,
+            "outcome": "favors_A",
+            "point_margin": 30.118661655911893,
+            "reason": null,
+            "rows_needed_for_5A": 3898,
+            "se_boot": 3.979411517773416
+          },
+          "CORPUS_CHRISTI": {
+            "block_lengths_run": [
+              1,
+              4,
+              8,
+              28
+            ],
+            "block_lengths_skipped": [],
+            "ci95_by_block_length": {
+              "1": [
+                25.538531869998444,
+                39.53115706074376
+              ],
+              "28": [
+                22.8289636910275,
+                41.77563352782062
+              ],
+              "4": [
+                24.500419385614183,
+                40.427195348801064
+              ],
+              "8": [
+                24.02605516427993,
+                40.45969437920869
+              ]
+            },
+            "label": "descriptive, uncorrected",
+            "mae_a": 85.78453896367502,
+            "mae_b": 118.38018358497831,
+            "mdd": 13.552465748412962,
+            "n_eff_acf": 506.2586230007322,
+            "n_paired": 784,
+            "outcome": "favors_A",
+            "point_margin": 32.59564462130329,
+            "reason": null,
+            "rows_needed_for_5A": 5760,
+            "se_boot": 4.837427632325009
+          },
+          "EL_PASO": {
+            "block_lengths_run": [
+              1,
+              4,
+              8,
+              28
+            ],
+            "block_lengths_skipped": [],
+            "ci95_by_block_length": {
+              "1": [
+                37.53475980511012,
+                53.816423584849424
+              ],
+              "28": [
+                38.72498875771212,
+                54.588301828435775
+              ],
+              "4": [
+                37.57423500525013,
+                54.177084444826185
+              ],
+              "8": [
+                37.66012422788191,
+                54.645034242155255
+              ]
+            },
+            "label": "descriptive, uncorrected",
+            "mae_a": 126.33238900294066,
+            "mae_b": 171.93027906142632,
+            "mdd": 12.063461538443532,
+            "n_eff_acf": 707.5257442943566,
+            "n_paired": 784,
+            "outcome": "favors_A",
+            "point_margin": 45.59789005848563,
+            "reason": null,
+            "rows_needed_for_5A": 4564,
+            "se_boot": 4.305941315099092
+          },
+          "MIDLAND": {
+            "block_lengths_run": [
+              1,
+              4,
+              8,
+              28
+            ],
+            "block_lengths_skipped": [],
+            "ci95_by_block_length": {
+              "1": [
+                73.58981540624569,
+                97.98933773626565
+              ],
+              "28": [
+                68.71111633052288,
+                105.29142337767027
+              ],
+              "4": [
+                71.7847790712954,
+                100.09480989033543
+              ],
+              "8": [
+                70.06040402658994,
+                101.05651423653563
+              ]
+            },
+            "label": "descriptive, uncorrected",
+            "mae_a": 119.92432153153284,
+            "mae_b": 205.65195413132773,
+            "mdd": 26.261269538689913,
+            "n_eff_acf": 309.2540512159412,
+            "n_paired": 784,
+            "outcome": "favors_A",
+            "point_margin": 85.72763259979484,
+            "reason": null,
+            "rows_needed_for_5A": 21628,
+            "se_boot": 9.373717911168312
+          }
+        },
+        "per_city_margins": {
+          "AUSTIN": 30.118661655911893,
+          "CORPUS_CHRISTI": 32.59564462130329,
+          "EL_PASO": 45.59789005848563,
+          "MIDLAND": 85.72763259979484
+        },
+        "point_margin": 48.50995723387392,
+        "relative_mae_reduction": 0.31430012096501114,
+        "row_source": "reconstructed_frames"
+      },
+      {
+        "a": "reference_ml_refit_24h",
+        "b": "persistence_24h",
+        "cities_favoring_a": 4,
+        "cities_with_data": 4,
+        "flags": [
+          "V4_reanalysis_truth_shared_weather"
+        ],
+        "headline": {
+          "analytic_design_effect_n": 2787.1049048355007,
+          "block_lengths_run": [
+            1,
+            4,
+            8,
+            28
+          ],
+          "block_lengths_skipped": [],
+          "ci95_widest": [
+            16.42645664632322,
+            31.11829122237622
+          ],
+          "ci_bonferroni_widest": [
+            14.090537214707743,
+            34.23191232357888
+          ],
+          "cities_with_data": 4,
+          "holm_rejected": true,
+          "mdd": 13.528771002923696,
+          "n_degenerate_resamples": 0,
+          "n_eff_bootstrap": 1007.2363401630508,
+          "n_paired": 3136,
+          "n_slots": 784,
+          "outcome": "favors_A",
+          "p_headline": 0.00019998000199980003,
+          "p_holm_adjusted": 0.0017998200179982003,
+          "p_min_over_runs": 0.00019998000199980003,
+          "point_margin": 23.668998315451322,
+          "reason": null,
+          "rho_bar": 0.04172730091826137,
+          "rows_needed_for_5A": 22959,
+          "schemes": {
+            "city_cluster_two_stage": {
+              "1": {
+                "ci95": [
+                  17.107451848612815,
+                  30.57493189608717
+                ],
+                "ci_bonferroni": [
+                  14.935266729484935,
+                  33.66770539453848
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 3.4932746122670943
+              },
+              "28": {
+                "ci95": [
+                  16.42645664632322,
+                  31.11829122237622
+                ],
+                "ci_bonferroni": [
+                  14.090537214707743,
+                  33.86427735448913
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 3.7428722715097833
+              },
+              "4": {
+                "ci95": [
+                  16.770719402437802,
+                  30.91018838721325
+                ],
+                "ci_bonferroni": [
+                  14.612779285122949,
+                  34.23191232357888
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 3.6679087323750093
+              },
+              "8": {
+                "ci95": [
+                  16.552097048567486,
+                  30.954952928927252
+                ],
+                "ci_bonferroni": [
+                  14.163806403300768,
+                  33.9456769896462
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 3.709771810488119
+              }
+            },
+            "joint_time_block": {
+              "1": {
+                "ci95": [
+                  19.329082121819884,
+                  28.031852499450896
+                ],
+                "ci_bonferroni": [
+                  17.312653340338592,
+                  29.81346723090621
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 2.2352196110985805
+              },
+              "28": {
+                "ci95": [
+                  18.291750924757313,
+                  29.464056425609364
+                ],
+                "ci_bonferroni": [
+                  16.125783496312458,
+                  31.78355359657445
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 2.851683997454369
+              },
+              "4": {
+                "ci95": [
+                  18.83094331448496,
+                  28.48528818820672
+                ],
+                "ci_bonferroni": [
+                  16.529274797404632,
+                  30.597906852814607
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 2.479792996755692
+              },
+              "8": {
+                "ci95": [
+                  18.433548698536995,
+                  28.627258419756938
+                ],
+                "ci_bonferroni": [
+                  16.29748425525177,
+                  30.604795079203267
+                ],
+                "n_finite_resamples": 10000,
+                "p": 0.00019998000199980003,
+                "sd": 2.5889556476854216
+              }
+            }
+          },
+          "se_boot": 3.7428722715097833
+        },
+        "id": "reference_ml_refit_24h__vs__persistence_24h",
+        "mae_a": 130.67379062440475,
+        "mae_b": 154.3427889398561,
+        "n_nominal": 3136,
+        "n_paired": 3136,
+        "per_city": {
+          "AUSTIN": {
+            "block_lengths_run": [
+              1,
+              4,
+              8,
+              28
+            ],
+            "block_lengths_skipped": [],
+            "ci95_by_block_length": {
+              "1": [
+                13.298844265457083,
+                26.532677643411596
+              ],
+              "28": [
+                13.642552426195534,
+                27.16091538296069
+              ],
+              "4": [
+                13.038519947100648,
+                26.439927492269675
+              ],
+              "8": [
+                13.13739940899839,
+                26.087043936372723
+              ]
+            },
+            "label": "descriptive, uncorrected",
+            "mae_a": 101.73015408888655,
+            "mae_b": 121.40873898169195,
+            "mdd": 9.77558323737876,
+            "n_eff_acf": 663.3231547930204,
+            "n_paired": 784,
+            "outcome": "favors_A",
+            "point_margin": 19.67858489280541,
+            "reason": null,
+            "rows_needed_for_5A": 2997,
+            "se_boot": 3.4893042603798383
+          },
+          "CORPUS_CHRISTI": {
+            "block_lengths_run": [
+              1,
+              4,
+              8,
+              28
+            ],
+            "block_lengths_skipped": [],
+            "ci95_by_block_length": {
+              "1": [
+                10.27707988646742,
+                23.92114877470464
+              ],
+              "28": [
+                7.943147686241663,
+                26.642131259194336
+              ],
+              "4": [
+                9.070835709136835,
+                24.70796362514732
+              ],
+              "8": [
+                8.430468077150445,
+                24.95372146538616
+              ]
+            },
+            "label": "descriptive, uncorrected",
+            "mae_a": 101.34309635345555,
+            "mae_b": 118.38018358497831,
+            "mdd": 13.3201052158564,
+            "n_eff_acf": 477.0105089104416,
+            "n_paired": 784,
+            "outcome": "favors_A",
+            "point_margin": 17.037087231522776,
+            "reason": null,
+            "rows_needed_for_5A": 5565,
+            "se_boot": 4.754488683670408
+          },
+          "EL_PASO": {
+            "block_lengths_run": [
+              1,
+              4,
+              8,
+              28
+            ],
+            "block_lengths_skipped": [],
+            "ci95_by_block_length": {
+              "1": [
+                22.126641078050582,
+                39.268956951996635
+              ],
+              "28": [
+                24.264422894879996,
+                38.2320111330937
+              ],
+              "4": [
+                22.06665213722061,
+                38.96824718049383
+              ],
+              "8": [
+                22.704087662000692,
+                38.96029684693336
+              ]
+            },
+            "label": "descriptive, uncorrected",
+            "mae_a": 141.41946426666962,
+            "mae_b": 171.93027906142632,
+            "mdd": 12.25395678423746,
+            "n_eff_acf": 724.384800960525,
+            "n_paired": 784,
+            "outcome": "favors_A",
+            "point_margin": 30.510814794756673,
+            "reason": null,
+            "rows_needed_for_5A": 4710,
+            "se_boot": 4.373936835835826
+          },
+          "MIDLAND": {
+            "block_lengths_run": [
+              1,
+              4,
+              8,
+              28
+            ],
+            "block_lengths_skipped": [],
+            "ci95_by_block_length": {
+              "1": [
+                16.681529269946665,
+                38.400329393890736
+              ],
+              "28": [
+                14.264861827425346,
+                39.507638470804906
+              ],
+              "4": [
+                15.20710268074123,
+                39.80584874728272
+              ],
+              "8": [
+                14.12962906736212,
+                39.68580640645883
+              ]
+            },
+            "label": "descriptive, uncorrected",
+            "mae_a": 178.20244778860726,
+            "mae_b": 205.65195413132773,
+            "mdd": 18.20389789727665,
+            "n_eff_acf": 518.0211391540229,
+            "n_paired": 784,
+            "outcome": "favors_A",
+            "point_margin": 27.449506342720426,
+            "reason": null,
+            "rows_needed_for_5A": 10393,
+            "se_boot": 6.497713430090855
+          }
+        },
+        "per_city_margins": {
+          "AUSTIN": 19.67858489280541,
+          "CORPUS_CHRISTI": 17.037087231522776,
+          "EL_PASO": 30.510814794756673,
+          "MIDLAND": 27.449506342720426
+        },
+        "point_margin": 23.668998315451322,
+        "relative_mae_reduction": 0.15335344448566768,
+        "row_source": "reconstructed_frames"
+      }
+    ],
+    "family_size": 9,
+    "holm": {
+      "adjusted": [
+        0.020997900209979003,
+        0.17998200179982002,
+        0.0017998200179982003,
+        0.0017998200179982003,
+        0.0017998200179982003,
+        0.9985001499850015,
+        0.0017998200179982003,
+        0.0017998200179982003,
+        0.0017998200179982003
+      ],
+      "alpha": 0.05,
+      "m": 9,
+      "rejected": [
+        true,
+        false,
+        true,
+        true,
+        true,
+        false,
+        true,
+        true,
+        true
+      ]
+    },
+    "params": {
+      "block_lengths": [
+        1,
+        4,
+        8,
+        28
+      ],
+      "consistency_min_cities": 3,
+      "decision_margin_amps": 5.0,
+      "family_alpha": 0.05,
+      "min_paired_rows": 8,
+      "n_resamples": 10000,
+      "power": 0.8,
+      "relative_margin_fraction": 0.02,
+      "seed": 20260929
+    },
+    "per_city_label": "descriptive, uncorrected",
+    "row_source": "reconstructed_frames",
+    "sample_size": {
+      "n_scored": {
+        "AUSTIN": {
+          "ml_cooling_corrected": 784,
+          "ml_wind_corrected": 784,
+          "persistence_24h": 784,
+          "raw_forecast": 784,
+          "reference_ml_refit_24h": 784
+        },
+        "CORPUS_CHRISTI": {
+          "ml_cooling_corrected": 784,
+          "ml_wind_corrected": 784,
+          "persistence_24h": 784,
+          "raw_forecast": 784,
+          "reference_ml_refit_24h": 784
+        },
+        "EL_PASO": {
+          "ml_cooling_corrected": 784,
+          "ml_wind_corrected": 784,
+          "persistence_24h": 784,
+          "raw_forecast": 784,
+          "reference_ml_refit_24h": 784
+        },
+        "MIDLAND": {
+          "ml_cooling_corrected": 784,
+          "ml_wind_corrected": 784,
+          "persistence_24h": 784,
+          "raw_forecast": 784,
+          "reference_ml_refit_24h": 784
+        }
+      },
+      "pairs": [
+        {
+          "a": "ml_wind_corrected",
+          "analytic_design_effect_n": 3063.645491081712,
+          "b": "ml_cooling_corrected",
+          "mdd": 12.674460083648757,
+          "n_eff_acf_by_city": {
+            "AUSTIN": 784.0,
+            "CORPUS_CHRISTI": 784.0,
+            "EL_PASO": 784.0,
+            "MIDLAND": 656.7813506940113
+          },
+          "n_eff_bootstrap": 484.70980698253476,
+          "n_paired": 3136,
+          "per_city_n_paired": {
+            "AUSTIN": 784,
+            "CORPUS_CHRISTI": 784,
+            "EL_PASO": 784,
+            "MIDLAND": 784
+          },
+          "rho_bar": 0.007872376131519594,
+          "rows_needed_for_5A": 20151,
+          "targets": {
+            "basis": "effective",
+            "mdd_target_met": false,
+            "mdd_target_rows": 1575,
+            "n": 3136,
+            "n_effective": 484.70980698253476,
+            "tail_rate_target_met": false,
+            "tail_rate_target_rows": 590
+          }
+        },
+        {
+          "a": "ml_wind_corrected",
+          "analytic_design_effect_n": 2984.3970845841154,
+          "b": "reference_ml_refit_24h",
+          "mdd": 44.00552354197065,
+          "n_eff_acf_by_city": {
+            "AUSTIN": 784.0,
+            "CORPUS_CHRISTI": 739.8857440377724,
+            "EL_PASO": 703.7398261714534,
+            "MIDLAND": 393.4220892768584
+          },
+          "n_eff_bootstrap": 105.90342910152508,
+          "n_paired": 3136,
+          "per_city_n_paired": {
+            "AUSTIN": 784,
+            "CORPUS_CHRISTI": 784,
+            "EL_PASO": 784,
+            "MIDLAND": 784
+          },
+          "rho_bar": 0.01693283557997788,
+          "rows_needed_for_5A": 242913,
+          "targets": {
+            "basis": "effective",
+            "mdd_target_met": false,
+            "mdd_target_rows": 1575,
+            "n": 3136,
+            "n_effective": 105.90342910152508,
+            "tail_rate_target_met": false,
+            "tail_rate_target_rows": 590
+          }
+        },
+        {
+          "a": "ml_cooling_corrected",
+          "analytic_design_effect_n": 2981.957853022172,
+          "b": "reference_ml_refit_24h",
+          "mdd": 37.23563426086496,
+          "n_eff_acf_by_city": {
+            "AUSTIN": 784.0,
+            "CORPUS_CHRISTI": 613.4709931247337,
+            "EL_PASO": 753.7671792504459,
+            "MIDLAND": 537.1532551362047
+          },
+          "n_eff_bootstrap": 89.36189045376801,
+          "n_paired": 3136,
+          "per_city_n_paired": {
+            "AUSTIN": 784,
+            "CORPUS_CHRISTI": 784,
+            "EL_PASO": 784,
+            "MIDLAND": 784
+          },
+          "rho_bar": 0.017219352136014544,
+          "rows_needed_for_5A": 173922,
+          "targets": {
+            "basis": "effective",
+            "mdd_target_met": false,
+            "mdd_target_rows": 1575,
+            "n": 3136,
+            "n_effective": 89.36189045376801,
+            "tail_rate_target_met": false,
+            "tail_rate_target_rows": 590
+          }
+        },
+        {
+          "a": "ml_wind_corrected",
+          "analytic_design_effect_n": 3302.636786016442,
+          "b": "raw_forecast",
+          "mdd": 24.795528863504927,
+          "n_eff_acf_by_city": {
+            "AUSTIN": 765.8251723426129,
+            "CORPUS_CHRISTI": 784.0,
+            "EL_PASO": 575.7066290979074,
+            "MIDLAND": 734.8857726775672
+          },
+          "n_eff_bootstrap": 185.81206006659482,
+          "n_paired": 3136,
+          "per_city_n_paired": {
+            "AUSTIN": 784,
+            "CORPUS_CHRISTI": 784,
+            "EL_PASO": 784,
+            "MIDLAND": 784
+          },
+          "rho_bar": -0.016818560119598137,
+          "rows_needed_for_5A": 77123,
+          "targets": {
+            "basis": "effective",
+            "mdd_target_met": false,
+            "mdd_target_rows": 1575,
+            "n": 3136,
+            "n_effective": 185.81206006659482,
+            "tail_rate_target_met": false,
+            "tail_rate_target_rows": 590
+          }
+        },
+        {
+          "a": "ml_cooling_corrected",
+          "analytic_design_effect_n": 3107.8189456441787,
+          "b": "raw_forecast",
+          "mdd": 21.802863409764644,
+          "n_eff_acf_by_city": {
+            "AUSTIN": 724.5904045331317,
+            "CORPUS_CHRISTI": 784.0,
+            "EL_PASO": 610.3425159399438,
+            "MIDLAND": 773.6174450922862
+          },
+          "n_eff_bootstrap": 188.0854785588019,
+          "n_paired": 3136,
+          "per_city_n_paired": {
+            "AUSTIN": 784,
+            "CORPUS_CHRISTI": 784,
+            "EL_PASO": 784,
+            "MIDLAND": 784
+          },
+          "rho_bar": 0.0030225971813575467,
+          "rows_needed_for_5A": 59630,
+          "targets": {
+            "basis": "effective",
+            "mdd_target_met": false,
+            "mdd_target_rows": 1575,
+            "n": 3136,
+            "n_effective": 188.0854785588019,
+            "tail_rate_target_met": false,
+            "tail_rate_target_rows": 590
+          }
+        },
+        {
+          "a": "reference_ml_refit_24h",
+          "analytic_design_effect_n": 3039.3294598146554,
+          "b": "raw_forecast",
+          "mdd": 55.247776542047944,
+          "n_eff_acf_by_city": {
+            "AUSTIN": 736.9806978186382,
+            "CORPUS_CHRISTI": 784.0,
+            "EL_PASO": 605.7055626143316,
+            "MIDLAND": 370.0952721160334
+          },
+          "n_eff_bootstrap": 84.90214892354605,
+          "n_paired": 3136,
+          "per_city_n_paired": {
+            "AUSTIN": 784,
+            "CORPUS_CHRISTI": 784,
+            "EL_PASO": 784,
+            "MIDLAND": 784
+          },
+          "rho_bar": 0.010602178480867919,
+          "rows_needed_for_5A": 382883,
+          "targets": {
+            "basis": "effective",
+            "mdd_target_met": false,
+            "mdd_target_rows": 1575,
+            "n": 3136,
+            "n_effective": 84.90214892354605,
+            "tail_rate_target_met": false,
+            "tail_rate_target_rows": 590
+          }
+        },
+        {
+          "a": "ml_wind_corrected",
+          "analytic_design_effect_n": 2968.1126062250723,
+          "b": "persistence_24h",
+          "mdd": 49.27890691050315,
+          "n_eff_acf_by_city": {
+            "AUSTIN": 758.1767918232993,
+            "CORPUS_CHRISTI": 565.3316199946483,
+            "EL_PASO": 714.6830858167567,
+            "MIDLAND": 330.64591382601986
+          },
+          "n_eff_bootstrap": 121.21833373392127,
+          "n_paired": 3136,
+          "per_city_n_paired": {
+            "AUSTIN": 784,
+            "CORPUS_CHRISTI": 784,
+            "EL_PASO": 784,
+            "MIDLAND": 784
+          },
+          "rho_bar": 0.018854562483334187,
+          "rows_needed_for_5A": 304620,
+          "targets": {
+            "basis": "effective",
+            "mdd_target_met": false,
+            "mdd_target_rows": 1575,
+            "n": 3136,
+            "n_effective": 121.21833373392127,
+            "tail_rate_target_met": false,
+            "tail_rate_target_rows": 590
+          }
+        },
+        {
+          "a": "ml_cooling_corrected",
+          "analytic_design_effect_n": 2856.7109416675244,
+          "b": "persistence_24h",
+          "mdd": 42.63024875710304,
+          "n_eff_acf_by_city": {
+            "AUSTIN": 729.2663208652075,
+            "CORPUS_CHRISTI": 506.2586230007322,
+            "EL_PASO": 707.5257442943566,
+            "MIDLAND": 309.2540512159412
+          },
+          "n_eff_bootstrap": 117.17525435298171,
+          "n_paired": 3136,
+          "per_city_n_paired": {
+            "AUSTIN": 784,
+            "CORPUS_CHRISTI": 784,
+            "EL_PASO": 784,
+            "MIDLAND": 784
+          },
+          "rho_bar": 0.03258864991189814,
+          "rows_needed_for_5A": 227967,
+          "targets": {
+            "basis": "effective",
+            "mdd_target_met": false,
+            "mdd_target_rows": 1575,
+            "n": 3136,
+            "n_effective": 117.17525435298171,
+            "tail_rate_target_met": false,
+            "tail_rate_target_rows": 590
+          }
+        },
+        {
+          "a": "reference_ml_refit_24h",
+          "analytic_design_effect_n": 2787.1049048355007,
+          "b": "persistence_24h",
+          "mdd": 13.528771002923696,
+          "n_eff_acf_by_city": {
+            "AUSTIN": 663.3231547930204,
+            "CORPUS_CHRISTI": 477.0105089104416,
+            "EL_PASO": 724.384800960525,
+            "MIDLAND": 518.0211391540229
+          },
+          "n_eff_bootstrap": 1007.2363401630508,
+          "n_paired": 3136,
+          "per_city_n_paired": {
+            "AUSTIN": 784,
+            "CORPUS_CHRISTI": 784,
+            "EL_PASO": 784,
+            "MIDLAND": 784
+          },
+          "rho_bar": 0.04172730091826137,
+          "rows_needed_for_5A": 22959,
+          "targets": {
+            "basis": "effective",
+            "mdd_target_met": false,
+            "mdd_target_rows": 1575,
+            "n": 3136,
+            "n_effective": 1007.2363401630508,
+            "tail_rate_target_met": true,
+            "tail_rate_target_rows": 590
+          }
+        }
+      ],
+      "targets_met": {
+        "mdd_1575": [],
+        "tail_rate_590": [
+          "reference_ml_refit_24h vs persistence_24h"
+        ]
+      }
+    }
+  },
+  "guard": {
+    "basis": "development",
+    "defaults_used": true,
+    "evaluation_instant": "2026-11-01T00:00:00+00:00",
+    "fresh_basis_start": "2026-09-30T00:00:00+00:00",
+    "nondefault_params": {},
+    "now_evaluated": "2026-11-02T08:51:08.295243+00:00",
+    "override_reason": null,
+    "prior_fresh_runs": [],
+    "round": "v4-read1",
+    "round_descriptive_only": false,
+    "row_source": "reconstructed_frames",
+    "valid_time_cutoff": "2026-10-25T00:00:00+00:00"
+  },
+  "not_measured": "Calibrated overrating risk (the overrating rate at the nominal 5% target) and retained capacity were not measured. No 8% ceiling was applied. Candidates are ranked on point error only, which is a weaker standard than v1.",
+  "owner_pending": [
+    "protocol v4 governs this evaluation: see docs/data-science/decisions/confirmation_protocol_v4_early_selection_SIGNING_COPY.md"
+  ],
+  "per_city": {
+    "AUSTIN": {
+      "candidate_exclusions": {
+        "ml_cooling_corrected": {},
+        "ml_wind_corrected": {},
+        "persistence_24h": {},
+        "raw_forecast": {},
+        "reference_ml_refit_24h": {}
+      },
+      "excluded_by_reason": {},
+      "metrics": {
+        "ml_cooling_corrected": {
+          "bias": 1.1710722251703307,
+          "mae": 91.29007732578009,
+          "median_abs_error": 59.72366073075352,
+          "n": 784,
+          "overprediction_label": "descriptive; not the calibrated 5%-target rate; not compared with 8%",
+          "overprediction_rate": 0.49362244897959184,
+          "overshoot_max": 462.26800527565456,
+          "overshoot_mean": 93.6557380464407,
+          "overshoot_p95": 266.9359465479393,
+          "rmse": 125.89741613999941
+        },
+        "ml_wind_corrected": {
+          "bias": -50.64172298151938,
+          "mae": 109.24350437848572,
+          "median_abs_error": 70.93281978726714,
+          "n": 784,
+          "overprediction_label": "descriptive; not the calibrated 5%-target rate; not compared with 8%",
+          "overprediction_rate": 0.4030612244897959,
+          "overshoot_max": 394.6302708125975,
+          "overshoot_mean": 72.69588072028739,
+          "overshoot_p95": 235.83035317433968,
+          "rmse": 151.88741718052515
+        },
+        "persistence_24h": {
+          "bias": 0.4601465365069806,
+          "mae": 121.40873898169195,
+          "median_abs_error": 89.7823671677553,
+          "n": 784,
+          "overprediction_label": "descriptive; not the calibrated 5%-target rate; not compared with 8%",
+          "overprediction_rate": 0.48596938775510207,
+          "overshoot_max": 923.328280755238,
+          "overshoot_mean": 125.38740977200521,
+          "overshoot_p95": 398.05790302817286,
+          "rmse": 167.61609799795002
+        },
+        "raw_forecast": {
+          "bias": 1.2426968115600276,
+          "mae": 114.45821338381691,
+          "median_abs_error": 80.76749716378544,
+          "n": 784,
+          "overprediction_label": "descriptive; not the calibrated 5%-target rate; not compared with 8%",
+          "overprediction_rate": 0.5293367346938775,
+          "overshoot_max": 666.9880189498133,
+          "overshoot_mean": 109.28857059418739,
+          "overshoot_p95": 325.97643881417423,
+          "rmse": 157.24119012686498
+        },
+        "reference_ml_refit_24h": {
+          "bias": 18.214659188538207,
+          "mae": 101.73015408888655,
+          "median_abs_error": 77.54091716148912,
+          "n": 784,
+          "overprediction_label": "descriptive; not the calibrated 5%-target rate; not compared with 8%",
+          "overprediction_rate": 0.576530612244898,
+          "overshoot_max": 396.3272353477064,
+          "overshoot_mean": 104.02293540874005,
+          "overshoot_p95": 274.52669171696283,
+          "rmse": 135.12243863956294
+        }
+      },
+      "n_in_scope": 784,
+      "n_scored": {
+        "ml_cooling_corrected": 784,
+        "ml_wind_corrected": 784,
+        "persistence_24h": 784,
+        "raw_forecast": 784,
+        "reference_ml_refit_24h": 784
+      },
+      "n_with_truth": 784,
+      "truth_label": "reanalysis-derived (Open-Meteo Archive reanalysis through IEEE 738), never sensor-validated",
+      "truth_stats": {
+        "mean_truth_amps": 1179.2948744337007,
+        "n_truth_rows": 784
+      }
+    },
+    "CORPUS_CHRISTI": {
+      "candidate_exclusions": {
+        "ml_cooling_corrected": {},
+        "ml_wind_corrected": {},
+        "persistence_24h": {},
+        "raw_forecast": {},
+        "reference_ml_refit_24h": {}
+      },
+      "excluded_by_reason": {},
+      "metrics": {
+        "ml_cooling_corrected": {
+          "bias": 0.46040441868453924,
+          "mae": 85.78453896367502,
+          "median_abs_error": 60.71960975626689,
+          "n": 784,
+          "overprediction_label": "descriptive; not the calibrated 5%-target rate; not compared with 8%",
+          "overprediction_rate": 0.49744897959183676,
+          "overshoot_max": 601.666095312913,
+          "overshoot_mean": 86.68722514329474,
+          "overshoot_p95": 297.52581632098367,
+          "rmse": 122.35357611553889
+        },
+        "ml_wind_corrected": {
+          "bias": -0.3271050264163779,
+          "mae": 88.0623686269552,
+          "median_abs_error": 59.1280316325483,
+          "n": 784,
+          "overprediction_label": "descriptive; not the calibrated 5%-target rate; not compared with 8%",
+          "overprediction_rate": 0.49744897959183676,
+          "overshoot_max": 606.7360763347814,
+          "overshoot_mean": 88.18518802925955,
+          "overshoot_p95": 281.7394308708793,
+          "rmse": 128.83815353544705
+        },
+        "persistence_24h": {
+          "bias": 1.4374356291037427,
+          "mae": 118.38018358497831,
+          "median_abs_error": 84.24997405822228,
+          "n": 784,
+          "overprediction_label": "descriptive; not the calibrated 5%-target rate; not compared with 8%",
+          "overprediction_rate": 0.4744897959183674,
+          "overshoot_max": 680.9861678740936,
+          "overshoot_mean": 126.25942669871013,
+          "overshoot_p95": 368.26594292164054,
+          "rmse": 165.8560402083512
+        },
+        "raw_forecast": {
+          "bias": -16.08946270251449,
+          "mae": 110.76124114904852,
+          "median_abs_error": 80.17950675897123,
+          "n": 784,
+          "overprediction_label": "descriptive; not the calibrated 5%-target rate; not compared with 8%",
+          "overprediction_rate": 0.39540816326530615,
+          "overshoot_max": 687.0095407483199,
+          "overshoot_mean": 119.71399080981078,
+          "overshoot_p95": 384.3140546999174,
+          "rmse": 152.6302670214743
+        },
+        "reference_ml_refit_24h": {
+          "bias": 17.876187821614305,
+          "mae": 101.34309635345555,
+          "median_abs_error": 73.16255411572456,
+          "n": 784,
+          "overprediction_label": "descriptive; not the calibrated 5%-target rate; not compared with 8%",
+          "overprediction_rate": 0.5497448979591837,
+          "overshoot_max": 572.757374030869,
+          "overshoot_mean": 108.4314603170009,
+          "overshoot_p95": 313.98501248037934,
+          "rmse": 137.36468319596642
+        }
+      },
+      "n_in_scope": 784,
+      "n_scored": {
+        "ml_cooling_corrected": 784,
+        "ml_wind_corrected": 784,
+        "persistence_24h": 784,
+        "raw_forecast": 784,
+        "reference_ml_refit_24h": 784
+      },
+      "n_with_truth": 784,
+      "truth_label": "reanalysis-derived (Open-Meteo Archive reanalysis through IEEE 738), never sensor-validated",
+      "truth_stats": {
+        "mean_truth_amps": 1330.0582132272411,
+        "n_truth_rows": 784
+      }
+    },
+    "EL_PASO": {
+      "candidate_exclusions": {
+        "ml_cooling_corrected": {},
+        "ml_wind_corrected": {},
+        "persistence_24h": {},
+        "raw_forecast": {},
+        "reference_ml_refit_24h": {}
+      },
+      "excluded_by_reason": {},
+      "metrics": {
+        "ml_cooling_corrected": {
+          "bias": 25.25423859350884,
+          "mae": 126.33238900294066,
+          "median_abs_error": 97.47368536463591,
+          "n": 784,
+          "overprediction_label": "descriptive; not the calibrated 5%-target rate; not compared with 8%",
+          "overprediction_rate": 0.5586734693877551,
+          "overshoot_max": 528.2499223534642,
+          "overshoot_mean": 135.66657081691372,
+          "overshoot_p95": 336.525490164128,
+          "rmse": 163.77769164989385
+        },
+        "ml_wind_corrected": {
+          "bias": -29.309553087909144,
+          "mae": 130.84296141080662,
+          "median_abs_error": 102.83598727972958,
+          "n": 784,
+          "overprediction_label": "descriptive; not the calibrated 5%-target rate; not compared with 8%",
+          "overprediction_rate": 0.4375,
+          "overshoot_max": 435.5115139365174,
+          "overshoot_mean": 116.03818094045425,
+          "overshoot_p95": 296.0998217445953,
+          "rmse": 170.89177728668042
+        },
+        "persistence_24h": {
+          "bias": 0.5630027831046596,
+          "mae": 171.93027906142632,
+          "median_abs_error": 139.98727543225834,
+          "n": 784,
+          "overprediction_label": "descriptive; not the calibrated 5%-target rate; not compared with 8%",
+          "overprediction_rate": 0.4961734693877551,
+          "overshoot_max": 792.5003268318703,
+          "overshoot_mean": 173.82356422379468,
+          "overshoot_p95": 468.3737022387753,
+          "rmse": 218.54085411084182
+        },
+        "raw_forecast": {
+          "bias": 70.2272492604762,
+          "mae": 168.6322464293769,
+          "median_abs_error": 124.40773297199576,
+          "n": 784,
+          "overprediction_label": "descriptive; not the calibrated 5%-target rate; not compared with 8%",
+          "overprediction_rate": 0.6670918367346939,
+          "overshoot_max": 820.9382858699017,
+          "overshoot_mean": 179.03044418818817,
+          "overshoot_p95": 466.9791557281727,
+          "rmse": 222.771811663322
+        },
+        "reference_ml_refit_24h": {
+          "bias": 50.1808428498544,
+          "mae": 141.41946426666962,
+          "median_abs_error": 117.16876852215114,
+          "n": 784,
+          "overprediction_label": "descriptive; not the calibrated 5%-target rate; not compared with 8%",
+          "overprediction_rate": 0.610969387755102,
+          "overshoot_max": 542.8655467192162,
+          "overshoot_mean": 156.80025133544348,
+          "overshoot_p95": 374.4531924894101,
+          "rmse": 177.2963993346001
+        }
+      },
+      "n_in_scope": 784,
+      "n_scored": {
+        "ml_cooling_corrected": 784,
+        "ml_wind_corrected": 784,
+        "persistence_24h": 784,
+        "raw_forecast": 784,
+        "reference_ml_refit_24h": 784
+      },
+      "n_with_truth": 784,
+      "truth_label": "reanalysis-derived (Open-Meteo Archive reanalysis through IEEE 738), never sensor-validated",
+      "truth_stats": {
+        "mean_truth_amps": 1145.2542042785253,
+        "n_truth_rows": 784
+      }
+    },
+    "MIDLAND": {
+      "candidate_exclusions": {
+        "ml_cooling_corrected": {},
+        "ml_wind_corrected": {},
+        "persistence_24h": {},
+        "raw_forecast": {},
+        "reference_ml_refit_24h": {}
+      },
+      "excluded_by_reason": {},
+      "metrics": {
+        "ml_cooling_corrected": {
+          "bias": -7.797478952134419,
+          "mae": 119.92432153153284,
+          "median_abs_error": 85.16112009736594,
+          "n": 784,
+          "overprediction_label": "descriptive; not the calibrated 5%-target rate; not compared with 8%",
+          "overprediction_rate": 0.41964285714285715,
+          "overshoot_max": 790.7223130371217,
+          "overshoot_mean": 133.59794009460236,
+          "overshoot_p95": 403.09788573526686,
+          "rmse": 167.73339569004636
+        },
+        "ml_wind_corrected": {
+          "bias": -10.621969398586186,
+          "mae": 122.95695948286628,
+          "median_abs_error": 81.45830498775877,
+          "n": 784,
+          "overprediction_label": "descriptive; not the calibrated 5%-target rate; not compared with 8%",
+          "overprediction_rate": 0.45535714285714285,
+          "overshoot_max": 801.234377923138,
+          "overshoot_mean": 123.34822440626834,
+          "overshoot_p95": 429.0507647213135,
+          "rmse": 179.65749783131977
+        },
+        "persistence_24h": {
+          "bias": 1.1409038556361166,
+          "mae": 205.65195413132773,
+          "median_abs_error": 151.64047099322806,
+          "n": 784,
+          "overprediction_label": "descriptive; not the calibrated 5%-target rate; not compared with 8%",
+          "overprediction_rate": 0.49489795918367346,
+          "overshoot_max": 1062.678665577935,
+          "overshoot_mean": 208.92474312085002,
+          "overshoot_p95": 556.767852767281,
+          "rmse": 272.7888765305987
+        },
+        "raw_forecast": {
+          "bias": -26.657699284179788,
+          "mae": 129.09219772235443,
+          "median_abs_error": 82.99810187066055,
+          "n": 784,
+          "overprediction_label": "descriptive; not the calibrated 5%-target rate; not compared with 8%",
+          "overprediction_rate": 0.4107142857142857,
+          "overshoot_max": 797.2672677933239,
+          "overshoot_mean": 124.70286766386478,
+          "overshoot_p95": 419.4059699344149,
+          "rmse": 183.61402911647565
+        },
+        "reference_ml_refit_24h": {
+          "bias": -25.58486256132661,
+          "mae": 178.20244778860726,
+          "median_abs_error": 151.8965717529727,
+          "n": 784,
+          "overprediction_label": "descriptive; not the calibrated 5%-target rate; not compared with 8%",
+          "overprediction_rate": 0.40816326530612246,
+          "overshoot_max": 802.2948452553557,
+          "overshoot_mean": 186.9565419034188,
+          "overshoot_p95": 489.15571340509257,
+          "rmse": 222.70007749907208
+        }
+      },
+      "n_in_scope": 784,
+      "n_scored": {
+        "ml_cooling_corrected": 784,
+        "ml_wind_corrected": 784,
+        "persistence_24h": 784,
+        "raw_forecast": 784,
+        "reference_ml_refit_24h": 784
+      },
+      "n_with_truth": 784,
+      "truth_label": "reanalysis-derived (Open-Meteo Archive reanalysis through IEEE 738), never sensor-validated",
+      "truth_stats": {
+        "mean_truth_amps": 1512.1397757404725,
+        "n_truth_rows": 784
+      }
+    }
+  },
+  "planner_defaults": {
+    "PD-01": {
+      "default": "the 12 frozen per-city artifacts (not a train-only refit)",
+      "non_default": false,
+      "note": "owner may override",
+      "title": "port model source",
+      "value": "the 12 frozen per-city artifacts (not a train-only refit)"
+    },
+    "PD-02": {
+      "default": "2026-09-28..2026-10-24",
+      "non_default": false,
+      "note": "owner may override",
+      "title": "port fetch window",
+      "value": "2026-09-28..2026-10-24"
+    },
+    "PD-03": {
+      "default": [
+        1,
+        4,
+        8,
+        28
+      ],
+      "non_default": false,
+      "note": "owner may override",
+      "title": "block lengths (six-hourly slots)",
+      "value": [
+        1,
+        4,
+        8,
+        28
+      ]
+    },
+    "PD-04": {
+      "default": "largest two-sided bootstrap p over both pooled schemes and every runnable block length",
+      "non_default": false,
+      "note": "owner may override",
+      "title": "headline p-value per test",
+      "value": "largest two-sided bootstrap p over both pooled schemes and every runnable block length"
+    },
+    "PD-05": {
+      "default": "Holm rejection at family alpha 0.05 with the margin favouring the candidate",
+      "non_default": false,
+      "note": "owner may override",
+      "title": "interval excludes 0 in the ship rule",
+      "value": "Holm rejection at family alpha 0.05 with the margin favouring the candidate"
+    },
+    "PD-06": {
+      "default": "row-weighted",
+      "non_default": false,
+      "note": "owner may override",
+      "title": "pooled statistic",
+      "value": "row-weighted"
+    },
+    "PD-07": {
+      "default": 8,
+      "non_default": false,
+      "note": "owner may override",
+      "title": "minimum paired rows",
+      "value": 8
+    },
+    "PD-08": {
+      "default": 0.8,
+      "non_default": false,
+      "note": "owner may override",
+      "title": "MDD power",
+      "value": 0.8
+    },
+    "PD-09": {
+      "default": "10000 resamples, seed 20260929",
+      "non_default": false,
+      "note": "owner may override",
+      "title": "resampling",
+      "value": "10000 resamples, seed 20260929"
+    },
+    "PD-10": {
+      "default": "v4 relative margin 2% of the city's mean truth ampacity (pooled, paired-row-weighted), consistency 3 cities",
+      "non_default": false,
+      "note": "owner may override",
+      "title": "ship-rule readings",
+      "value": "v4 relative margin 2% of the city's mean truth ampacity (pooled, paired-row-weighted), consistency 3 cities"
+    },
+    "PD-11": {
+      "default": "decision_time + 24 h rounded to the nearest whole UTC hour (half past rounds up)",
+      "non_default": false,
+      "note": "owner may override",
+      "title": "logs: reference own target hour",
+      "value": "decision_time + 24 h rounded to the nearest whole UTC hour (half past rounds up)"
+    },
+    "PD-12": {
+      "default": "first eligible line in file order",
+      "non_default": false,
+      "note": "owner may override",
+      "title": "first-logged",
+      "value": "first eligible line in file order"
+    },
+    "PD-13": {
+      "default": "gfs_seamless",
+      "non_default": false,
+      "note": "owner may override",
+      "title": "underlying weather model",
+      "value": "gfs_seamless"
+    },
+    "PD-14": {
+      "default": "not scored",
+      "non_default": false,
+      "note": "owner may override",
+      "title": "bundle ampacity",
+      "value": "not scored"
+    },
+    "PD-15": {
+      "default": "any non-default value in a FRESH run is refused (signed v4 rounds take no override)",
+      "non_default": false,
+      "note": "owner may override",
+      "title": "parameter changes",
+      "value": "any non-default value in a FRESH run is refused (signed v4 rounds take no override)"
+    },
+    "PD-16": {
+      "default": "artifact commits at or after 2026-11-01T00:00Z are flagged, not refused",
+      "non_default": false,
+      "note": "owner may override",
+      "title": "freeze check",
+      "value": "artifact commits at or after 2026-11-01T00:00Z are flagged, not refused"
+    },
+    "PD-17": {
+      "default": "data/shadow/evaluation",
+      "non_default": false,
+      "note": "owner may override",
+      "title": "evidence root",
+      "value": "data/shadow/evaluation"
+    },
+    "PD-18": {
+      "default": "v4-read1",
+      "non_default": false,
+      "note": "owner may override",
+      "title": "protocol round",
+      "value": "v4-read1"
+    }
+  },
+  "protocol_status": "signed",
+  "provenance": {
+    "artifacts": [
+      {
+        "city": "AUSTIN",
+        "commits": [
+          {
+            "commit": "68313221f3b7f76bb0d2116b980ab5b8c1e33708",
+            "committed_at": "2026-10-12T21:35:59-05:00"
+          }
+        ],
+        "method": "ml_wind_corrected",
+        "path": "data/shadow/models/ml_wind_corrected_AUSTIN.joblib",
+        "sha256": "b19039c2d3e8bf7688c92d9946eb64fc118994f587ee42fb619349862b21f9a0"
+      },
+      {
+        "city": "AUSTIN",
+        "commits": [
+          {
+            "commit": "68313221f3b7f76bb0d2116b980ab5b8c1e33708",
+            "committed_at": "2026-10-12T21:35:59-05:00"
+          }
+        ],
+        "method": "ml_cooling_corrected",
+        "path": "data/shadow/models/ml_cooling_corrected_AUSTIN.joblib",
+        "sha256": "5026d01fb430016b23f1823fa58f74996b999e0b9a85d321a79ddbae5f384f5b"
+      },
+      {
+        "city": "AUSTIN",
+        "commits": [
+          {
+            "commit": "68313221f3b7f76bb0d2116b980ab5b8c1e33708",
+            "committed_at": "2026-10-12T21:35:59-05:00"
+          }
+        ],
+        "method": "reference_ml_refit_24h",
+        "path": "data/shadow/models/reference_ml_refit_24h_AUSTIN.joblib",
+        "sha256": "f348ba6d9fcda92888c49f0308123ba647a98c60a6029b89b8a3614ef506d5ee"
+      },
+      {
+        "city": "CORPUS_CHRISTI",
+        "commits": [
+          {
+            "commit": "68313221f3b7f76bb0d2116b980ab5b8c1e33708",
+            "committed_at": "2026-10-12T21:35:59-05:00"
+          }
+        ],
+        "method": "ml_wind_corrected",
+        "path": "data/shadow/models/ml_wind_corrected_CORPUS_CHRISTI.joblib",
+        "sha256": "f81f0d5e3371e14e4bf3e31dfd9261a28ac09024e4cd25c451d4691f6f9d53f1"
+      },
+      {
+        "city": "CORPUS_CHRISTI",
+        "commits": [
+          {
+            "commit": "68313221f3b7f76bb0d2116b980ab5b8c1e33708",
+            "committed_at": "2026-10-12T21:35:59-05:00"
+          }
+        ],
+        "method": "ml_cooling_corrected",
+        "path": "data/shadow/models/ml_cooling_corrected_CORPUS_CHRISTI.joblib",
+        "sha256": "8f50c799f6e282f48e2e51738da44896d0893125fdb27eda0a488ae70419a7cc"
+      },
+      {
+        "city": "CORPUS_CHRISTI",
+        "commits": [
+          {
+            "commit": "68313221f3b7f76bb0d2116b980ab5b8c1e33708",
+            "committed_at": "2026-10-12T21:35:59-05:00"
+          }
+        ],
+        "method": "reference_ml_refit_24h",
+        "path": "data/shadow/models/reference_ml_refit_24h_CORPUS_CHRISTI.joblib",
+        "sha256": "c3f998af8b8b4058dc4e74281500b5e47ed579274f288bdf99bd847ccdbbe11f"
+      },
+      {
+        "city": "MIDLAND",
+        "commits": [
+          {
+            "commit": "68313221f3b7f76bb0d2116b980ab5b8c1e33708",
+            "committed_at": "2026-10-12T21:35:59-05:00"
+          }
+        ],
+        "method": "ml_wind_corrected",
+        "path": "data/shadow/models/ml_wind_corrected_MIDLAND.joblib",
+        "sha256": "79c8bd5ac6bebf5e3dfcd4c32bffc9356349c2b77a7c0acc395c41b3bd57f544"
+      },
+      {
+        "city": "MIDLAND",
+        "commits": [
+          {
+            "commit": "68313221f3b7f76bb0d2116b980ab5b8c1e33708",
+            "committed_at": "2026-10-12T21:35:59-05:00"
+          }
+        ],
+        "method": "ml_cooling_corrected",
+        "path": "data/shadow/models/ml_cooling_corrected_MIDLAND.joblib",
+        "sha256": "cdd0a2c9187560d04921647c59bcaf99577fd6e9d94c92a10b59958a5c63a5ee"
+      },
+      {
+        "city": "MIDLAND",
+        "commits": [
+          {
+            "commit": "68313221f3b7f76bb0d2116b980ab5b8c1e33708",
+            "committed_at": "2026-10-12T21:35:59-05:00"
+          }
+        ],
+        "method": "reference_ml_refit_24h",
+        "path": "data/shadow/models/reference_ml_refit_24h_MIDLAND.joblib",
+        "sha256": "ba4eff0ed8b902eb05b26b8df883c881bd2862c095f1b9cfe037ab7cf024bea9"
+      },
+      {
+        "city": "EL_PASO",
+        "commits": [
+          {
+            "commit": "68313221f3b7f76bb0d2116b980ab5b8c1e33708",
+            "committed_at": "2026-10-12T21:35:59-05:00"
+          }
+        ],
+        "method": "ml_wind_corrected",
+        "path": "data/shadow/models/ml_wind_corrected_EL_PASO.joblib",
+        "sha256": "7494e91d218651c8640ddb156ee0d16db34af0ea1f296c65f40c06c2403530ae"
+      },
+      {
+        "city": "EL_PASO",
+        "commits": [
+          {
+            "commit": "68313221f3b7f76bb0d2116b980ab5b8c1e33708",
+            "committed_at": "2026-10-12T21:35:59-05:00"
+          }
+        ],
+        "method": "ml_cooling_corrected",
+        "path": "data/shadow/models/ml_cooling_corrected_EL_PASO.joblib",
+        "sha256": "f64f9872883164e89979536cbc5c5338195f2b84929b30ca6e3dde7e24610fb2"
+      },
+      {
+        "city": "EL_PASO",
+        "commits": [
+          {
+            "commit": "68313221f3b7f76bb0d2116b980ab5b8c1e33708",
+            "committed_at": "2026-10-12T21:35:59-05:00"
+          }
+        ],
+        "method": "reference_ml_refit_24h",
+        "path": "data/shadow/models/reference_ml_refit_24h_EL_PASO.joblib",
+        "sha256": "46b3e09b44638557998c7b96d366fd3b59c47b3b03414443e485af574e83e580"
+      }
+    ],
+    "freeze_check": {
+      "flagged": [],
+      "model_freeze": "2026-11-01T00:00:00+00:00",
+      "note": "artifact commits dated at or after the freeze are flagged, not refused (PD-16)"
+    },
+    "git_dirty": true,
+    "git_sha": "6e12778ec38f19821ff7eace23cd62ebae59dbf8",
+    "logs_source_commit": null,
+    "versions": {
+      "numpy": "2.4.3",
+      "pandas": "2.3.3",
+      "python": "3.12.13",
+      "scipy": "1.17.1",
+      "sklearn": "1.9.1"
+    }
+  },
+  "rating_config_version": "v2-provisional-2026-11-02",
+  "report_paths": {
+    "report_json": "data/shadow/evaluation/v4-test/reconstructed_frames_20261102T085108Z/report.json",
+    "report_md": "data/shadow/evaluation/v4-test/reconstructed_frames_20261102T085108Z/report.md"
+  },
+  "round": "v4-read1",
+  "row_source": "reconstructed_frames",
+  "sample_size": {
+    "nominal_vs_effective": "n is nominal; effective sample sizes (ACF per city, bootstrap pooled) are in `pairs` and are smaller",
+    "pairs": [
+      {
+        "a": "ml_wind_corrected",
+        "analytic_design_effect_n": 3063.645491081712,
+        "b": "ml_cooling_corrected",
+        "mdd": 12.674460083648757,
+        "n_eff_acf_by_city": {
+          "AUSTIN": 784.0,
+          "CORPUS_CHRISTI": 784.0,
+          "EL_PASO": 784.0,
+          "MIDLAND": 656.7813506940113
+        },
+        "n_eff_bootstrap": 484.70980698253476,
+        "n_paired": 3136,
+        "per_city_n_paired": {
+          "AUSTIN": 784,
+          "CORPUS_CHRISTI": 784,
+          "EL_PASO": 784,
+          "MIDLAND": 784
+        },
+        "rho_bar": 0.007872376131519594,
+        "rows_needed_for_5A": 20151,
+        "targets": {
+          "basis": "effective",
+          "mdd_target_met": false,
+          "mdd_target_rows": 1575,
+          "n": 3136,
+          "n_effective": 484.70980698253476,
+          "tail_rate_target_met": false,
+          "tail_rate_target_rows": 590
+        }
+      },
+      {
+        "a": "ml_wind_corrected",
+        "analytic_design_effect_n": 2984.3970845841154,
+        "b": "reference_ml_refit_24h",
+        "mdd": 44.00552354197065,
+        "n_eff_acf_by_city": {
+          "AUSTIN": 784.0,
+          "CORPUS_CHRISTI": 739.8857440377724,
+          "EL_PASO": 703.7398261714534,
+          "MIDLAND": 393.4220892768584
+        },
+        "n_eff_bootstrap": 105.90342910152508,
+        "n_paired": 3136,
+        "per_city_n_paired": {
+          "AUSTIN": 784,
+          "CORPUS_CHRISTI": 784,
+          "EL_PASO": 784,
+          "MIDLAND": 784
+        },
+        "rho_bar": 0.01693283557997788,
+        "rows_needed_for_5A": 242913,
+        "targets": {
+          "basis": "effective",
+          "mdd_target_met": false,
+          "mdd_target_rows": 1575,
+          "n": 3136,
+          "n_effective": 105.90342910152508,
+          "tail_rate_target_met": false,
+          "tail_rate_target_rows": 590
+        }
+      },
+      {
+        "a": "ml_cooling_corrected",
+        "analytic_design_effect_n": 2981.957853022172,
+        "b": "reference_ml_refit_24h",
+        "mdd": 37.23563426086496,
+        "n_eff_acf_by_city": {
+          "AUSTIN": 784.0,
+          "CORPUS_CHRISTI": 613.4709931247337,
+          "EL_PASO": 753.7671792504459,
+          "MIDLAND": 537.1532551362047
+        },
+        "n_eff_bootstrap": 89.36189045376801,
+        "n_paired": 3136,
+        "per_city_n_paired": {
+          "AUSTIN": 784,
+          "CORPUS_CHRISTI": 784,
+          "EL_PASO": 784,
+          "MIDLAND": 784
+        },
+        "rho_bar": 0.017219352136014544,
+        "rows_needed_for_5A": 173922,
+        "targets": {
+          "basis": "effective",
+          "mdd_target_met": false,
+          "mdd_target_rows": 1575,
+          "n": 3136,
+          "n_effective": 89.36189045376801,
+          "tail_rate_target_met": false,
+          "tail_rate_target_rows": 590
+        }
+      },
+      {
+        "a": "ml_wind_corrected",
+        "analytic_design_effect_n": 3302.636786016442,
+        "b": "raw_forecast",
+        "mdd": 24.795528863504927,
+        "n_eff_acf_by_city": {
+          "AUSTIN": 765.8251723426129,
+          "CORPUS_CHRISTI": 784.0,
+          "EL_PASO": 575.7066290979074,
+          "MIDLAND": 734.8857726775672
+        },
+        "n_eff_bootstrap": 185.81206006659482,
+        "n_paired": 3136,
+        "per_city_n_paired": {
+          "AUSTIN": 784,
+          "CORPUS_CHRISTI": 784,
+          "EL_PASO": 784,
+          "MIDLAND": 784
+        },
+        "rho_bar": -0.016818560119598137,
+        "rows_needed_for_5A": 77123,
+        "targets": {
+          "basis": "effective",
+          "mdd_target_met": false,
+          "mdd_target_rows": 1575,
+          "n": 3136,
+          "n_effective": 185.81206006659482,
+          "tail_rate_target_met": false,
+          "tail_rate_target_rows": 590
+        }
+      },
+      {
+        "a": "ml_cooling_corrected",
+        "analytic_design_effect_n": 3107.8189456441787,
+        "b": "raw_forecast",
+        "mdd": 21.802863409764644,
+        "n_eff_acf_by_city": {
+          "AUSTIN": 724.5904045331317,
+          "CORPUS_CHRISTI": 784.0,
+          "EL_PASO": 610.3425159399438,
+          "MIDLAND": 773.6174450922862
+        },
+        "n_eff_bootstrap": 188.0854785588019,
+        "n_paired": 3136,
+        "per_city_n_paired": {
+          "AUSTIN": 784,
+          "CORPUS_CHRISTI": 784,
+          "EL_PASO": 784,
+          "MIDLAND": 784
+        },
+        "rho_bar": 0.0030225971813575467,
+        "rows_needed_for_5A": 59630,
+        "targets": {
+          "basis": "effective",
+          "mdd_target_met": false,
+          "mdd_target_rows": 1575,
+          "n": 3136,
+          "n_effective": 188.0854785588019,
+          "tail_rate_target_met": false,
+          "tail_rate_target_rows": 590
+        }
+      },
+      {
+        "a": "reference_ml_refit_24h",
+        "analytic_design_effect_n": 3039.3294598146554,
+        "b": "raw_forecast",
+        "mdd": 55.247776542047944,
+        "n_eff_acf_by_city": {
+          "AUSTIN": 736.9806978186382,
+          "CORPUS_CHRISTI": 784.0,
+          "EL_PASO": 605.7055626143316,
+          "MIDLAND": 370.0952721160334
+        },
+        "n_eff_bootstrap": 84.90214892354605,
+        "n_paired": 3136,
+        "per_city_n_paired": {
+          "AUSTIN": 784,
+          "CORPUS_CHRISTI": 784,
+          "EL_PASO": 784,
+          "MIDLAND": 784
+        },
+        "rho_bar": 0.010602178480867919,
+        "rows_needed_for_5A": 382883,
+        "targets": {
+          "basis": "effective",
+          "mdd_target_met": false,
+          "mdd_target_rows": 1575,
+          "n": 3136,
+          "n_effective": 84.90214892354605,
+          "tail_rate_target_met": false,
+          "tail_rate_target_rows": 590
+        }
+      },
+      {
+        "a": "ml_wind_corrected",
+        "analytic_design_effect_n": 2968.1126062250723,
+        "b": "persistence_24h",
+        "mdd": 49.27890691050315,
+        "n_eff_acf_by_city": {
+          "AUSTIN": 758.1767918232993,
+          "CORPUS_CHRISTI": 565.3316199946483,
+          "EL_PASO": 714.6830858167567,
+          "MIDLAND": 330.64591382601986
+        },
+        "n_eff_bootstrap": 121.21833373392127,
+        "n_paired": 3136,
+        "per_city_n_paired": {
+          "AUSTIN": 784,
+          "CORPUS_CHRISTI": 784,
+          "EL_PASO": 784,
+          "MIDLAND": 784
+        },
+        "rho_bar": 0.018854562483334187,
+        "rows_needed_for_5A": 304620,
+        "targets": {
+          "basis": "effective",
+          "mdd_target_met": false,
+          "mdd_target_rows": 1575,
+          "n": 3136,
+          "n_effective": 121.21833373392127,
+          "tail_rate_target_met": false,
+          "tail_rate_target_rows": 590
+        }
+      },
+      {
+        "a": "ml_cooling_corrected",
+        "analytic_design_effect_n": 2856.7109416675244,
+        "b": "persistence_24h",
+        "mdd": 42.63024875710304,
+        "n_eff_acf_by_city": {
+          "AUSTIN": 729.2663208652075,
+          "CORPUS_CHRISTI": 506.2586230007322,
+          "EL_PASO": 707.5257442943566,
+          "MIDLAND": 309.2540512159412
+        },
+        "n_eff_bootstrap": 117.17525435298171,
+        "n_paired": 3136,
+        "per_city_n_paired": {
+          "AUSTIN": 784,
+          "CORPUS_CHRISTI": 784,
+          "EL_PASO": 784,
+          "MIDLAND": 784
+        },
+        "rho_bar": 0.03258864991189814,
+        "rows_needed_for_5A": 227967,
+        "targets": {
+          "basis": "effective",
+          "mdd_target_met": false,
+          "mdd_target_rows": 1575,
+          "n": 3136,
+          "n_effective": 117.17525435298171,
+          "tail_rate_target_met": false,
+          "tail_rate_target_rows": 590
+        }
+      },
+      {
+        "a": "reference_ml_refit_24h",
+        "analytic_design_effect_n": 2787.1049048355007,
+        "b": "persistence_24h",
+        "mdd": 13.528771002923696,
+        "n_eff_acf_by_city": {
+          "AUSTIN": 663.3231547930204,
+          "CORPUS_CHRISTI": 477.0105089104416,
+          "EL_PASO": 724.384800960525,
+          "MIDLAND": 518.0211391540229
+        },
+        "n_eff_bootstrap": 1007.2363401630508,
+        "n_paired": 3136,
+        "per_city_n_paired": {
+          "AUSTIN": 784,
+          "CORPUS_CHRISTI": 784,
+          "EL_PASO": 784,
+          "MIDLAND": 784
+        },
+        "rho_bar": 0.04172730091826137,
+        "rows_needed_for_5A": 22959,
+        "targets": {
+          "basis": "effective",
+          "mdd_target_met": false,
+          "mdd_target_rows": 1575,
+          "n": 3136,
+          "n_effective": 1007.2363401630508,
+          "tail_rate_target_met": true,
+          "tail_rate_target_rows": 590
+        }
+      }
+    ],
+    "per_city": {
+      "AUSTIN": {
+        "n_in_scope": 784,
+        "n_scored": {
+          "ml_cooling_corrected": 784,
+          "ml_wind_corrected": 784,
+          "persistence_24h": 784,
+          "raw_forecast": 784,
+          "reference_ml_refit_24h": 784
+        },
+        "targets": {
+          "basis": "nominal",
+          "mdd_target_met": false,
+          "mdd_target_rows": 1575,
+          "n": 784,
+          "n_effective": null,
+          "tail_rate_target_met": true,
+          "tail_rate_target_rows": 590
+        }
+      },
+      "CORPUS_CHRISTI": {
+        "n_in_scope": 784,
+        "n_scored": {
+          "ml_cooling_corrected": 784,
+          "ml_wind_corrected": 784,
+          "persistence_24h": 784,
+          "raw_forecast": 784,
+          "reference_ml_refit_24h": 784
+        },
+        "targets": {
+          "basis": "nominal",
+          "mdd_target_met": false,
+          "mdd_target_rows": 1575,
+          "n": 784,
+          "n_effective": null,
+          "tail_rate_target_met": true,
+          "tail_rate_target_rows": 590
+        }
+      },
+      "EL_PASO": {
+        "n_in_scope": 784,
+        "n_scored": {
+          "ml_cooling_corrected": 784,
+          "ml_wind_corrected": 784,
+          "persistence_24h": 784,
+          "raw_forecast": 784,
+          "reference_ml_refit_24h": 784
+        },
+        "targets": {
+          "basis": "nominal",
+          "mdd_target_met": false,
+          "mdd_target_rows": 1575,
+          "n": 784,
+          "n_effective": null,
+          "tail_rate_target_met": true,
+          "tail_rate_target_rows": 590
+        }
+      },
+      "MIDLAND": {
+        "n_in_scope": 784,
+        "n_scored": {
+          "ml_cooling_corrected": 784,
+          "ml_wind_corrected": 784,
+          "persistence_24h": 784,
+          "raw_forecast": 784,
+          "reference_ml_refit_24h": 784
+        },
+        "targets": {
+          "basis": "nominal",
+          "mdd_target_met": false,
+          "mdd_target_rows": 1575,
+          "n": 784,
+          "n_effective": null,
+          "tail_rate_target_met": true,
+          "tail_rate_target_rows": 590
+        }
+      }
+    },
+    "pooled_nominal": {
+      "label": "nominal, not effective",
+      "n_scored": {
+        "ml_cooling_corrected": 3136,
+        "ml_wind_corrected": 3136,
+        "persistence_24h": 3136,
+        "raw_forecast": 3136,
+        "reference_ml_refit_24h": 3136
+      },
+      "targets": {
+        "basis": "nominal_not_judged",
+        "mdd_target_met": false,
+        "mdd_target_rows": 1575,
+        "n": 3136,
+        "n_effective": null,
+        "note": "a pooled nominal count is not an effective sample size and is never judged against the precision targets; see the per-pair effective n",
+        "tail_rate_target_met": false,
+        "tail_rate_target_rows": 590
+      }
+    },
+    "targets_met": {
+      "mdd_1575": [],
+      "tail_rate_590": [
+        "reference_ml_refit_24h vs persistence_24h"
+      ]
+    }
+  },
+  "scored_artifacts": [
+    {
+      "city": "AUSTIN",
+      "method": "ml_wind_corrected",
+      "path": "data/shadow/models/ml_wind_corrected_AUSTIN.joblib",
+      "role": "headline",
+      "sha256": "b19039c2d3e8bf7688c92d9946eb64fc118994f587ee42fb619349862b21f9a0",
+      "source": "frozen"
+    },
+    {
+      "city": "AUSTIN",
+      "method": "ml_cooling_corrected",
+      "path": "data/shadow/models/ml_cooling_corrected_AUSTIN.joblib",
+      "role": "headline",
+      "sha256": "5026d01fb430016b23f1823fa58f74996b999e0b9a85d321a79ddbae5f384f5b",
+      "source": "frozen"
+    },
+    {
+      "city": "AUSTIN",
+      "method": "reference_ml_refit_24h",
+      "path": "data/shadow/models/reference_ml_refit_24h_AUSTIN.joblib",
+      "role": "headline",
+      "sha256": "f348ba6d9fcda92888c49f0308123ba647a98c60a6029b89b8a3614ef506d5ee",
+      "source": "frozen"
+    },
+    {
+      "city": "CORPUS_CHRISTI",
+      "method": "ml_wind_corrected",
+      "path": "data/shadow/models/ml_wind_corrected_CORPUS_CHRISTI.joblib",
+      "role": "headline",
+      "sha256": "f81f0d5e3371e14e4bf3e31dfd9261a28ac09024e4cd25c451d4691f6f9d53f1",
+      "source": "frozen"
+    },
+    {
+      "city": "CORPUS_CHRISTI",
+      "method": "ml_cooling_corrected",
+      "path": "data/shadow/models/ml_cooling_corrected_CORPUS_CHRISTI.joblib",
+      "role": "headline",
+      "sha256": "8f50c799f6e282f48e2e51738da44896d0893125fdb27eda0a488ae70419a7cc",
+      "source": "frozen"
+    },
+    {
+      "city": "CORPUS_CHRISTI",
+      "method": "reference_ml_refit_24h",
+      "path": "data/shadow/models/reference_ml_refit_24h_CORPUS_CHRISTI.joblib",
+      "role": "headline",
+      "sha256": "c3f998af8b8b4058dc4e74281500b5e47ed579274f288bdf99bd847ccdbbe11f",
+      "source": "frozen"
+    },
+    {
+      "city": "MIDLAND",
+      "method": "ml_wind_corrected",
+      "path": "data/shadow/models/ml_wind_corrected_MIDLAND.joblib",
+      "role": "headline",
+      "sha256": "79c8bd5ac6bebf5e3dfcd4c32bffc9356349c2b77a7c0acc395c41b3bd57f544",
+      "source": "frozen"
+    },
+    {
+      "city": "MIDLAND",
+      "method": "ml_cooling_corrected",
+      "path": "data/shadow/models/ml_cooling_corrected_MIDLAND.joblib",
+      "role": "headline",
+      "sha256": "cdd0a2c9187560d04921647c59bcaf99577fd6e9d94c92a10b59958a5c63a5ee",
+      "source": "frozen"
+    },
+    {
+      "city": "MIDLAND",
+      "method": "reference_ml_refit_24h",
+      "path": "data/shadow/models/reference_ml_refit_24h_MIDLAND.joblib",
+      "role": "headline",
+      "sha256": "ba4eff0ed8b902eb05b26b8df883c881bd2862c095f1b9cfe037ab7cf024bea9",
+      "source": "frozen"
+    },
+    {
+      "city": "EL_PASO",
+      "method": "ml_wind_corrected",
+      "path": "data/shadow/models/ml_wind_corrected_EL_PASO.joblib",
+      "role": "headline",
+      "sha256": "7494e91d218651c8640ddb156ee0d16db34af0ea1f296c65f40c06c2403530ae",
+      "source": "frozen"
+    },
+    {
+      "city": "EL_PASO",
+      "method": "ml_cooling_corrected",
+      "path": "data/shadow/models/ml_cooling_corrected_EL_PASO.joblib",
+      "role": "headline",
+      "sha256": "f64f9872883164e89979536cbc5c5338195f2b84929b30ca6e3dde7e24610fb2",
+      "source": "frozen"
+    },
+    {
+      "city": "EL_PASO",
+      "method": "reference_ml_refit_24h",
+      "path": "data/shadow/models/reference_ml_refit_24h_EL_PASO.joblib",
+      "role": "headline",
+      "sha256": "46b3e09b44638557998c7b96d366fd3b59c47b3b03414443e485af574e83e580",
+      "source": "frozen"
+    }
+  ],
+  "scored_window": [
+    "2026-03-18T00:00:00+00:00",
+    "2026-09-30T00:00:00+00:00"
+  ],
+  "secondary": null,
+  "truth_label": "reanalysis-derived (Open-Meteo Archive reanalysis through IEEE 738), never sensor-validated",
+  "truth_stats": {
+    "AUSTIN": {
+      "mean_truth_amps": 1179.2948744337007,
+      "n_truth_rows": 784
+    },
+    "CORPUS_CHRISTI": {
+      "mean_truth_amps": 1330.0582132272411,
+      "n_truth_rows": 784
+    },
+    "EL_PASO": {
+      "mean_truth_amps": 1145.2542042785253,
+      "n_truth_rows": 784
+    },
+    "MIDLAND": {
+      "mean_truth_amps": 1512.1397757404725,
+      "n_truth_rows": 784
+    }
+  },
+  "validity_flags": [
+    {
+      "applies": false,
+      "id": "V1",
+      "not_applicable_reason": "The reconstructed frames use the archive anchor at valid - 24 h, which is the development configuration.",
+      "text": "The live correction anchor is a station observation (TCEQ, falling back to Synoptic) taken 11 to 23 h before valid time; the models were trained with an archive anchor at exactly valid - 24 h."
+    },
+    {
+      "applies": false,
+      "id": "V2",
+      "not_applicable_reason": "In the reconstructed frames the reference features sit at the anchor (valid - 24 h), so its target is the valid time by construction.",
+      "text": "reference_ml_refit_24h predicts about decision time + 24 h, which is 7 to 13 h after the logged valid time. Its headline is scored at its own target hour; the logged-valid_time reading is reported alongside and flagged."
+    },
+    {
+      "applies": false,
+      "id": "V3",
+      "not_applicable_reason": "The port uses the development persistence: archive truth weather 24 h earlier, run through IEEE 738.",
+      "text": "The logged persistence_24h is the previous same-model cycle's raw_forecast (an hour about 11 to 17 h before the scored valid time), not the 24 h persistence of the development record. It is unavailable on a cold start."
+    },
+    {
+      "applies": true,
+      "id": "V4",
+      "not_applicable_reason": null,
+      "text": "Truth is reanalysis shared with the training data, and the four cities share weather, so a pooled comparison has far fewer effective samples than rows."
+    },
+    {
+      "applies": false,
+      "id": "V5",
+      "not_applicable_reason": "The reconstructed frames use GFS Previous-Runs forecasts, the training source.",
+      "text": "The live underlying weather model must match the one the corrections were trained on (gfs_seamless). Only rows tagged forecast_model == gfs_seamless are scored."
+    },
+    {
+      "applies": false,
+      "id": "V6",
+      "not_applicable_reason": "The reconstructed frames contain no logged rows.",
+      "text": "Rows without a forecast_model field were logged before the 2026-10-13 fix and predict the hour before the scored hour; they are excluded and never pooled."
+    }
+  ],
+  "veto_rule": {
+    "min_cities": 3,
+    "rule": "mae_strictly_higher_than_raw_forecast_in_at_least_min_cities_of_the_cities_with_data"
+  },
+  "vetoes": {
+    "ml_cooling_corrected": {
+      "cities_losing_to_raw": [],
+      "per_city_mae": {
+        "AUSTIN": [
+          91.29007732578009,
+          114.45821338381691
+        ],
+        "CORPUS_CHRISTI": [
+          85.78453896367502,
+          110.76124114904852
+        ],
+        "EL_PASO": [
+          126.33238900294066,
+          168.6322464293769
+        ],
+        "MIDLAND": [
+          119.92432153153284,
+          129.09219772235443
+        ]
+      },
+      "reasons": [],
+      "vetoed": false
+    },
+    "ml_wind_corrected": {
+      "cities_losing_to_raw": [],
+      "per_city_mae": {
+        "AUSTIN": [
+          109.24350437848572,
+          114.45821338381691
+        ],
+        "CORPUS_CHRISTI": [
+          88.0623686269552,
+          110.76124114904852
+        ],
+        "EL_PASO": [
+          130.84296141080662,
+          168.6322464293769
+        ],
+        "MIDLAND": [
+          122.95695948286628,
+          129.09219772235443
+        ]
+      },
+      "reasons": [],
+      "vetoed": false
+    },
+    "reference_ml_refit_24h": {
+      "cities_losing_to_raw": [
+        "MIDLAND"
+      ],
+      "per_city_mae": {
+        "AUSTIN": [
+          101.73015408888655,
+          114.45821338381691
+        ],
+        "CORPUS_CHRISTI": [
+          101.34309635345555,
+          110.76124114904852
+        ],
+        "EL_PASO": [
+          141.41946426666962,
+          168.6322464293769
+        ],
+        "MIDLAND": [
+          178.20244778860726,
+          129.09219772235443
+        ]
+      },
+      "reasons": [],
+      "vetoed": false
+    }
+  }
+}

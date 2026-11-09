@@ -1,0 +1,358 @@
+---
+gsd_state_version: "1.0"
+current_phase: 08
+current_plan: Not started
+status: completed
+stopped_at: Phase 08 complete — all phases complete
+last_updated: "2026-11-09T06:05:59.427Z"
+last_activity: 2026-11-09
+last_activity_desc: Phase 08 complete
+state_head: 9866c9d0d7dfbf80d59c104f4da2e27cfa5db361
+progress:
+  total_phases: 8
+  completed_phases: 8
+  total_plans: 78
+  completed_plans: 78
+  percent: 100
+milestone_name: Production Pipeline (Supabase + live ratings)
+workstream: production-pipeline
+created: 2026-10-18
+current_phase_name: Day-Ahead Cooling Forecast Alongside 60-Minute G6
+---
+
+# Project State
+
+## Project Reference
+
+See: this workstream's REQUIREMENTS.md and ROADMAP.md (both 2026-10-18).
+
+**Core value:** Every city's dynamic rating is computed on a schedule, stored in Supabase Postgres,
+and readable by the other teams at any time through a read-only REST interface.
+
+**Scope note (owner, 2026-10-18):** this workstream strings the system together end to end. It
+does not analyze the ratings themselves. Observations about output values are recorded below for
+whoever owns that analysis; they are not work items here.
+
+## Current Position
+
+**Status:** All phases complete
+**Current Phase:** 08
+**Current Plan:** Not started
+**Total Plans in Phase:** 12
+**Last Activity:** 2026-11-09
+**Last Activity Description:** Phase 08 complete
+
+## Planning Summary (2026-10-19)
+
+| Phase | Plans | Check | Revisions |
+|-------|-------|-------|-----------|
+| 1 Land PR #7 | 5 | passed | 0 |
+| 2 Data Cleaning | 4 | passed | 1 (CSV first-write-wins marked CSV-only; Postgres follows OD-7) |
+| 3 Real-Data Validation | 5 | passed | 0 |
+| 4 Supabase Store & Writer | 6 | passed | 1 (pre-push manylinux wheel check for the psycopg pins) |
+| 5 Scheduled Live Runs | 8 | passed | 1 (phase-wide secret scan; binary permanence shown at push) |
+| 6 Exposure & E2E | 7 | passed | 1 (72 h soak starts only after the dry-soak review) |
+
+Execution order is 1 → 2 → 3 → 4 → 5 → 6. Each phase's preconditions check the previous one.
+
+**Cross-phase notes:**
+- **Conflict rules:** the CSV archive is first-write-wins (Phase 2, for backfill resume). The Postgres `city_rating` upsert is `ON CONFLICT (city, valid_time) DO UPDATE` with `first_written_at` immutable (OD-7, Phase 4). The DB-03 backfill loader uses DO NOTHING, so it never overwrites live rows.
+- **Phase 2 edits Phase 1's tests:** it changes fixture data in Phase 1's `city_pipeline_test.py` and in `predictive_tracer_test.py`. Assert lines stay pinned to the last `test(01-03)` commit.
+- **Phase 5 extends Phase 1's pinned tests:** it adds to the pinned key lists in Phase 1's tests and removes no assertion. Each city runs in its own child process, so a station-discovery abort stays per city, and the behaviour pinned by Phase 1's orchestrator test is unchanged.
+- **Phase 6 permissions:** Phase 6 revokes every anon/authenticated privilege in `public`, then grants SELECT on `city_rating` and `latest_rating` only. The `dlr_writer` role is untouched.
+
+**Owner risks to settle before go-live:**
+- **Actions minutes:** the repo is PRIVATE. Hourly live runs are estimated at about 2,900-4,300 min/month on top of about 600-660 for Shadow Collection. Running out of minutes stops every workflow, including Shadow Collection, before 2026-11-24. Plan 05-06 reads the real quota and offers "hold".
+- **requirements.txt push:** adding psycopg affects Shadow Collection's install. Plan 04-06 gates the push on a manylinux cp312 wheel check.
+- **Cold start:** the backfill window ends 2026-09-28, which is outside the 30-day read window by go-live. A fresh backfill before go-live avoids the cold start (raised in 04-05).
+- **Wind feature mismatch:** the ml forecast was trained on measured wind but reads projected wind from the archive. Phase 3 records this as a finding with options for the owner.
+
+## Phase 1 Progress
+
+| Req | Status | Evidence |
+|-----|--------|----------|
+| LAND-01 | Done | 151aac2: files at `backend/` / `docs/` paths, LF, root `dlr_pipeline.py` dropped. 5efe97d removed the `backup/` upload |
+| LAND-02 | Done | b1e1d7b (19 `city_rating_test` fixtures get `wind_direction`), e330570 (cron test now checks the cron-job.org dispatch). Suite: 1236 passed, 0 failed |
+| LAND-03 | **Open** | No tests yet for `observation_composer`, `city_pipeline`, `dlr_orchestrator`, `backfill_archive` |
+| LAND-04 | Done | Amendments in `docs/data-science/PRD.md` §7.1 and `decisions/data_provider.md` |
+| PIPE-01 | Done (live) | 2026-10-19 ~04:25Z `dlr_orchestrator --no-archive`, run by the owner: all 4 cities rated through composed weather → projection → G1-G6 |
+
+**History note:** PR #7 was merged on GitHub at 35939cc (root-level uploads plus `backup/`) before
+the restructured branch was pushed. Main was then fast-forwarded to 5efe97d, whose tree equals the
+restructured branch (e330570) and contains no `backup/`. PR #8 (an accidental auto-revert of #7)
+was closed and its branch deleted.
+
+## Integration Items Found in the Live Run (2026-10-19)
+
+These block or affect stringing the system together and belong to the phases named.
+
+1. **Anomaly models are not available outside the main checkout** (Phase 4/5). `data/models/` is
+   git-ignored, so the worktree run logged "no trained anomaly model" for all 4 cities, and a
+   GitHub Actions runner will hit the same thing. The live workflow needs a way to provision
+   `data/models/anomaly_{CITY}.joblib`: commit them, download a release/artifact, or train in CI.
+2. **`dlr_orchestrator` does not load `.env`** (Phase 1 follow-up or Phase 5). Local CLI runs need
+   the variables exported. `.env` uses `KEY = value` spacing that `source` rejects, so loading it
+   through python-dotenv works. Actions will pass secrets as env vars, so this only affects local
+   runs. Option: call `load_dotenv()` in `main()` as `forecast_shadow_pipeline.py` does.
+3. **NSRDB fails 3 times per run for current windows** (Phase 5). It has no 2026 data (HTTP 400),
+   so each live run spends 3 calls before the circuit breaker skips it. Option: skip NSRDB when
+   the window is past its coverage.
+4. **Stray `print` output** (Phase 5, log hygiene): `SUMMARY:`, `Returned stations`, `OBS keys`
+   (Synoptic helpers) and `G4 FAIL ...` (`DLRSafetyMonitor`) go to stdout alongside logging.
+   Backfill already redirects stdout to count gate failures, so a change here must keep that
+   working.
+5. **Cold start** (Phase 4, DB-03): 0 history rows for every city, so no forecast. Expected without
+   an archive. The backfill load covers it.
+
+## Output Observations (recorded only; not analyzed in this workstream)
+
+- AUSTIN: computed 1080 A was below its lower bound (`config.RATING_BOUNDS_BY_LOCATION` 1150 A),
+  so G4 fell back to the static 1825 A, a higher value than computed. MIDLAND's lower bound
+  (1250 A) has the same exposure. Flagged for the owner of rating bounds and fallback policy.
+- Other cities: CORPUS_CHRISTI 1259 A (static 1500), MIDLAND 1912 A (1875), EL_PASO 1048 A (1320).
+
+## Decisions
+
+- 2026-10-18: Supabase Postgres as the store, Supabase REST as the read interface, cron-job.org →
+  `workflow_dispatch` as the trigger. The DS team holds decision authority on integration
+  architecture.
+- 2026-10-18: Supersedes the corridor-era `pipeline-integration` workstream.
+- 2026-10-18: The workstream's job is to string the system together, not to analyze output values.
+- [Phase 01]: 01-01: offline seams for Phase 1 tests are autouse _no_network (records requests.get attempts, asserts empty at teardown) and _offline_env (credentials unset, anomaly model loader patched to None, default archive redirected to tmp_path); stub providers via oc.<provider>.fetch_* with fixed timestamps
+- [Phase 02]: Cleaning is a read-time view: clean_flags/clean_excluded live on the cleaned frame only, never persisted (ARCHIVE_COLUMNS is imported by forecast_training and the shadow collection)
+- [Phase 02]: CSV append is first-write-wins on the exact (city, UTC instant); CSV-only, differs on purpose from OD-7 (Postgres: hour-slot key, retry overwrites)
+- [Phase 02]: A clean_history exception gives forecast and detector an empty history (cold start), not unvetted history
+- [Phase 02]: 02-02: historical_archive._parse_utc parses explicit-offset and naive timestamps in separate batches (pandas 2.3 carries an earlier offset into a later naive value); same defect in data_cleaning._parse_utc deferred to 02-03
+- [Phase 02]: 02-03: Mark, never fill - a missing hourly slot is never imputed; the next usable row carries after_gap and gap_slots and the report measures missing, trailing and contiguous-tail slots for 02-04
+- [Phase 02]: 02-03: at_or_after_run excludes rows whose slot is at or after as_of's slot, so reruns and out-of-order backfills have no look-ahead
+- [Phase 02]: 02-03: stuck (6 rows, solar 0.0 exempt) and spike (10 degC, 10 m/s, 700 W/m2 per hour) thresholds are provisional and unfitted; Phase 3 measures flag rates; each rule family judges its fields against one shared row set
+- [Phase 02]: A forecast is withheld from G6 when the newest usable row is more than 1 hourly slot before the run, or (ml only) when fewer than 7 newest usable rows sit on consecutive hours; both provisional until Phase 3
+- [Phase 03]: Phase 03-01: rate denominators are the expected steps of the period, so exhausted, errored, untraced and missing steps stay in every rate
+- [Phase 03]: Phase 03-01: a G4 fallback whose recomputed ampacity is inside the bounds is classed ERROR and counted as a computed-vs-reported mismatch
+- [Phase 03]: Phase 03-01: archive rows without a trace record are NO_TRACE in outcomes and completeness, not archive-vs-trace mismatches
+- [Phase 03]: 03-03: VAL-02 coverage population n_band = scored steps that reached G6 with a positive-width forecast band and a computed rating (used by G6 or withheld across a gap); every other step is counted in its own column
+- [Phase 03]: 03-03: replay is a counterfactual reference (same traced observations, different forecast method), refuses without anomaly models or over existing outputs, and is gated by replay_fidelity mismatches == 0
+- [Phase 03]: 03-02: real backfill window 2026-09-08..09-28 (168 h warm-up, 14 scored days) ran complete for all four cities with ml forecast; manifest pins archive sha256 18f999aa... and 504 rows per city for the Phase 4 DB-03 load
+- [Phase 03]: 03-04: AUSTIN publishes above computed at 68.15% of scored steps (median +780 A), MIDLAND 20.83%: measured, findings and options recorded for the owner, no policy changed
+- [Phase 03]: 03-04: the validation doc leaves the Decision section as 'Pending owner decision.'; GO / GO WITH CONDITIONS / NO-GO is taken at 03-05's checkpoint
+- 2026-10-21: VAL-03 production go/no-go: NO-GO, signed by Aaron Phan (docs/data-science/decisions/real_data_validation.md).
+- 2026-10-21: B6 (Finding 5, input provenance): owner accepts Open-Meteo reanalysis solar (Option A) and asks for it to be documented. Phase 4 input: the schema carries a per-row solar source column. Before Phase 5: confirm the Open-Meteo Archive API serves the current hour, else add a near-real-time solar source.
+- [Phase 04]: valid_time is the hour-truncated UTC run slot (CHECK-enforced); upsert is ON CONFLICT (city, valid_time) DO UPDATE with first_written_at never updated (OD-7) — A same-hour retry must overwrite, not duplicate
+- [Phase 04]: DB-06 identity: automatic per-city sha256 config_fingerprint plus model-file hashes on every row; RATING_CONFIG_VERSION v1-provisional-2026-10-13 is its label — Fingerprint is authoritative; a conductor or model change alters values, never the schema
+- [Phase 04]: connect() pins session time zone to UTC; dlr_writer is policy-based (no BYPASSRLS) with no credential in the migration — Hour CHECK truncates in session zone; least privilege (DB-04)
+- [Phase 04]: 04-02: forecast_status describes the forecast call (ok/cold_start/failed), not G6 use; a forecast withheld by the gap guard stays ok
+- [Phase 04]: 04-02: with a store the orchestrator runs each city with archive=False and writes the rating row itself; a failed city or failed write has no row (OD-9) and is recorded in pipeline_run as error; written-but-unhealthy is degraded
+- [Phase 04]: 04-02: Phase 5 children use --store postgres --no-run-row; row-written flag is summary archived; upsert_run(conn,row) takes any subset of PIPELINE_RUN_COLUMNS with run_id
+- [Phase 04]: 04-03: backfill rows carry PHASE3_CONFIG_VERSION and a manifest-built PROVISIONAL (OD-5) rating_basis; Phase 3 config fingerprints are evaluated on the manifest commit's sources in an isolated child, model hashes come from the manifest
+- [Phase 04]: 04-03: connect() failure text also redacts host, user, project reference and resolved address so loader, smoke test and orchestrator print nothing naming the project
+- [Phase 04]: 04-07: success log names only the server-reported role (select current_user), redacted against URL project reference and host; client-supplied pooler user is never read — CR-01: the pooler user dlr_writer.<project-ref> carries the project reference (DB-04)
+- [Phase 04]: 04-07: SupabaseStore reconnects once and retries once per operation only on a lost connection (closed, broken or failing select 1); healthy-connection failures are never retried — WR-03: a dropped pooler session must not fail the remaining cities and the run row; retrying a data error would hide it
+- [Phase 04]: 04-08: a --store postgres run exits 1 when any city fails (CSV rule unchanged); a cleaning failure on non-empty history is forecast_status failed with cleaning_error and a degraded city in the run log — WR-01/WR-02: a missing or degraded row must not leave a scheduled job green or a healthy-looking cold_start; the cleaning text goes only to the redacted run row, never city_rating
+- [Phase 04]: 04-09 IN-06: hour CHECK fixed by a new additive migration (UTC-evaluated); applied migration pinned by sha256, never edited
+- [Phase 04]: 04-09 IN-05: smoke workflow actions pinned by SHA (checkout v4.4.0, setup-python v5.6.0), persist-credentials false, main-only job; protected environment documented not configured
+- [Phase 04]: 04-10 IN-01: redact() takes limit (default stays 300); run-log errors and provider-error keys cut at 1000 after redaction; colliding keys sum their counts; the orchestrator leaves redaction to build_run_row
+- [Phase 04]: 04-10 IN-04: supabase_store.finite is public; the loader uses supabase_store.file_sha256 and finite (no copy, no private access)
+- [Phase 04]: 04-11: the identity recipe lives in backend/rating_identity.py (stdlib, config, city_point only); the Phase 3 fingerprint child imports only it from live code and refuses any other live backend module — A live module that reads a new config name at import time (Phase 7) must not break the backfill identity re-run
+- [Phase 04]: 04-11: backfill de-duplication keeps the first computed row of a slot, the first fallback row only when every row is fallback — Matches historical_archive.append_observation and data_cleaning's duplicate flag
+- [Phase 05]: 05-01: live runner exits 0 only when every city is ok with forecast_status ok or cold_start and a loaded anomaly model; a missing or unknown status is also red — Never exit green without the ML forecast or anomaly model (SCHED-01); a row with no forecast_status cannot prove an ML forecast. Until 05-02 adds the keys to summary rows, a real run exits 1 by design
+- [Phase 05]: 05-01: each city runs in its own dlr_orchestrator child (--store postgres --no-run-row, 300 s kill, one shared 5-minute-floored end); children never share a process, the runner writes no rating and no substitute row (OD-9) — A hung HTTP call cannot be interrupted in-process; a failed or hung city must be recorded without stopping the others; 4 x 300 s + 10 min fits the 30-minute job timeout and the 60-minute cadence
+- [Phase 05]: 05-02: pipeline forecast_error keeps Phase 4's 'forecast failed: <message>' form and gains only a 300-character cap; summarize() appends forecast_status, forecast_error and detector_model_loaded (a boolean, never a path) — The Phase 4 text is documented in the city_rating_v1 schema doc and pinned by Phase 4 tests; the runner (05-01) reads the three names from each summary row
+- [Phase 05]: 05-02: the composer skips NSRDB for any window ending in the current UTC year (NSRDB_SKIP_YEARS_BEFORE_CURRENT = 0, relative to now) by returning None from _call, so no request, no error entry and no breaker count; past-year windows are unchanged — NSRDB publishes a year only after it ends (live run got HTTP 400 three times per run); a fixed ceiling year would be wrong per nsrdb_provider
+- [Phase 05]: 05-02: fetch_timeseries diagnostics are DEBUG logs and the default DLRSafetyMonitor logger is log.warning; backfill's _capture_gate_messages captures stdout and the DLRSafetyMonitor logger into the step buffer at any root level and restores the logger; load_dotenv() runs only under __main__ — A scheduled run's stdout must carry no stray lines, backfill must keep counting gate failures, and tests that call main() must not read the owner's .env
+- [Phase 05]: 05-03: upsert_run_row delegates to Phase 4's supabase_store.upsert_run; row timestamps are aware UTC datetimes — One SQL builder, one conflict rule and column allow-list; exact timestamptz binding
+- [Phase 05]: 05-03: an ok child with a missing forecast_status or no anomaly model is 'degraded' in pipeline_run.cities_failed; timeout is a new outcome value — cities_ok needs positive evidence of health, so no written city is dropped from both lists; schema doc lists only error/degraded (runbook/Phase 6 to update)
+- [Phase 05]: 05-03: the runner is the only pipeline_run writer; children keep Phase 4's --no-run-row, orchestrator files untouched — The no-run-row flag already existed and is in STORE_ARGS from 05-01
+- [Phase 05]: 05-04: the eight live models (forecast_/anomaly_ for AUSTIN, CORPUS_CHRISTI, MIDLAND, EL_PASO) and data/models/LIVE_ARTIFACT_HASHES.sha256 are tracked through /data/models/* plus nine explicit ! lines (OD-10); corridor-era joblibs, training frames, CSVs and reports stay ignored — Git cannot re-include a file inside an excluded directory; explicit names keep anomaly_AUSTIN_CORPUS_CHRISTI.joblib out; the runner has no other way to obtain the models
+- [Phase 05]: 05-04: dlr_live_check_models.py verifies presence and every SHA-256 against the manifest before any joblib.load, runs the production strict loaders only when no problem is open, parses the manifest strictly, and the workflow step has no env or secrets; promoting a retrain means regenerating the manifest with --write-manifest and committing it with the artifacts — A joblib file is a pickle: unpickling runs code in a process holding the database URL and provider secrets; an unpromoted retrain changes the hash and fails the job before rating (T-05-16, T-05-17)
+- [Phase 05]: 05-05: a slot's rating rows count when their run_id belongs to any run placed in that slot, so a same-hour drill or re-run overwrite (OD-7) does not fail an earlier good run — Window check keeps SC 2 honest without punishing the documented overwrite rule
+- [Phase 05]: 05-05: a run that is unfinished or has a conclusion other than success/failure/timed_out/cancelled is not evidence a slot was attempted; the slot is missing and the window fails — Fail closed; startup_failure can be added to RED_CONCLUSIONS if the owner wants it visible
+- [Phase 05]: 05-05: runbook records the shadow job's observed 05/11/17/23 UTC hours as an observation only; live runs at minute 05 so it never shares a minute with shadow runs — Runbook must not instruct changes to the shadow job; discrepancy surfaced for the owner
+- [Phase 05]: 05-06: owner chose go-live after making the repository public (free Actions minutes); anon-refusal check T-05-29 recorded as skipped
+- [Phase 05]: 05-07: window start for 05-08 is run 40145300072 (2026-10-25T00:05:05Z, slot 00:00); owner test run 40144431987 counted as manual — First dispatch within 5 min after an hh:05 boundary; drill run 40146481713 overwrote three 00:00 slot rows (OD-7)
+- [Phase 05]: 05-08: owner signed off the 24 h window (24 of 24 slots ok) and the budget with approve-push; main pushed fast-forward 702a833..d71c501 — Measured live 2,880 + shadow 600 min per 30 days exceeds 2,000 included on a private basis; moot while the repository is public. Next scheduled run 40272358123 green in environment production on the pushed SHA; repository-level SUPABASE_DB_URL secret now safe to delete (owner action)
+- [Phase 05]: close-out 2026-10-26: UAT 2/2 (billing flat since public, cron-job.org matches runbook), 05-VALIDATION nyquist_compliant, 05-SECURITY threats_open 0 (T-05-20 acceptance re-grounded on content, not privacy, after the repo went public), re-verification passed after the review fixes (14 findings, 0 open; IN-08 won't-fix)
+- [Phase 06]: Phase 06 P01: is_provisional is the word rule on rating_basis OR config_version, guarded offline against the real config strings (D-03 revised)
+- [Phase 06]: Phase 06 P01: age_minutes is ceil integer and is_stale a direct timestamp comparison; exactly 90 minutes is fresh in the view and assert_fresh
+- [Phase 06]: Phase 06 P01: Phase 4 revoke already denies city_rating writes; the new sweep and verify_exposure.sql pin the view, sequences and future objects
+- [Phase 06]: 06-02: secret scan treats a project reference as exactly 20 lowercase letters or digits and flags project host, pooler reference and publishable key (D-10); owner-local exact-value test is env-gated
+- [Phase 06]: 06-03: dry-soak lag and peak age use first_written_at; late fills listed separately, never a breach; age at --until also held to 90 min
+- [Phase 06]: 06-04: a table write passes only on 401/403 + 42501 + permission denied AND an identical before/after SHA-256 snapshot of city_rating rows older than the current UTC hour minus one hour; RLS-only, any 2xx and inconclusive answers fail (E2E-03)
+- [Phase 06]: 06-04: view PATCH/DELETE in the write check name the old target row (city + valid_time), so even an updatable view could not change a current rating (T-06-13)
+- [Phase 06]: 06-05: ops.freshness_log stores latest_rating's own is_stale and the exact numeric age_seconds, so breach equals age_seconds > 5400; the soak log, the consumer flag and assert_fresh share one 90-minute rule
+- [Phase 06]: 06-05: pg_cron scheduling lives only in owner SQL (supabase/ops/soak_cron_schedule.sql, soak_cron_unschedule.sql), never in a migration; job dlr-soak-freshness runs every five minutes, applied in 06-10 and removed in 06-12
+- [Phase 06]: 06-06: the three consumer examples read SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY from the environment only, send the key in the apikey header alone, page with valid_time ascending and stop on an empty page; the doc forbids the word bearer outright — D-10 (public repo, no project value committed) and T-06-20 (one credential header); a short-page stop breaks if the server cap drops below the page size
+- [Phase 06]: 06-06: rest-api.md column table is parsed by a test and compared with LATEST_COLUMNS; Phase 7's REVAL-01 go must remove the word provisional from both rating_basis and config_version for is_provisional to turn false (also in city_rating_v1.md) — The doc is the only contract consumers get (publishable key cannot read OpenAPI), so it must not drift; the flag reads the words in the labels, not a prefix
+- [Phase 06]: 06-07: a breach interval starts when the age reaches the limit and counts only if it ends strictly after 90 minutes on the exact timedelta; a deploy is context for a breach, never its explanation — OD-4 and D-08: exactly 90 minutes is fresh in the write measure, the probe log and the report; only a rule-derived cause or an owner annotation explains a breach
+- [Phase 06]: 06-07: deploy classification validates versions as 7-40 lowercase hex before calling git with an argv list; unknown commits, unchanged versions and unrecognised paths are flagged, never guessed — T-06-24: version strings come from the database; nothing is passed to a shell and nothing is inferred
+- [Phase 06]: 06-07: the freshness alarm is permanent (runbook section 14) and pausing the pipeline also pauses the alarm; cron-job.org disables a job after more than 25 failures — D-13..D-15 and Pitfall 13: a paused pipeline would make the alarm fail until cron-job.org disables it
+- [Phase 06]: 06-08: E2E trace correlates a cron-job.org execution to exactly one workflow_dispatch run created within -60 s/+300 s (inclusive), refuses to guess on zero or several candidates, reads SQL rows read-only and REST rows by run_id, and rejects an execution time without a UTC offset
+- [Phase 06]: 06-09: owner published the 34-column latest_rating contract as built; both Phase 6 migrations live and pinned by SHA-256. View writes are refused with HTTP 500 (55000), table writes 401 (42501).
+- [Phase 06]: 06-10: owner go; 72 h soak window G=2026-10-27T03:35:00Z, planned end 2026-10-30T03:35:00Z (after the D-09 2026-10-30T00:00Z target; not lengthened; 06-13 follows the window)
+- [Phase 06]: 06-10: alarm recovery (success-after-failure) email unproven; failure email proven; owner to check the notification setting
+- [Phase 06]: 06-11: supabase-js approved and installed at exactly 2.117.3 (scratch folder, --ignore-scripts); PSS/E interpreter question non-blocking, owner has not yet confirmed sending (follow-up, date TBD)
+- [Phase 06]: 06-12: soak accepted (72 h, 0 breaches, 864/864 probes); sign-off signalled by running the accept-only teardown; soak cron job removed, permanent freshness alarm stays on (D-13)
+- [Phase 06]: 06-13: write verdicts after the 2026-10-30 platform change identical to 06-09 and 06-12; E2E-03 holds, T-04-22 closed
+- [Phase 07]: 07-01: legacy identity path (no production resolver, i.e. Phase 3 copies) emits the schema-1 recipe without PRODUCTION_CONDUCTORS so Phase 3 backfill fingerprints still reproduce — Unconditional schema 2 broke supabase_load_backfill_test parity with backfill_parity.json
+- [Phase 07]: 07-01: RATING_CONFIG_VERSION not bumped; fingerprint changes automatically (schema 2 plus PRODUCTION_CONDUCTORS); bump together with the city_rating_v1.md edit in a later plan — Label is pinned to the schema doc by supabase_schema_doc_test; plan did not list the bump
+- [Phase 07]: 07-02: owner signed protocol v4 on 2026-11-02 as aaphan (sign-with-changes: O4 = switch AUSTIN to Drake ACSR at 100 C; elevation/azimuth at model defaults; other cities Drake 75 C; O1-O3, O5-O11 at option A). AUSTIN headline is scored under Drake 100 C, its cooling and reference are refit on rows before 2026-03-17, and the TEST veto is re-scored under the production conductors before read 1 is run; no registered date moves. The actual config change lands in plan 07-11's apply-answers path (backend/config.py not edited here)
+- [Phase 07]: 07-04: production rating, training and validation resolve through city_point.production_city_point; dlr_orchestrator, supabase_store and supabase_smoke keep city_point.city_point for .static_rating only; test_caller_split (AST) pins the split and shadow modules never name the production resolver — COND-02 production half; the golden and the AST test keep the frozen shadow path on the Drake resolver. No config value changed (AUSTIN 100 C lands in 07-11); forecast_training_test:287 and the v2 label stay with 07-19
+- [Phase 07]: 07-05: v4 ship rule implemented exactly as signed in backend/forecast_shadow_decision_v4.py (2% of mean truth pooled bar, 3-of-4 consistency, ABLATION/TEST vetoes, TIE_ORDER, explicit no pick); constants pinned to the signing copy registry; v3 decision module untouched — Signed protocol v4 (2026-11-02) replaces v3 decision 8; headline refuses a missing veto record (SEL-03); non-headline labels never pick
+- [Phase 07]: 07-06: signed v4 rounds are frozen ProtocolRound values selected by name; check_guard measures dates against the selected round, so the before-instant and one-shot refusals stay armed and a FRESH run takes no override — An override disabled both refusals (research Pitfall 4); T-07-12, SEL-01, SEL-04
+- [Phase 07]: 07-06: a FRESH run is refused at the retired 2026-11-24 instant and while v4 is unsigned (v4_signed reads the signature line before any network call); relative_margin_fraction 0.02 is pre-registered so a non-default value is refused — T-07-13, T-07-14; decision_margin_amps 5.0 stays registered until 07-07 replaces the v3 ship-rule call
+- [Phase 07]: 07-06 operator note: forecast_shadow_confirm.py is untouched until 07-07; a real (non dry-run) run now passes the guard without the veto check, so do not run it before 07-07 and the vetoes exist — Real clock 2026-11-02 is past the read-1 instant and v4 is signed
+- [Phase 07]: 07-07: deciding rounds (v4-read1, v4-read2) refuse at the CLI unless --vetoes loads (both source-report sha256 values match disk) and --protocol-status is signed; run_confirmation also refuses a FRESH decision scope with no veto record before the guard — SEL-03: the ABLATION and TEST vetoes must exist before the one-shot FRESH read; a crash after the guard would spend it
+- [Phase 07]: 07-07: load_vetoes requires all three real candidates in both veto sections with real-bool flags; round_name defaults to the guard's round and a disagreement is refused — an edited or truncated record must not un-veto by omission (T-07-15); a read-2 guard must not yield a read-1 decision
+- [Phase 07]: 07-07: the shadow-log scorer applies apply_ship_rule_v4 with the live label (pick always None); only the headline port decides; --decision-margin-amps stays registered but unused — D-01/D-02: live-system check never decides; PD-15 still refuses a non-default value in a FRESH run
+- [Phase 07]: 07-08: forecast_used_by_g6 is an explicit primary_fed_g6 flag; the naive G6 fallback (D-17) never reads as the stored ml forecast, g6_forecast_method/g6_forecast are trace-only
+- [Phase 07]: 07-08: g6_method_recorded is column presence in the trace; pre-B5 traces report NA counts, not zeros (a mixed trace counts pre-B5 hours as no band)
+- [Phase 07]: 07-19: city_training_frame stores the line-perpendicular wind in wind_speed (B2, D-14); RATING_CONFIG_VERSION is v2-provisional-2026-11-02 with the schema doc naming it, snapshot schema 2 and the per-city conductor basis — Training and serving use the same projected feature; the label tells consumers production reads the per-city table (values unchanged, D-09) and fingerprints change once; provisional stays until 07-17's signed GO; no model retrained (07-14), forecast_training_test:287 now on production_city_point so 07-11's AUSTIN change is safe
+- [Phase 07]: 07-09: the CLI's frozen secondary loader is make_headline_loader with no refit cities (hash-verified frozen serving) rather than the bare load_correction_model; frozen artifacts are pre-verified with the refit ones, so a tampered file refuses with exit 2 before any request
+- [Phase 07]: 07-09: v4-late-descriptive needs a v4-read1 report.json whose rating_config_version differs from the current one (newest directory wins); otherwise exit 2 'nothing to re-score descriptively (D-03)'. At parity report['secondary'] is None and conductor_basis states it is identical by construction
+- [Phase 07]: 07-10: TEST never picks; run_test_split sets the decision to None and rewrites report.json/md because a development-basis headline decision on TEST rows could read as a pick (D-02)
+- [Phase 07]: 07-10: the TEST scorer refuses any window outside [2026-03-18, 2026-09-30) and a missing cache before an evidence directory exists, and loads frozen artifacts through the hash-verified headline loader
+- [Phase 07]: 07-10: registry parity test pins all 58 signed v4 keys (47 code constants, 3 state-aware O4 checks against the production table that tighten when RATING_CONFIG_VERSION leaves v2-provisional, 8 DOC_ONLY); no constant differed from the signature
+- [Phase 07]: 07-11: Power Systems gate applied for AUSTIN only (795 kcmil ACSR Drake, 100 C) under signed v4 O4; RATING_CONFIG_VERSION v3-powersystems-2026-11-02; AUSTIN cooling and reference refit; TEST re-scored under production with no veto; Task 3 precondition (before 2026-11-01) superseded by test.rescore_gate=before_read1_run
+- [Phase 07]: 07-12: v4 read 1 ran once per row source after owner go (2026-11-02T17:51Z); no candidate qualifies, v4-read2 due at or after 2026-11-08T00:00:00Z
+- 2026-11-02: 07-13 SEL-04 read 1 owner decision (aaphan; decision_record.md): rule's outcome accepted (no pick under signed v4); interim G6 = ml retrained on projected wind (B2, D-14, models commit e0a00a9), checked under D-15 at the go/no-go (07-17). Owner also selects `ml_cooling_corrected` for day-ahead as a labelled engineering choice, NOT a rule pick (best read-1 benefit 11.89 A vs 27.86 A bar, Holm p 0.36; departure recorded), as an additional output alongside the 60-minute forecast with the understanding it carries more error; serving it is a new phase after Phase 7. Read 2 (D-08) still runs at or after 2026-11-08T00:00:00Z (07-15). Nothing in live ratings changes now. SEL-04 stays open until read 2.
+- 2026-11-02: REVAL-01 re-validation go/no-go: GO, label mode go-forward-only (no stored-row relabel; backfill rows never relabelled), signed by aaphan, 2026-11-02 (UTC); D-15 interim G6 method kept as ml; B4 follow-up date 2026-11-30T00:00:00Z accepted; B1, B2, B4 and B5 closed, B3 and B6 not blocking (docs/data-science/decisions/real_data_validation_p7.md). config.RATING_BASIS and the schema doc's label section changed together (new text, no word "provisional"; RATING_CONFIG_VERSION unchanged at v3-powersystems-2026-11-02); latest_rating.is_provisional is false only for rows written with the new label, after the promotion push in 07-18 (nothing is pushed or applied to the live database yet).
+- [Phase 07]: 07-18: promotion pushed as fast-forward e970549..682801d after a clean merge of origin/main (teammate docs); live run 41543992876 verified four rows with v3-powersystems-2026-11-02 and is_provisional false; stored-row relabel not applicable (go-forward-only)
+- [Phase 07]: 07-15: read 2 (v4-read2) ran once per row source under signed v4 and also names no winner; no shadow model replaces ml, interim G6 method keeps running
+- 2026-11-08: 07-16 SEL-04 final decision (aaphan; decision_record.md, Read 2 section): option rule-outcome-keep-cooling. The signed O3 outcome is accepted (no shadow model, no day-ahead pick under the rule; interim G6 `ml` keeps running; 2026-11-24 stays retired; any later evaluation needs a new signed protocol), and the owner keeps `ml_cooling_corrected` as the day-ahead selection for Phase 8 as a continuing labelled engineering departure, never a rule pick or "validated" (read-2 best benefit 12.12 A vs 28.01 A bar, Holm p 0.29; read 2 re-grades read 1's rows). Live-system check (never decides): `ml_cooling_corrected` -0.01 A vs raw_forecast (2 of 4 cities), `ml_wind_corrected` +0.85 A.
+- [Phase 07]: 07-16: SEL-04 final decision recorded: owner accepted the signed O3 outcome after read 2 (no shadow model, interim G6 ml continues, 2026-11-24 stays retired) and keeps ml_cooling_corrected as a labelled engineering day-ahead selection for Phase 8 (continuing departure, not a rule pick, not validated)
+- 2026-11-08: Phase 07 UAT (aaphan, 2/2 pass): accepted the read-1 date slip (goal now "read 1 at or after 2026-11-01T00:00Z") and the go-forward-only label scope, re-confirming the GO after read 2; ROADMAP SC5 and REVAL-01 reworded (4f586e8). Security: T-07-23 closed by an ablation-CLI signature refusal (3aa7bf4, b15d389); CR-01, WR-01 and WR-04 deferred to before any new signed protocol or FRESH read (07-SECURITY.md). Re-verification passed 9/9 (f6dbd75).
+- [Phase 08]: 08-01: band_for ships as the TEST-split branch behind its final signature; 08-03 adds live-rolling without changing callers — Keeps the runner call stable across plans
+- [Phase 08]: 08-01: supabase_smoke writer-policy check scoped to city_rating and pipeline_run; day_ahead_forecast keeps its own dlr_writer_all policy — Smaller than renaming the policy that 08-07 and 08-10 refer to; the live smoke check would otherwise fail after the migration is applied
+- [Phase 08]: 08-01: load_model and read_anchor wrap loader hash refusals and missing anchor readings into DayAheadNotIssued; out-of-bounds values are logged, not suppressed — D-16 no-row reasons for every failure; the day-ahead value has no safety role
+- [Phase 08]: 08-02: the day-ahead stage shares the ratings' wall-clock budget (4 x 300 s from the start of run_live; 150 s child cap, 60 s start floor) and runs only after the exit code is fixed; its own {run_id, day_ahead} pipeline_run write is counted in day_ahead_run_log, never run_log — D-02, D-15: structurally unable to delay, block or redden the live ratings; the pinned 30-minute job envelope holds; rating-stage writes never name day_ahead so a push before the column cannot fail them
+- [Phase 08]: 08-02: supabase_store.upsert_run accepts optional later-migration columns (PIPELINE_RUN_OPTIONAL_COLUMNS = day_ahead) while the 12 pinned columns and build_run_row are unchanged; 08-01's migration already adds pipeline_run.day_ahead, so no second column change — Only the writer that owns a column sends it (Pitfall 4); reconciled with 08-01 with no duplicate migration
+- [Phase 08]: 08-03: live band offsets are np.quantile of rating minus forecast; a live set that does not bracket zero keeps the TEST band (logged), and BandChoice always carries the TEST artifact sha256 (artifact bytes unchanged, sha256 19b9c522...)
+- [Phase 08]: 08-04: child calls load_verified_band() defaults, so until 08-05 pins the band artifact in the live manifest a real run refuses every target (outcome error, no row, exit 0)
+- [Phase 08]: 08-04: --no-store dry run counts computed targets like issued, keeps issued empty and sets dry_run; a key stored by a racing run is already_present, not a failure
+- [Phase 08]: 08-04: child redacts provider credentials itself and leaves database URLs to supabase_store.redact defaults (no private store name read); output written atomically
+- [Phase 08]: 08-05: the day-ahead band is strict-loaded from the path in the artifact list, not the function default, so the hashed file is the loaded file
+- [Phase 08]: 08-05: day-ahead pre-flight problems are ::warning:: only; the tier runs under one Exception+SystemExit guard after the exit code is fixed from the eight live models (D-13a)
+- [Phase 08]: 08-06: first_run_covers_every_due_target fails on a missing due target and issue_lead_at_most_18h on a row for a target not yet due, so the two together enforce rows == due_targets(issued_at) and each failure flips exactly one check; with no first run every check fails (no vacuous pass); an unreachable database is exit 1 with a failed database_read check in the redacted JSON, only missing SUPABASE_DB_URL, bad --since or unreadable manifest is exit 2
+- [Phase 08]: 08-07: owner confirmed the day-ahead contract as built (reply: confirm); contract file at 14eb365
+- [Phase 08]: 08-07: write-side migration 20261108120000_day_ahead_forecast_store.sql applied live and pinned at sha256 fb5337a6...bf8f1; never edited again
+- [Phase 08]: 08-08: Owner approved pushing the day-ahead stage (approve-push); main pushed fast-forward b6e910f..1088392; first issuing run 42543631399 verified, 12 rows, 10/10 first-slot checks PASS; expose step unblocked
+- [Phase 08]: 08-09: one day-ahead late rule lives in public.day_ahead_status and assert_fresh (same signature) reads it; armed by the first row, 12 h window on a UTC date_bin grid
+- [Phase 08]: 08-10: the day-ahead docs state that out-of-range values are published as computed (not withheld), and --check-rest classifies its write probes with the e2e privilege classifiers
+- [Phase 08]: 08-10: --check-rest and --check-store are separate runs; an empty upcoming view or table answer fails instead of passing vacuously
+- [Phase 08]: 08-12: a late day-ahead feed is printed by the examples and exits 0; only a failed read or a status missing a city exits 1
+- [Phase 08]: 08-11: owner chose expose-and-publish; expose migration applied live 2026-11-09 and sha256-pinned (253a539e...)
+- 2026-11-09: Phase 08 close-out: code review WR-01..WR-05 fixed (re-review: WR-06 comment wording and IN-01..IN-14 open, none blocking; 08-REVIEW-DISPOSITION.md); UAT 53/53 pass (owner ran the live curl example and --check-rest 8/8, accepted the WR-01 TEST-band fallback); 08-SECURITY.md verified, 46/46 threats closed (T-08-42 closed by 49131d4, secret-scan regression fixed by 1047814); full suite 3002 passed; re-verification passed 5/5. New CI job day_ahead_manifest_check.yml is green; make it a required status check to block merges.
+
+## Open Decisions
+
+None open. OD-1 to OD-10 were decided on 2026-10-19 (REQUIREMENTS.md "Owner decisions"):
+- OD-1 to OD-5: hourly cadence, composed providers, ml forecast, 30-min grace, labelled provisional.
+- OD-6: public history.
+- OD-7: hour-slot `valid_time`; a retry overwrites.
+- OD-8: 30-day read window.
+- OD-9: a failed city appears in the run log only.
+- OD-10: models committed to git.
+
+## Blockers
+
+- VAL-03 NO-GO (2026-10-21) blockers B1 (fallback policy and rating basis: conductor type, max operating temperature, elevation, azimuth; with Power Systems), B2 (ml wind feature train/serve alignment), B4 (CORPUS_CHRISTI detector trip rate 11.01%) and B5 (fallback effect on forecast availability) gated only lifting the provisional label (re-sequenced by the owner 2026-10-21). CLOSED 2026-11-02: B1, B2, B4 and B5 were closed in Phase 7 and the owner signed GO (REVAL-01, going forward only; docs/data-science/decisions/real_data_validation_p7.md). B3 and B6 stay not blocking. The new label reaches the live system only with the 07-18 push. Phases 4-6 were no longer blocked. See docs/data-science/decisions/real_data_validation.md.
+- Phase 7 external gate (outcome 2026-11-02: only the AUSTIN answer arrived; the owner accepted the rest of the re-validation results as stated, and the label is lifted going forward on the stated conductor basis): Power Systems' per-city conductor answers (model-default values with sources until then). v4 signed 2026-11-02 by aaphan (docs/data-science/decisions/confirmation_protocol_v4_early_selection_SIGNING_COPY.md), so v3's 2026-11-24 read is retired; no FRESH-basis outcome has been read. Owner item O4 switches AUSTIN to Drake ACSR at 100 C (the config change lands in plan 07-11's apply-answers path); CORPUS_CHRISTI, MIDLAND and EL_PASO still wait on Power Systems and stay on Drake 75 C. Options and conductor analysis: docs/data-science/decisions/shadow_early_decision_options.md.
+- [Phase 4] Carried forward, none blocking: re-run the local smoke (`consumers_cannot_write`) on or after 2026-10-31, after Supabase's 2026-10-30 default-grant change (T-04-22; a live privilege check on 2026-10-25 showed anon and authenticated with no rights on either table, RLS on, only the dlr_writer policy); review findings IN-11 (the stored `pipeline_run.cities_ok` column comment lacks the "no error" rule, and the `cities_failed` comment lacks the runner's `timeout` outcome; one additive migration) and IN-12 (an empty exception message prints as an empty string) are open in 04-REVIEW-DISPOSITION.md.
+- [Phase 4] Closed 2026-10-25: T-04-24 (Shadow Collection runs kept succeeding after Phase 4, e.g. 2026-10-23 17:00, 23:00 and 2026-10-24 05:00 UTC). The pending decision on exiting non-zero when every written city is degraded is superseded for the live path: `dlr_live_run.py` already exits 1 when any city is degraded (05-01); the orchestrator's own exit code now matters only for manual CLI runs.
+- [Phase 4] T-04-38, in progress 2026-10-25: `dlr_live.yml` (now also guarded to main) and `supabase_smoke.yml` run in the `production` environment (local commit, pushed with 05-08). The owner created environment `production` on 2026-10-25 (deployment branches: custom policy, `main` only) with environment secret `SUPABASE_DB_URL` (from the local `.env` dlr_writer URL). Remaining: after 05-08 pushes, confirm the first live run in the environment is green, then delete the repository-level `SUPABASE_DB_URL` (dlr_live_runbook.md section 12).
+- [Phase 5] Open, accepted (owner, 2026-10-25), waits on the Phase 7 conductor gate: AUSTIN falls back to its static rating (1825 A) in about 72% of hours (70 of 97 `city_rating` rows in the 30 days to 2026-10-25), well above the 5-30% measured on 2026-10-13, mostly G4 low-side fails (e.g. computed 1075 A against the 1150 A floor). Falling back is safe by the owner's rule (the documented static rating is safe; a computation below it means the model is inaccurate). This is a model-accuracy issue, expected to change once Power Systems' Austin conductor configuration arrives. Side effect: fallback rows are not usable history, so AUSTIN's G6 forecast band has not engaged (newest usable row 2026-09-28), and a computed rating between 1825 A and the 2500 A G4 ceiling gets no band check. Revisit with the Austin conductor answers in Phase 7; options are counting fallback hours as band history or accepting the gap.
+  UPDATE 2026-11-02 (07-17 re-validation, offline September replay): the AUSTIN conductor answer (Drake at 100 C) moved computed ratings above the lower plausibility bound, so low-side G4 fallbacks fell from 225 of 336 steps (Phase 3) to 15 of 336 (0.0446), and 321 hours (not 111) reached G6. The B5 fix lets the naive band check the rating when ml is withheld: a band checked 317 of 321 G6-evaluated AUSTIN hours (0.9875; ml band 261, naive 56, none 4), against 15 of 111 (13.5%) in Phase 3. Owner, 2026-11-02: the Power Systems answers were primarily to clear the assumptions that made Austin fall back to static over half the time; other results are accepted as stated. Closed for the Phase 7 decision; live behaviour is confirmed only after the 07-18 push (`real_data_validation_p7/val02_g6_band_by_city.csv`, `val01_outcomes_by_city.csv`).
+- [Phase 7] Open follow-up (owner, 2026-11-02, B4 acceptance; D-16): refit the CORPUS_CHRISTI anomaly detector on station-measured inputs once Power Systems answers, or by 2026-11-30T00:00:00Z if they never do, then re-check with a replay of the September window (re-measured trip rate 11.01%, 37 of 336 hours, accepted as safe because a trip publishes the static rating). A conductor change alters only the detector's validation arm and does not by itself force an anomaly refit.
+- Superseded (2026-10-21): the earlier timing note that B1/B2 wait for 2026-11-24. Phase 7 decouples the production conductor from the frozen shadow path (COND-02) and moves the evaluation to about 2026-11-01 under v4.
+
+## Session Continuity
+
+**Last session:** 2026-11-09T10:09:08Z
+
+**Stopped At:** Phase 08 complete and closed out (UAT, security, re-verification) — all phases complete
+**Resume File:** None
+
+## Performance Metrics
+
+| Plan | Duration | Tasks | Files |
+|------|----------|-------|-------|
+| Phase 01 P01 | 8 min | 2 tasks | 1 files |
+| Phase 01 P02 | 25min | 2 tasks | 1 files |
+| Phase 01 P03 | 8min | 2 tasks | 1 files |
+| Phase 01 P04 | 6 min | 2 tasks | 1 files |
+| Phase 01 P05 | 9 min | 2 tasks | 0 files |
+| Phase 02 P01 | 22 min | 2 tasks | 6 files |
+| Phase 02 P02 | 9 min | 2 tasks | 2 files |
+| Phase 02 P03 | 40 min | 3 tasks | 5 files |
+| Phase 02 P04 | 6 min | 2 tasks | 4 files |
+| Phase 03 P01 | 15 min | 3 tasks | 4 files |
+| Phase 03 P03 | 12 min | 2 tasks | 3 files |
+| Phase 03 P02 | 336 min | 3 tasks | 2 files |
+| Phase 03 P04 | 14min | 2 tasks | 13 files |
+| Phase 03 P05 | 6min | 2 tasks | 2 files |
+| Phase 04 P01 | 55 min | 3 tasks | 8 files |
+| Phase 04 P02 | 10 min | 3 tasks | 8 files |
+| Phase 04 P03 | 75 min | 3 tasks | 8 files |
+| Phase 04 P07 | 13 min | 3 tasks | 3 files |
+| Phase 04 P08 | 7 min | 2 tasks | 5 files |
+| Phase 04 P09 | 9 min | 3 tasks | 5 files |
+| Phase 04 P10 | 5 min | 2 tasks | 6 files |
+| Phase 04 P11 | 8min | 2 tasks | 5 files |
+| Phase 04 P12 | 15min | 3 tasks | 4 files |
+| Phase 05 P01 | 9 min | 2 tasks | 4 files |
+| Phase 05 P02 | 10 min | 3 tasks | 11 files |
+| Phase 05 P03 | 8 min | 2 tasks | 4 files |
+| Phase 05 P04 | 10 min | 3 tasks | 14 files |
+| Phase 05 P05 | 14 min | 2 tasks | 4 files |
+| Phase 05 P06 | 40 min | 3 tasks | 1 files |
+| Phase 05 P07 | 130 min | 2 tasks | 0 files |
+| Phase 05 P08 | 1h 15m | 2 tasks | 1 files |
+| Phase 06 P01 | 16 min | 2 tasks | 6 files |
+| Phase 06 P02 | 5 min | 2 tasks | 1 files |
+| Phase 06 P03 | 7 min | 2 tasks | 2 files |
+| Phase 06 P04 | 10 min | 2 tasks | 4 files |
+| Phase 06 P05 | 7 min | 2 tasks | 6 files |
+| Phase 06 P06 | 11 min | 3 tasks | 10 files |
+| Phase 06 P07 | 13 min | 3 tasks | 4 files |
+| Phase 06 P08 | 10 min | 2 tasks | 2 files |
+| Phase 06 P09 | owner-gated, ~15min executor | 3 tasks | 3 files |
+| Phase 06 P10 | 1 session | 3 tasks | 7 files |
+| Phase 06 P11 | 1 session | 3 tasks | 3 files |
+| Phase 06 P12 | 1 session | 3 tasks | 12 files |
+| Phase 06 P13 | 1 session | 2 tasks | 3 files |
+| Phase 07 P01 | 25 min | 2 tasks | 8 files |
+| Phase 07 P02 | ~25min (this session; owner-gated) | 3 tasks | 6 files |
+| Phase 07 P04 | 8 min | 2 tasks | 9 files |
+| Phase 07 P05 | 6 min | 2 tasks | 2 files |
+| Phase 07 P06 | 22 min | 2 tasks | 6 files |
+| Phase 07 P07 | 22 min | 2 tasks | 6 files |
+| Phase 07 P08 | 10 min | 2 tasks | 9 files |
+| Phase 07 P19 | 6 min | 2 tasks | 4 files |
+| Phase 07 P09 | 22 min | 2 tasks | 2 files |
+| Phase 07 P10 | 13 min | 2 tasks | 3 files |
+| Phase 07 P11 | 15min | 3 tasks | 28 files |
+| Phase 07 P12 | 5min | 2 tasks | 34 files |
+| Phase 07 P13 | 120min | 3 tasks | 4 files |
+| Phase 07 P17 | owner-gated, ~40min executor | 3 tasks | 12 files |
+| Phase 07 P18 | 15min | 3 tasks | 1 files |
+| Phase 07 P15 | 3min | 2 tasks | 3 files |
+| Phase 07 P16 | 2 sessions | 3 tasks | 4 files |
+| Phase 08 P01 | 21 min | 2 tasks | 8 files |
+| Phase 08 P02 | 18 min | 3 tasks | 8 files |
+| Phase 08 P03 | 9 min | 2 tasks | 2 files |
+| Phase 08 P04 | 30min | 2 tasks | 4 files |
+| Phase 08 P05 | 9 min | 2 tasks | 4 files |
+| Phase 08 P06 | 11 min | 2 tasks | 4 files |
+| Phase 08 P07 | 13h elapsed (owner gates) | 3 tasks | 2 files |
+| Phase 08 P08 | about 1h elapsed (owner gates) | 3 tasks | 2 files |
+| Phase 08 P09 | 12 min | 2 tasks | 4 files |
+| Phase 08 P10 | 14 min | 2 tasks | 8 files |
+| Phase 08 P12 | 51 min | 3 tasks | 10 files |
+| Phase 08 P11 | continuation | 3 tasks | 4 files |
+
+## Accumulated Context
+
+### Roadmap Evolution
+
+- Phase 7 added: Per-City Conductors, Shadow Refit and Early Model Selection (protocol v4 retires the 2026-11-24 run; selection by 2026-11-01; parallel with 4-6)
+- Phase 4 edited: NO-GO no longer blocks Phases 4-6 (owner 2026-10-21); rows provisional until Phase 7 GO; DB-06 config/model identity per row; 04-01 precondition needs re-plan
+- Phase 6 edited: Not gated on Phase 7; web app and PSS/E read provisional rows

@@ -1,0 +1,97 @@
+{
+  "label": "exploratory, not pre-registered; does not change signed protocol v4 or read 1",
+  "fetch": [
+    "2025-12-25",
+    "2026-09-29"
+  ],
+  "score": [
+    "2026-01-01 00:00:00+00:00",
+    "2026-09-29 23:00:00+00:00"
+  ],
+  "cities": {
+    "AUSTIN": {
+      "rows_frame": 6696,
+      "n_expected_targets": 6528,
+      "n_missing_target": 0,
+      "n_excluded_lookback_or_feature": 0,
+      "spot_check_max_abs_diff_a": 0.0,
+      "truth_mean_a": 1464.8264552360058,
+      "frame_first": "2025-12-25 00:00:00+00:00",
+      "frame_last": "2026-09-29 23:00:00+00:00"
+    },
+    "CORPUS_CHRISTI": {
+      "rows_frame": 6696,
+      "n_expected_targets": 6528,
+      "n_missing_target": 0,
+      "n_excluded_lookback_or_feature": 0,
+      "spot_check_max_abs_diff_a": 0.0,
+      "truth_mean_a": 1351.3937067483464,
+      "frame_first": "2025-12-25 00:00:00+00:00",
+      "frame_last": "2026-09-29 23:00:00+00:00"
+    },
+    "MIDLAND": {
+      "rows_frame": 6696,
+      "n_expected_targets": 6528,
+      "n_missing_target": 0,
+      "n_excluded_lookback_or_feature": 0,
+      "spot_check_max_abs_diff_a": 4.547473508864641e-13,
+      "truth_mean_a": 1530.6536815915613,
+      "frame_first": "2025-12-25 00:00:00+00:00",
+      "frame_last": "2026-09-29 23:00:00+00:00"
+    },
+    "EL_PASO": {
+      "rows_frame": 6696,
+      "n_expected_targets": 6528,
+      "n_missing_target": 0,
+      "n_excluded_lookback_or_feature": 0,
+      "spot_check_max_abs_diff_a": 2.2737367544323206e-13,
+      "truth_mean_a": 1177.115067868416,
+      "frame_first": "2025-12-25 00:00:00+00:00",
+      "frame_last": "2026-09-29 23:00:00+00:00"
+    }
+  },
+  "pooled_runs": {
+    "cluster_L6": {
+      "p": 0.00019998000199980003,
+      "ci": [
+        3.1570645427004425,
+        4.666542925678766
+      ]
+    },
+    "cluster_L24": {
+      "p": 0.00019998000199980003,
+      "ci": [
+        3.1381149917986573,
+        4.643771247909276
+      ]
+    },
+    "cluster_L72": {
+      "p": 0.00019998000199980003,
+      "ci": [
+        3.1166819761964155,
+        4.6540485569788
+      ]
+    },
+    "joint_L6": {
+      "p": 0.00019998000199980003,
+      "ci": [
+        3.3030236938960957,
+        4.496232988773695
+      ]
+    },
+    "joint_L24": {
+      "p": 0.00019998000199980003,
+      "ci": [
+        3.229235561754472,
+        4.53147779949306
+      ]
+    },
+    "joint_L72": {
+      "p": 0.00019998000199980003,
+      "ci": [
+        3.1183813097562907,
+        4.672471770893589
+      ]
+    }
+  }
+}

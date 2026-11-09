@@ -255,6 +255,51 @@ def test_gates_are_sorted_unique_first_tokens_and_alerts_keep_utf8():
     assert "—" in row["alerts"][0]
 
 
+def test_alerts_are_redacted_and_capped_before_they_are_stored():
+    # A G6 alert carries the raw detector exception, and the column is publicly readable (review WR-03).
+    url = "postgres" + "ql://user:hunter2@db.example.invalid/x"  # built from pieces for secret_scan_test
+    leaky = "G6 FAIL (detector error (connect %s password=hunter2))" % url
+    long_alert = "G4 FAIL (" + "x" * 500 + ")"
+    row = supabase_store.build_rating_row(_result(alerts=[leaky, long_alert]), _END, _RUN_CTX)
+    assert "hunter2" not in repr(row) and "postgresql://user" not in repr(row)
+    assert "REDACTED" in row["alerts"][0]
+    assert len(row["alerts"][1]) == 300  # no fallback suffix: cut at the cap
+    assert row["fallback_gates"] == ["G4", "G6"]
+
+
+def test_a_long_alert_keeps_its_fallback_rating_suffix_when_it_is_shortened():
+    # The G6 reason embeds the raw detector exception; the cut must take the reason, not the rating.
+    url = "postgres" + "ql://user:hunter2@db.example.invalid/x"  # built from pieces for secret_scan_test
+    suffix = " — fallback rating 1825 A"
+    alert = "G6 FAIL (detector error (" + "boom " * 120 + "connect %s password=hunter2))" % url + suffix
+    assert len(alert) > 300
+    row = supabase_store.build_rating_row(_result(alerts=[alert]), _END, _RUN_CTX)
+    stored = row["alerts"][0]
+    assert len(stored) <= 300
+    assert stored.startswith("G6 FAIL (detector error (boom") and "…" in stored
+    assert stored.endswith(suffix)
+    assert row["fallback_gates"] == ["G6"]
+    # redaction happens before the cut, so a secret near the cut can never survive half-matched
+    secret_near_cut = "G6 FAIL (" + "x" * 280 + " password=hunter2 tail)" + suffix
+    stored = supabase_store.build_rating_row(_result(alerts=[secret_near_cut]), _END, _RUN_CTX)["alerts"][0]
+    assert "hunter2" not in stored and stored.endswith(suffix) and len(stored) <= 300
+
+
+def test_begin_read_only_pins_a_transaction_not_the_session():
+    class Conn:
+        autocommit = True
+        read_only = None
+        statements = []
+
+        def execute(self, sql, params=None):
+            self.statements.append(sql)
+
+    conn = Conn()
+    supabase_store.begin_read_only(conn)
+    assert conn.autocommit is False and conn.read_only is True
+    assert conn.statements == []  # no session-level SET, which a transaction pooler would not keep
+
+
 def test_probe_trail_is_json_text_without_numpy_or_nan():
     trail = [
         {"stid": "A", "lat": np.float64(30.1), "lon": -97.7, "distance_km": np.float64("nan"),

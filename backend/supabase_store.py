@@ -88,6 +88,13 @@ PIPELINE_RUN_COLUMNS = (
     "sources",
 )
 PIPELINE_RUN_JSONB = ("cities_failed", "provider_errors", "sources")
+# Columns that come from later additive migrations (Phase 8:
+# 20261108120000_day_ahead_forecast_store.sql). They are NOT part of the 12 pinned
+# columns above and build_run_row never emits them: only the writer that owns a
+# column sends it, so a code push before its migration cannot break the
+# rating-stage writes (D-15, research Pitfall 4).
+PIPELINE_RUN_OPTIONAL_COLUMNS = ("day_ahead",)
+PIPELINE_RUN_OPTIONAL_JSONB = ("day_ahead",)
 PIPELINE_RUN_KEY = "run_id"
 _RUN_ERROR_MAX_CHARS = 1000
 # A city whose forecast ran (or cold-started) and whose anomaly model loaded is healthy.
@@ -293,6 +300,27 @@ def redact(text, secrets=None, limit=_MAX_MESSAGE_CHARS) -> str:
     return text[:limit]
 
 
+_ALERT_SUFFIX_SEP = " — "
+_ALERT_SUFFIX_PREFIX = "fallback rating "
+
+
+def _safe_alert(alert, limit=_MAX_MESSAGE_CHARS) -> str:
+    """
+    One stored alert: redacted first (uncapped, so no secret survives a cut), then shortened to
+    `limit` characters. An alert ends in `— fallback rating N A` (`DLRSafetyMonitor._fallback`), the
+    part a consumer needs to read; when the text is too long the middle (the reason, which can carry
+    a raw detector exception) is cut with an ellipsis and that suffix is kept whole.
+    """
+    text = redact(str(alert), limit=10 ** 9)
+    if len(text) <= limit:
+        return text
+    head, sep, tail = text.rpartition(_ALERT_SUFFIX_SEP)
+    room = limit - len(sep) - len(tail) - 1
+    if not sep or not tail.startswith(_ALERT_SUFFIX_PREFIX) or room <= 0:
+        return text[:limit]
+    return head[:room] + "…" + sep + tail
+
+
 def connect(url=None):
     """
     Open the writer connection. `url` defaults to the SUPABASE_DB_URL secret.
@@ -341,6 +369,18 @@ def connect(url=None):
         raise StoreError(f"database connection failed: {failure}")
     log.info("connected to Postgres as %s", redact(role, secrets + _project_identifiers(url)))
     return conn
+
+
+def begin_read_only(conn):
+    """
+    Make everything `conn` runs from here one read-only transaction (BEGIN READ ONLY on the first
+    statement). `connect()` opens an autocommit connection, so a session-level
+    `set default_transaction_read_only` would not be tied to the client connection behind a
+    transaction pooler (the next statement can land on another backend); a transaction is pinned
+    to one backend, so the guard holds there. End it with `conn.rollback()`.
+    """
+    conn.autocommit = False
+    conn.read_only = True
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -548,7 +588,9 @@ def build_rating_row(result: dict, end, run_ctx: dict, provenance=None) -> dict:
     voltage = float(config.LINE_VOLTAGE_KV)
     power_factor = float(config.POWER_FACTOR)
 
-    alerts = [str(a) for a in (result.get("alerts") or [])]
+    # The alerts land in a publicly readable column (a G6 alert carries a raw detector exception), so
+    # each one is redacted and cut like every other stored error text; the cut keeps the fallback rating.
+    alerts = [_safe_alert(a) for a in (result.get("alerts") or [])]
     gates = sorted({a.split(" ")[0] for a in alerts})
 
     observation = result.get("observation")
@@ -727,21 +769,25 @@ def build_run_row(run_ctx: dict, *, window_end, provider, forecast_method, start
 def upsert_run(conn, row: dict) -> None:
     """
     Upsert one `pipeline_run` row keyed by run_id, in one transaction. `row` may
-    be any subset of `PIPELINE_RUN_COLUMNS` that includes run_id; every given
-    non-key column is updated on conflict, so a re-run attempt (same
-    GITHUB_RUN_ID) replaces the row. Column names are only ever taken from
-    `PIPELINE_RUN_COLUMNS` (an unknown key raises ValueError); values are bound
-    parameters. Phase 5's live_run_log may delegate to this function.
+    be any subset of `PIPELINE_RUN_COLUMNS` + `PIPELINE_RUN_OPTIONAL_COLUMNS`
+    that includes run_id; every given non-key column is updated on conflict, so a
+    re-run attempt (same GITHUB_RUN_ID) replaces the row. Column names are only
+    ever taken from those two tuples (an unknown key raises ValueError); values
+    are bound parameters. Optional columns (day_ahead) are written only by the
+    caller that names them, after their migration exists. Phase 5's
+    live_run_log may delegate to this function.
     """
-    unknown = [key for key in row if key not in PIPELINE_RUN_COLUMNS]
+    allowed = PIPELINE_RUN_COLUMNS + PIPELINE_RUN_OPTIONAL_COLUMNS
+    jsonb = PIPELINE_RUN_JSONB + PIPELINE_RUN_OPTIONAL_JSONB
+    unknown = [key for key in row if key not in allowed]
     if unknown:
         raise ValueError(f"not pipeline_run columns: {unknown}")
     if row.get(PIPELINE_RUN_KEY) is None:
         raise ValueError("a pipeline_run row needs a run_id")
 
-    columns = [column for column in PIPELINE_RUN_COLUMNS if column in row]
+    columns = [column for column in allowed if column in row]
     placeholders = [
-        f"%({column})s::jsonb" if column in PIPELINE_RUN_JSONB else f"%({column})s"
+        f"%({column})s::jsonb" if column in jsonb else f"%({column})s"
         for column in columns
     ]
     updates = [f"{column} = excluded.{column}" for column in columns if column != PIPELINE_RUN_KEY]
@@ -756,7 +802,7 @@ def upsert_run(conn, row: dict) -> None:
     params = {
         column: (
             json.dumps(row[column], allow_nan=False, default=str)
-            if column in PIPELINE_RUN_JSONB and row[column] is not None else row[column]
+            if column in jsonb and row[column] is not None else row[column]
         )
         for column in columns
     }

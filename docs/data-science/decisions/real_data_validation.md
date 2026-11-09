@@ -1,5 +1,7 @@
 # Real-data validation and production go/no-go (2026-10, production-pipeline Phase 3)
 
+Re-validated in Phase 7: see [real_data_validation_p7.md](real_data_validation_p7.md).
+
 **Status:** the measurements are complete and the owner's decision was made and signed on 2026-10-21: NO-GO,
 blocking on B1, B2, B4 and B5 (see "Decision"; plan 03-05). Nothing was
 changed to produce these numbers: no rating bound, static rating, line bearing, conductor model, fallback

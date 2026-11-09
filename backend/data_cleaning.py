@@ -88,6 +88,13 @@ ML_LOOKBACK_ROWS: int = (
     max(max(config.FORECAST_ML_LAG_HOURS), config.FORECAST_ML_ROLLING_WINDOW_HOURS) + 1
 )
 
+# Which rule withheld a forecast from G6, as `forecast_gap_kind` reports it. The
+# caller uses the kind to decide whether a naive band may stand in for an `ml`
+# forecast withheld only by the lookback rule (B5, D-17); a trailing gap withholds
+# every band.
+GAP_KIND_TRAILING: str = "trailing_gap"
+GAP_KIND_ML_LOOKBACK: str = "ml_lookback"
+
 # The order rules run in, and the order flags are joined in `clean_flags`.
 # `after_gap` marks a row without excluding it.
 FLAG_ORDER: tuple[str, ...] = (
@@ -463,4 +470,25 @@ def forecast_gap_reason(report: dict, forecast_method: str):
                 f"ml forecast needs {ML_LOOKBACK_ROWS} newest usable rows on consecutive hours, "
                 f"found {tail}"
             )
+    return None
+
+
+def forecast_gap_kind(report: dict, forecast_method: str):
+    """
+    Which rule withholds a forecast from G6, or None: `GAP_KIND_TRAILING` or
+    `GAP_KIND_ML_LOOKBACK`.
+
+    Same conditions and the same order as `forecast_gap_reason` (trailing gap
+    first, then the `ml` lookback), so the result is None exactly when that
+    function returns None. It exists so a caller can tell the two apart without
+    parsing the reason text: only the lookback rule is specific to `ml`.
+    """
+    if not report.get("rows_usable"):
+        return None
+    trailing = report.get("trailing_gap_slots")
+    if trailing is not None and trailing > MAX_TRAILING_GAP_SLOTS:
+        return GAP_KIND_TRAILING
+    if forecast_method == "ml":
+        if report.get("contiguous_tail_rows", 0) < ML_LOOKBACK_ROWS:
+            return GAP_KIND_ML_LOOKBACK
     return None

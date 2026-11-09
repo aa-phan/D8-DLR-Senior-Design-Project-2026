@@ -1,0 +1,22 @@
+{
+  "body_file": "06_MIDLAND.body",
+  "byte_length": 33708,
+  "content_type": "application/json; charset=utf-8",
+  "date_header": "Sun, 08 Nov 2026 01:21:11 GMT",
+  "error": null,
+  "params": {
+    "end_date": "2026-10-31",
+    "hourly": "temperature_2m_previous_day1,wind_speed_10m_previous_day1,wind_direction_10m_previous_day1,shortwave_radiation_previous_day1,relative_humidity_2m_previous_day1",
+    "latitude": 31.9974,
+    "longitude": -102.0779,
+    "models": "gfs_seamless",
+    "start_date": "2026-09-28",
+    "timezone": "UTC",
+    "wind_speed_unit": "ms"
+  },
+  "retrieval_completed_at_utc": "2026-11-08T01:21:11.703687+00:00",
+  "retrieval_started_at_utc": "2026-11-08T01:21:10.957363+00:00",
+  "sha256": "9e8bb90b44023d294d28d3e09bbedd65b2c9c45b336d41cb12dbb5ad4c433e05",
+  "status_code": 200,
+  "url": "https://previous-runs-api.open-meteo.com/v1/forecast"
+}

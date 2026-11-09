@@ -1,0 +1,425 @@
+{
+  "plan": "07-15",
+  "task": 1,
+  "round": "v4-read2",
+  "purpose": "Preflight shown to the owner before the one-shot v4 read 2 (D-08 re-test). Holds dry-run and count-only output and equality checks against read 1's preflight and report only; no outcome of any kind.",
+  "generated_at_utc": "2026-11-08T00:40Z",
+  "read1_decision_gate": {
+    "record": "docs/data-science/decisions/v4_selection/decision_record.md",
+    "read1_outcome": "no pick (no candidate qualifies under signed protocol v4)",
+    "read2_required": true,
+    "not_needed_applies": false
+  },
+  "utc_clock": {
+    "checked_at": "2026-11-08T00:34:04.726573+00:00",
+    "instant": "2026-11-08T00:00:00Z",
+    "at_or_after_instant": true
+  },
+  "dry_run": {
+    "command": "forecast_shadow_confirm.py --dry-run --round v4-read2",
+    "round": "v4-read2",
+    "would_refuse": false,
+    "refuse_reason": null,
+    "fetch_window": [
+      "2026-09-28",
+      "2026-10-31"
+    ],
+    "scored_window": [
+      "2026-09-30T00:00:00+00:00",
+      "2026-11-01T00:00:00+00:00"
+    ],
+    "expected_slots_per_city": 128,
+    "planned_request_count": 8,
+    "planned_request_end_dates": [
+      "2026-10-31"
+    ],
+    "evidence_root": "data/shadow/evaluation/v4-read2",
+    "rating_config_version": "v3-powersystems-2026-11-02",
+    "conductor_basis": {
+      "config_version": "v3-powersystems-2026-11-02",
+      "differing": [
+        "AUSTIN"
+      ],
+      "parity_cities": [
+        "CORPUS_CHRISTI",
+        "MIDLAND",
+        "EL_PASO"
+      ],
+      "refit_verified": true,
+      "problems": [],
+      "headline": "production per-city conductors (D-01): AUSTIN scored under the production configuration with the refit ml_cooling_corrected and reference_ml_refit_24h for config version v3-powersystems-2026-11-02; every other city and ml_wind_corrected use the frozen artifacts",
+      "secondary": "secondary: frozen Drake artifacts, never decides: the 12 frozen Drake artifacts scored under the Drake configuration on the same fetched frames"
+    },
+    "frozen_artifact_hashes": [
+      {
+        "city": "AUSTIN",
+        "method": "ml_wind_corrected",
+        "sha256": "b19039c2d3e8bf7688c92d9946eb64fc118994f587ee42fb619349862b21f9a0"
+      },
+      {
+        "city": "AUSTIN",
+        "method": "ml_cooling_corrected",
+        "sha256": "5026d01fb430016b23f1823fa58f74996b999e0b9a85d321a79ddbae5f384f5b"
+      },
+      {
+        "city": "AUSTIN",
+        "method": "reference_ml_refit_24h",
+        "sha256": "f348ba6d9fcda92888c49f0308123ba647a98c60a6029b89b8a3614ef506d5ee"
+      },
+      {
+        "city": "CORPUS_CHRISTI",
+        "method": "ml_wind_corrected",
+        "sha256": "f81f0d5e3371e14e4bf3e31dfd9261a28ac09024e4cd25c451d4691f6f9d53f1"
+      },
+      {
+        "city": "CORPUS_CHRISTI",
+        "method": "ml_cooling_corrected",
+        "sha256": "8f50c799f6e282f48e2e51738da44896d0893125fdb27eda0a488ae70419a7cc"
+      },
+      {
+        "city": "CORPUS_CHRISTI",
+        "method": "reference_ml_refit_24h",
+        "sha256": "c3f998af8b8b4058dc4e74281500b5e47ed579274f288bdf99bd847ccdbbe11f"
+      },
+      {
+        "city": "MIDLAND",
+        "method": "ml_wind_corrected",
+        "sha256": "79c8bd5ac6bebf5e3dfcd4c32bffc9356349c2b77a7c0acc395c41b3bd57f544"
+      },
+      {
+        "city": "MIDLAND",
+        "method": "ml_cooling_corrected",
+        "sha256": "cdd0a2c9187560d04921647c59bcaf99577fd6e9d94c92a10b59958a5c63a5ee"
+      },
+      {
+        "city": "MIDLAND",
+        "method": "reference_ml_refit_24h",
+        "sha256": "ba4eff0ed8b902eb05b26b8df883c881bd2862c095f1b9cfe037ab7cf024bea9"
+      },
+      {
+        "city": "EL_PASO",
+        "method": "ml_wind_corrected",
+        "sha256": "7494e91d218651c8640ddb156ee0d16db34af0ea1f296c65f40c06c2403530ae"
+      },
+      {
+        "city": "EL_PASO",
+        "method": "ml_cooling_corrected",
+        "sha256": "f64f9872883164e89979536cbc5c5338195f2b84929b30ca6e3dde7e24610fb2"
+      },
+      {
+        "city": "EL_PASO",
+        "method": "reference_ml_refit_24h",
+        "sha256": "46b3e09b44638557998c7b96d366fd3b59c47b3b03414443e485af574e83e580"
+      }
+    ],
+    "frozen_artifacts_verified_against_manifest": true,
+    "refit_artifact_hashes": [
+      {
+        "city": "AUSTIN",
+        "method": "ml_cooling_corrected",
+        "path": "data/models/conductor_refit/v3-powersystems-2026-11-02/ml_cooling_corrected_AUSTIN.joblib",
+        "sha256": "31fe8d9b0fec7b89b9deae0e294cabcb4c1d90fa6d43cf10390cda453ff20973",
+        "verified": true
+      },
+      {
+        "city": "AUSTIN",
+        "method": "reference_ml_refit_24h",
+        "path": "data/models/conductor_refit/v3-powersystems-2026-11-02/reference_ml_refit_24h_AUSTIN.joblib",
+        "sha256": "f5dc0ebb68b073573d94d6ea1b653fb9636738da575d9077a822427f13f0dc43",
+        "verified": true
+      }
+    ],
+    "freeze_check": {
+      "flagged": [],
+      "model_freeze": "2026-11-01T00:00:00+00:00",
+      "note": "artifact commits dated at or after the freeze are flagged, not refused (PD-16)"
+    }
+  },
+  "equality_with_read1": {
+    "source": "docs/data-science/decisions/v4_selection/read1_preflight.json and data/shadow/evaluation/v4-read1/reconstructed_frames_20261102T175156Z/report.json",
+    "rating_config_version_now": "v3-powersystems-2026-11-02",
+    "rating_config_version_in_read1_report": "v3-powersystems-2026-11-02",
+    "rating_config_version_equal": true,
+    "worktree_at_read1_commit_needed": false,
+    "conductor_basis_equal_to_read1_report": true,
+    "frozen_artifact_hashes_equal_to_read1_preflight": true,
+    "refit_artifact_hashes_equal_to_read1_preflight": true,
+    "freeze_check_equal": true,
+    "files_changed_since_read1_evidence_commit_2115cfd_in_backend_data_shadow_data_models": [
+      "backend/config.py (RATING_BASIS label text only, 07-17; not imported by the shadow headline path)",
+      "backend/tests/* (test files only)",
+      "data/models/forecast_{AUSTIN,CORPUS_CHRISTI,EL_PASO,MIDLAND}.joblib and LIVE_ARTIFACT_HASHES.sha256 (07-14 live ml retrain; not loaded by the shadow headline path)"
+    ],
+    "unchanged_since_read1": [
+      "data/shadow/models/",
+      "data/models/conductor_refit/",
+      "data/shadow/evaluation/v4-read1/",
+      "backend/forecast_shadow_*.py",
+      "backend/forecast_conductor_refit.py"
+    ]
+  },
+  "vetoes_record": {
+    "path": "docs/data-science/decisions/v4_selection/vetoes.json",
+    "sha256": "1d31cf387098b85be46a5cedc83fa8097061ffa5bb9dd612e67e6204e37454dc",
+    "sha256_in_read1_report": "1d31cf387098b85be46a5cedc83fa8097061ffa5bb9dd612e67e6204e37454dc",
+    "equal": true
+  },
+  "read_scope_clean_tree_check": {
+    "command": "git status --porcelain -- backend data/shadow data/models docs/data-science/decisions/v4_selection docs/data-science/decisions/confirmation_protocol_v4_early_selection.md docs/data-science/decisions/confirmation_protocol_v4_early_selection_SIGNING_COPY.md",
+    "output": [],
+    "clean": true,
+    "whole_tree_entries_outside_read_scope": {
+      " M .DS_Store, .planning/.DS_Store, .planning/workstreams/.DS_Store, docs/.DS_Store, docs/data-science/.DS_Store": "macOS Finder metadata, unowned, unrelated",
+      " M .planning/config.json": "GSD workflow config (3 added lines), owner/session tooling, outside read scope",
+      "?? .DS_Store.swp, supabase/.DS_Store": "editor/Finder scratch, unrelated",
+      "?? .obsidian/": "owner's Obsidian vault settings, unrelated",
+      "?? .planning/NEXT-SESSION-PROMPT.md, .planning/tmp/, .planning/graphs/": "GSD session tooling, outside read scope",
+      "?? .planning/workstreams/production-pipeline/{.verification-ledger.json,config.json,milestone.lock,state.json,phases/07-.../.gitkeep}": "production-pipeline workstream GSD state, outside read scope",
+      "?? .planning/workstreams/pss-e-integration/state.json": "pss-e-integration workstream GSD state, outside read scope",
+      "?? docs/Test and Evaluation Report.docx, docs/Test and Evaluation Report.pdf": "owner's report deliverables, outside read scope",
+      "?? graphify-out/": "graphify knowledge-graph output, outside read scope"
+    }
+  },
+  "shadow_log_export": {
+    "source_ref": "origin/shadow-collection-data",
+    "source_commit": "e7863106bc7f305534031c818092887ddd207eeb",
+    "source_commit_date": "2026-11-08T00:02:46+00:00",
+    "command": "forecast_shadow_score.py --count-only --round v4-read2",
+    "valid_time_cutoff": "2026-11-01T00:00:00+00:00",
+    "pooled_in_scope_rows": 288,
+    "note": "Live-system check only (never pooled with the headline, never decides). 72 of each city's logged rows fall in the scored window (valid_time before 2026-11-01), against 128 headline slots per city.",
+    "per_city": {
+      "AUSTIN": {
+        "lines_total": 118,
+        "accepted_rows": 118,
+        "in_scope_rows": 72,
+        "at_or_after_cutoff": 31,
+        "duplicate_valid_time": 10,
+        "missing_forecast_model": 5,
+        "valid_hour_histogram": {
+          "00": 18,
+          "06": 18,
+          "12": 18,
+          "18": 18
+        },
+        "lead_gap_hours": {
+          "max": 16.783626738333332,
+          "median": 12.986660589583334,
+          "min": 11.157189704444445
+        },
+        "candidate_status_counts": {
+          "ml_cooling_corrected": {
+            "failed": 0,
+            "missing": 0,
+            "ok": 67,
+            "other": 0,
+            "unavailable": 5
+          },
+          "ml_wind_corrected": {
+            "failed": 0,
+            "missing": 0,
+            "ok": 67,
+            "other": 0,
+            "unavailable": 5
+          },
+          "persistence_24h": {
+            "failed": 0,
+            "missing": 0,
+            "ok": 37,
+            "other": 0,
+            "unavailable": 35
+          },
+          "raw_forecast": {
+            "failed": 0,
+            "missing": 0,
+            "ok": 72,
+            "other": 0,
+            "unavailable": 0
+          },
+          "reference_ml_refit_24h": {
+            "failed": 0,
+            "missing": 0,
+            "ok": 64,
+            "other": 0,
+            "unavailable": 8
+          }
+        }
+      },
+      "CORPUS_CHRISTI": {
+        "lines_total": 118,
+        "accepted_rows": 118,
+        "in_scope_rows": 72,
+        "at_or_after_cutoff": 31,
+        "duplicate_valid_time": 10,
+        "missing_forecast_model": 5,
+        "valid_hour_histogram": {
+          "00": 18,
+          "06": 18,
+          "12": 18,
+          "18": 18
+        },
+        "lead_gap_hours": {
+          "max": 16.75900703611111,
+          "median": 12.98009259625,
+          "min": 11.132944785277777
+        },
+        "candidate_status_counts": {
+          "ml_cooling_corrected": {
+            "failed": 0,
+            "missing": 0,
+            "ok": 71,
+            "other": 0,
+            "unavailable": 1
+          },
+          "ml_wind_corrected": {
+            "failed": 0,
+            "missing": 0,
+            "ok": 71,
+            "other": 0,
+            "unavailable": 1
+          },
+          "persistence_24h": {
+            "failed": 0,
+            "missing": 0,
+            "ok": 37,
+            "other": 0,
+            "unavailable": 35
+          },
+          "raw_forecast": {
+            "failed": 0,
+            "missing": 0,
+            "ok": 72,
+            "other": 0,
+            "unavailable": 0
+          },
+          "reference_ml_refit_24h": {
+            "failed": 0,
+            "missing": 0,
+            "ok": 68,
+            "other": 0,
+            "unavailable": 4
+          }
+        }
+      },
+      "EL_PASO": {
+        "lines_total": 118,
+        "accepted_rows": 118,
+        "in_scope_rows": 72,
+        "at_or_after_cutoff": 31,
+        "duplicate_valid_time": 10,
+        "missing_forecast_model": 5,
+        "valid_hour_histogram": {
+          "00": 18,
+          "06": 18,
+          "12": 18,
+          "18": 18
+        },
+        "lead_gap_hours": {
+          "max": 16.714653104444444,
+          "median": 12.93714277013889,
+          "min": 11.070671505277778
+        },
+        "candidate_status_counts": {
+          "ml_cooling_corrected": {
+            "failed": 0,
+            "missing": 0,
+            "ok": 70,
+            "other": 0,
+            "unavailable": 2
+          },
+          "ml_wind_corrected": {
+            "failed": 0,
+            "missing": 0,
+            "ok": 70,
+            "other": 0,
+            "unavailable": 2
+          },
+          "persistence_24h": {
+            "failed": 0,
+            "missing": 0,
+            "ok": 37,
+            "other": 0,
+            "unavailable": 35
+          },
+          "raw_forecast": {
+            "failed": 0,
+            "missing": 0,
+            "ok": 71,
+            "other": 0,
+            "unavailable": 1
+          },
+          "reference_ml_refit_24h": {
+            "failed": 0,
+            "missing": 0,
+            "ok": 69,
+            "other": 0,
+            "unavailable": 3
+          }
+        }
+      },
+      "MIDLAND": {
+        "lines_total": 118,
+        "accepted_rows": 118,
+        "in_scope_rows": 72,
+        "at_or_after_cutoff": 31,
+        "duplicate_valid_time": 10,
+        "missing_forecast_model": 5,
+        "valid_hour_histogram": {
+          "00": 18,
+          "06": 18,
+          "12": 18,
+          "18": 18
+        },
+        "lead_gap_hours": {
+          "max": 16.721041982777777,
+          "median": 12.957153358749999,
+          "min": 11.094957064444445
+        },
+        "candidate_status_counts": {
+          "ml_cooling_corrected": {
+            "failed": 1,
+            "missing": 0,
+            "ok": 71,
+            "other": 0,
+            "unavailable": 0
+          },
+          "ml_wind_corrected": {
+            "failed": 0,
+            "missing": 0,
+            "ok": 72,
+            "other": 0,
+            "unavailable": 0
+          },
+          "persistence_24h": {
+            "failed": 0,
+            "missing": 0,
+            "ok": 37,
+            "other": 0,
+            "unavailable": 35
+          },
+          "raw_forecast": {
+            "failed": 0,
+            "missing": 0,
+            "ok": 72,
+            "other": 0,
+            "unavailable": 0
+          },
+          "reference_ml_refit_24h": {
+            "failed": 0,
+            "missing": 0,
+            "ok": 69,
+            "other": 0,
+            "unavailable": 3
+          }
+        }
+      }
+    }
+  },
+  "owner_go_status": "pending: awaiting owner's go, not-needed or hold at the 07-15 Task 1 blocking-human checkpoint",
+  "plain_words": [
+    "Read 2 re-grades read 1's rows plus one more week, so it is not an independent second test.",
+    "Read 2 runs once and cannot be repeated; it is the last pre-registered read.",
+    "A city whose data cannot be fetched is recorded and left out, never retried.",
+    "The result decides only which shadow model moves forward, not the live G6 method or any live rating."
+  ]
+}

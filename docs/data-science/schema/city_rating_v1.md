@@ -2,18 +2,18 @@
 
 **Schema version:** v1
 **Date:** 2026-10-23
-**Status:** decided contract (DS decision authority, REQUIREMENTS.md); values are PROVISIONAL (see "Provisional label (OD-5)")
+**Status:** decided contract (DS decision authority, REQUIREMENTS.md); values carry the label described in "Provisional label (OD-5)" (provisional for backfill and older live rows)
 **Scope:** `public.city_rating` in the production Supabase Postgres, written hourly by the production pipeline. Migrations: `supabase/migrations/20261019000000_create_city_rating.sql` (tables, writer role, policies) and `supabase/migrations/20261023000000_city_rating_utc_hour_check_and_run_log_comments.sql` (hour check evaluated in UTC in every session, run-log comments). This document also describes `public.pipeline_run`, the operational run log, which consumers do not read.
 
-**Read this first.** Every value in this table is a provisional estimate, not a verified line limit. The ratings come from the IEEE 738 thermal model at one rating point per city, with owner-supplied static ratings divided by an assumed subconductor count and assumed line bearings. Show the label (`rating_basis`) wherever a value is shown. Phase 3's go/no-go on real data was a NO-GO; the owner decided on 2026-10-21 to publish provisional rows anyway. No row, backfill included, has passed a go/no-go.
+**Read this first.** Every value in this table is a provisional estimate, not a verified line limit. The ratings come from the IEEE 738 thermal model at one rating point per city, with owner-supplied static ratings divided by an assumed subconductor count and assumed line bearings. Show the label (`rating_basis`) wherever a value is shown. Phase 3's go/no-go on real data was a NO-GO; the owner decided on 2026-10-21 to publish provisional rows anyway. A backfill row, or a row written before the Phase 7 label change, has not passed a go/no-go; rows that carry the current label are covered by the Phase 7 re-validation go signed on 2026-11-02 (see "Provisional label (OD-5)").
 
 ## Where the data lives
 
 - A Supabase-hosted Postgres database, table `public.city_rating`: one row per city per hour.
 - Rows are written by `dlr_orchestrator --store postgres` (the scheduled runner arrives in Phase 5) and, for history, by the one-time backfill loader (see "Backfill rows").
-- Consumers read the table through Supabase's REST API once Phase 6 grants SELECT to the `anon` role on the table and adds the `latest_rating` view. Until Phase 6 delivers that, no consumer role has any access to the table (OD-6). Nothing in this document says Phase 5 or Phase 6 is already live.
+- Consumers read the table `public.city_rating` and the view `public.latest_rating` (one current row per city, plus the computed columns `age_minutes`, `is_stale` and `is_provisional`) through Supabase's REST API; the contract is [`rest-api.md`](../../integration/rest-api.md). The read grant (SELECT for the `anon` role, OD-6) takes effect when the owner applies Phase 6's migration; until then the table is not readable with the publishable key. Nothing in this document says Phase 5 or Phase 6 is already live.
 - No connection details (host, project reference, key, URL) are published in this repository's docs. The owner hands them to the teams that need them.
-- The full history will be public by owner decision (OD-6), so no column holds anything sensitive: no file path, no credential, no error text.
+- The full history will be public by owner decision (OD-6), so no column holds a credential, and each `alerts` entry is redacted and cut to 300 characters before it is stored. An entry for a detector failure (`G6 ... detector error`) can still carry a short error message, so `alerts` is diagnostic text.
 
 ## Key and time semantics
 
@@ -103,15 +103,20 @@ Columns are listed in migration order. "NULL when" says when the column is empty
 
 Every row carries the label in `rating_basis`. The current live label is:
 
-> Per-conductor amperes from the IEEE 738 thermal model at one rating point per city. Static ratings are owner-supplied 345 kV bundle averages divided by an assumed subconductor count; line bearings are assumed, not measured. Not a verified equipment-limited circuit rating. Values are provisional until Phase 7's re-validation go (REVAL-01) lifts this label.
+> Per-conductor amperes from the IEEE 738 thermal model at one rating point per city, using the per-city conductor table identified by the row's config_version and config_fingerprint. AUSTIN's conductor type and maximum operating temperature come from an Austin Energy statement; every other conductor value, for every city, is a model default awaiting Power Systems confirmation. Static ratings are owner-supplied 345 kV bundle averages divided by an assumed subconductor count; line bearings are assumed, not measured. Not a verified equipment-limited circuit rating. The Phase 3 findings were re-validated in Phase 7 (REVAL-01) on this conductor basis.
 
-The current assumption-set label is `v1-provisional-2026-10-13` (that is `config.RATING_CONFIG_VERSION`). It is bumped by people whenever any rating assumption changes, every per-city conductor parameter included. The fingerprint (next section) changes automatically; the version is its human-readable label.
+**Which rows carry it.** The owner signed the Phase 7 re-validation go on 2026-11-02 (UTC), for rows written going forward only (`docs/data-science/decisions/real_data_validation_p7.md`). Rows written after the new code is promoted carry the text above. Live rows written earlier keep the older text, which says the values are provisional until the re-validation go, and backfill rows keep their Phase 3 label (`PROVISIONAL (OD-5)`); neither is relabelled. The older text is accurate for those rows: they were computed before the wind-feature fix and the gap fix that the re-validation covered.
+
+The current assumption-set label is `v3-powersystems-2026-11-02` (that is `config.RATING_CONFIG_VERSION`). It does not carry the word provisional, and neither does the `rating_basis` text above, so `latest_rating.is_provisional` is false for a row that carries both. It is true for any older row whose `rating_basis` or `config_version` still carries the word. The version is bumped by people whenever any rating assumption changes, every per-city conductor parameter included. The fingerprint (next section) changes automatically; the version is its human-readable label.
+
+**Conductor basis per city (Phase 7).** Each city's conductor (type, diameter, AC resistance, emissivity, absorptivity, maximum operating temperature, elevation, azimuth) comes from a per-city table with a recorded source per value, and production reads that table. Since v3 (`v3-powersystems-2026-11-02`) one value has changed: AUSTIN is 795 kcmil ACSR Drake at a 100 C maximum operating temperature (Austin Energy teammate, relayed by the owner 2026-10-27; Austin Energy 2005 ERCOT ROS/SPWG statement; signed v4 O4). AUSTIN's diameter, AC resistance, elevation and line bearing are unchanged from the model default. CORPUS_CHRISTI, MIDLAND and EL_PASO have no Power Systems answer and stay on the model default (795 kcmil Drake ACSR, 75 C, 900 m, carried-over line bearings), still awaiting Power Systems confirmation. Only AUSTIN's `config_fingerprint` changes at v3; the other three cities' fingerprints do not. A further Power Systems value is a config change plus a version bump. Rows written before this version carry `v1-provisional-2026-10-13` or `v2-provisional-2026-11-02`; backfill rows keep their Phase 3 label.
 
 Rules for consumers:
 
 - Display the label wherever a value is shown. Do not drop the static-rating caveat or the line-bearing caveat.
-- Every row, live or backfill, stays provisional until Phase 7's re-validation go (REVAL-01) lifts the label.
-- Phase 3's go/no-go on real data was a NO-GO and stays recorded as written in `docs/data-science/decisions/real_data_validation.md`. On 2026-10-21 the owner decided to publish provisional rows anyway, so Phases 4 to 6 are not blocked by it. Never describe any row, the backfill included, as having passed a go/no-go.
+- Backfill rows and live rows written before the Phase 7 label change stay provisional: they carry the word in `rating_basis` or `config_version`, and the label is not lifted on them (the 2026-11-02 re-validation go applies going forward only). Rows that carry the current label above are the ones the Phase 7 re-validation go covers.
+- `latest_rating.is_provisional` is true while the word provisional (any case) appears in `rating_basis` or in `config_version` (D-03), so it is false only for a row whose two labels both lack the word. A phrase such as "no longer provisional" would still read as provisional.
+- Phase 3's go/no-go on real data was a NO-GO and stays recorded as written in `docs/data-science/decisions/real_data_validation.md`. On 2026-10-21 the owner decided to publish provisional rows anyway, so Phases 4 to 6 are not blocked by it. Never describe a backfill row or a row written before the label change as having passed a go/no-go. The Phase 7 re-validation (`docs/data-science/decisions/real_data_validation_p7.md`) is a separate, later sign-off that covers only rows carrying the current label, and it keeps each row's conductor basis visible through `config_version` and `config_fingerprint`.
 
 ## What produced each row (DB-06)
 
@@ -122,6 +127,8 @@ Four columns say what produced a row, so a change in configuration or model is v
 - `forecast_model_sha256`: the sha256 of the forecast model file the run loaded. NULL when the forecast method has no artifact (`forecast_method` then names it, for example `naive` or `ewm`), or when no forecast was produced.
 - `anomaly_model_sha256`: the sha256 of the anomaly model file the run loaded. NULL when none was loaded.
 
+From v2 the fingerprint uses snapshot schema 2 (the per-city conductor table is fingerprinted, its source notes are not), so fingerprints are comparable only within one schema, and every live fingerprint changes once at the switch.
+
 Backfill rows carry the values of the Phase 3 run: fingerprints computed on the code at the Phase 3 manifest's commit and model hashes from that manifest.
 
 For consumers: within one city, a change in `config_fingerprint`, `forecast_model_sha256` or `anomaly_model_sha256` between rows marks a configuration or model change. The web app should mark such a change on charts and tables, and PSS/E studies should not splice values across it without noting it. Phase 7's per-city conductors (COND-01) and any change of forecast method or model (SEL-04) arrive this way, as new values in these same columns, never as a schema change.
@@ -131,19 +138,20 @@ For consumers: within one city, a change in `config_fingerprint`, `forecast_mode
 - Cadence is hourly (OD-1): one row per city per hour once Phase 5's scheduled runner is live.
 - The target is that the newest `valid_time` of each city is no older than 90 minutes (OD-4), once Phase 5 runs. Before Phase 5 delivers the schedule, rows appear only when someone runs the pipeline.
 - A city that fails outright writes no row (OD-9), so its newest row ages and the freshness check flags it. A consumer sees the gap as an old latest row, not as an error row.
+- `latest_rating` shows each city's age on its row: `age_minutes` (whole minutes, rounded up) and `is_stale` (true when strictly more than 90 minutes old; exactly 90 is fresh). `rpc/assert_fresh` checks all four cities at once and answers HTTP 503 naming the missing or stale ones (D-02). Details: [`rest-api.md`](../../integration/rest-api.md).
 - Run outcomes, including per-city failures, go to `public.pipeline_run`. That table is an operational log; consumers never read it.
 
 ## Forecast fields
 
 - `forecast_amps` is a one-step-ahead forecast of the rating with a 60-minute horizon (`forecast_horizon_min`), and `forecast_ci_lower_amps` / `forecast_ci_upper_amps` are an empirical band from out-of-sample walk-forward residuals.
 - `forecast_status` is `ok` when a forecast was computed (even if the gap guard from Phase 2 or a zero-width band kept it from G6; see `forecast_used_by_g6`), `cold_start` when there was too little history, and `failed` when the forecast raised (for example a missing ML model) or when the city's history could not be cleaned, so the forecast ran on no history although the city had history rows; the detector then reports a cold start (`detector_signal`). It is NULL on backfill rows.
-- `forecast_used_by_g6` says whether the forecast fed the G6 detector in that run.
+- `forecast_used_by_g6` says whether the forecast fed the G6 detector in that run. Since Phase 7, when the ml forecast is held back for the lookback rule a naive band may feed G6; `forecast_used_by_g6` then reads false because it describes the stored forecast, and the trace records which band was used.
 - Cold start in production: the backfill window ends on 2026-09-28 and the read window is the last 30 days (OD-8). Phase 2's gap guard withholds a forecast after more than one missing hour. So after go-live the forecast and the detector rebuild from live hours: the `ml` method needs 7 consecutive hours of history, and the rolling detector baseline needs 24 usable rows. Until then expect `forecast_status` of `cold_start` and empty forecast columns.
 
 ## Backfill rows
 
 - The Phase 3 real-data archive is loaded once with origin `backfill`. The window comes from the Phase 3 manifest (2026-09-08T00:00Z to 2026-09-28T23:00Z), 504 hourly rows per city. `run_id` is `backfill-<sha12>` (the first 12 hex characters of the archive's sha256).
-- They are labelled provisional: `config_version` is `v1-provisional-2026-10-13` and `rating_basis` starts with `PROVISIONAL (OD-5)`, names the Phase 3 window and commit and the single Drake conductor used for every city, and ends with REVAL-01. They stay provisional until Phase 7's re-validation go (REVAL-01). Phase 3's go/no-go was a NO-GO; these rows have not passed it.
+- They are labelled provisional: `config_version` is `v1-provisional-2026-10-13` and `rating_basis` starts with `PROVISIONAL (OD-5)`, names the Phase 3 window and commit and the single Drake conductor used for every city, and ends with REVAL-01. They stay provisional: the Phase 7 re-validation go (REVAL-01, signed 2026-11-02) applies to rows written going forward only, and backfill rows are never relabelled. Phase 3's go/no-go was a NO-GO; these rows have not passed it.
 - Their identity columns come from the Phase 3 run (see "What produced each row (DB-06)"), and `forecast_method` is the method Phase 3 used.
 - Columns that are NULL or empty on a backfill row, because the archive does not hold them: `observation_time`, `station_id`, `candidates_probed`, `probe_trail`, `wind_speed_ms`, `wind_direction_deg`, the three `*_source` columns, `forecast_status`, all `forecast_*` values, `forecast_used_by_g6`, `detector_signal`, `detector_model_loaded`, `history_rows` and `usable_history_rows`. `fallback_gates` and `alerts` are empty, so a backfill row with status `fallback` does not say which gate fired.
 - A backfill never overwrites an existing row: a live row at the same `(city, valid_time)` keeps its values and its origin.

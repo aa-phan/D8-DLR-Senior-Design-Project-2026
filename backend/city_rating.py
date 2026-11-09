@@ -6,7 +6,7 @@ Per-city replacement for the retired `corridor_discretization.rate_corridor`
 independent rating point: `rate_city` resolves the nearest usable weather
 observation to `config.CITY_COORDINATES[city]`, runs it through the same
 fail-safe `DLRSafetyMonitor` (C7) with that city's own static rating,
-plausibility bounds and conductor (`city_point.city_point`), optionally
+plausibility bounds and conductor (`city_point.production_city_point`), optionally
 archives one row, and returns a per-city dict. There is no discretization, no
 `min()` reduction across points and no bottleneck.
 
@@ -338,11 +338,11 @@ def rate_city(
     stations to `config.CITY_COORDINATES[city]` via
     `resolve_point_observation` (nearest-5-then-10), run the first usable
     reading through a `DLRSafetyMonitor` configured from
-    `city_point.city_point(city)`, and optionally archive one row.
+    `city_point.production_city_point`, and optionally archive one row.
 
     Args:
         city: A key in `config.LOCATIONS`; unknown keys raise `KeyError`
-            (from `city_point.city_point`).
+            (from `city_point.production_city_point`).
         start, end: The weather-fetch date window (ISO 8601 strings).
         stations: A station metadata DataFrame (`stid`, `lat`, `lon`, ...).
             Unused by the `open_meteo`/`nsrdb` coordinate path.
@@ -374,7 +374,7 @@ def rate_city(
     if fetch_weather is None:
         fetch_weather = weather_provider.fetch_weather
 
-    point = city_point_module.city_point(city)
+    point = city_point_module.production_city_point(city)
     lat, lon = point.coord
 
     if provider in ("open_meteo", "nsrdb"):

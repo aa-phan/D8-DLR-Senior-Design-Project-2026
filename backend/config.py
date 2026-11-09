@@ -220,6 +220,181 @@ CITY_LINE_BEARING_DEG: dict[str, float] = {
     "EL_PASO": 267.54,
 }
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Production per-city conductor table (production-pipeline Phase 7, COND-01)
+# ──────────────────────────────────────────────────────────────────────────────
+# Production rating, training and validation read ONLY this table, through
+# `city_point.production_city_point`. The shadow collector and the frozen
+# evaluation keep DEFAULT_CONDUCTOR_CONFIG_KWARGS through `city_point.city_point`
+# (COND-02), so the table must never be read from a shadow module.
+#
+# Per D-09 every city starts on the model default (795 kcmil Drake ACSR, 75 C,
+# 900 m, the carried-over line bearing above) until Power Systems answers; since
+# v3 (plan 07-11) AUSTIN alone holds the Power Systems 100 C value. Each
+# value carries a source string below. Replacing a value is an edit here plus a
+# RATING_CONFIG_VERSION bump, never a code change: the table is fingerprinted
+# per city (rating_identity.FINGERPRINTED_CONFIG_NAMES), so a changed value
+# changes that city's `config_fingerprint` and no other city's. The sources are
+# not fingerprinted.
+#
+# Field order is documentation only; the fingerprint canonicalizes key order.
+PRODUCTION_CONDUCTOR_FIELDS: tuple[str, ...] = (
+    "conductor_type",
+    "diameter_m",
+    "resistance_ac",
+    "resist_temp_coef",
+    "emissivity",
+    "absorptivity",
+    "max_temp_c",
+    "elevation_m",
+    "line_azimuth",
+)
+
+# One key per line so a reviewer (and the backfill identity test, which rewrites
+# the max_temp_c line of every entry) sees every value on its own line.
+PRODUCTION_CONDUCTORS: dict[str, dict] = {
+    "AUSTIN": {
+        "conductor_type": "795 kcmil ACSR Drake",
+        "diameter_m": 0.02814,
+        "resistance_ac": 0.0726,
+        "resist_temp_coef": 0.00404,
+        "emissivity": 0.8,
+        "absorptivity": 0.8,
+        "max_temp_c": 100.0,
+        "elevation_m": 900.0,
+        "line_azimuth": 173.15,
+    },
+    "CORPUS_CHRISTI": {
+        "conductor_type": "795 kcmil ACSR Drake (model default)",
+        "diameter_m": 0.02814,
+        "resistance_ac": 0.0726,
+        "resist_temp_coef": 0.00404,
+        "emissivity": 0.8,
+        "absorptivity": 0.8,
+        "max_temp_c": 75.0,
+        "elevation_m": 900.0,
+        "line_azimuth": 173.15,
+    },
+    "MIDLAND": {
+        "conductor_type": "795 kcmil ACSR Drake (model default)",
+        "diameter_m": 0.02814,
+        "resistance_ac": 0.0726,
+        "resist_temp_coef": 0.00404,
+        "emissivity": 0.8,
+        "absorptivity": 0.8,
+        "max_temp_c": 75.0,
+        "elevation_m": 900.0,
+        "line_azimuth": 267.54,
+    },
+    "EL_PASO": {
+        "conductor_type": "795 kcmil ACSR Drake (model default)",
+        "diameter_m": 0.02814,
+        "resistance_ac": 0.0726,
+        "resist_temp_coef": 0.00404,
+        "emissivity": 0.8,
+        "absorptivity": 0.8,
+        "max_temp_c": 75.0,
+        "elevation_m": 900.0,
+        "line_azimuth": 267.54,
+    },
+}
+
+PRODUCTION_CONDUCTOR_SOURCE_PROVISIONAL: str = "current model default, provisional; Power Systems pending"
+
+# A source string for every value of every city (a test asserts completeness).
+# Overwrite a city's entries with the document or person that supplied the value.
+PRODUCTION_CONDUCTOR_SOURCES: dict[str, dict[str, str]] = {
+    city: {
+        field: (
+            "carried-over corridor bearing (CITY_LINE_BEARING_DEG), provisional; Power Systems pending"
+            if field == "line_azimuth"
+            else "thermal_model.ConductorConfig default, provisional; Power Systems pending"
+            if field == "resist_temp_coef"
+            else PRODUCTION_CONDUCTOR_SOURCE_PROVISIONAL
+        )
+        for field in PRODUCTION_CONDUCTOR_FIELDS
+    }
+    for city in PRODUCTION_CONDUCTORS
+}
+
+# AUSTIN (v3, plan 07-11): the owner's relayed answer. Conductor type and maximum
+# operating temperature are the answer itself; diameter and AC resistance are the
+# catalogue values for that type (unchanged), and every value the answer did not
+# touch keeps its provisional source above.
+PRODUCTION_CONDUCTOR_SOURCE_AUSTIN_POWER_SYSTEMS: str = (
+    "Austin Energy teammate, relayed by owner 2026-10-27; Austin Energy 2005 ERCOT ROS/SPWG statement; "
+    "signed v4 O4 (2026-11-02)"
+)
+for _field in ("conductor_type", "max_temp_c"):
+    PRODUCTION_CONDUCTOR_SOURCES["AUSTIN"][_field] = PRODUCTION_CONDUCTOR_SOURCE_AUSTIN_POWER_SYSTEMS
+for _field in ("diameter_m", "resistance_ac"):
+    PRODUCTION_CONDUCTOR_SOURCES["AUSTIN"][_field] = (
+        "Drake 795 ACSR catalogue value (03-05-CONDUCTOR-RESEARCH.md), unchanged; type confirmed by "
+        + PRODUCTION_CONDUCTOR_SOURCE_AUSTIN_POWER_SYSTEMS
+    )
+del _field
+
+# Inclusive plausibility ranges for the numeric fields (units as in the table).
+# A guard against a typo or a unit slip, not an engineering limit.
+PRODUCTION_CONDUCTOR_RANGES: dict[str, tuple[float, float]] = {
+    "diameter_m": (0.005, 0.1),
+    "resistance_ac": (0.005, 1.0),       # ohm/km at 25 C
+    "resist_temp_coef": (0.0, 0.01),     # per C
+    "emissivity": (0.0, 1.0),
+    "absorptivity": (0.0, 1.0),
+    "max_temp_c": (50.0, 250.0),
+    "elevation_m": (-100.0, 4000.0),
+    "line_azimuth": (0.0, 360.0),
+}
+
+
+def production_conductor_kwargs_for(city: str) -> dict:
+    """
+    `thermal_model.ConductorConfig` kwargs for `city` from PRODUCTION_CONDUCTORS: the
+    eight numeric fields as floats (`conductor_type` is descriptive and dropped).
+    Consumed by `city_point.production_city_point`.
+
+    Raises:
+        KeyError: `city` is not in LOCATIONS (naming the sorted valid cities), has no
+            table entry, or its entry lacks a field (naming the city and the field).
+        ValueError: the entry has an unknown key, an empty `conductor_type`, or a value
+            that is not a finite number inside its inclusive PRODUCTION_CONDUCTOR_RANGES
+            interval (naming the city, field, value and range).
+    """
+    if city not in LOCATIONS:
+        raise KeyError(f"Unknown city {city!r}. Valid cities: {sorted(LOCATIONS)}")
+    if city not in PRODUCTION_CONDUCTORS:
+        raise KeyError(
+            f"No production conductor entry for {city!r}; entries exist for {sorted(PRODUCTION_CONDUCTORS)}"
+        )
+    entry = PRODUCTION_CONDUCTORS[city]
+    for field in PRODUCTION_CONDUCTOR_FIELDS:
+        if field not in entry:
+            raise KeyError(f"Production conductor entry for {city!r} lacks the field {field!r}")
+    extra = sorted(set(entry) - set(PRODUCTION_CONDUCTOR_FIELDS))
+    if extra:
+        raise ValueError(
+            f"Production conductor entry for {city!r} has unknown key(s) {extra}; "
+            f"allowed fields: {list(PRODUCTION_CONDUCTOR_FIELDS)}"
+        )
+    conductor_type = entry["conductor_type"]
+    if not isinstance(conductor_type, str) or not conductor_type.strip():
+        raise ValueError(
+            f"Production conductor entry for {city!r}: field 'conductor_type' must be a non-empty string, "
+            f"got {conductor_type!r}"
+        )
+    kwargs = {}
+    for field, (lo, hi) in PRODUCTION_CONDUCTOR_RANGES.items():
+        value = entry[field]
+        # bool is an int subclass; NaN fails the comparison below
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not (lo <= value <= hi):
+            raise ValueError(
+                f"Production conductor entry for {city!r}: field {field!r} value {value!r} is not a finite "
+                f"number inside the allowed range [{lo!r}, {hi!r}]"
+            )
+        kwargs[field] = float(value)
+    return kwargs
+
 # Retired corridor pairing, retained ONLY for the frozen 2026-09/10
 # forecast-correction experiment modules (forecast_experiment*.py,
 # legacy_corridor.py), which reproduce a completed study. No production,
@@ -253,12 +428,24 @@ POWER_FACTOR: float = 0.95      # Standard conservative assumption for grid powe
 # Written into every public.city_rating row by backend/supabase_store.py so a
 # consumer can always tell what a stored value is (OD-5). Not the shadow
 # bundle labels above (BUNDLE_*), which describe a different quantity.
+#
+# REVAL-01 (plan 07-17): the owner signed GO on 2026-11-02 (UTC), going forward
+# only. This text replaces the older label that carried the word "provisional";
+# the new text must never contain that word in any case, because
+# latest_rating.is_provisional (D-03) reads it from here and from
+# config_version. It keeps the conductor basis visible on every row (D-13).
+# Pinned to the schema doc's "Provisional label (OD-5)" section by
+# supabase_schema_doc_test.
 RATING_BASIS: str = (
     "Per-conductor amperes from the IEEE 738 thermal model at one rating point "
-    "per city. Static ratings are owner-supplied 345 kV bundle averages divided "
-    "by an assumed subconductor count; line bearings are assumed, not measured. "
-    "Not a verified equipment-limited circuit rating. Values are provisional "
-    "until Phase 7's re-validation go (REVAL-01) lifts this label."
+    "per city, using the per-city conductor table identified by the row's "
+    "config_version and config_fingerprint. AUSTIN's conductor type and maximum "
+    "operating temperature come from an Austin Energy statement; every other "
+    "conductor value, for every city, is a model default awaiting Power Systems "
+    "confirmation. Static ratings are owner-supplied 345 kV bundle averages "
+    "divided by an assumed subconductor count; line bearings are assumed, not "
+    "measured. Not a verified equipment-limited circuit rating. The Phase 3 "
+    "findings were re-validated in Phase 7 (REVAL-01) on this conductor basis."
 )
 
 # Human-readable label of the rating assumption set (DB-06). Bump it whenever
@@ -270,7 +457,23 @@ RATING_BASIS: str = (
 # Every row also stores `config_fingerprint` (supabase_store.rating_config_fingerprint),
 # which changes automatically with any of them, so a forgotten bump is still
 # visible in the data; the fingerprint is the authoritative identity.
-RATING_CONFIG_VERSION: str = "v1-provisional-2026-10-13"
+#
+# v2 (production-pipeline Phase 7, plans 07-04 and 07-19): production reads the
+# per-city PRODUCTION_CONDUCTORS table through city_point.production_city_point;
+# values are unchanged from v1 (Drake 795 ACSR, 75 C, 900 m, carried-over
+# bearings, D-09); the fingerprint snapshot schema is 2
+# (rating_identity.RATING_CONFIG_SNAPSHOT_SCHEMA). The word "provisional" stays
+# until a signed GO in 07-17 lifts the label (REVAL-01), and RATING_BASIS is
+# unchanged here.
+#
+# v3 (production-pipeline Phase 7, plan 07-11, owner's Power Systems gate, signed
+# v4 O4): AUSTIN only moves to 795 kcmil ACSR Drake at a 100 C maximum operating
+# temperature (Austin Energy teammate, relayed by the owner 2026-10-27; Austin
+# Energy 2005 ERCOT ROS/SPWG statement). Every other value of every city is
+# unchanged, and CORPUS_CHRISTI, MIDLAND and EL_PASO stay on the model-default
+# Drake 75 C (no answer). The label no longer starts with "v2-provisional", but
+# the provisional rating_basis caveat is unchanged until a signed GO in 07-17.
+RATING_CONFIG_VERSION: str = "v3-powersystems-2026-11-02"
 
 # OD-8: the forecast and the detector read the last 30 days per city from
 # Postgres (supabase_store.read_history).

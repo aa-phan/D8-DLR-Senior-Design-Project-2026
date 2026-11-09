@@ -1,0 +1,77 @@
+{
+  "date_utc": "2026-11-09",
+  "note": "Run live by the orchestrator at the owner's request after the expose apply and before the publishing push; URL and key were never printed; only counts, exit codes and short first lines are kept.",
+  "examples": [
+    {
+      "name": "curl.sh",
+      "runtime": "bash (macOS), curl",
+      "exit_code": 0,
+      "rating_cities": 4,
+      "history_line": "total rows: 167",
+      "day_ahead_label_seen": true,
+      "day_ahead_upcoming_rows": 12,
+      "day_ahead_status_rows": 4,
+      "day_ahead_late_cities": [],
+      "first_lines": [
+        "== Current rating per city (view latest_rating) ==",
+        "== AUSTIN from 2026-10-25T00:00:00Z to 2026-11-01T00:00:00Z (table city_rating, 1000 rows per page) ==",
+        "total rows: 167",
+        "== Day-ahead forecast: upcoming targets (view day_ahead_upcoming) ==",
+        "== Day-ahead status per city (view day_ahead_status) =="
+      ]
+    },
+    {
+      "name": "read_ratings.py",
+      "runtime": "/usr/bin/python3 3.9.6 (-I)",
+      "exit_code": 0,
+      "rating_cities": 4,
+      "history_line": "AUSTIN rows from 2026-11-02T05:00:00Z to 2026-11-09T06:00:00Z: 168",
+      "day_ahead_label_seen": true,
+      "day_ahead_upcoming_rows": 12,
+      "day_ahead_status_rows": 4,
+      "day_ahead_late_cities": [],
+      "first_lines": [
+        "Current rating per city (view latest_rating)",
+        "AUSTIN           1533.6 A    870.6 MW  ok       age   46 min  stale=False  provisional=False  gates=-",
+        "AUSTIN rows from 2026-11-02T05:00:00Z to 2026-11-09T06:00:00Z: 168",
+        "label: day-ahead-24h; engineering-selection; not-validated",
+        "this is not the live rating: it never sets or checks it, and it is not validated"
+      ]
+    },
+    {
+      "name": "read_ratings.py",
+      "runtime": "repository .venv Python 3.12.13 (-I, --city AUSTIN)",
+      "exit_code": 0,
+      "rating_cities": 4,
+      "history_line": "AUSTIN rows from 2026-11-02T05:00:00Z to 2026-11-09T06:00:00Z: 168",
+      "day_ahead_label_seen": true,
+      "day_ahead_upcoming_rows": 12,
+      "day_ahead_status_rows": 4,
+      "day_ahead_late_cities": [],
+      "first_lines": [
+        "Current rating per city (view latest_rating)",
+        "AUSTIN           1533.6 A    870.6 MW  ok       age   46 min  stale=False  provisional=False  gates=-",
+        "AUSTIN rows from 2026-11-02T05:00:00Z to 2026-11-09T06:00:00Z: 168",
+        "label: day-ahead-24h; engineering-selection; not-validated",
+        "this is not the live rating: it never sets or checks it, and it is not validated"
+      ]
+    },
+    {
+      "name": "supabase_js.mjs",
+      "runtime": "Node v26.9.0, @supabase/supabase-js 2.117.3 (~/dlr-js-check)",
+      "exit_code": 0,
+      "rating_cities": 4,
+      "history_line": "AUSTIN rows from 2026-10-25T00:00:00Z to 2026-11-01T00:00:00Z: 167",
+      "day_ahead_label_seen": true,
+      "day_ahead_upcoming_rows": 12,
+      "day_ahead_status_rows": 4,
+      "day_ahead_late_cities": [],
+      "first_lines": [
+        "rating table (4 rows, city/valid_time/rating_amps/rating_mw/status/fallback_gates)",
+        "AUSTIN rows from 2026-10-25T00:00:00Z to 2026-11-01T00:00:00Z: 167",
+        "Day-ahead forecast: upcoming targets (view day_ahead_upcoming)",
+        "day-ahead status table (4 rows, is_late false)"
+      ]
+    }
+  ]
+}

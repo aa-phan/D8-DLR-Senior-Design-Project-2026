@@ -28,8 +28,11 @@ See: .planning/PROJECT.md (updated 2026-09-10) and this workstream's
 **Core value:** The end-to-end pipeline produces valid ampacity forecasts and runs without manual
 intervention, while never letting an unreliable input silently overstate what a line can safely
 carry.
-**Current focus:** All five phases are built. The open item is the 2026-11-24 shadow evaluation
-(owned by this workstream; see `docs/data-science/decisions/confirmation_protocol_v3_per_city.md`).
+**Current focus:** All five phases are built. The 2026-11-24 shadow evaluation is retired (signed
+2026-11-02, `docs/data-science/decisions/confirmation_protocol_v4_early_selection_SIGNING_COPY.md`):
+the open item is the v4 read 1 (instant 2026-11-01T00:00:00Z, run in production-pipeline Phase 7) and,
+only if it names no winner, the conditional read 2 (instant 2026-11-08T00:00:00Z). The v3 amendment
+`docs/data-science/decisions/confirmation_protocol_v3_per_city.md` still defines the frozen artifacts and the carried-over decisions.
 Phase 3 (the forecast correction experiment, promoted from backlog Phase 999.1) determined what
 should replace Phase 1's "ml" forecasting method: `ml_cooling_corrected` (a 24-hour-lead
 physics-plus-ML-corrected approach) beat persistence with a statistically distinguishable margin
@@ -43,8 +46,10 @@ Phase: 05 (Shadow Collector: Five-Method Side-by-Side Challenger Recording) — 
 Plan: 5 of 5
 Status: completed
 Last activity: 2026-10-13 — Phase 05 complete (five-candidate shadow collection verified 11/11).
-All 5 phases and 26 plans are complete; the milestone stays open pending the 2026-11-24 shadow
-evaluation.
+All 5 phases and 26 plans are complete. The v4 shadow evaluation is closed: read 1 (2026-11-01 instant)
+and read 2 (2026-11-08 instant, run 2026-11-08) both named no winner, so the signed O3 outcome applies
+(final record 2026-11-08, `docs/data-science/decisions/v4_selection/decision_record.md`); the 2026-11-24
+evaluation stays retired.
 
 Progress: [██████████] 100%
 
@@ -101,6 +106,14 @@ Progress: [██████████] 100%
 - [Phase 05]: Approved as written - nested per-candidate JSONL schema (schema_version 2) with
   six-field legacy mirror for ml_wind_corrected, and no-migration strategy for already-committed
   flat-shape rows on shadow-collection-data (05-01).
+- 2026-11-02: Signed by aaphan: confirmation protocol v4 retires the 2026-11-24 evaluation; read 1 at
+  2026-11-01T00:00:00Z (cutoff 2026-10-25T00:00:00Z), conditional read 2 at 2026-11-08T00:00:00Z;
+  relative bar 2% of mean truth; no pick if nothing qualifies (production-pipeline Phase 7,
+  `docs/data-science/decisions/confirmation_protocol_v4_early_selection_SIGNING_COPY.md`). Owner item
+  O4 set to a custom choice: AUSTIN switches to Drake ACSR at 100 C (cooling and reference refit for
+  AUSTIN, TEST veto re-scored under production conductors before read 1 is run; no registered date moves).
+- 2026-11-02: SEL-04 owner decision after read 1 (aaphan; `docs/data-science/decisions/v4_selection/decision_record.md`): the rule's outcome (no pick) is accepted, so no model replaces ml under the signed rule; read 2 (pre-registered, D-08) still runs at or after 2026-11-08T00:00:00Z (plan 07-15) and is reported. Separately, the owner selects `ml_cooling_corrected` for day-ahead as a labelled engineering choice (not a rule pick; best read-1 benefit 11.89 A vs the 27.86 A bar, Holm p 0.36), supported by exploratory non-FRESH results; serving it is a new phase after Phase 7. Interim G6 stays ml (B2-fixed, 60-minute) under D-15.
+- 2026-11-08: SEL-04 final v4 outcome (aaphan; `docs/data-science/decisions/v4_selection/decision_record.md`, Read 2 section; read 2 ran 2026-11-08T01:21Z and also names no winner, best benefit `ml_cooling_corrected` 12.12 A vs the 28.01 A bar, Holm p 0.29; read 2 re-grades read 1's rows and is not independent): the signed O3 outcome applies (no shadow model, no day-ahead pick under the rule; interim G6 method `ml` keeps running; 2026-11-24 stays retired; any later evaluation needs a new signed protocol). The owner keeps `ml_cooling_corrected` as the day-ahead selection for Phase 8 as a continuing labelled engineering departure, not a rule pick and not validated. The v4 shadow-evaluation item is closed.
 - [Phase 05]: collect_once wired to run_once_all_methods for every corridor (05-03); real two-corridor live cycle exits 0 in ~32s, well under the 15-minute workflow budget
 - [Phase 05]: reference_ml_refit_24h's real artifact fit via fit_fitted_arms's exact arm-5 recipe on the pinned train-plus-validation window (18834 rows/corridor); real live truth-proxy predict path replaces 05-02's honest unavailable stub
 
@@ -120,12 +133,12 @@ None yet.
 
 ### Blockers/Concerns
 
-- **Pending amendment (2026-10-25, production-pipeline Phase 7):** confirmation protocol v4 is being
-  drafted for the owner's signature. If signed, it retires the 2026-11-24 evaluation, moves the
-  selection to one FRESH read at 2026-11-01T00:00Z (valid_time cutoff 2026-10-25T00:00Z) with a
-  pre-registered conditional re-test at 2026-11-08T00:00Z, uses a relative ship threshold (2% of
-  the city's mean truth ampacity) and names no pick when no candidate qualifies. Until it is signed,
-  v3 (`confirmation_protocol_v3_per_city.md`) governs. Plan 07-02 records the signed outcome here.
+- **Signed 2026-11-02 by aaphan:** confirmation protocol v4 retires the 2026-11-24 evaluation; read 1 at
+  2026-11-01T00:00:00Z (cutoff 2026-10-25T00:00:00Z), conditional read 2 at 2026-11-08T00:00:00Z;
+  relative bar 2% of mean truth; no pick if nothing qualifies (production-pipeline Phase 7,
+  `docs/data-science/decisions/confirmation_protocol_v4_early_selection_SIGNING_COPY.md`). The owner
+  signed with one change: owner item O4 switches AUSTIN to Drake ACSR at 100 C (other cities stay on
+  Drake 75 C). v3 (`confirmation_protocol_v3_per_city.md`) is superseded for per-city scoring.
 - **Resolved:** the new ML dependency was added in Phase 1 (`scikit-learn==1.9.1` is pinned in
   `requirements.txt`, with its legitimacy audit recorded there).
 - The live `historical_archive.py` archive (`config.HISTORICAL_ARCHIVE_PATH`) was empty when this
@@ -157,7 +170,7 @@ the JSONL logs are unchanged and no reconstructed rows were written to them (own
 762a0cd; verified by run 39666133426 (data commit 208ee80). The first live persistence match is expected
 on the next scheduled run (prior row valid 2026-10-22T00Z). The live-log check has no persistence rows
 before 2026-10-21.
-Stopped at: Phase 05 complete (all 5 plans); awaiting the 2026-11-24 shadow evaluation
+Stopped at: Phase 05 complete (all 5 plans); the v4 shadow evaluation is closed (read 2 ran 2026-11-08, no winner, O3 applies; the 2026-11-24 evaluation stays retired)
 Resume file: None
 
 ### Quick Tasks Completed

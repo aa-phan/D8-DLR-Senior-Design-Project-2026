@@ -23,7 +23,7 @@ def _row(**overrides):
 
 
 def test_project_wind_across_line_keeps_full_speed():
-    bearing = city_point.city_point("AUSTIN").bearing_deg
+    bearing = city_point.production_city_point("AUSTIN").bearing_deg
     obs = {"wind": 5.0, "wind_direction": (bearing + 90) % 360}
     out = city_rating._project_wind(obs, bearing)
     assert math.isclose(out["wind"], 5.0, rel_tol=1e-9)
@@ -31,7 +31,7 @@ def test_project_wind_across_line_keeps_full_speed():
 
 
 def test_project_wind_along_line_uses_the_20_degree_floor():
-    bearing = city_point.city_point("MIDLAND").bearing_deg
+    bearing = city_point.production_city_point("MIDLAND").bearing_deg
     out = city_rating._project_wind({"wind": 5.0, "wind_direction": bearing % 360}, bearing)
     assert math.isclose(out["wind"], 5.0 * math.sin(math.radians(20)), rel_tol=1e-9)
 
@@ -69,7 +69,7 @@ class _SpyDetector:
 
 
 def test_archive_gets_projected_wind_and_detector_gets_raw_wind():
-    point = city_point.city_point("AUSTIN")
+    point = city_point.production_city_point("AUSTIN")
     lat, lon = point.coord
     stations = pd.DataFrame([{"stid": "T1", "name": "t", "lat": lat, "lon": lon,
                               "elev_ft": 0, "county": "", "state": "TX"}])
@@ -99,7 +99,7 @@ def test_archive_gets_projected_wind_and_detector_gets_raw_wind():
 
 
 def test_reading_without_direction_makes_the_city_exhausted():
-    point = city_point.city_point("EL_PASO")
+    point = city_point.production_city_point("EL_PASO")
     lat, lon = point.coord
     stations = pd.DataFrame([{"stid": "T1", "name": "t", "lat": lat, "lon": lon,
                               "elev_ft": 0, "county": "", "state": "TX"}])

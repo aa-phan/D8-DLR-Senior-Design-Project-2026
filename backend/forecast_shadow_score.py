@@ -19,12 +19,25 @@ nothing here fetches them)::
     # any time (status-only counts, no truth, no ampacity-derived number):
     PYTHONPATH=backend .venv/bin/python backend/forecast_shadow_score.py \\
         --count-only --predictions-dir $D --out $D/counts.json
-    # one-shot evaluation, at or after 2026-11-24T00:00:00Z only:
-    PYTHONPATH=backend .venv/bin/python backend/forecast_shadow_score.py \\
+    # one-shot live-system check for read 1, at or after 2026-11-01T00:00:00Z only
+    # (signed protocol v4; the evidence lands under data/shadow/evaluation/v4-read1):
+    PYTHONPATH=backend .venv/bin/python backend/forecast_shadow_score.py --round v4-read1 \\
+        --predictions-dir $D --source-commit $(git rev-parse origin/shadow-collection-data)
+    # the conditional re-test, only if read 1 names no winner, at or after 2026-11-08T00:00:00Z:
+    PYTHONPATH=backend .venv/bin/python backend/forecast_shadow_score.py --round v4-read2 \\
         --predictions-dir $D --source-commit $(git rev-parse origin/shadow-collection-data)
 
-Before the evaluation instant a FRESH-dated scoring run is refused before any
-network call (`forecast_shadow_eval_core.check_guard`). `--count-only` is the
+The report's decision block applies the signed v4 rule (`forecast_shadow_decision_v4`) with the
+"live-system check, never decides" label: it computes each candidate's level against the per-city
+bar (2% of the mean truth ampacity of the scored rows) and the would-be outcome, but its pick is always
+None. Only the reconstructed-frame port (`forecast_shadow_confirm.py`) can decide.
+
+The 2026-11-24 evaluation of protocol v3 is retired by signed v4 and is refused
+for any FRESH run. `--round` selects a signed round by name (v4-read1, v4-read2
+or v4-late-descriptive) and writes into that round's own evidence subroot, so no
+override is ever needed; a FRESH run takes none. Before the round's instant, or
+while v4 is unsigned, a FRESH-dated scoring run is refused before any network
+call (`forecast_shadow_eval_core.check_guard`). `--count-only` is the
 mechanical-health-check carve-out: it never fetches truth and never uses a
 logged ampacity.
 
@@ -42,6 +55,7 @@ reanalysis-derived, never sensor-validated.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import math
 import os
@@ -52,7 +66,7 @@ import numpy as np
 import pandas as pd
 
 import config
-import forecast_shadow_decision as decision
+import forecast_shadow_decision_v4 as decision_v4
 import forecast_shadow_eval_core as core
 import forecast_shadow_score_stats as stats
 
@@ -539,13 +553,23 @@ def _city_error_frame(scored: pd.DataFrame) -> pd.DataFrame:
 
 def score(predictions_dir: str, *, cities, guard_cfg: core.GuardConfig, evidence_root: str,
           protocol_status: str = "unsigned", now=None, source_commit: Optional[str] = None,
-          params: Optional[dict] = None, repo_root: Optional[str] = None) -> dict:
+          params: Optional[dict] = None, repo_root: Optional[str] = None,
+          round_name: Optional[str] = None) -> dict:
     """
     Order: read and select; compute the scope valid times (valid times plus the
     reference's own target hours); `check_guard`; create the evidence
     directory; one archive fetch per city; exact-hour truth join; descriptive
     metrics; diagnostics; report. Corridor files are never opened.
+
+    `round_name` is the signed round the decision block names (default: the guard's round, which
+    defaults to v4-read1); it must agree with the guard. The decision is the v4 rule with the
+    live-system label: it never picks.
     """
+    rnd_name = guard_cfg.round_name if round_name is None else round_name
+    if rnd_name != guard_cfg.round_name:
+        raise ValueError(f"score: round_name {rnd_name!r} disagrees with the guard's round {guard_cfg.round_name!r}; "
+                         f"build the guard with core.guard_for_round({rnd_name!r})")
+    core.round_named(rnd_name)
     params = core.default_params() if params is None else {**core.default_params(), **params}
     now_ts = core.utc_now_or(now)
     cutoff = core.to_utc(guard_cfg.valid_time_cutoff)
@@ -579,6 +603,8 @@ def score(predictions_dir: str, *, cities, guard_cfg: core.GuardConfig, evidence
     prov = core.provenance(root, cities, source_commit)
     report = core.new_report(row_source=ROW_SOURCE, basis=guard_record["basis"], protocol_status=protocol_status,
                              guard=guard_record, config_record=config_record, prov=prov, params=params)
+    report["round"] = rnd_name
+    report["truth_stats"] = {}
 
     error_frames: dict = {}
     logged_reading_frames: dict = {}
@@ -603,6 +629,9 @@ def score(predictions_dir: str, *, cities, guard_cfg: core.GuardConfig, evidence
                                                    "candidate_exclusions": {n: {} for n in core.CANDIDATES}})
         scored_by_city[city] = scored
         error_frames[city] = _city_error_frame(scored)
+        city_truth = _truth_stats(scored)
+        if city_truth is not None:
+            report["truth_stats"][city] = city_truth
 
         metrics = {}
         n_scored = {}
@@ -687,7 +716,8 @@ def score(predictions_dir: str, *, cities, guard_cfg: core.GuardConfig, evidence
         "pooled_nominal": {"label": "nominal, not effective", "n_scored": pooled,
                            "targets": core.pooled_nominal_targets(max(pooled.values(), default=0))},
     }
-    report = _attach_family_and_decision(report, error_frames, params, protocol_status)
+    report = _attach_family_and_decision(report, error_frames, params, protocol_status,
+                                         truth_stats=report["truth_stats"], round_name=rnd_name)
     report["evidence"] = core.collect_evidence(evidence_dir)
     report["evidence_dir"] = evidence_dir
     paths = core.write_report(report, evidence_dir)
@@ -695,17 +725,32 @@ def score(predictions_dir: str, *, cities, guard_cfg: core.GuardConfig, evidence
     return report
 
 
-def _attach_family_and_decision(report: dict, error_frames: dict, params: dict, protocol_status: str) -> dict:
-    """The 9-test pooled Holm family, the sample-size block and the ship rule
-    (live-system check: this report never changes the headline decision)."""
+def _truth_stats(scored: pd.DataFrame) -> Optional[dict]:
+    """Per-city mean and count of `raw_forecast`'s truth over the rows it scored (None when it scored none).
+
+    The raw forecast's truth is the archive truth at the logged valid time, the same hour every candidate
+    except the reference is scored against, so this is the city's mean truth ampacity over its scored rows."""
+    if scored.empty or "raw_forecast__truth" not in scored.columns:
+        return None
+    values = scored["raw_forecast__truth"].dropna().to_numpy(dtype=float)
+    if len(values) == 0:
+        return None
+    return {"mean_truth_amps": float(np.mean(values)), "n_truth_rows": int(len(values))}
+
+
+def _attach_family_and_decision(report: dict, error_frames: dict, params: dict, protocol_status: str, *,
+                                truth_stats: dict, round_name: str) -> dict:
+    """The 9-test pooled Holm family, the sample-size block and the v4 rule with the live-system label
+    (this report never decides and never changes the headline decision)."""
     family = stats.build_family_report(error_frames, row_source=ROW_SOURCE, params=params)
     report["family"] = family
     report["sample_size"]["pairs"] = family["sample_size"]["pairs"]
     report["sample_size"]["targets_met"] = family["sample_size"]["targets_met"]
     report["sample_size"]["nominal_vs_effective"] = (
         "n is nominal; effective sample sizes (ACF per city, bootstrap pooled) are in `pairs` and are smaller")
-    report["decision"] = decision.apply_ship_rule(
-        family, protocol_status=protocol_status, margin=params["decision_margin_amps"],
+    report["decision"] = decision_v4.apply_ship_rule_v4(
+        family, truth_stats=truth_stats, round_name=round_name, label="live", vetoes=None, require_vetoes=False,
+        protocol_status=protocol_status, fraction=params["relative_margin_fraction"],
         min_cities=params["consistency_min_cities"])
     return report
 
@@ -721,17 +766,23 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--count-only", action="store_true",
                    help="status-only counts; no truth fetched, no ampacity read; allowed at any time")
     p.add_argument("--out", default=None, help="write the count-only JSON (or a copy of report.json) here")
+    p.add_argument("--round", choices=sorted(core.PROTOCOL_ROUNDS), default=core.DEFAULT_ROUND.name,
+                   help="signed protocol v4 round to score under; its evidence goes to "
+                        "<evidence-root>/<round> (default %(default)s)")
     p.add_argument("--evidence-root", default=core.EVIDENCE_ROOT_DEFAULT)
     p.add_argument("--source-commit", default=None, help="commit of the exported logs (git rev-parse origin/shadow-collection-data)")
     p.add_argument("--evaluation-instant", default=None)
     p.add_argument("--valid-time-cutoff", default=None)
-    p.add_argument("--override-reason", default=None)
+    p.add_argument("--override-reason", default=None,
+                   help="development runs only; a FRESH run takes no override (signed v4 rounds)")
     p.add_argument("--protocol-status", choices=("signed", "unsigned"), default="unsigned")
-    # Pre-registered statistical parameters. Any non-default value in a FRESH run needs --override-reason.
+    # Pre-registered statistical parameters. Any non-default value in a FRESH run is refused (no override).
     # There is deliberately no --row-gate and no --family-size (decisions 2 and 3).
     p.add_argument("--block-lengths", type=int, nargs="+", default=None, help="six-hourly slot block lengths (default 1 4 8 28)")
     p.add_argument("--n-resamples", type=int, default=None)
-    p.add_argument("--decision-margin-amps", type=float, default=None)
+    p.add_argument("--decision-margin-amps", type=float, default=None,
+                   help="retired v3 parameter: the v4 rule does not use it (it uses 2%% of mean truth); a non-default "
+                        "value is still refused in a FRESH run (PD-15)")
     p.add_argument("--consistency-min-cities", type=int, default=None)
     p.add_argument("--min-paired-rows", type=int, default=None)
     p.add_argument("--power", type=float, default=None)
@@ -740,12 +791,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _guard_from_args(args) -> core.GuardConfig:
+    """The selected round's guard, with an explicit instant / cutoff applied on top.
+
+    An explicit date that differs from the round's is a non-default value for the guard:
+    a development run then needs an override reason and a FRESH run is refused.
+    """
     kwargs = {}
     if args.evaluation_instant:
         kwargs["evaluation_instant"] = core.to_utc(args.evaluation_instant)
     if args.valid_time_cutoff:
         kwargs["valid_time_cutoff"] = core.to_utc(args.valid_time_cutoff)
-    return core.GuardConfig(override_reason=args.override_reason, **kwargs)
+    base = core.guard_for_round(getattr(args, "round", core.DEFAULT_ROUND.name))
+    return dataclasses.replace(base, override_reason=args.override_reason, **kwargs)
 
 
 def _params_from_args(args) -> Optional[dict]:
@@ -778,9 +835,11 @@ def main(argv=None) -> int:
                       f"missing_forecast_model {c['missing_forecast_model']}, "
                       f"other_forecast_model {c['other_forecast_model']}", file=sys.stderr)
             return 0
+        evidence_root = core.round_evidence_root(args.evidence_root, core.round_named(args.round))
         report = score(args.predictions_dir, cities=args.cities, guard_cfg=guard_cfg,
-                       evidence_root=args.evidence_root, protocol_status=args.protocol_status,
-                       source_commit=args.source_commit, params=_params_from_args(args))
+                       evidence_root=evidence_root, protocol_status=args.protocol_status,
+                       source_commit=args.source_commit, params=_params_from_args(args),
+                       round_name=args.round)
         if args.out:
             with open(args.out, "w", encoding="utf-8") as fh:
                 fh.write(core.dumps(report, indent=2))

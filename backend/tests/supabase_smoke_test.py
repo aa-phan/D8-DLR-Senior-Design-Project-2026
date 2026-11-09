@@ -238,7 +238,9 @@ def test_smoke_passes_on_a_fresh_migration_and_leaves_no_rows(tmp_path, monkeypa
                 "rating_upsert_idempotent", "run_row_idempotent", "delete_denied",
                 "session_timezone_utc", "utc_hour_check_zone_independent"]
     assert all(report["checks"][name] is True for name in expected)
-    assert report["info"]["role"] == "dlr_writer" and report["info"]["anon_can_select"] is False
+    # Every migration is applied here, including Phase 6's expose migration, which grants anon SELECT
+    # on city_rating (OD-6); consumers_cannot_write above still proves it granted no write privilege.
+    assert report["info"]["role"] == "dlr_writer" and report["info"]["anon_can_select"] is True
     assert report["checked_at"].endswith("Z")
     # Nothing a smoke run wrote survives it.
     assert _count_rows(_pg_admin_url) == {"ratings": 0, "runs": 0}

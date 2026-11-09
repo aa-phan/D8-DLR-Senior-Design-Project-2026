@@ -6,11 +6,17 @@ provenance and the report writer.
 
 Network-free: `requests.get` raises unless a test installs a fake. Every file
 is written under `tmp_path`; nothing touches `data/`.
+
+Plan 07-06 (protocol v4, signed 2026-11-02): the module defaults are the signed
+round `v4-read1`, the guard is armed for every round (no override path for a
+FRESH run) and the round constants are compared with the signing copy's
+machine-checked registry.
 """
 
 from __future__ import annotations
 
 import ast
+import dataclasses
 import hashlib
 import json
 import os
@@ -24,10 +30,12 @@ import requests
 import city_point
 import config
 import forecast_experiment_audit
+import forecast_shadow_decision_v4
 import forecast_shadow_eval_core as core
 import forecast_shadow_pipeline
 import open_meteo_forecast_provider
 import open_meteo_provider
+import protocol_v4_registry as reg
 import thermal_model
 
 FRESH_TIME = pd.Timestamp("2026-10-20T06:00:00Z")
@@ -83,13 +91,15 @@ def _no_network(monkeypatch):
 # --------------------------------------------------------------------------
 
 def test_constants_are_pinned():
-    assert core.EVALUATION_INSTANT_DEFAULT == pd.Timestamp("2026-11-24T00:00:00Z")
-    assert core.VALID_TIME_CUTOFF_DEFAULT == pd.Timestamp("2026-11-17T00:00:00Z")
+    # v4-read1 is the default round (signed 2026-11-02); the retired v3 instant is kept only to be refused.
+    assert core.EVALUATION_INSTANT_DEFAULT == pd.Timestamp("2026-11-01T00:00:00Z")
+    assert core.VALID_TIME_CUTOFF_DEFAULT == pd.Timestamp("2026-10-25T00:00:00Z")
+    assert core.V3_RETIRED_INSTANT == pd.Timestamp("2026-11-24T00:00:00Z")
     assert core.MODEL_FREEZE == pd.Timestamp("2026-11-01T00:00:00Z")
     assert core.FRESH_BASIS_START == pd.Timestamp(forecast_experiment_audit.FROZEN_WINDOW_END, tz="UTC") + pd.Timedelta(days=1)
     assert core.FROZEN_WINDOW_END_DATE == forecast_experiment_audit.FROZEN_WINDOW_END
     assert core.RECON_FETCH_START == "2026-09-28"
-    assert core.RECON_FETCH_END == "2026-11-16"
+    assert core.RECON_FETCH_END == "2026-10-24"
     assert pd.Timestamp(core.RECON_FETCH_END, tz="UTC") == core.VALID_TIME_CUTOFF_DEFAULT - pd.Timedelta(days=1)
     assert (core.LEAD_HOURS, core.SLOT_HOURS, core.DECISION_GAP_HOURS) == (24, 6, (11, 17))
     assert core.SCORED_FORECAST_MODEL == open_meteo_forecast_provider.PREVIOUS_RUNS_MODEL_ID == "gfs_seamless"
@@ -104,10 +114,11 @@ def test_constants_are_pinned():
     assert core.SEED == config.FORECAST_EXPERIMENT_CORRECTION_RANDOM_STATE == 20260929
     assert (core.MIN_PAIRED_ROWS, core.POWER, core.FAMILY_ALPHA) == (8, 0.8, 0.05)
     assert (core.DECISION_MARGIN_AMPS, core.CONSISTENCY_MIN_CITIES) == (5.0, 3)
+    assert core.RELATIVE_MARGIN_FRACTION == 0.02 == forecast_shadow_decision_v4.RELATIVE_MARGIN_FRACTION
     assert "never sensor-validated" in core.TRUTH_LABEL
     assert "No 8% ceiling was applied" in core.NOT_MEASURED_STATEMENT
-    assert len(core.PLANNER_DEFAULTS) == 17
-    assert all(f"PD-{i:02d}" in core.PLANNER_DEFAULTS for i in range(1, 18))
+    assert len(core.PLANNER_DEFAULTS) == 18
+    assert all(f"PD-{i:02d}" in core.PLANNER_DEFAULTS for i in range(1, 19))
     assert set(core.VALIDITY_FLAGS) == {f"V{i}" for i in range(1, 7)}
     assert core.VALIDITY_FLAGS["V4"]["applies_to"] == ["shadow_logs", "reconstructed_frames"]
     for fid in ("V1", "V2", "V3", "V5", "V6"):
@@ -169,15 +180,25 @@ def test_guard_passes_at_the_instant_and_records_basis(tmp_path):
     assert rec["prior_fresh_runs"] == []
 
 
-def test_guard_override_passes_and_is_recorded(tmp_path):
-    rec = core.check_guard(_guard(override_reason="rehearsal for the owner"), valid_times=[FRESH_TIME],
+def test_guard_override_text_no_longer_lets_a_fresh_run_through(tmp_path):
+    # v4 (SEL-01, SEL-04): the old override path skipped both refusals; a FRESH run now takes no override.
+    for now in (pd.Timestamp("2026-10-21T00:00:00Z"), INSTANT, INSTANT + pd.Timedelta(days=30)):
+        with pytest.raises(core.EvaluationGuardError, match="take no override"):
+            core.check_guard(_guard(override_reason="rehearsal for the owner"), valid_times=[FRESH_TIME],
+                             row_source="shadow_logs", now=now, evidence_root=str(tmp_path / "e"))
+    assert not (tmp_path / "e").exists()
+
+
+def test_guard_override_text_is_still_recorded_for_a_development_run(tmp_path):
+    rec = core.check_guard(_guard(override_reason="rehearsal for the owner"), valid_times=[DEV_TIME],
                            row_source="shadow_logs", now=pd.Timestamp("2026-10-21T00:00:00Z"),
                            evidence_root=str(tmp_path / "e"))
-    assert rec["override_reason"] == "rehearsal for the owner"
+    assert rec["basis"] == "development" and rec["override_reason"] == "rehearsal for the owner"
 
 
 def test_guard_blank_override_reason_is_not_an_override(tmp_path):
-    with pytest.raises(core.EvaluationGuardError):
+    # blank text is not an override: it neither passes a FRESH run early nor trips the no-override refusal
+    with pytest.raises(core.EvaluationGuardError, match="evaluation instant"):
         core.check_guard(_guard(override_reason="   "), valid_times=[FRESH_TIME], row_source="shadow_logs",
                          now=pd.Timestamp("2026-10-21T00:00:00Z"), evidence_root=str(tmp_path / "e"))
 
@@ -199,10 +220,10 @@ def test_guard_fresh_basis_starts_exactly_at_2026_09_30(tmp_path):
 
 
 @pytest.mark.parametrize("kwargs", [
-    {"evaluation_instant": pd.Timestamp("2026-11-25T00:00:00Z")},
-    {"valid_time_cutoff": pd.Timestamp("2026-11-16T00:00:00Z")},
+    {"evaluation_instant": pd.Timestamp("2026-11-02T00:00:00Z")},
+    {"valid_time_cutoff": pd.Timestamp("2026-10-24T00:00:00Z")},
 ])
-def test_guard_nondefault_dates_need_an_override(tmp_path, kwargs):
+def test_guard_nondefault_dates_need_an_override_and_never_pass_a_fresh_run(tmp_path, kwargs):
     with pytest.raises(ValueError):
         core.check_guard(_guard(**kwargs), valid_times=[DEV_TIME], row_source="shadow_logs", now=INSTANT,
                          evidence_root=str(tmp_path / "e"))
@@ -210,6 +231,14 @@ def test_guard_nondefault_dates_need_an_override(tmp_path, kwargs):
                            row_source="shadow_logs", now=INSTANT, evidence_root=str(tmp_path / "e"))
     assert rec["defaults_used"] is False
     assert set(rec["nondefault_params"]) & {"evaluation_instant", "valid_time_cutoff"}
+    # the same dates in a FRESH run: refused without an override (ValueError) and with one (guard error)
+    with pytest.raises(ValueError):
+        core.check_guard(_guard(**kwargs), valid_times=[FRESH_TIME], row_source="shadow_logs",
+                         now=pd.Timestamp("2027-01-01T00:00:00Z"), evidence_root=str(tmp_path / "e"))
+    with pytest.raises(core.EvaluationGuardError):
+        core.check_guard(_guard(override_reason="why", **kwargs), valid_times=[FRESH_TIME],
+                         row_source="shadow_logs", now=pd.Timestamp("2027-01-01T00:00:00Z"),
+                         evidence_root=str(tmp_path / "e"))
 
 
 def test_guard_cutoff_at_or_after_instant_is_refused_even_with_override(tmp_path):
@@ -218,16 +247,17 @@ def test_guard_cutoff_at_or_after_instant_is_refused_even_with_override(tmp_path
                          row_source="shadow_logs", now=INSTANT, evidence_root=str(tmp_path / "e"))
 
 
-def test_guard_nondefault_parameters_need_an_override_in_fresh_runs_only(tmp_path):
+def test_guard_nondefault_parameters_are_refused_in_fresh_runs_and_free_in_development(tmp_path):
     nd = core.nondefault_params({**core.default_params(), "n_resamples": 2000, "block_lengths": (1, 4)})
     assert nd == {"n_resamples": 2000, "block_lengths": [1, 4]}
     with pytest.raises(ValueError):
         core.check_guard(_guard(), valid_times=[FRESH_TIME], row_source="shadow_logs", now=INSTANT,
                          evidence_root=str(tmp_path / "e"), nondefault_params=nd)
-    rec = core.check_guard(_guard(override_reason="owner changed it"), valid_times=[FRESH_TIME],
-                           row_source="shadow_logs", now=INSTANT, evidence_root=str(tmp_path / "e"),
-                           nondefault_params=nd)
-    assert rec["nondefault_params"] == nd and rec["defaults_used"] is False
+    # no override text can help (PD-15, signed v4 rounds take no override)
+    with pytest.raises(core.EvaluationGuardError):
+        core.check_guard(_guard(override_reason="owner changed it"), valid_times=[FRESH_TIME],
+                         row_source="shadow_logs", now=INSTANT, evidence_root=str(tmp_path / "e"),
+                         nondefault_params=nd)
     # development runs may use any parameter without an override
     rec = core.check_guard(_guard(), valid_times=[DEV_TIME], row_source="shadow_logs", now=INSTANT,
                            evidence_root=str(tmp_path / "e"), nondefault_params=nd)
@@ -244,7 +274,7 @@ def test_one_shot_marker_blocks_a_second_fresh_run_even_without_a_report(tmp_pat
     root = str(tmp_path / "evidence")
     rec = core.check_guard(_guard(), valid_times=[FRESH_TIME], row_source="shadow_logs", now=INSTANT, evidence_root=root)
     path = core.new_evidence_dir(root, "shadow_logs", INSTANT, rec, {"x": 1})
-    assert os.path.basename(path) == "shadow_logs_20261124T000000Z"
+    assert os.path.basename(path) == "shadow_logs_20261101T000000Z"
     first = os.listdir(path)
     assert first == ["run_started.json"]          # no report.json: the first run "crashed"
     marker = json.loads(open(os.path.join(path, "run_started.json")).read())
@@ -253,9 +283,10 @@ def test_one_shot_marker_blocks_a_second_fresh_run_even_without_a_report(tmp_pat
     with pytest.raises(core.EvaluationGuardError):
         core.check_guard(_guard(), valid_times=[FRESH_TIME], row_source="shadow_logs",
                          now=INSTANT + pd.Timedelta(hours=1), evidence_root=root)
-    rec2 = core.check_guard(_guard(override_reason="rerun after crash"), valid_times=[FRESH_TIME],
-                            row_source="shadow_logs", now=INSTANT + pd.Timedelta(hours=1), evidence_root=root)
-    assert rec2["prior_fresh_runs"] == ["shadow_logs_20261124T000000Z"]
+    # the old "override after a crash" path is gone: a second FRESH run is refused whatever text is given
+    with pytest.raises(core.EvaluationGuardError, match="take no override"):
+        core.check_guard(_guard(override_reason="rerun after crash"), valid_times=[FRESH_TIME],
+                         row_source="shadow_logs", now=INSTANT + pd.Timedelta(hours=1), evidence_root=root)
 
 
 def test_prior_run_of_the_other_row_source_does_not_block(tmp_path):
@@ -275,7 +306,7 @@ def test_development_marker_does_not_block_a_fresh_run(tmp_path):
 
 
 def test_unreadable_marker_is_treated_as_a_prior_run(tmp_path):
-    root = tmp_path / "evidence" / "shadow_logs_20261124T000000Z"
+    root = tmp_path / "evidence" / "shadow_logs_20261101T000000Z"
     root.mkdir(parents=True)
     (root / "run_started.json").write_text("{not json")
     with pytest.raises(core.EvaluationGuardError):
@@ -296,6 +327,317 @@ def test_unknown_row_source_is_refused(tmp_path):
 
 
 # --------------------------------------------------------------------------
+# Signed protocol rounds (07-06, confirmation protocol v4)
+# --------------------------------------------------------------------------
+
+READ1_INSTANT = pd.Timestamp("2026-11-01T00:00:00Z")
+READ2_INSTANT = pd.Timestamp("2026-11-08T00:00:00Z")
+READ1_FRESH_TIME = pd.Timestamp("2026-10-24T18:00:00Z")      # the last scored slot of read 1
+READ2_FRESH_TIME = pd.Timestamp("2026-10-31T18:00:00Z")      # the last scored slot of read 2
+
+
+def test_rounds_match_the_signed_registry():
+    registry = reg.parse_registry(reg.SIGNING_COPY_PATH)
+    for key, rnd in (("read1", core.V4_READ1), ("read2", core.V4_READ2)):
+        assert rnd.name == registry[f"{key}.name"]
+        assert rnd.instant == reg.as_timestamp(registry[f"{key}.instant"])
+        assert rnd.cutoff == reg.as_timestamp(registry[f"{key}.cutoff"])
+        assert rnd.fetch_start == registry[f"{key}.fetch_start"]
+        assert rnd.fetch_end == registry[f"{key}.fetch_end"]
+        assert rnd.slots_per_city == int(registry[f"{key}.slots_per_city"])
+        assert rnd.family_alpha == float(registry[f"{key}.family_alpha"])
+        assert rnd.descriptive_only is False
+        assert rnd.evidence_subdir == rnd.name
+    late = core.V4_LATE_DESCRIPTIVE
+    assert late.name == registry["late.name"]
+    # the late-answer descriptive re-score reuses read 1's dates and only describes
+    assert (late.instant, late.cutoff, late.fetch_start, late.fetch_end) == (
+        core.V4_READ1.instant, core.V4_READ1.cutoff, core.V4_READ1.fetch_start, core.V4_READ1.fetch_end)
+    assert late.descriptive_only is True and late.evidence_subdir == "v4-late-descriptive"
+    assert core.V3_RETIRED_INSTANT == reg.as_timestamp(registry["v3_retired_instant"])
+    assert core.FRESH_BASIS_START == reg.as_timestamp(registry["fresh_basis_start"])
+    assert core.MODEL_FREEZE == reg.as_timestamp(registry["model_freeze"])
+    assert core.RELATIVE_MARGIN_FRACTION == float(registry["rule.relative_margin_fraction"])
+    assert core.PRE_REGISTERED_PARAM_DEFAULTS["relative_margin_fraction"] == core.RELATIVE_MARGIN_FRACTION
+    assert core.CONSISTENCY_MIN_CITIES == int(registry["rule.consistency_min_cities"])
+    assert core.FAMILY_SIZE == int(registry["rule.family_size"])
+    assert list(core.BLOCK_LENGTHS_SLOTS) == [int(v) for v in reg.as_list(registry["rule.block_lengths"])]
+    assert core.N_RESAMPLES == int(registry["rule.n_resamples"])
+
+
+def test_slot_counts_follow_from_the_signed_windows():
+    for rnd in (core.V4_READ1, core.V4_READ2):
+        slots = pd.date_range(core.FRESH_BASIS_START, rnd.cutoff, freq=f"{core.SLOT_HOURS}h", inclusive="left")
+        assert len(slots) == rnd.slots_per_city
+        assert pd.Timestamp(rnd.fetch_end, tz="UTC") == rnd.cutoff - pd.Timedelta(days=1)
+    assert (core.V4_READ1.slots_per_city, core.V4_READ2.slots_per_city) == (100, 128)
+
+
+def test_the_registry_names_exactly_the_three_signed_rounds_and_read1_is_the_default():
+    assert sorted(core.PROTOCOL_ROUNDS) == ["v4-late-descriptive", "v4-read1", "v4-read2"]
+    assert all(core.PROTOCOL_ROUNDS[name].name == name for name in core.PROTOCOL_ROUNDS)
+    assert core.DEFAULT_ROUND is core.V4_READ1
+    assert core.EVALUATION_INSTANT_DEFAULT == core.DEFAULT_ROUND.instant
+    assert core.VALID_TIME_CUTOFF_DEFAULT == core.DEFAULT_ROUND.cutoff
+    assert (core.RECON_FETCH_START, core.RECON_FETCH_END) == (core.DEFAULT_ROUND.fetch_start, core.DEFAULT_ROUND.fetch_end)
+    assert core.GuardConfig().round_name == "v4-read1"
+    assert core.round_named("v4-read2") is core.V4_READ2
+
+
+def test_a_protocol_round_cannot_be_edited():
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        core.V4_READ1.instant = pd.Timestamp("2026-11-24T00:00:00Z")
+
+
+def test_round_named_lists_the_three_names_for_anything_else():
+    for bad in ("v3", "v4-read3", ""):
+        with pytest.raises(KeyError) as err:
+            core.round_named(bad)
+        for name in ("v4-late-descriptive", "v4-read1", "v4-read2"):
+            assert name in str(err.value)
+    with pytest.raises(KeyError):
+        core.guard_for_round("v3")
+
+
+def test_round_evidence_root_is_one_subroot_per_round(tmp_path):
+    base = str(tmp_path / "evaluation")
+    roots = {name: core.round_evidence_root(base, core.round_named(name)) for name in core.PROTOCOL_ROUNDS}
+    assert roots == {name: os.path.join(base, name) for name in core.PROTOCOL_ROUNDS}
+    assert len(set(roots.values())) == 3
+    assert core.EVIDENCE_ROOT_DEFAULT == os.path.join("data", "shadow", "evaluation")
+
+
+def test_guard_for_round_carries_the_round_dates():
+    g1, g2 = core.guard_for_round("v4-read1"), core.guard_for_round("v4-read2")
+    assert (g1.round_name, g1.evaluation_instant, g1.valid_time_cutoff, g1.override_reason) == (
+        "v4-read1", READ1_INSTANT, pd.Timestamp("2026-10-25T00:00:00Z"), None)
+    assert (g2.round_name, g2.evaluation_instant, g2.valid_time_cutoff, g2.override_reason) == (
+        "v4-read2", READ2_INSTANT, pd.Timestamp("2026-11-01T00:00:00Z"), None)
+    assert core.guard_for_round("v4-late-descriptive").evaluation_instant == READ1_INSTANT
+
+
+@pytest.mark.parametrize("name, instant, fresh_time", [
+    ("v4-read1", READ1_INSTANT, READ1_FRESH_TIME),
+    ("v4-read2", READ2_INSTANT, READ2_FRESH_TIME),
+])
+def test_a_round_is_refused_one_second_before_its_instant_and_runs_at_it_with_no_override(tmp_path, name, instant, fresh_time):
+    root = tmp_path / "evidence"
+    guard = core.guard_for_round(name)
+    with pytest.raises(core.EvaluationGuardError, match="evaluation instant"):
+        core.check_guard(guard, valid_times=[fresh_time], row_source="reconstructed_frames",
+                         now=instant - pd.Timedelta(seconds=1), evidence_root=str(root))
+    assert not root.exists()                                  # refused before anything is created
+    rec = core.check_guard(guard, valid_times=[fresh_time], row_source="reconstructed_frames",
+                           now=instant, evidence_root=str(root))
+    assert rec["round"] == name and rec["basis"] == "FRESH"
+    assert rec["defaults_used"] is True and rec["nondefault_params"] == {} and rec["override_reason"] is None
+    assert rec["evaluation_instant"] == instant.isoformat()
+    assert rec["round_descriptive_only"] is False
+
+
+def test_the_read1_boundary_edge(tmp_path):
+    guard = core.guard_for_round("v4-read1")
+    with pytest.raises(core.EvaluationGuardError):
+        core.check_guard(guard, valid_times=[FRESH_TIME], row_source="shadow_logs",
+                         now=pd.Timestamp("2026-10-31T23:59:59Z"), evidence_root=str(tmp_path))
+    rec = core.check_guard(guard, valid_times=[FRESH_TIME], row_source="shadow_logs",
+                           now=pd.Timestamp("2026-11-01T00:00:00Z"), evidence_root=str(tmp_path))
+    assert rec["basis"] == "FRESH"
+    # a cutoff equal to the instant (or later) is a ValueError, with or without text
+    for bad_cutoff in (READ1_INSTANT, READ1_INSTANT + pd.Timedelta(days=1)):
+        with pytest.raises(ValueError, match="strictly before"):
+            core.check_guard(core.GuardConfig(valid_time_cutoff=bad_cutoff), valid_times=[DEV_TIME],
+                             row_source="shadow_logs", now=READ1_INSTANT, evidence_root=str(tmp_path))
+    # the scored window is start <= valid_time < cutoff: 2026-10-25T00:00:00Z is the first unscored slot
+    slots = pd.date_range(core.FRESH_BASIS_START, guard.valid_time_cutoff, freq="6h", inclusive="left")
+    assert slots[0] == core.FRESH_BASIS_START and slots[-1] == READ1_FRESH_TIME
+    assert pd.Timestamp("2026-10-25T00:00:00Z") not in set(slots) and len(slots) == 100
+
+
+def test_the_late_descriptive_round_is_marked_descriptive_in_the_record(tmp_path):
+    rec = core.check_guard(core.guard_for_round("v4-late-descriptive"), valid_times=[FRESH_TIME],
+                           row_source="reconstructed_frames", now=READ1_INSTANT, evidence_root=str(tmp_path))
+    assert rec["round"] == "v4-late-descriptive" and rec["round_descriptive_only"] is True
+    assert rec["defaults_used"] is True
+
+
+def test_a_second_round_is_not_a_non_default_date_but_a_wrong_round_name_is_refused(tmp_path):
+    # the default dates belong to v4-read1: read 2's dates are non-default for a guard that names read 1
+    mixed = core.GuardConfig(evaluation_instant=READ2_INSTANT, valid_time_cutoff=core.V4_READ2.cutoff)
+    with pytest.raises(ValueError, match="non-default"):
+        core.check_guard(mixed, valid_times=[DEV_TIME], row_source="shadow_logs", now=READ2_INSTANT,
+                         evidence_root=str(tmp_path))
+    with pytest.raises(KeyError):
+        core.check_guard(core.GuardConfig(round_name="v3"), valid_times=[DEV_TIME], row_source="shadow_logs",
+                         now=READ1_INSTANT, evidence_root=str(tmp_path))
+
+
+def test_one_shot_applies_per_round_subroot(tmp_path):
+    base = str(tmp_path / "evaluation")
+    r1_root = core.round_evidence_root(base, core.V4_READ1)
+    r2_root = core.round_evidence_root(base, core.V4_READ2)
+    g1, g2 = core.guard_for_round("v4-read1"), core.guard_for_round("v4-read2")
+    rec1 = core.check_guard(g1, valid_times=[FRESH_TIME], row_source="reconstructed_frames",
+                            now=READ1_INSTANT, evidence_root=r1_root)
+    core.new_evidence_dir(r1_root, "reconstructed_frames", READ1_INSTANT, rec1, {})
+    # a second run into the read-1 subroot is refused, whatever the row-source-matching clock says
+    with pytest.raises(core.EvaluationGuardError, match="second FRESH run"):
+        core.check_guard(g1, valid_times=[FRESH_TIME], row_source="reconstructed_frames",
+                         now=READ1_INSTANT + pd.Timedelta(hours=1), evidence_root=r1_root)
+    # the read-1 marker does not refuse read 2, and the other way round
+    rec2 = core.check_guard(g2, valid_times=[FRESH_TIME], row_source="reconstructed_frames",
+                            now=READ2_INSTANT, evidence_root=r2_root)
+    assert rec2["prior_fresh_runs"] == []
+    core.new_evidence_dir(r2_root, "reconstructed_frames", READ2_INSTANT, rec2, {})
+    shadow_marker_root = core.round_evidence_root(base, core.V4_LATE_DESCRIPTIVE)
+    assert core.check_guard(core.guard_for_round("v4-late-descriptive"), valid_times=[FRESH_TIME],
+                            row_source="reconstructed_frames", now=READ1_INSTANT,
+                            evidence_root=shadow_marker_root)["prior_fresh_runs"] == []
+    with pytest.raises(core.EvaluationGuardError):
+        core.check_guard(g2, valid_times=[FRESH_TIME], row_source="reconstructed_frames",
+                         now=READ2_INSTANT + pd.Timedelta(days=1), evidence_root=r2_root)
+    # the one-shot rule is per row source as well
+    assert core.check_guard(g1, valid_times=[FRESH_TIME], row_source="shadow_logs",
+                            now=READ1_INSTANT, evidence_root=r1_root)["prior_fresh_runs"] == []
+
+
+@pytest.mark.parametrize("name, fresh_time", [("v4-read1", READ1_FRESH_TIME), ("v4-read2", READ2_FRESH_TIME)])
+@pytest.mark.parametrize("text", ["owner approved it", "x", "2026-11-24 rehearsal"])
+def test_a_fresh_run_is_refused_whatever_override_text_is_given(tmp_path, name, fresh_time, text):
+    base = core.guard_for_round(name)
+    guard = core.GuardConfig(base.evaluation_instant, base.valid_time_cutoff, text, name)
+    for now in (base.evaluation_instant - pd.Timedelta(days=3), base.evaluation_instant,
+                base.evaluation_instant + pd.Timedelta(days=60)):
+        with pytest.raises(core.EvaluationGuardError, match="take no override"):
+            core.check_guard(guard, valid_times=[fresh_time], row_source="reconstructed_frames", now=now,
+                             evidence_root=str(tmp_path / "e"))
+    assert not (tmp_path / "e").exists()
+
+
+def test_the_retired_v3_instant_is_refused_for_a_fresh_run(tmp_path):
+    retired = core.GuardConfig(evaluation_instant=core.V3_RETIRED_INSTANT,
+                               valid_time_cutoff=pd.Timestamp("2026-11-17T00:00:00Z"))
+    with pytest.raises(ValueError, match="retired by signed protocol v4"):
+        core.check_guard(retired, valid_times=[FRESH_TIME], row_source="reconstructed_frames",
+                         now=core.V3_RETIRED_INSTANT + pd.Timedelta(days=1), evidence_root=str(tmp_path))
+    # the other v3 cutoff and instant alone are non-default dates, refused too
+    with pytest.raises(ValueError):
+        core.check_guard(core.GuardConfig(evaluation_instant=core.V3_RETIRED_INSTANT), valid_times=[FRESH_TIME],
+                         row_source="reconstructed_frames", now=core.V3_RETIRED_INSTANT + pd.Timedelta(days=1),
+                         evidence_root=str(tmp_path))
+    assert not os.listdir(tmp_path)
+
+
+def test_a_fresh_run_is_refused_while_v4_is_unsigned_and_a_development_run_is_not(tmp_path, monkeypatch):
+    monkeypatch.setattr(core, "v4_signed", lambda *a, **k: False)
+    for name, fresh_time in (("v4-read1", READ1_FRESH_TIME), ("v4-read2", READ2_FRESH_TIME)):
+        guard = core.guard_for_round(name)
+        with pytest.raises(core.EvaluationGuardError, match=r"protocol v4 is not signed.*\(SEL-01\)"):
+            core.check_guard(guard, valid_times=[fresh_time], row_source="reconstructed_frames",
+                             now=guard.evaluation_instant + pd.Timedelta(days=1), evidence_root=str(tmp_path))
+    rec = core.check_guard(core.guard_for_round("v4-read1"), valid_times=[DEV_TIME], row_source="shadow_logs",
+                           now=READ1_INSTANT - pd.Timedelta(days=3), evidence_root=str(tmp_path))
+    assert rec["basis"] == "development" and rec["round"] == "v4-read1"
+    assert not os.listdir(tmp_path)
+
+
+def test_development_runs_are_unaffected_by_the_fresh_refusals(tmp_path):
+    # development rows: no instant, no one-shot, any parameter; override text is recorded as before
+    g = core.guard_for_round("v4-read1")
+    before_instant = READ1_INSTANT - pd.Timedelta(days=30)
+    rec = core.check_guard(g, valid_times=[DEV_TIME], row_source="shadow_logs", now=before_instant,
+                           evidence_root=str(tmp_path / "e"))
+    assert rec["basis"] == "development" and rec["prior_fresh_runs"] == []
+    for text in ("a", "b"):
+        with_text = core.GuardConfig(g.evaluation_instant, g.valid_time_cutoff, text, g.round_name)
+        r = core.check_guard(with_text, valid_times=[DEV_TIME], row_source="shadow_logs", now=before_instant,
+                             evidence_root=str(tmp_path / "e"))
+        assert r["override_reason"] == text and r["basis"] == "development"
+
+
+def test_the_old_armed_before_instant_line_is_gone_for_good():
+    src = open(os.path.join(os.path.dirname(core.__file__), "forecast_shadow_eval_core.py"), encoding="utf-8").read()
+    assert "if now_ts < instant and override is None" not in src
+    assert "if prior and override is None" not in src
+
+
+def test_relative_margin_fraction_is_a_pre_registered_parameter():
+    assert core.default_params()["relative_margin_fraction"] == 0.02
+    assert core.nondefault_params(core.default_params()) == {}
+    assert core.nondefault_params({"relative_margin_fraction": 0.03}) == {"relative_margin_fraction": 0.03}
+    assert core.nondefault_params({"relative_margin_fraction": 0.02}) == {}
+
+
+def test_a_non_default_relative_margin_refuses_a_fresh_run_and_override_text_cannot_help(tmp_path):
+    nd = core.nondefault_params({"relative_margin_fraction": 0.03})
+    g = core.guard_for_round("v4-read1")
+    with pytest.raises(ValueError, match="relative_margin_fraction"):
+        core.check_guard(g, valid_times=[FRESH_TIME], row_source="reconstructed_frames", now=READ1_INSTANT,
+                         evidence_root=str(tmp_path), nondefault_params=nd)
+    with pytest.raises(core.EvaluationGuardError):
+        core.check_guard(core.GuardConfig(g.evaluation_instant, g.valid_time_cutoff, "0.03 was my idea", g.round_name),
+                         valid_times=[FRESH_TIME], row_source="reconstructed_frames", now=READ1_INSTANT,
+                         evidence_root=str(tmp_path), nondefault_params=nd)
+    # development runs may try it
+    rec = core.check_guard(g, valid_times=[DEV_TIME], row_source="reconstructed_frames", now=READ1_INSTANT,
+                           evidence_root=str(tmp_path), nondefault_params=nd)
+    assert rec["nondefault_params"] == nd
+
+
+def test_planner_defaults_describe_the_v4_rule_and_round():
+    pd_ = core.PLANNER_DEFAULTS
+    assert "relative" in pd_["PD-10"]["default"] and "2%" in pd_["PD-10"]["default"]
+    assert "3" in pd_["PD-10"]["default"] and "consistency" in pd_["PD-10"]["default"]
+    assert "signed v4 rounds take no override" in pd_["PD-15"]["default"]
+    assert pd_["PD-18"] == {"title": "protocol round", "default": "v4-read1"}
+    assert core._PD_PARAM_MAP["relative_margin_fraction"] == "PD-10"
+    r = core.planner_defaults_in_force({"relative_margin_fraction": 0.03})
+    assert r["PD-10"]["non_default"] and r["PD-10"]["changed"] == {"relative_margin_fraction": 0.03}
+    assert core.PLANNER_DEFAULTS["PD-02"]["default"] == "2026-09-28..2026-10-24"
+
+
+def test_owner_pending_points_at_the_signing_copy_only():
+    assert len(core.OWNER_PENDING) == 1
+    assert "confirmation_protocol_v4_early_selection_SIGNING_COPY.md" in core.OWNER_PENDING[0]
+    assert "v3_per_city" not in core.OWNER_PENDING[0]
+    assert core.V4_SIGNING_COPY == os.path.join(
+        "docs", "data-science", "decisions", "confirmation_protocol_v4_early_selection_SIGNING_COPY.md")
+
+
+def test_rendered_header_names_the_round():
+    r = _report()
+    assert "Round: v4-read1" in core.render_header(r)
+    assert r["guard"]["round"] == "v4-read1"
+
+
+def test_retired_instant_appears_in_the_module_text_only_as_retired():
+    path = os.path.join(os.path.dirname(core.__file__), "forecast_shadow_eval_core.py")
+    for number, line in enumerate(open(path, encoding="utf-8").read().splitlines(), start=1):
+        if "2026-11-24" in line:
+            assert "retired" in line.lower() or "V3_RETIRED_INSTANT" in line, f"line {number}: {line}"
+
+
+# --- v4_signed: the signature line of the signing copy
+
+def _signing_copy_in(tmp_path, signature_line):
+    folder = tmp_path / "docs" / "data-science" / "decisions"
+    folder.mkdir(parents=True)
+    (folder / "confirmation_protocol_v4_early_selection_SIGNING_COPY.md").write_text(
+        "# v4\n\n## Sign-off\n\n- Project owner (name): ____\n" + signature_line + "\n- Date (UTC): ____\n",
+        encoding="utf-8")
+    return str(tmp_path)
+
+
+def test_v4_signed_reads_the_signature_line(tmp_path):
+    assert core.v4_signed() is True                                  # this repository's signing copy
+    assert core.v4_signed(str(tmp_path)) is False                    # no signing copy at all
+    assert core.v4_signed(_signing_copy_in(tmp_path / "blank", "- Signature: ____________")) is False
+    assert core.v4_signed(_signing_copy_in(tmp_path / "spaces", "- Signature:    ")) is False
+    assert core.v4_signed(_signing_copy_in(tmp_path / "none", "no signature line here")) is False
+    assert core.v4_signed(_signing_copy_in(tmp_path / "signed", "- Signature: aaphan")) is True
+
+
+# --------------------------------------------------------------------------
 # FRESH experiment cache path guard
 # --------------------------------------------------------------------------
 
@@ -306,11 +648,11 @@ def test_fresh_cache_path_guard(tmp_path):
     frozen = os.path.join("data", "experiment", "anchored_pair_frame_AUSTIN_2024-01-20_2026-09-29_lead24_previous_runs.csv")
     core.assert_not_fresh_experiment_cache(frozen)          # frozen window end: allowed
     core.assert_not_fresh_experiment_cache("some/other/file.csv")
-    inside = tmp_path / "run" / "frames" / "anchored_pair_frame_AUSTIN_2026-09-28_2026-11-16_lead24_previous_runs.csv"
+    inside = tmp_path / "run" / "frames" / "anchored_pair_frame_AUSTIN_2026-09-28_2026-10-24_lead24_previous_runs.csv"
     core.assert_not_fresh_experiment_cache(str(inside), allow_dir=str(tmp_path / "run"))
     with pytest.raises(core.EvaluationGuardError):
         core.assert_not_fresh_experiment_cache(str(inside), allow_dir=str(tmp_path / "other"))
-    sibling = tmp_path / "run_evil" / "anchored_pair_frame_AUSTIN_2026-09-28_2026-11-16_lead24_x.csv"
+    sibling = tmp_path / "run_evil" / "anchored_pair_frame_AUSTIN_2026-09-28_2026-10-24_lead24_x.csv"
     with pytest.raises(core.EvaluationGuardError):
         core.assert_not_fresh_experiment_cache(str(sibling), allow_dir=str(tmp_path / "run"))
 
@@ -578,7 +920,7 @@ def test_new_report_has_the_s6_keys():
                       "decision", "per_city", "exclusions", "validity_flags", "diagnostics", "not_measured",
                       "planner_defaults", "owner_pending", "evidence"}
     assert r["not_measured"] == core.NOT_MEASURED_STATEMENT
-    assert len(r["planner_defaults"]) == 17 and not any(v["non_default"] for v in r["planner_defaults"].values())
+    assert len(r["planner_defaults"]) == 18 and not any(v["non_default"] for v in r["planner_defaults"].values())
     flags = {f["id"]: f for f in r["validity_flags"]}
     assert flags["V4"]["applies"] and flags["V6"]["applies"]
     rr = _report(row_source="reconstructed_frames")
@@ -606,8 +948,9 @@ def test_render_markdown_order_and_required_lines(tmp_path):
     assert md.startswith("# Per-city shadow evaluation - row source: shadow logs (live-system check)")
     assert core.TRUTH_LABEL in md
     assert "DEVELOPMENT DATA - not a confirmation result" in md
-    assert "Evaluation instant: 2026-11-24T00:00:00+00:00" in md
-    assert "Valid-time cutoff (strict, valid_time < cutoff): 2026-11-17T00:00:00+00:00" in md
+    assert "Round: v4-read1" in md
+    assert "Evaluation instant: 2026-11-01T00:00:00+00:00" in md
+    assert "Valid-time cutoff (strict, valid_time < cutoff): 2026-10-25T00:00:00+00:00" in md
     assert "Override: owner rehearsal" in md
     assert core.NOT_MEASURED_STATEMENT in md
     assert core.EXPLORATORY_STATEMENT in md

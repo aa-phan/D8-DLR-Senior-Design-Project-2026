@@ -41,6 +41,17 @@ def synthetic_city(monkeypatch):
     monkeypatch.setitem(config.STATIC_RATINGS, _TEST_CITY, _SYNTHETIC_STATIC_RATING)
     monkeypatch.setitem(config.RATING_BOUNDS_BY_LOCATION, _TEST_CITY, (100.0, 5000.0))
     monkeypatch.setitem(config.CITY_LINE_BEARING_DEG, _TEST_CITY, 90.0)
+    # rate_city resolves the conductor through the strict per-city production table, so the synthetic
+    # city needs an entry and a source per value: the Drake values of the four real entries, with the
+    # azimuth matching CITY_LINE_BEARING_DEG above.
+    monkeypatch.setitem(
+        config.PRODUCTION_CONDUCTORS, _TEST_CITY,
+        {**config.PRODUCTION_CONDUCTORS["AUSTIN"], "line_azimuth": 90.0},
+    )
+    monkeypatch.setitem(
+        config.PRODUCTION_CONDUCTOR_SOURCES, _TEST_CITY,
+        {field: "synthetic test city (Drake values)" for field in config.PRODUCTION_CONDUCTOR_FIELDS},
+    )
     return _TEST_CITY
 
 
@@ -394,7 +405,7 @@ def test_rate_city_rating_matches_direct_monitor_run(synthetic_city):
         fetch_weather=_good_fetch, archive=False,
     )
 
-    pt = city_point.city_point(synthetic_city)
+    pt = city_point.production_city_point(synthetic_city)
     expected = DLRSafetyMonitor(
         static_rating=pt.static_rating, conductor=pt.conductor,
         rating_bounds=pt.rating_bounds, delta_fraction=float("inf"),

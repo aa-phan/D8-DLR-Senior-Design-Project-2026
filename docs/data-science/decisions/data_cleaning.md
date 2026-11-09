@@ -132,9 +132,18 @@ This is a use rule, not a cleaning rule: no row is excluded and no value changes
 
 The `ml` lookback applies to the `ml` method only; `naive` and `ewm` ignore it. With no usable rows the guard is not consulted.
 
-When a forecast is withheld it is still computed and reported in `pipeline["forecast"]`, `forecast_used_by_g6` is False, and one INFO line names the reason. G6 then uses the rolling baseline with 24 or more usable rows, otherwise cold start, exactly as for a zero-width band. A gap is never filled to keep a forecast usable.
+`data_cleaning.forecast_gap_kind(report, forecast_method)` applies the same conditions in the same order and says which rule withheld the forecast, so the caller does not parse the reason text. It returns None or one of two kinds:
 
-Owner decision OD-3 makes `ml` the live forecast method, so after a skipped cycle G6 runs without the forecast for up to seven hours, until the lookback is unbroken again. Both values are provisional until Phase 3.
+| Kind constant | Value | Meaning |
+|---|---|---|
+| `GAP_KIND_TRAILING` | `trailing_gap` | More than `MAX_TRAILING_GAP_SLOTS` missing slots before the run; every band is withheld, `ml` and `naive` alike |
+| `GAP_KIND_ML_LOOKBACK` | `ml_lookback` | `ml` only: fewer than `ML_LOOKBACK_ROWS` newest usable rows on consecutive hours |
+
+**Naive band for G6 on an `ml` lookback gap (B5, D-17).** When the kind is `ml_lookback`, `city_pipeline` asks `forecast_ampacity(history, method="naive")` for a band from the same cleaned history and hands that to G6. The naive band needs only the newest usable row, so a skipped hour inside the lookback no longer leaves G6 without a band. It is not used when naive returns no forecast (fewer than `FORECAST_MIN_HISTORY_ROWS` usable rows), when its band width is zero or negative, or when the call raises; G6 then has no band, the city still rates, and the reason is logged. `ml` stays the primary method and the stored `forecast` block is still the `ml` forecast. `pipeline["g6_forecast_method"]` (`ml`, `naive`, `ewm` or null) and `pipeline["g6_forecast"]` record which band gated G6; `forecast_used_by_g6` stays True only when the stored forecast itself fed G6. None of these is a `city_rating` column.
+
+When a forecast is withheld it is still computed and reported in `pipeline["forecast"]`, `forecast_used_by_g6` is False, and one INFO line names the reason. G6 then uses the rolling baseline with 24 or more usable rows, otherwise cold start, exactly as for a zero-width band, except for the `ml` lookback case above where the naive band is tried first. A gap is never filled to keep a forecast usable.
+
+Owner decision OD-3 makes `ml` the live forecast method, so after a skipped cycle the `ml` forecast is withheld for up to seven hours, until the lookback is unbroken again; over that stretch G6 is gated by the naive band (D-17) instead of running unbanded. Both values are provisional until Phase 3.
 
 ## One row per slot (CLEAN-03)
 

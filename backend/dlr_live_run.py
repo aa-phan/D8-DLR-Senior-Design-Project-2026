@@ -42,6 +42,17 @@ leaves a row with `finished_at` null. The children run with `--no-run-row` and n
 write it. A write that fails is logged (redacted), counted, and makes the exit code 1;
 it never stops the remaining cities. `--no-run-log` skips recording (local dry runs).
 
+Day-ahead stage (Phase 8, DAY-04; D-02, D-15): after the ratings, `run_live(day_ahead=True)`
+(which `main()` turns on unless `--no-day-ahead`) runs one `dlr_day_ahead.py` child per city. The
+exit code is fixed from the ratings BEFORE the stage starts and nothing the stage does, crashes,
+hangs on or fails to write can change it, the city records or `run_log`. The stage shares the
+ratings' wall-clock budget (`DAY_AHEAD_SHARED_BUDGET_S`, measured from the start of `run_live`):
+each child is killed at the smaller of `DAY_AHEAD_CITY_TIMEOUT_S` and the budget left, and a city
+reached with under `DAY_AHEAD_MIN_START_S` left is recorded `skipped_budget` with no child, so
+the pinned 30-minute job envelope holds. Its outcome goes to `pipeline_run.day_ahead` in one
+write of its own (`state["day_ahead_run_log"]`, never counted in `run_log`), and to a separate
+step-summary table.
+
 Secrets: every error text that enters a record or the Actions step summary goes
 through `redact()` first.
 
@@ -73,6 +84,19 @@ REPO_ROOT = os.path.dirname(BACKEND_DIR)
 ORCHESTRATOR = os.path.join(BACKEND_DIR, "dlr_orchestrator.py")
 
 CITY_TIMEOUT_S = 300
+# The day-ahead stage (Phase 8). A module attribute so tests can point it at a fake child.
+DAY_AHEAD_CHILD = os.path.join(BACKEND_DIR, "dlr_day_ahead.py")
+DAY_AHEAD_CITY_TIMEOUT_S = 150
+# A city reached with less than this much shared budget left is skipped, not started.
+DAY_AHEAD_MIN_START_S = 60
+# The pinned 1200 s child envelope (4 x CITY_TIMEOUT_S), shared with the ratings and measured
+# by wall clock from the start of run_live: slow ratings leave the stage less, never more.
+DAY_AHEAD_SHARED_BUDGET_S = len(config.LOCATIONS) * CITY_TIMEOUT_S
+# main() runs the stage unless --no-day-ahead; run_live defaults to off.
+MAIN_RUNS_DAY_AHEAD = True
+DAY_AHEAD_OUTCOMES = ("none_due", "issued", "partial", "error", "timeout", "skipped_budget")
+# The outcomes the child itself may report in its --output file.
+_DAY_AHEAD_CHILD_OUTCOMES = ("none_due", "issued", "partial", "error")
 # One definition, shared with the run row (`live_run_log`).
 PROVIDER = live_run_log.PROVIDER
 FORECAST_METHOD = live_run_log.FORECAST_METHOD
@@ -337,6 +361,146 @@ def run_city(city, end, workdir, timeout_s, env, fault_injected=False) -> dict:
     return record
 
 
+def day_ahead_child_argv(city: str, output_path: str) -> list:
+    """
+    The command line of one city's day-ahead child (the contract `dlr_day_ahead.py`
+    implements). Secrets reach the child only through the environment.
+    """
+    return [os.path.abspath(sys.executable), DAY_AHEAD_CHILD, "--city", city, "--output", output_path]
+
+
+def _text_list(value) -> list:
+    return [str(item) for item in value] if isinstance(value, (list, tuple)) else []
+
+
+def _text_map(value, env) -> dict:
+    """`{str: redacted text}` from a child-supplied mapping (anything else gives {})."""
+    if not isinstance(value, dict):
+        return {}
+    return {str(key): redact(text, env) for key, text in value.items()}
+
+
+def _day_ahead_record(city, outcome, returncode=None) -> dict:
+    return {
+        "city": city, "outcome": outcome, "due": [], "issued": [], "missing": [], "reasons": {},
+        "band_sources": {}, "out_of_bounds": [], "cooling_model_sha256": None,
+        "exit_code": returncode,
+    }
+
+
+def classify_day_ahead(city, returncode, output, stderr_text, timed_out=False, env=None) -> dict:
+    """
+    One city's day-ahead record, from what its child left behind (pure).
+
+    Outcomes, first match wins: timed out -> 'timeout'; non-zero exit -> 'error' (its
+    output is not trusted); no usable --output -> 'error' ("no output"); an `outcome`
+    other than none_due/issued/partial/error -> 'error'; otherwise the child's own
+    outcome. `missing` is due minus already present minus issued. Every reason text
+    (the child's `not_issued` values and the crash/kill tail under the key "child") is
+    redacted and cut to 1000 characters; the child's output is never evaluated or trusted
+    beyond plain strings and lists.
+    """
+    output = output if isinstance(output, dict) else None
+    record = _day_ahead_record(city, "error", returncode)
+
+    def fail(outcome, text):
+        record["outcome"] = outcome
+        record["reasons"]["child"] = redact(text, env)
+        return record
+
+    if timed_out:
+        return fail("timeout", "killed at its time budget\n" + _tail(stderr_text))
+    if returncode != 0:
+        return fail("error", _tail(stderr_text) or f"exit {returncode}")
+    if output is None:
+        return fail("error", "no output")
+    outcome = output.get("outcome")
+    if outcome not in _DAY_AHEAD_CHILD_OUTCOMES:
+        return fail("error", f"unknown outcome: {outcome!r}")
+    due = _text_list(output.get("due"))
+    present = set(_text_list(output.get("already_present")))
+    issued = _text_list(output.get("issued"))
+    sha = output.get("cooling_model_sha256")
+    record.update(
+        outcome=outcome, due=due, issued=issued,
+        missing=[iso for iso in due if iso not in present and iso not in issued],
+        reasons=_text_map(output.get("not_issued"), env),
+        band_sources=_text_map(output.get("band_sources"), env),
+        out_of_bounds=_text_list(output.get("out_of_bounds")),
+        cooling_model_sha256=None if sha is None else redact(sha, env, limit=128),
+    )
+    return record
+
+
+def run_day_ahead_city(city, workdir, timeout_s, env) -> dict:
+    """
+    Run one city's day-ahead child and return its record, with timing. Like `run_city`:
+    cwd is the repo root, a child still running after `timeout_s` is killed by
+    `subprocess.run` and its partial output kept ('timeout'), and the child's streams are
+    re-emitted through the same redaction and workflow-command defanging.
+    """
+    output_path = os.path.join(workdir, f"{city}.day_ahead.json")
+    started = datetime.now(timezone.utc)
+    t0 = time.monotonic()
+    timed_out = False
+    try:
+        proc = subprocess.run(
+            day_ahead_child_argv(city, output_path), cwd=REPO_ROOT, env=env,
+            capture_output=True, text=True, timeout=timeout_s)
+        returncode, stdout_text, stderr_text = proc.returncode, proc.stdout, proc.stderr
+    except subprocess.TimeoutExpired as exc:
+        timed_out = True
+        returncode, stdout_text, stderr_text = None, _as_text(exc.stdout), _as_text(exc.stderr)
+        log.error("%s: day-ahead child exceeded %ss and was killed", city, timeout_s)
+    duration = time.monotonic() - t0
+    _emit(f"{city} day-ahead", stdout_text, stderr_text, env)
+    record = classify_day_ahead(city, returncode, None if timed_out else _load_output(output_path),
+                                stderr_text, timed_out=timed_out, env=env)
+    record.update(started_at=_stamp(started), finished_at=_stamp(datetime.now(timezone.utc)),
+                  duration_s=round(duration, 1))
+    return record
+
+
+def run_day_ahead_stage(cities, env, deadline) -> dict:
+    """
+    Run the day-ahead child of every city in `cities`, one after another, in that order.
+
+    `deadline` is a `time.monotonic()` value: the end of the budget shared with the
+    ratings. For each city, with `remaining` = deadline minus now: under
+    `DAY_AHEAD_MIN_START_S` the city is recorded 'skipped_budget' and no child starts;
+    otherwise its child runs with a kill timeout of `min(DAY_AHEAD_CITY_TIMEOUT_S,
+    remaining)`. A failure to even start a child is that city's 'error' and the next city
+    still runs. Returns `{"started_at", "finished_at", "budget_s", "cities": {city: record}}`
+    where `budget_s` is the budget left when the stage began.
+    """
+    started = datetime.now(timezone.utc)
+    budget = max(0.0, deadline - time.monotonic())
+    records = {}
+    with tempfile.TemporaryDirectory() as workdir:
+        for city in cities:
+            remaining = deadline - time.monotonic()
+            if remaining < DAY_AHEAD_MIN_START_S:
+                record = _day_ahead_record(city, "skipped_budget")
+                record["reasons"]["child"] = (
+                    f"not started: {max(0, int(remaining))} s of the shared budget left, "
+                    f"under {DAY_AHEAD_MIN_START_S} s")
+                record.update(started_at=None, finished_at=None, duration_s=0.0)
+                log.warning("%s: day-ahead skipped, %d s of the shared budget left", city, max(0, int(remaining)))
+            else:
+                try:
+                    record = run_day_ahead_city(
+                        city, workdir, min(DAY_AHEAD_CITY_TIMEOUT_S, remaining), env)
+                except Exception as exc:  # noqa: BLE001 - one city's fault must not stop the next
+                    record = _day_ahead_record(city, "error")
+                    record["reasons"]["child"] = redact(f"{type(exc).__name__}: {exc}", env)
+                    record.update(started_at=None, finished_at=None, duration_s=0.0)
+                    log.error("%s: day-ahead child could not run (%s)", city, type(exc).__name__)
+                log.info("%s: day-ahead %s", city, record["outcome"])
+            records[city] = record
+    return {"started_at": _stamp(started), "finished_at": _stamp(datetime.now(timezone.utc)),
+            "budget_s": round(budget, 1), "cities": records}
+
+
 def write_run_row(row) -> None:
     """
     The default `record_fn`: upsert `row` into pipeline_run over a fresh connection,
@@ -350,8 +514,35 @@ def write_run_row(row) -> None:
         conn.close()
 
 
+def _day_ahead_after_ratings(state, cities, child_env, env, t0, record_fn, record_run) -> None:
+    """
+    The day-ahead stage and its own run-row write, run only after `run_live` has fixed
+    `state["exit_code"]` from the ratings (D-02, D-15). It adds `state["day_ahead"]` and
+    `state["day_ahead_run_log"]`; it never assigns `exit_code`, the city records or
+    `run_log`, and nothing here can raise out of the run: the stage and the write each
+    sit in their own `except Exception`, logging only the exception type and a redacted
+    message (no traceback, whose text would bypass `redact()`).
+    """
+    try:
+        deadline = t0 + DAY_AHEAD_SHARED_BUDGET_S
+        state["day_ahead"] = run_day_ahead_stage(cities, child_env, deadline)
+    except Exception as exc:  # noqa: BLE001 - the stage must never change the run's result
+        log.error("day-ahead stage failed (%s): %s", type(exc).__name__, redact(exc, env))
+        state["day_ahead"] = {"started_at": None, "finished_at": None, "budget_s": None,
+                              "cities": {}, "error": type(exc).__name__}
+    if not record_run:
+        return
+    counts = state["day_ahead_run_log"] = {"writes": 0, "failed": 0}
+    counts["writes"] += 1
+    try:
+        record_fn(live_run_log.build_day_ahead_run_row(state, env=env))
+    except Exception as exc:  # noqa: BLE001 - counted apart from run_log, never the exit code
+        counts["failed"] += 1
+        log.error("pipeline_run day-ahead write failed (%s): %s", type(exc).__name__, redact(exc, env))
+
+
 def run_live(cities=None, end=None, fault_city="", timeout_s=CITY_TIMEOUT_S, env=None, now=None,
-             record_fn=None, record_run=True) -> dict:
+             record_fn=None, record_run=True, day_ahead=False) -> dict:
     """
     Run every city (default: all of config.LOCATIONS) strictly one after another, in
     that order, each in its own child sharing one window end. Returns the run
@@ -369,7 +560,16 @@ def run_live(cities=None, end=None, fault_city="", timeout_s=CITY_TIMEOUT_S, env
     child gets the environment unmodified. The exit code is 0 only when every
     record is healthy: 'ok' with a forecast_status of 'ok' or 'cold_start' and a
     loaded anomaly model.
+
+    `finished_at` means "the ratings finished": it and the exit code are fixed before
+    anything day-ahead happens. With `day_ahead=True` (default False; `main()` turns it
+    on) the day-ahead stage then runs one child per city under the budget shared with the
+    ratings (`DAY_AHEAD_SHARED_BUDGET_S` from the start of this call) and adds
+    `state["day_ahead"]` and, when recording, `state["day_ahead_run_log"]`
+    (`{"writes": 1, "failed": 0|1}`, kept apart from `run_log`). Day-ahead children always get
+    the unmodified child environment: the fault drill blanks credentials for a rating child only.
     """
+    t0 = time.monotonic()
     if fault_city and fault_city not in config.LOCATIONS:
         raise ValueError(f"fault_city must be empty or one of {list(config.LOCATIONS)}, got {fault_city!r}")
     env = dict(os.environ if env is None else env)
@@ -428,6 +628,9 @@ def run_live(cities=None, end=None, fault_city="", timeout_s=CITY_TIMEOUT_S, env
     state["exit_code"] = 0 if all(live_run_log.is_healthy(r) for r in records) and run_log["failed"] == 0 else 1
     state["run_log"] = run_log if record_run else None
     log.info("live run %s attempt %s finished, exit code %d", run_id, run_attempt, state["exit_code"])
+    # From here on nothing may assign state["exit_code"], state["cities"] or run_log (D-02, D-15).
+    if day_ahead:
+        _day_ahead_after_ratings(state, cities, child_env, env, t0, record_fn, record_run)
     return state
 
 
@@ -444,12 +647,46 @@ def _cell(text, limit=_SUMMARY_ERROR_CHARS) -> str:
     return flat.replace("\\", "\\\\").replace("|", "\\|")
 
 
+def _day_ahead_summary_lines(run, env=None) -> list:
+    """
+    The day-ahead section of the step summary: a heading, a table with one row per city
+    (outcome, how many targets were issued and how many are still missing, band
+    sources, and the redacted reasons) and the stage's own `pipeline_run day_ahead:
+    N writes, M failed` line. Built completely before anything is written, so a
+    malformed entry raises here and never leaves a half table behind.
+    """
+    stage = run["day_ahead"]
+    lines = [
+        "", "### Day-ahead forecast (does not affect the exit code)", "",
+        "| city | outcome | issued | missing | band source | reason |",
+        "|---|---|---|---|---|---|",
+    ]
+    for city, rec in stage["cities"].items():
+        sources = ", ".join(sorted({str(v) for v in (rec.get("band_sources") or {}).values()})) or "-"
+        reasons = "; ".join(f"{key}: {text}" for key, text in (rec.get("reasons") or {}).items())
+        cells = [
+            str(city), str(rec.get("outcome")),
+            str(len(rec.get("issued") or [])), str(len(rec.get("missing") or [])),
+            _cell(sources), _cell(redact(reasons, env)),
+        ]
+        lines.append("| " + " | ".join(cells) + " |")
+    counts = run.get("day_ahead_run_log")
+    lines += ["", "pipeline_run day_ahead: skipped (--no-run-log)" if counts is None
+              else f"pipeline_run day_ahead: {counts['writes']} writes, {counts['failed']} failed"]
+    return lines
+
+
 def write_step_summary(run, path, env=None) -> None:
     """
     Append the run to the Actions step summary: a heading, one table row per
     city, in run order, and a `pipeline_run: N writes, M failed` line. The error
     column is redacted, cut to its last 120 characters (the exception line of a
     traceback comes last) and has its pipes escaped.
+
+    When the run has a `day_ahead` entry, a separate day-ahead table follows (the lines
+    above keep their meaning and order). It is built inside its own guard: if it cannot be
+    rendered, one line naming only the exception type replaces it, so a malformed entry
+    can never stop the rating table or the `pipeline_run` line from being written.
     """
     lines = [
         f"## DLR live run {run['run_id']} attempt {run['run_attempt']} (slot {run['slot']})",
@@ -473,6 +710,11 @@ def write_step_summary(run, path, env=None) -> None:
         counts = run["run_log"]
         lines += ["", "pipeline_run: skipped (--no-run-log)" if counts is None
                   else f"pipeline_run: {counts['writes']} writes, {counts['failed']} failed"]
+    if run.get("day_ahead") is not None:
+        try:
+            lines += _day_ahead_summary_lines(run, env)
+        except Exception as exc:  # noqa: BLE001 - type name only, so no reason text can leak
+            lines += ["", f"Day-ahead table not rendered ({type(exc).__name__}); the exit code is unaffected"]
     with open(path, "a") as fh:
         fh.write("\n".join(lines) + "\n\n")
 
@@ -499,6 +741,24 @@ def _positive_int(value):
     return number
 
 
+def _write_summary_json(run, path) -> None:
+    """
+    Write the whole run record as JSON. A run that serialises gives the bytes
+    `json.dump(run, fh, indent=2)` always gave. If the day-ahead entry cannot be
+    serialised (D-15), a shallow copy with that entry replaced by
+    `{"not_serialisable": <exception type name>}` is written instead, rating fields unchanged.
+    """
+    try:
+        text = json.dumps(run, indent=2, default=str)
+    except (TypeError, ValueError, RecursionError) as exc:
+        if "day_ahead" not in run:
+            raise
+        shallow = dict(run, day_ahead={"not_serialisable": type(exc).__name__})
+        text = json.dumps(shallow, indent=2, default=str)
+    with open(path, "w") as fh:
+        fh.write(text)
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Run every city's live DLR pipeline, one child process each.")
     parser.add_argument("--cities", nargs="*", choices=config.LOCATIONS, default=None,
@@ -514,6 +774,9 @@ def main(argv=None) -> int:
     parser.add_argument("--no-run-log", action="store_true",
                         help="local dry runs only: do not write the pipeline_run row "
                              "(the scheduled workflow never passes this)")
+    parser.add_argument("--no-day-ahead", action="store_true",
+                        help="local runs only: skip the day-ahead stage "
+                             "(the scheduled workflow never passes this)")
     args = parser.parse_args(argv)
     if args.fault_city and args.fault_city not in config.LOCATIONS:
         parser.error(f"--fault-city must be empty or one of {list(config.LOCATIONS)}, got {args.fault_city!r}")
@@ -526,13 +789,13 @@ def main(argv=None) -> int:
         return 1
 
     run = run_live(cities=args.cities, end=args.end, fault_city=args.fault_city,
-                   timeout_s=args.timeout_s, record_run=not args.no_run_log)
+                   timeout_s=args.timeout_s, record_run=not args.no_run_log,
+                   day_ahead=MAIN_RUNS_DAY_AHEAD and not args.no_day_ahead)
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary_path:
         write_step_summary(run, summary_path)
     if args.summary_json:
-        with open(args.summary_json, "w") as fh:
-            json.dump(run, fh, indent=2)
+        _write_summary_json(run, args.summary_json)
     return run["exit_code"]
 
 

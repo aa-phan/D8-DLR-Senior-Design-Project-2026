@@ -1,0 +1,163 @@
+{
+  "checks": [
+    {
+      "name": "latest_rating_readable",
+      "ok": true,
+      "detail": "HTTP 200, 4 rows"
+    },
+    {
+      "name": "latest_rating_four_cities",
+      "ok": true,
+      "detail": "4 rows, one per city: AUSTIN, CORPUS_CHRISTI, MIDLAND, EL_PASO"
+    },
+    {
+      "name": "latest_rating_columns",
+      "ok": true,
+      "detail": "34 columns in the published order on every row"
+    },
+    {
+      "name": "latest_rating_values",
+      "ok": true,
+      "detail": "rating_amps above 0 and valid_time on a whole hour for every row"
+    },
+    {
+      "name": "latest_rating_flags",
+      "ok": true,
+      "detail": "is_stale and is_provisional agree with age_minutes and the labels on every row"
+    },
+    {
+      "name": "latest_rating_count_exact",
+      "ok": true,
+      "detail": "count=exact reports 4"
+    },
+    {
+      "name": "city_rating_readable",
+      "ok": true,
+      "detail": "HTTP 200"
+    },
+    {
+      "name": "keyless_request_refused",
+      "ok": true,
+      "detail": "refused with HTTP 401"
+    },
+    {
+      "name": "assert_fresh_answers",
+      "ok": true,
+      "detail": "HTTP 200 (every city is fresh)"
+    },
+    {
+      "name": "hidden:public.pipeline_run",
+      "ok": true,
+      "detail": "not readable (HTTP 401)"
+    },
+    {
+      "name": "hidden:ops.freshness_log",
+      "ok": true,
+      "detail": "not readable (HTTP 406)"
+    },
+    {
+      "name": "snapshot_before",
+      "ok": true,
+      "detail": "2212 rows older than the cutoff, sha256 ea66a80f7b53"
+    },
+    {
+      "name": "write:table_insert",
+      "ok": true,
+      "detail": "refused by privilege (HTTP 401 42501 permission denied)"
+    },
+    {
+      "name": "write:table_upsert",
+      "ok": true,
+      "detail": "refused by privilege (HTTP 401 42501 permission denied)"
+    },
+    {
+      "name": "write:table_patch",
+      "ok": true,
+      "detail": "refused by privilege (HTTP 401 42501 permission denied)"
+    },
+    {
+      "name": "write:table_delete",
+      "ok": true,
+      "detail": "refused by privilege (HTTP 401 42501 permission denied)"
+    },
+    {
+      "name": "write:view_insert",
+      "ok": true,
+      "detail": "refused (HTTP 500)"
+    },
+    {
+      "name": "write:view_patch",
+      "ok": true,
+      "detail": "refused (HTTP 500)"
+    },
+    {
+      "name": "write:view_delete",
+      "ok": true,
+      "detail": "refused (HTTP 500)"
+    },
+    {
+      "name": "snapshot_unchanged",
+      "ok": true,
+      "detail": "2212 rows, sha256 ea66a80f7b53 identical before and after"
+    }
+  ],
+  "attempts": [
+    {
+      "name": "table_insert",
+      "method": "POST",
+      "path": "city_rating",
+      "status": 401,
+      "code": "42501",
+      "verdict": "pass"
+    },
+    {
+      "name": "table_upsert",
+      "method": "POST",
+      "path": "city_rating",
+      "status": 401,
+      "code": "42501",
+      "verdict": "pass"
+    },
+    {
+      "name": "table_patch",
+      "method": "PATCH",
+      "path": "city_rating",
+      "status": 401,
+      "code": "42501",
+      "verdict": "pass"
+    },
+    {
+      "name": "table_delete",
+      "method": "DELETE",
+      "path": "city_rating",
+      "status": 401,
+      "code": "42501",
+      "verdict": "pass"
+    },
+    {
+      "name": "view_insert",
+      "method": "POST",
+      "path": "latest_rating",
+      "status": 500,
+      "code": "55000",
+      "verdict": "pass"
+    },
+    {
+      "name": "view_patch",
+      "method": "PATCH",
+      "path": "latest_rating",
+      "status": 500,
+      "code": "55000",
+      "verdict": "pass"
+    },
+    {
+      "name": "view_delete",
+      "method": "DELETE",
+      "path": "latest_rating",
+      "status": 500,
+      "code": "55000",
+      "verdict": "pass"
+    }
+  ],
+  "exit_code": 0
+}

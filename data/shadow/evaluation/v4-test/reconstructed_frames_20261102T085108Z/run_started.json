@@ -1,0 +1,66 @@
+{
+  "basis": "development",
+  "config": {
+    "cities": [
+      "AUSTIN",
+      "CORPUS_CHRISTI",
+      "MIDLAND",
+      "EL_PASO"
+    ],
+    "conductor_basis": {
+      "config_version": "v2-provisional-2026-11-02",
+      "differing": [],
+      "headline": "the 12 frozen artifacts under the frozen Drake configuration (every city on Drake)",
+      "name": "frozen-drake"
+    },
+    "evidence_root": "data/shadow/evaluation/v4-test",
+    "fetch_window": [
+      "2026-09-28",
+      "2026-10-24"
+    ],
+    "frame_provider": "injected",
+    "model_loader": "injected",
+    "model_source": "the 12 frozen per-city artifacts (PD-01); not a train-only refit, so the development (train-only) numbers are not directly comparable",
+    "params": {
+      "block_lengths": [
+        1,
+        4,
+        8,
+        28
+      ],
+      "consistency_min_cities": 3,
+      "decision_margin_amps": 5.0,
+      "min_paired_rows": 8,
+      "n_resamples": 10000,
+      "power": 0.8,
+      "relative_margin_fraction": 0.02,
+      "seed": 20260929
+    },
+    "point_resolver": "city_point (frozen Drake)",
+    "protocol_status": "signed",
+    "rating_config_version": "v2-provisional-2026-11-02",
+    "round": "v4-read1",
+    "scored_window": [
+      "2026-03-18T00:00:00+00:00",
+      "2026-09-30T00:00:00+00:00"
+    ],
+    "secondary": null,
+    "vetoes": null
+  },
+  "guard": {
+    "basis": "development",
+    "defaults_used": true,
+    "evaluation_instant": "2026-11-01T00:00:00+00:00",
+    "fresh_basis_start": "2026-09-30T00:00:00+00:00",
+    "nondefault_params": {},
+    "now_evaluated": "2026-11-02T08:51:08.295243+00:00",
+    "override_reason": null,
+    "prior_fresh_runs": [],
+    "round": "v4-read1",
+    "round_descriptive_only": false,
+    "row_source": "reconstructed_frames",
+    "valid_time_cutoff": "2026-10-25T00:00:00+00:00"
+  },
+  "row_source": "reconstructed_frames",
+  "started_at_utc": "2026-11-02T08:51:08.295243+00:00"
+}

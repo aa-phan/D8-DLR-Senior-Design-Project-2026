@@ -95,18 +95,9 @@ _RUN_CTX = {"run_id": "123", "run_attempt": 1, "pipeline_version": "abcdef1"}
 
 
 def _patch_austin_conductor(monkeypatch, **changes):
-    """Rebuild only AUSTIN's ConductorConfig with `changes` applied to its kwargs."""
-    real = city_point.city_point
-
-    def patched(city):
-        point = real(city)
-        if city == "AUSTIN":
-            kwargs = config.conductor_kwargs_for(config.CITY_LINE_BEARING_DEG[city])
-            kwargs.update(changes)
-            point.conductor = thermal_model.ConductorConfig(**kwargs)
-        return point
-
-    monkeypatch.setattr(city_point, "city_point", patched)
+    """Replace only AUSTIN's production conductor table entry, with `changes` applied (COND-01)."""
+    monkeypatch.setitem(
+        config.PRODUCTION_CONDUCTORS, "AUSTIN", {**config.PRODUCTION_CONDUCTORS["AUSTIN"], **changes})
 
 
 def test_fingerprint_is_hex_per_city_and_stable_across_processes():
@@ -135,7 +126,41 @@ def _conductor(name, value):
     return lambda mp: _patch_austin_conductor(mp, **{name: value})
 
 
+def _austin_reordered(mp):
+    """The same AUSTIN entry with its keys in reverse order: canonical JSON must not care."""
+    entry = config.PRODUCTION_CONDUCTORS["AUSTIN"]
+    mp.setitem(config.PRODUCTION_CONDUCTORS, "AUSTIN", dict(reversed(list(entry.items()))))
+
+
+def _austin_sources_edited(mp):
+    sources = dict(config.PRODUCTION_CONDUCTOR_SOURCES["AUSTIN"])
+    sources["max_temp_c"] = "edited provenance note"
+    mp.setitem(config.PRODUCTION_CONDUCTOR_SOURCES, "AUSTIN", sources)
+
+
+def _austin_diameter_plus_1e9(mp):
+    entry = config.PRODUCTION_CONDUCTORS["AUSTIN"]
+    mp.setitem(config.PRODUCTION_CONDUCTORS, "AUSTIN", {**entry, "diameter_m": entry["diameter_m"] + 1e-9})
+
+
+def _austin_and_corpus_christi_share_a_new_entry(mp):
+    entry = {**config.PRODUCTION_CONDUCTORS["AUSTIN"], "max_temp_c": 90.0}
+    mp.setitem(config.PRODUCTION_CONDUCTORS, "AUSTIN", dict(entry))
+    mp.setitem(config.PRODUCTION_CONDUCTORS, "CORPUS_CHRISTI", dict(entry))
+
+
+def _midland_max_temp(mp):
+    mp.setitem(config.PRODUCTION_CONDUCTORS, "MIDLAND", {**config.PRODUCTION_CONDUCTORS["MIDLAND"], "max_temp_c": 85.0})
+
+
 _CASES = [
+    ("austin-conductor_type", _conductor("conductor_type", "954 kcmil ACSR Rail"), {"AUSTIN"}),
+    ("austin-diameter_m-plus-1e-9", _austin_diameter_plus_1e9, {"AUSTIN"}),
+    ("midland-max_temp_c", _midland_max_temp, {"MIDLAND"}),
+    ("sources-only-edit", _austin_sources_edited, set()),
+    ("austin-entry-key-order", _austin_reordered, set()),
+    ("austin-and-corpus-christi-share-an-entry", _austin_and_corpus_christi_share_a_new_entry,
+     {"AUSTIN", "CORPUS_CHRISTI"}),
     ("austin-diameter_m", _conductor("diameter_m", 0.03), {"AUSTIN"}),
     ("austin-resistance_ac", _conductor("resistance_ac", 0.08), {"AUSTIN"}),
     ("austin-resist_temp_coef", _conductor("resist_temp_coef", 0.0041), {"AUSTIN"}),
@@ -172,6 +197,43 @@ def test_each_rating_assumption_changes_only_its_citys_fingerprint(monkeypatch, 
 
     monkeypatch.undo()
     assert _fingerprints() == before
+
+
+def test_two_cities_with_identical_conductor_entries_keep_different_fingerprints(monkeypatch):
+    """The city is part of the snapshot, so an identical table entry never collapses two cities."""
+    monkeypatch.setitem(config.PRODUCTION_CONDUCTORS, "CORPUS_CHRISTI", dict(config.PRODUCTION_CONDUCTORS["AUSTIN"]))
+    assert config.PRODUCTION_CONDUCTORS["CORPUS_CHRISTI"] == config.PRODUCTION_CONDUCTORS["AUSTIN"]
+    fingerprints = _fingerprints()
+    assert fingerprints["AUSTIN"] != fingerprints["CORPUS_CHRISTI"]
+    assert len(set(fingerprints.values())) == len(config.LOCATIONS)
+
+
+def test_the_snapshot_reads_the_production_table_not_the_shadow_default(monkeypatch):
+    before = supabase_store.rating_config_snapshot("AUSTIN")
+    _patch_austin_conductor(monkeypatch, diameter_m=0.031)
+    after = supabase_store.rating_config_snapshot("AUSTIN")
+    assert before["conductor"]["D"] == 0.02814 and after["conductor"]["D"] == 0.031
+    assert after["config"]["PRODUCTION_CONDUCTORS"]["diameter_m"] == 0.031
+    assert after["snapshot_schema"] == 2
+
+
+def test_identity_falls_back_to_the_drake_resolver_when_the_production_resolver_is_absent(monkeypatch):
+    """The Phase 3 backfill child loads Phase 3 copies of city_point, which have no production resolver."""
+    monkeypatch.delattr(city_point, "production_city_point")
+    snapshot = supabase_store.rating_config_snapshot("AUSTIN")
+    drake = city_point.city_point("AUSTIN")
+    assert snapshot["conductor"] == {name: value for name, value in sorted(vars(drake.conductor).items())}
+    assert snapshot["point"]["line_bearing_deg"] == drake.bearing_deg
+    # and the schema-1 recipe, so the Phase 3 backfill fingerprints still reproduce
+    assert snapshot["snapshot_schema"] == 1
+    assert "PRODUCTION_CONDUCTORS" not in snapshot["config"]
+
+
+def test_the_identity_module_resolves_the_point_at_call_time_with_a_getattr_fallback():
+    path = os.path.join(_BACKEND, "rating_identity.py")
+    with open(path, encoding="utf-8") as handle:
+        source = handle.read()
+    assert 'getattr(city_point, "production_city_point", city_point.city_point)' in source
 
 
 def _config_names_read_by(module):

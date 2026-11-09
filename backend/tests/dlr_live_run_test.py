@@ -71,6 +71,16 @@ def _offline_env(tmp_path, monkeypatch):
     monkeypatch.setattr(anomaly_detector, "_load_city_model_or_none", lambda city: None)
 
 
+@pytest.fixture(autouse=True)
+def _ratings_only(monkeypatch):
+    """
+    These Phase 5 tests cover the ratings. main() turns the Phase 8 day-ahead stage on by
+    default; it has its own file (dlr_live_day_ahead_stage_test.py), so here it stays off
+    and no test starts a day-ahead child.
+    """
+    monkeypatch.setattr(dlr_live_run, "MAIN_RUNS_DAY_AHEAD", False)
+
+
 _FAKE_SOURCE = '''
 import argparse, json, os, sys, time
 

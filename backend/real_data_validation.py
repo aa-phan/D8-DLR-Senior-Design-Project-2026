@@ -119,9 +119,19 @@ _PIPELINE_COLUMNS = {
     "history_rows": "history_rows",
     "usable_history_rows": "usable_history_rows",
     "forecast_used_by_g6": "forecast_used_by_g6",
+    "g6_forecast_method": "g6_forecast_method",
     "detector_signal": "detector_signal",
     "detector_model": "detector_model",
 }
+# The band that actually gated G6 (B5, D-17): the stored forecast's own columns
+# are `fc_*`; these say what G6 was given when that differs (a naive fallback).
+_G6_FORECAST_COLUMNS = {
+    "amps": "g6_amps", "ci_lower_amps": "g6_ci_lower", "ci_upper_amps": "g6_ci_upper",
+}
+# Pipeline keys a trace written before B5 does not carry. Their columns are left
+# out of such a record, so "the trace never recorded the G6 method" (column absent)
+# stays distinguishable from "recorded, and no band gated G6" (column present, null).
+_G6_PIPELINE_KEYS = ("g6_forecast_method", "g6_forecast")
 _FORECAST_COLUMNS = {
     "amps": "fc_amps", "ci_lower_amps": "fc_ci_lower", "ci_upper_amps": "fc_ci_upper",
     "n_observations": "fc_n_observations", "horizon_min": "fc_horizon_min",
@@ -150,9 +160,15 @@ def _flatten_record(record: dict) -> dict:
     for key, column in _FORECAST_COLUMNS.items():
         flat[column] = forecast.get(key)
     for key, column in _PIPELINE_COLUMNS.items():
+        if key in _G6_PIPELINE_KEYS and key not in pipeline:
+            continue
         flat[column] = pipeline.get(key)
+    if "g6_forecast" in pipeline:
+        g6_forecast = pipeline["g6_forecast"] or {}
+        for key, column in _G6_FORECAST_COLUMNS.items():
+            flat[column] = g6_forecast.get(key)
     for key, value in pipeline.items():
-        if key != "forecast" and key not in _PIPELINE_COLUMNS:
+        if key not in ("forecast", "g6_forecast") and key not in _PIPELINE_COLUMNS:
             flat[f"pipeline_{key}"] = value
     return flat
 
@@ -272,7 +288,8 @@ _AMP_DECIMALS, _RATE_DECIMALS, _INPUT_DECIMALS = 1, 4, 3
 _QUANTILES = (("min", 0.0), ("p05", 0.05), ("p25", 0.25), ("p50", 0.5), ("p75", 0.75),
               ("p95", 0.95), ("max", 1.0))
 _PASS_THROUGH_PREFIXES = ("fc_", "detector_", "pipeline_")
-_PASS_THROUGH_NAMES = ("history_rows", "usable_history_rows", "forecast_used_by_g6")
+_PASS_THROUGH_NAMES = ("history_rows", "usable_history_rows", "forecast_used_by_g6",
+                       "g6_forecast_method", "g6_amps", "g6_ci_lower", "g6_ci_upper")
 _OBS_COLUMNS = tuple(_OBSERVATION_COLUMNS.values())  # the flattened trace columns, same order
 _LABEL = ("PROVISIONAL (OD-5): static ratings, rating bounds and line bearings are unconfirmed "
           "assumptions; these tables measure, they do not decide.")
@@ -307,7 +324,7 @@ def computed_amps(city, temp, wind_perp, solar) -> np.ndarray:
     the figure gate G4 judged. `wind_perp` is the projected (line-perpendicular)
     component, as stored in the trace and the archive.
     """
-    point = city_point.city_point(city)
+    point = city_point.production_city_point(city)
     return np.asarray(thermal_model.ieee738_ampacity(
         T_amb_c=np.asarray(temp, dtype=float), wind_perp_ms=np.asarray(wind_perp, dtype=float),
         ghi_wm2=np.asarray(solar, dtype=float), conductor=point.conductor,
@@ -370,7 +387,7 @@ def classify_steps(trace, archive, cities, steps, start, warmup_hours) -> pd.Dat
 
     rows = []
     for city in cities:
-        point = city_point.city_point(city)
+        point = city_point.production_city_point(city)
         lower, upper = point.rating_bounds
         for ts in steps:
             rec = records.get((city, ts))
@@ -487,7 +504,7 @@ def _quantile_cells(prefix: str, values: pd.Series) -> dict:
 def _ratings_table(frame, cities) -> pd.DataFrame:
     rows = []
     for city in cities:
-        point = city_point.city_point(city)
+        point = city_point.production_city_point(city)
         part = frame[(frame["city"] == city) & (frame["period"] == "scored")]
         n = len(part)
         reported, computed = part["reported_a"], part["computed_a"]
@@ -1066,6 +1083,67 @@ def g6_trips_table(steps, method_label, cities=None, per_city=G6_TRIPS_PER_CITY)
     return pd.DataFrame(rows, columns=_TRIP_COLUMNS_OUT)
 
 
+G6_BAND_COLUMNS = [
+    "city", "n_g6_evaluated", "n_band_ml", "n_band_naive", "n_band_other", "n_no_band",
+    "band_share", "g6_method_recorded"]
+
+
+def g6_band_table(steps, cities=None) -> pd.DataFrame:
+    """
+    B5 / D-18: how often a forecast band checked the computed rating in G6, and
+    with which method, one row per city (scored period).
+
+    Population `n_g6_evaluated`: scored steps that reached G6 (outcome `ok` or
+    `G6`). Each is counted once by the trace's `g6_forecast_method`, matched as an
+    exact string: `n_band_ml` ("ml"), `n_band_naive` ("naive"), `n_band_other` (any
+    other recorded method, "ewm" among them) and `n_no_band` (null: no band gated
+    G6, so only the rolling baseline or cold start ran). `band_share` is
+    `(n_band_ml + n_band_naive + n_band_other) / n_g6_evaluated`, empty when no step
+    reached G6. A trace written before B5 has no `g6_forecast_method` column: then
+    `g6_method_recorded` is False and the four counts and the share are empty,
+    never zero, because the trace cannot say. The flag is read from the column, so
+    a trace that mixes pre-B5 and post-B5 records counts the pre-B5 ones as no band.
+    """
+    recorded = "g6_forecast_method" in steps.columns
+    rows = []
+    for city in _cities_in(steps, cities):
+        part = _scored_city(steps, city)
+        g6 = part[part["_scored"] & part["_g6"]]
+        row = {"city": city, "n_g6_evaluated": int(len(g6)), "g6_method_recorded": recorded}
+        if recorded:
+            method = g6["g6_forecast_method"]
+            missing = method.isna()
+            n_ml = int((method == "ml").sum())
+            n_naive = int((method == "naive").sum())
+            n_other = int((~missing & ~method.isin(("ml", "naive"))).sum())
+            row.update(n_band_ml=n_ml, n_band_naive=n_naive, n_band_other=n_other,
+                       n_no_band=int(missing.sum()),
+                       band_share=_share(n_ml + n_naive + n_other, len(g6)))
+        else:
+            row.update(n_band_ml=pd.NA, n_band_naive=pd.NA, n_band_other=pd.NA,
+                       n_no_band=pd.NA, band_share=float("nan"))
+        rows.append(row)
+    table = pd.DataFrame(rows, columns=G6_BAND_COLUMNS)
+    for column in ("n_band_ml", "n_band_naive", "n_band_other", "n_no_band"):
+        table[column] = table[column].astype("Int64")
+    return table
+
+
+def _g6_band_markdown(table: pd.DataFrame) -> list:
+    return [
+        "## G6 band engagement (B5)", "",
+        "`val02_g6_band_by_city.csv`, one row per city over the scored period of the live run "
+        "(the naive replay is not counted). `n_g6_evaluated` is the number of hours that passed gates "
+        "G1-G5, so the anomaly check (G6) ran on them. The next four columns split those hours by "
+        "which forecast band checked the computed rating: `n_band_ml` (the ml forecast), `n_band_naive` "
+        "(the naive band that stands in when the ml forecast is withheld by its lookback rule), "
+        "`n_band_other` (any other method) and `n_no_band` (no forecast band, so only the rolling "
+        "baseline or cold start ran). `band_share` is the share of G6-evaluated hours in which a "
+        "forecast band checked the rating. `g6_method_recorded` is False for a trace written before "
+        "this was recorded, and the counts and share are then empty rather than zero.", "",
+        _markdown_table(table), ""]
+
+
 def _trace_methods(trace) -> str:
     """The forecast method(s) the trace records, '+'-joined; 'unknown' when none."""
     if "forecast_method" not in trace.columns:
@@ -1413,7 +1491,8 @@ def build_report(archive_path, trace_path, start, end, step_hours, warmup_hours,
                  method_label=None, replay_archive=None, replay_trace=None,
                  replay_label=REPLAY_LABEL_DEFAULT) -> int:
     """
-    Write the VAL-01 and VAL-02 tables, report_meta.json and tables.md to
+    Write the VAL-01 and VAL-02 tables, the per-city G6 band table
+    (`val02_g6_band_by_city.csv`, B5), report_meta.json and tables.md to
     `out_dir`, then return 1 if any self-check (a key of report_meta ending in
     `mismatches`) counted a disagreement, else 0. Files are written before the
     exit code is decided, so a failing run still leaves its evidence. The VAL-02
@@ -1450,6 +1529,8 @@ def build_report(archive_path, trace_path, start, end, step_hours, warmup_hours,
         fidelity = replay_fidelity(frame, replay_frame)
         method_frames.append((replay_label, replay_frame))
     val02 = val02_tables(method_frames, cities)
+    # The live run only: a replay's G6 method is the replay's own, not what gated the live hours.
+    g6_band = _round(g6_band_table(frame, cities))
     notes = [] if usable_history_known(frame) else [
         "usable_history_rows is absent from the trace, so n_cold_start, n_silent_forecast_failure and "
         "n_cleaning_failure_suspect are left empty."]
@@ -1484,7 +1565,7 @@ def build_report(archive_path, trace_path, start, end, step_hours, warmup_hours,
             replay_trace_frame.attrs.get("unparseable", 0))
 
     os.makedirs(out_dir, exist_ok=True)
-    for name, table in {**tables, **val02}.items():
+    for name, table in {**tables, **val02, "val02_g6_band_by_city": g6_band}.items():
         _write_csv(table, os.path.join(out_dir, f"{name}.csv"))
     with open(os.path.join(out_dir, "report_meta.json"), "w", encoding="utf-8", newline="\n") as fh:
         fh.write(json.dumps(meta, indent=2, sort_keys=True) + "\n")
@@ -1502,6 +1583,7 @@ def build_report(archive_path, trace_path, start, end, step_hours, warmup_hours,
         sections += [f"## {name}", "", _markdown_table(table), ""]
     sections += ["## Cleaning activity", "", _markdown_table(cleaning), ""]
     sections += _val02_markdown(val02, [name for name, _ in method_frames], notes)
+    sections += _g6_band_markdown(g6_band)
     with open(os.path.join(out_dir, "tables.md"), "w", encoding="utf-8", newline="\n") as fh:
         fh.write("\n".join(sections))
     failed = sorted(k for k, v in meta.items() if k.endswith("mismatches") and v)

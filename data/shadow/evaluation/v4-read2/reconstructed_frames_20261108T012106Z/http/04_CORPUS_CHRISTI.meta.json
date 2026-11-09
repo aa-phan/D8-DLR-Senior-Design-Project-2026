@@ -1,0 +1,22 @@
+{
+  "body_file": "04_CORPUS_CHRISTI.body",
+  "byte_length": 33490,
+  "content_type": "application/json; charset=utf-8",
+  "date_header": "Sun, 08 Nov 2026 01:21:10 GMT",
+  "error": null,
+  "params": {
+    "end_date": "2026-10-31",
+    "hourly": "temperature_2m_previous_day1,wind_speed_10m_previous_day1,wind_direction_10m_previous_day1,shortwave_radiation_previous_day1,relative_humidity_2m_previous_day1",
+    "latitude": 27.7635,
+    "longitude": -97.4033,
+    "models": "gfs_seamless",
+    "start_date": "2026-09-28",
+    "timezone": "UTC",
+    "wind_speed_unit": "ms"
+  },
+  "retrieval_completed_at_utc": "2026-11-08T01:21:10.229747+00:00",
+  "retrieval_started_at_utc": "2026-11-08T01:21:09.407928+00:00",
+  "sha256": "903342cb7a1570f193784a40654cbe3d886bffe01a18f2fadb9e26534003e1bf",
+  "status_code": 200,
+  "url": "https://previous-runs-api.open-meteo.com/v1/forecast"
+}

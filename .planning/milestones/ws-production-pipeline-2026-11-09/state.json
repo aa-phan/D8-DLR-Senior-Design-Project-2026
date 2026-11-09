@@ -1,0 +1,53 @@
+{
+  "contract": "1.0.0",
+  "flavor": "core",
+  "milestone": null,
+  "phases": [
+    {
+      "number": "1",
+      "name": "Land PR #7",
+      "status": "complete"
+    },
+    {
+      "number": "2",
+      "name": "Data Cleaning",
+      "status": "complete"
+    },
+    {
+      "number": "3",
+      "name": "Real-Data Validation",
+      "status": "complete"
+    },
+    {
+      "number": "4",
+      "name": "Supabase Store & Writer",
+      "status": "complete"
+    },
+    {
+      "number": "5",
+      "name": "Scheduled Live Runs",
+      "status": "complete"
+    },
+    {
+      "number": "6",
+      "name": "Exposure & E2E Verification",
+      "status": "complete"
+    },
+    {
+      "number": "7",
+      "name": "Per-City Conductors, Shadow Refit and Early Model Selection",
+      "status": "complete"
+    },
+    {
+      "number": "8",
+      "name": "Day-Ahead Cooling Forecast Alongside 60-Minute G6",
+      "status": "complete"
+    }
+  ],
+  "next": {
+    "command": "/gsd-debug",
+    "label": "Debug the blocker",
+    "reason": "Blocked · 8 blocker(s) — resolve before continuing"
+  },
+  "updated_at": "2026-11-09T06:05:59.438Z"
+}

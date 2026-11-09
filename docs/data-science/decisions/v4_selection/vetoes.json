@@ -1,0 +1,96 @@
+{
+  "protocol": "v4",
+  "ablation": {
+    "report": "data/shadow/evaluation/v4-ablation/20261102T085103Z/ablation.json",
+    "sha256": "60963aa83030a9e7a11c99db61589ad3426edcfc931e847f48a76c3a3f0e745d",
+    "markdown": "data/shadow/evaluation/v4-ablation/20261102T085103Z/ablation.md",
+    "rule": "sign_flip_vs_raw_or_default",
+    "ranking_invariant": true,
+    "variants": [
+      "Drake-100",
+      "Drake-75",
+      "Drake-75-AUSTIN-163m",
+      "Falcon-90",
+      "Suwannee-150",
+      "Suwannee-200"
+    ],
+    "n_rows_per_city": {
+      "train": 2360,
+      "validation": 784
+    },
+    "vetoes": {
+      "ml_wind_corrected": {
+        "vetoed": false,
+        "reasons": []
+      },
+      "ml_cooling_corrected": {
+        "vetoed": false,
+        "reasons": []
+      },
+      "reference_ml_refit_24h": {
+        "vetoed": false,
+        "reasons": []
+      }
+    }
+  },
+  "test": {
+    "report": "data/shadow/evaluation/v4-test/report_20261102T173449Z/test_split.json",
+    "sha256": "43fa316f4c0f1ad6c1e0b29a9531c81686a10b66639b7dbce11a68518e76db3f",
+    "markdown": "data/shadow/evaluation/v4-test/report_20261102T173449Z/test_split.md",
+    "rule": "mae_strictly_higher_than_raw_forecast_in_at_least_min_cities_of_the_cities_with_data",
+    "min_cities": 3,
+    "conductor_basis": "production (config v3-powersystems-2026-11-02): AUSTIN on Power Systems values (795 kcmil ACSR Drake, 100 C) via the AUSTIN refit artifacts; CORPUS_CHRISTI, MIDLAND, EL_PASO on Drake 75 C via the frozen artifacts",
+    "window": [
+      "2026-03-18T00:00:00Z",
+      "2026-09-30T00:00:00Z"
+    ],
+    "slots_per_city": 784,
+    "vetoes": {
+      "ml_cooling_corrected": {
+        "vetoed": false,
+        "reasons": [],
+        "cities_losing_to_raw": []
+      },
+      "ml_wind_corrected": {
+        "vetoed": false,
+        "reasons": [],
+        "cities_losing_to_raw": []
+      },
+      "reference_ml_refit_24h": {
+        "vetoed": false,
+        "reasons": [],
+        "cities_losing_to_raw": [
+          "MIDLAND"
+        ]
+      }
+    },
+    "frozen_drake_record": {
+      "report": "data/shadow/evaluation/v4-test/report_20261102T085108Z/test_split.json",
+      "sha256": "b003a2c0431956f397c302d20d58aac0941973bf745703e0d3ad27b85431c045",
+      "markdown": "data/shadow/evaluation/v4-test/report_20261102T085108Z/test_split.md",
+      "conductor_basis": "frozen-drake (every city on Drake)",
+      "vetoes": {
+        "ml_wind_corrected": {
+          "vetoed": false,
+          "reasons": [],
+          "cities_losing_to_raw": []
+        },
+        "ml_cooling_corrected": {
+          "vetoed": false,
+          "reasons": [],
+          "cities_losing_to_raw": []
+        },
+        "reference_ml_refit_24h": {
+          "vetoed": false,
+          "reasons": [],
+          "cities_losing_to_raw": [
+            "MIDLAND"
+          ]
+        }
+      },
+      "note": "superseded for the read by the production-basis re-score below; kept as the record of the frozen-drake TEST run (every city on Drake)"
+    }
+  },
+  "created_at_utc": "2026-11-02T08:52:14Z",
+  "rescored_at_utc": "2026-11-02T17:35:17Z"
+}

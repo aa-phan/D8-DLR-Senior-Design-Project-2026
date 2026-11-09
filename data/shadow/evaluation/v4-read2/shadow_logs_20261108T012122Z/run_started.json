@@ -1,0 +1,46 @@
+{
+  "basis": "FRESH",
+  "config": {
+    "cities": [
+      "AUSTIN",
+      "CORPUS_CHRISTI",
+      "MIDLAND",
+      "EL_PASO"
+    ],
+    "evidence_root": "data/shadow/evaluation/v4-read2",
+    "params": {
+      "block_lengths": [
+        1,
+        4,
+        8,
+        28
+      ],
+      "consistency_min_cities": 3,
+      "decision_margin_amps": 5.0,
+      "min_paired_rows": 8,
+      "n_resamples": 10000,
+      "power": 0.8,
+      "relative_margin_fraction": 0.02,
+      "seed": 20260929
+    },
+    "predictions_dir": "/tmp/read2logs.gYvojF",
+    "protocol_status": "signed",
+    "source_commit": "e7863106bc7f305534031c818092887ddd207eeb"
+  },
+  "guard": {
+    "basis": "FRESH",
+    "defaults_used": true,
+    "evaluation_instant": "2026-11-08T00:00:00+00:00",
+    "fresh_basis_start": "2026-09-30T00:00:00+00:00",
+    "nondefault_params": {},
+    "now_evaluated": "2026-11-08T01:21:22.061585+00:00",
+    "override_reason": null,
+    "prior_fresh_runs": [],
+    "round": "v4-read2",
+    "round_descriptive_only": false,
+    "row_source": "shadow_logs",
+    "valid_time_cutoff": "2026-11-01T00:00:00+00:00"
+  },
+  "row_source": "shadow_logs",
+  "started_at_utc": "2026-11-08T01:21:22.061585+00:00"
+}

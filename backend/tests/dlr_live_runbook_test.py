@@ -13,8 +13,11 @@ The secret patterns are assembled from string pieces so this file does not match
 own scan.
 """
 
+import glob
 import os
 import re
+import subprocess
+import sys
 
 import config
 import dlr_live_check_models
@@ -141,6 +144,24 @@ def test_runbook_minutes_section_covers_both_workflows():
         assert needle in section, needle
 
 
+def test_runbook_section_17_matches_the_day_ahead_stage_constants_and_tools():
+    # Phase 8 (08-06, T-08-19): the day-ahead section quotes the stage's constants, flags and tool
+    # names, so a change in the code that the runbook does not follow fails here.
+    section = _section(_runbook(), "Day-ahead forecast stage")
+
+    assert f"`DAY_AHEAD_CITY_TIMEOUT_S` = {dlr_live_run.DAY_AHEAD_CITY_TIMEOUT_S} s" in section
+    assert f"`DAY_AHEAD_MIN_START_S` = {dlr_live_run.DAY_AHEAD_MIN_START_S} s" in section
+    assert f"{dlr_live_run.DAY_AHEAD_SHARED_BUDGET_S} s" in section
+    for needle in (
+        "--no-day-ahead",
+        "pipeline_run.day_ahead",
+        "day_ahead_verify.py",
+        "DAY_AHEAD_REFIT_VERSION",
+        "weather run's age",
+    ):
+        assert needle in section, needle
+
+
 def test_phase5_files_contain_no_secret_values():
     # Control: each pattern fires on a planted line assembled at run time, so a pattern that
     # silently stopped matching cannot make the scan below pass vacuously.
@@ -170,3 +191,157 @@ def test_phase5_files_contain_no_secret_values():
                 for name in _scan_line(line):
                     findings.append(f"{path}:{number}:{name}")
     assert findings == [], "secret-shaped text in phase files: " + ", ".join(findings)
+
+
+def test_runbook_section_14_states_the_day_ahead_alarm_clause():
+    # Phase 8 (08-10, D-12): the same alarm URL also fails for a stalled day-ahead feed.
+    section = " ".join(_section(_runbook(), "Freshness alarm").split())
+
+    for needle in (
+        "day_ahead_late",
+        "day_ahead_armed",
+        "armed by the first value",
+        "12 hours",
+        "pipeline_run.day_ahead",
+        "no new cron job",
+        "pausing the pipeline pauses both",
+        "hourly catch-up",
+    ):
+        assert needle in section, needle
+
+
+def _bash_commands(text: str) -> list:
+    """Every command in a fenced bash block, with its backslash continuations joined."""
+    commands, current, language = [], None, None
+    for line in text.splitlines():
+        if line.startswith("```"):
+            if current is None:
+                current, language = [], line[3:].strip()
+            else:
+                if language in ("bash", "sh"):
+                    joined = re.sub(r"\\\n\s*", " ", "\n".join(current))
+                    commands += [row.strip() for row in joined.splitlines() if row.strip()]
+                current = None
+        elif current is not None:
+            current.append(line)
+    return commands
+
+
+def test_permission_recheck_states_the_day_ahead_surface():
+    # Phase 8 (08-10, D-09, D-17): section 16 describes the public surface that exists after the expose
+    # migration, so the owner compares like with like.
+    section = _section(_runbook(), "Permission re-check")
+    flat = " ".join(section.split())
+    rows = [line for line in section.splitlines() if line.startswith("|") and not set(line) <= set("|- ")]
+    body = {}
+    for row in rows[1:]:
+        cells = [c.strip() for c in row.strip().strip("|").split("|")]
+        body[cells[0]] = cells
+    assert len(rows[1:]) == 5, "the table keeps exactly five rows"
+
+    permission_list = " ".join(body["Database permission list"])
+    for name in ("city_rating", "latest_rating", "day_ahead_forecast", "day_ahead_upcoming", "day_ahead_status"):
+        assert name in permission_list, name
+    assert "29" in permission_list and "assert_fresh" in permission_list
+
+    writes = " ".join(body["Writes"])
+    assert "city_rating" in writes and "latest_rating" in writes and "day-ahead check" in writes
+    assert "day_ahead" not in writes.replace("day-ahead", "")  # --check-writes does not probe the day-ahead objects
+
+    smoke = " ".join(body["Writer smoke"])
+    assert "run log" in smoke and "pipeline_run" in smoke and "city_rating" in smoke
+    assert "verify_exposure.sql" in smoke and "day-ahead" in smoke
+
+    for needle in ("day_ahead_verify.py --check-rest", "08-11", "06-09", "Since Phase 8",
+                   "expected since 08-11", "not a discrepancy", "08-11-live-checks.json", "08-11-SUMMARY.md"):
+        assert needle in flat, needle
+    assert "either table" not in flat
+
+    commands = [c for c in _bash_commands(section) if "day_ahead_verify.py" in c]
+    assert len(commands) == 1 and "--check-rest" in commands[0] and "<RECHECK_DAY_AHEAD_FILE>" in commands[0]
+    done = subprocess.run(
+        [sys.executable, os.path.join(_REPO, "backend", "day_ahead_verify.py"), "--help"],
+        capture_output=True, text=True, timeout=120, cwd=_REPO,
+        env=dict(os.environ, PYTHONPATH=os.path.join(_REPO, "backend")))
+    assert done.returncode == 0, done.stderr[-300:]
+    allowed = set(re.findall(r"--[a-z][a-z0-9-]*", done.stdout))
+    flags = re.findall(r"--[a-z][a-z0-9-]*", commands[0])
+    assert flags and set(flags) <= allowed, set(flags) - allowed
+
+
+_PRIVILEGE_ORDER = ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER")
+
+
+def _writer_grants_from_the_migrations() -> dict:
+    """{object: privileges} for every table-privilege grant to dlr_writer in supabase/migrations/*.sql.
+
+    SQL `--` comments are removed first; the text inside `do $$ ... $$` blocks is read like any other
+    statement. A schema, function or sequence grant is not a table grant and is skipped. Any revoke
+    from dlr_writer fails the test, because the runbook would then state a privilege that is gone.
+    """
+    grants = {}
+    files = sorted(glob.glob(os.path.join(_REPO, "supabase", "migrations", "*.sql")))
+    assert files, "no migrations found"
+    for path in files:
+        with open(path, encoding="utf-8") as fh:
+            text = re.sub(r"--[^\n]*", "", fh.read())
+        assert not re.search(r"(?is)\brevoke\b[^;]*?\bfrom\b[^;]*\bdlr_writer\b", text), (
+            f"{os.path.basename(path)} revokes from dlr_writer; update the runbook row and this test")
+        for match in re.finditer(r"(?is)\bgrant\s+([^;]+?)\s+on\s+([^;]+?)\s+to\s+([^;]+?)\s*;", text):
+            privileges, target, grantees = match.groups()
+            if "dlr_writer" not in [g.split()[0].strip('"') for g in grantees.split(",") if g.split()]:
+                continue
+            target = " ".join(target.split())
+            if re.match(r"(?i)(schema|function|procedure|sequence|database|type|domain|language)\b", target):
+                continue
+            target = re.sub(r"(?i)^table\s+", "", target)
+            privs = {p.strip().upper() for p in privileges.split(",")}
+            for obj in (o.strip() for o in target.split(",")):
+                name = obj[len("public."):] if obj.startswith("public.") else obj
+                grants.setdefault(name, set()).update(privs)
+    return grants
+
+
+def _privilege_phrase(privileges) -> str:
+    ordered = [p for p in _PRIVILEGE_ORDER if p in privileges]
+    assert set(ordered) == set(privileges), privileges
+    if len(ordered) == 1:
+        return ordered[0]
+    return ", ".join(ordered[:-1]) + " and " + ordered[-1]
+
+
+def test_secrets_section_states_the_writer_grants_from_the_migrations():
+    # Phase 8 (08-10): the SUPABASE_DB_URL row says what dlr_writer can do, and a test reads the
+    # migrations for the truth, so a later grant that the row does not mention fails here.
+    grants = _writer_grants_from_the_migrations()
+    assert grants == {
+        "city_rating": {"SELECT", "INSERT", "UPDATE"},
+        "pipeline_run": {"SELECT", "INSERT", "UPDATE"},
+        "ops.freshness_log": {"SELECT"},
+        "day_ahead_forecast": {"SELECT", "INSERT"},
+    }, grants
+
+    section = _section(_runbook(), "Secrets")
+    rows = [line for line in section.splitlines() if line.startswith("| ") and "SUPABASE_DB_URL" in line.split("|")[1]]
+    assert len(rows) == 1
+    cells = [c.strip() for c in rows[0].strip().strip("|").split("|")]
+    assert len(cells) == 2
+    detail = cells[1]
+    assert detail.startswith("Phase 4's writer connection: the session pooler URL (port 5432) for the `dlr_writer` role")
+    assert "the two tables" not in detail and "nothing else" not in detail
+    for name in grants:
+        assert "`%s`" % name in detail, name
+    # each clause starts with the privilege phrase and names the objects that hold exactly that set
+    clauses = [c.strip() for c in detail.split("define them:", 1)[1].split(";")]
+    by_phrase = {}
+    for name, privileges in grants.items():
+        by_phrase.setdefault(_privilege_phrase(privileges), []).append(name)
+    for phrase, names in by_phrase.items():
+        matching = [c for c in clauses if c.startswith(phrase + " on ")]
+        assert len(matching) == 1, (phrase, clauses)
+        for name in names:
+            assert "`%s`" % name in matching[0], (phrase, name)
+        for other in grants:
+            if other not in names:
+                assert "`%s`" % other not in matching[0], (phrase, other)
+    assert "no UPDATE" in detail and "no DELETE" in detail

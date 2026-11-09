@@ -72,7 +72,8 @@ import config
 import forecast_correction_models as fcm
 import forecast_experiment
 import forecast_shadow_confirm as conf
-import forecast_shadow_decision as decision
+import forecast_shadow_decision as decision          # retired v3 rule: kept for its own refusal test
+import forecast_shadow_decision_v4 as decision_v4
 import forecast_shadow_eval_core as core
 import forecast_shadow_fit_models as fit_models
 import forecast_shadow_pipeline as pipeline
@@ -90,16 +91,16 @@ WIND, COOL, RAW, PERSIST, REF = (
     "ml_wind_corrected", "ml_cooling_corrected", "raw_forecast", "persistence_24h", "reference_ml_refit_24h")
 CANDS = (WIND, COOL, RAW, PERSIST, REF)
 SENTINEL = 4321.987
-SMALL = {"n_resamples": 300}     # development basis only; a FRESH run with this needs an override
+SMALL = {"n_resamples": 300}     # development basis only; a FRESH run with this is refused (no override helps)
 DEV_NOW = "2026-10-13T08:00:00Z"
-INSTANT = "2026-11-24T00:00:00Z"
-BEFORE_INSTANT = "2026-11-23T23:59:59Z"
+INSTANT = "2026-11-01T00:00:00Z"            # the v4-read1 evaluation instant
+BEFORE_INSTANT = "2026-10-31T23:59:59Z"
 CUTOFF = core.VALID_TIME_CUTOFF_DEFAULT
 DEV_WINDOW = ("2026-04-01T00:00:00Z", "2026-06-01T00:00:00Z")
 SLOTS = pd.date_range("2026-04-01T00:00:00Z", "2026-05-31T18:00:00Z", freq="6h")   # 244 slots per city
 PROD_SHIFT_DAYS = 182          # production-window dates 2026-09-28.. map onto fixture 2026-03-30..
 FRESH_LOG_SHIFT_DAYS = 200     # FRESH-calendar logs: 2026-04-01 -> 2026-10-18
-PROD_SLOTS = SLOTS[:192]       # fixture-time slots behind the 192 production-window slots
+PROD_SLOTS = SLOTS[:100]       # fixture-time slots behind the 100 production-window slots of v4-read1
 HALF = pd.Timedelta(hours=12)
 DAY = pd.Timedelta(hours=24)
 TOL = 1e-9
@@ -547,6 +548,25 @@ def evidence_root(tmp_path):
     return str(tmp_path / "evidence")
 
 
+def no_veto_record() -> dict:
+    """A synthetic ABLATION + TEST veto record in which nothing is vetoed (every FRESH-calendar decision run needs one)."""
+    section = lambda: {"vetoes": {c: {"vetoed": False, "reasons": []} for c in core.REAL_CANDIDATES}}
+    return {"protocol": "v4", "ablation": section(), "test": section()}
+
+
+def write_veto_file(tmp_path) -> str:
+    """A veto file with its two source reports (sha256 recorded) for the CLI's --vetoes."""
+    record = {"protocol": "v4"}
+    for basis in ("ablation", "test"):
+        report = tmp_path / f"{basis}_report.json"
+        report.write_text(json.dumps({"synthetic": basis}), encoding="utf-8")
+        record[basis] = {"report": str(report), "sha256": hashlib.sha256(report.read_bytes()).hexdigest(),
+                         "vetoes": {c: {"vetoed": False, "reasons": []} for c in core.REAL_CANDIDATES}}
+    path = tmp_path / "vetoes.json"
+    path.write_text(json.dumps(record), encoding="utf-8")
+    return str(path)
+
+
 def score_logs(pred_dir, evidence_root, *, cities=("AUSTIN",), now=DEV_NOW, params=SMALL, guard_cfg=None, **kw):
     return score_mod.score(str(pred_dir), cities=list(cities), guard_cfg=guard_cfg or core.GuardConfig(),
                            evidence_root=str(evidence_root), now=now, params=params, **kw)
@@ -694,7 +714,17 @@ def test_log_family_margins_equal_the_complete_case_oracle(logs_base):
         if WIND in (c["a"], c["b"]) or COOL in (c["a"], c["b"]):
             assert core.FLAG_V1 in c["flags"]
     assert logs_base.report["decision"]["row_source"] == "shadow_logs"
-    assert logs_base.report["decision"]["label"] == "live-system check"
+    assert logs_base.report["decision"]["rule"] == "v4"
+    assert logs_base.report["decision"]["label"] == "live-system check, never decides"
+    assert logs_base.report["decision"]["pick"] is None
+
+
+def test_log_truth_stats_equal_the_oracle_mean_truth_and_feed_the_live_decision(logs_base):
+    for city in CITIES:
+        mean_truth = float(world(city).truth[SLOTS].mean())
+        assert logs_base.report["truth_stats"][city] == {"mean_truth_amps": pytest.approx(mean_truth, abs=TOL, rel=0),
+                                                         "n_truth_rows": 244}
+        assert logs_base.report["decision"]["bars"]["per_city"][city] == pytest.approx(0.02 * mean_truth, abs=TOL, rel=0)
 
 
 def test_log_anchor_source_split_equals_the_oracle(logs_base):
@@ -790,6 +820,7 @@ def test_port_metrics_and_family_margins_equal_numpy(port_base, stub_models):
     for c in report["family"]["comparisons"]:
         assert c["row_source"] == "reconstructed_frames" and c["flags"] == [core.FLAG_V4]
     assert report["decision"]["row_source"] == "reconstructed_frames" and report["decision"]["label"] == "headline decision"
+    assert report["decision"]["rule"] == "v4" and set(report["truth_stats"]) == set(CITIES)
 
 
 # ==========================================================================
@@ -1017,19 +1048,20 @@ def test_fault_rows_lacking_forecast_model_and_other_models_never_reach_a_metric
 
 
 def test_fault_rows_at_or_after_the_cutoff_and_a_reference_target_at_or_after_it(monkeypatch, tmp_path):
-    # FRESH-calendar log (+200 days) restricted to logged valid times 2026-11-15T00Z .. 2026-11-17T06Z
-    indices = range(112, 122)
+    # FRESH-calendar log (+200 days) restricted to logged valid times 2026-10-23T00Z .. 2026-10-25T06Z
+    indices = range(20, 30)
     report, server = run_log_fault(monkeypatch, tmp_path, shift_days=FRESH_LOG_SHIFT_DAYS, indices=indices,
                                    now=INSTANT, params=None)
     assert report["basis"] == "FRESH" and report["guard"]["defaults_used"]
     excl = report["exclusions"]["AUSTIN"]
     assert excl["row_level"]["at_or_after_cutoff"] == 2          # exactly the cutoff and cutoff + 6 h
     block = report["per_city"]["AUSTIN"]
-    assert block["n_in_scope"] == 8                              # cutoff - 6 h (2026-11-16T18Z) is kept
-    assert server.calls[0][1]["end_date"] == "2026-11-16"        # never fetches the cutoff day
-    # own target hour (valid + 12 h) at or after the cutoff: the rows valid 2026-11-16T12Z and T18Z
+    assert block["n_in_scope"] == 8                              # cutoff - 6 h (2026-10-24T18Z) is kept
+    assert server.calls[0][1]["end_date"] == "2026-10-24"        # never fetches the cutoff day
+    # own target hour (valid + 12 h) at or after the cutoff: the rows valid 2026-10-24T12Z and T18Z
     assert block["candidate_exclusions"][REF] == {"reference_target_at_or_after_cutoff": 2}
-    assert block["n_scored"] == {WIND: 8, COOL: 8, RAW: 8, PERSIST: 8, REF: 6}
+    # row index 20 is a multiple of 10, so its persistence is unavailable by construction of the log fixture
+    assert block["n_scored"] == {WIND: 8, COOL: 8, RAW: 8, PERSIST: 7, REF: 6}
     errs = {"AUSTIN": oracle_log_errors("AUSTIN", shift_days=FRESH_LOG_SHIFT_DAYS, cutoff=CUTOFF, only=set(indices))}
     for cand in CANDS:
         assert_metrics_equal(block["metrics"][cand], errs["AUSTIN"][cand].to_numpy())
@@ -1098,6 +1130,7 @@ def test_port_fault_a_nan_weather_hour_is_missing_from_reconstruction_and_poison
 def prod_run(monkeypatch, evidence_root, *, cities=CITIES, now=INSTANT, fail_previous=(), params=None, guard_cfg=None, **kw):
     """The production path: anchored_pair_frame behind the recorder, fed by a fake server that re-dates the fixture."""
     server = FakeServer(monkeypatch, shift_days=PROD_SHIFT_DAYS, fail_previous=fail_previous)
+    kw.setdefault("vetoes", no_veto_record())          # a FRESH decision read needs the record (SEL-03)
     report = conf.run_confirmation(cities=list(cities), guard_cfg=guard_cfg or core.GuardConfig(), evidence_root=str(evidence_root),
                                    now=now, params=params, **kw)
     return report, server
@@ -1116,7 +1149,7 @@ def test_port_fault_http_503_on_one_citys_previous_runs_is_named_not_retried_and
     errs = {}
     for city in ("AUSTIN", "CORPUS_CHRISTI", "EL_PASO"):
         errs[city] = port_errors(port_oracle(city, stub_models[city], PROD_SLOTS))
-        assert report["per_city"][city]["n_scored"] == {c: 192 for c in CANDS}
+        assert report["per_city"][city]["n_scored"] == {c: 100 for c in CANDS}
         for cand in CANDS:
             assert_metrics_equal(report["per_city"][city]["metrics"][cand], errs[city][cand].to_numpy())
     errs["MIDLAND"] = pd.DataFrame({c: pd.Series(dtype=float) for c in CANDS})
@@ -1164,8 +1197,9 @@ def test_logs_at_the_instant_score_fresh_rows_and_exclude_everything_from_the_cu
     assert len(server.calls) == 4
     errs = {}
     for city in CITIES:
-        assert report["exclusions"][city]["row_level"]["at_or_after_cutoff"] == 124        # logged 2026-11-17 .. 2026-12-17
-        assert report["per_city"][city]["n_in_scope"] == 120
+        # 244 logged slots 2026-10-18 .. 2026-12-17: 28 before the 2026-10-25 cutoff, the other 216 at or after it
+        assert report["exclusions"][city]["row_level"]["at_or_after_cutoff"] == 216
+        assert report["per_city"][city]["n_in_scope"] == 28
         errs[city] = oracle_log_errors(city, shift_days=FRESH_LOG_SHIFT_DAYS, cutoff=CUTOFF)
         for cand in CANDS:
             assert_metrics_equal(report["per_city"][city]["metrics"][cand], errs[city][cand].to_numpy())
@@ -1174,13 +1208,23 @@ def test_logs_at_the_instant_score_fresh_rows_and_exclude_everything_from_the_cu
     _assert_pooled_nominal_not_judged(report)
 
 
-def test_logs_override_is_recorded_in_json_and_markdown(monkeypatch, tmp_path, evidence_root):
+def test_logs_override_text_is_refused_for_a_fresh_run_and_is_still_recorded_for_a_development_run(monkeypatch, tmp_path, evidence_root):
+    # v4: the old "rehearsal of the evaluation day" override let a FRESH run through early; the refusal replaces it
     pred = _fresh_logs(tmp_path)
-    FakeServer(monkeypatch, shift_days=FRESH_LOG_SHIFT_DAYS)
-    report = score_logs(pred, evidence_root, now=BEFORE_INSTANT, guard_cfg=core.GuardConfig(override_reason="rehearsal of the evaluation day"))
-    assert report["guard"]["override_reason"] == "rehearsal of the evaluation day"
-    assert read_json(report)["guard"]["override_reason"] == "rehearsal of the evaluation day"
-    assert "Override: rehearsal of the evaluation day" in read_md(report)
+    server = FakeServer(monkeypatch, shift_days=FRESH_LOG_SHIFT_DAYS)
+    for now in (BEFORE_INSTANT, INSTANT):
+        with pytest.raises(core.EvaluationGuardError, match="take no override"):
+            score_logs(pred, evidence_root, now=now, guard_cfg=core.GuardConfig(override_reason="rehearsal of the evaluation day"))
+    assert server.calls == [] and not os.path.exists(evidence_root)
+    # development rows keep the recorded override
+    dev_pred = tmp_path / "dev_pred"
+    write_logs(dev_pred, ["AUSTIN"], 0)
+    with monkeypatch.context() as m:
+        FakeServer(m)
+        report = score_logs(dev_pred, tmp_path / "ev_dev", guard_cfg=core.GuardConfig(override_reason="rehearsal on development data"))
+    assert report["basis"] == "development"
+    assert read_json(report)["guard"]["override_reason"] == "rehearsal on development data"
+    assert "Override: rehearsal on development data" in read_md(report)
 
 
 def test_logs_second_fresh_run_is_refused_even_after_a_first_run_that_crashed(monkeypatch, tmp_path, evidence_root):
@@ -1189,11 +1233,13 @@ def test_logs_second_fresh_run_is_refused_even_after_a_first_run_that_crashed(mo
     first = score_logs(pred, evidence_root, now=INSTANT, params=None)
     assert first["basis"] == "FRESH"
     with pytest.raises(core.EvaluationGuardError, match="second FRESH run"):
-        score_logs(pred, evidence_root, now="2026-11-24T00:00:05Z", params=None)
+        score_logs(pred, evidence_root, now="2026-11-01T00:00:05Z", params=None)
     assert len(os.listdir(evidence_root)) == 1
-    again = score_logs(pred, evidence_root, now="2026-11-24T00:00:09Z",
-                       guard_cfg=core.GuardConfig(override_reason="owner-approved rerun"), params=None)
-    assert again["guard"]["prior_fresh_runs"] and again["guard"]["override_reason"] == "owner-approved rerun"
+    # an "owner-approved rerun" text no longer reopens the one-shot read
+    with pytest.raises(core.EvaluationGuardError, match="take no override"):
+        score_logs(pred, evidence_root, now="2026-11-01T00:00:09Z",
+                   guard_cfg=core.GuardConfig(override_reason="owner-approved rerun"), params=None)
+    assert len(os.listdir(evidence_root)) == 1
 
     other_root = str(tmp_path / "evidence_crash")
     with monkeypatch.context() as m:
@@ -1204,15 +1250,18 @@ def test_logs_second_fresh_run_is_refused_even_after_a_first_run_that_crashed(mo
     assert os.path.isfile(os.path.join(other_root, run_dir, "run_started.json"))
     assert not os.path.exists(os.path.join(other_root, run_dir, "report.json"))
     with pytest.raises(core.EvaluationGuardError, match="second FRESH run"):
-        score_logs(pred, other_root, now="2026-11-24T00:01:00Z", params=None)
+        score_logs(pred, other_root, now="2026-11-01T00:01:00Z", params=None)
 
 
-def test_logs_nondefault_block_lengths_in_a_fresh_run_are_refused_without_an_override(monkeypatch, tmp_path, evidence_root, capsys):
+def test_logs_nondefault_block_lengths_in_a_fresh_run_are_refused_and_no_override_helps(monkeypatch, tmp_path, evidence_root, capsys):
     pred = _fresh_logs(tmp_path)
     monkeypatch.setattr(core, "utcnow", lambda: pd.Timestamp(INSTANT))
     code = score_mod.main(["--predictions-dir", str(pred), "--cities", "AUSTIN", "--evidence-root", evidence_root,
                            "--block-lengths", "1", "2"])
-    assert code == 2 and "override" in capsys.readouterr().err
+    assert code == 2 and "no override" in capsys.readouterr().err
+    code = score_mod.main(["--predictions-dir", str(pred), "--cities", "AUSTIN", "--evidence-root", evidence_root,
+                           "--block-lengths", "1", "2", "--override-reason", "smaller blocks"])
+    assert code == 2 and "no override" in capsys.readouterr().err
     assert not os.path.exists(evidence_root)
     with pytest.raises(SystemExit):
         score_mod.build_parser().parse_args(["--row-gate", "1"])
@@ -1225,12 +1274,13 @@ def test_port_guard_refuses_before_the_instant_before_any_request_frame_build_ar
     monkeypatch.setattr(forecast_experiment, "anchored_pair_frame", boom)
     monkeypatch.setattr(pipeline, "load_correction_model", boom)
     with pytest.raises(core.EvaluationGuardError, match="evaluation instant"):
-        conf.run_confirmation(cities=CITIES, guard_cfg=core.GuardConfig(), evidence_root=evidence_root, now=BEFORE_INSTANT)
+        conf.run_confirmation(cities=CITIES, guard_cfg=core.GuardConfig(), evidence_root=evidence_root, now=BEFORE_INSTANT,
+                              vetoes=no_veto_record())
     assert not os.path.exists(evidence_root)
     assert not os.path.exists(config.FORECAST_EXPERIMENT_CACHE_DIR)
 
 
-def test_port_at_the_instant_scores_192_fresh_slots_per_city_and_matches_the_oracle(monkeypatch, evidence_root, model_dir, stub_models):
+def test_port_at_the_instant_scores_100_fresh_slots_per_city_and_matches_the_oracle(monkeypatch, evidence_root, model_dir, stub_models):
     report, server = prod_run(monkeypatch, evidence_root)
     assert report["basis"] == "FRESH" and report["guard"]["defaults_used"] and report["guard"]["override_reason"] is None
     assert len(server.calls) == 8 and all(len(server.calls_for(c)) == 2 for c in CITIES)
@@ -1240,39 +1290,49 @@ def test_port_at_the_instant_scores_192_fresh_slots_per_city_and_matches_the_ora
     errs = {}
     for city in CITIES:
         errs[city] = port_errors(port_oracle(city, stub_models[city], PROD_SLOTS))
-        assert report["per_city"][city]["n_scored"] == {c: 192 for c in CANDS}
+        assert report["per_city"][city]["n_scored"] == {c: 100 for c in CANDS}
         for cand in CANDS:
             assert_metrics_equal(report["per_city"][city]["metrics"][cand], errs[city][cand].to_numpy())
         diag = report["diagnostics"][city]
         assert diag["leakage_probe"]["passed"] and diag["archive_vs_frame_truth"]["max_abs_diff_weather"] == 0.0
         assert diag["missing_slots"] == []
     assert_family_equals_oracle(report["family"], errs)
+    for city in CITIES:                     # the decision's bars come from the independent oracle's mean truth
+        mean_truth = float(port_oracle(city, stub_models[city], PROD_SLOTS)["truth_amps"].mean())
+        assert report["truth_stats"][city] == {"mean_truth_amps": pytest.approx(mean_truth, abs=TOL, rel=0), "n_truth_rows": 100}
+        assert report["decision"]["bars"]["per_city"][city] == pytest.approx(0.02 * mean_truth, abs=TOL, rel=0)
+    assert report["decision"]["rule"] == "v4" and report["decision"]["round"] == "v4-read1"
     ev = report["evidence_dir"]
     assert len([f for f in os.listdir(os.path.join(ev, "http")) if f.endswith(".body")]) == 8
     assert len(os.listdir(os.path.join(ev, "frames"))) == 4
     assert not os.path.exists(config.FORECAST_EXPERIMENT_CACHE_DIR)                # nothing under the (real-path stand-in) cache dir
     assert "DEVELOPMENT DATA" not in read_md(report)
     _assert_pooled_nominal_not_judged(report)
-    assert report["sample_size"]["pooled_nominal"]["n_scored"][RAW] == 768
+    assert report["sample_size"]["pooled_nominal"]["n_scored"][RAW] == 400
 
 
-def test_port_override_is_recorded_in_json_and_markdown(monkeypatch, evidence_root, model_dir):
-    report, _ = prod_run(monkeypatch, evidence_root, cities=["AUSTIN"], now=BEFORE_INSTANT,
-                         guard_cfg=core.GuardConfig(override_reason="rehearsal of the evaluation day"))
-    assert report["guard"]["override_reason"] == "rehearsal of the evaluation day"
-    assert read_json(report)["guard"]["override_reason"] == "rehearsal of the evaluation day"
-    assert "Override: rehearsal of the evaluation day" in read_md(report)
+def test_port_override_text_is_refused_for_a_fresh_run_before_any_request(monkeypatch, evidence_root, model_dir):
+    # v4: the old "rehearsal of the evaluation day" override ran the port on FRESH rows early; now it is refused
+    server = FakeServer(monkeypatch, shift_days=PROD_SHIFT_DAYS)
+    for now in (BEFORE_INSTANT, INSTANT):
+        with pytest.raises(core.EvaluationGuardError, match="take no override"):
+            conf.run_confirmation(cities=["AUSTIN"], evidence_root=str(evidence_root), now=now, params=None,
+                                  vetoes=no_veto_record(),
+                                  guard_cfg=core.GuardConfig(override_reason="rehearsal of the evaluation day"))
+    assert server.calls == [] and not os.path.exists(evidence_root)
 
 
 def test_port_second_fresh_run_is_refused_even_after_a_first_run_that_crashed(monkeypatch, evidence_root, model_dir, tmp_path):
     first, _ = prod_run(monkeypatch, evidence_root, cities=["AUSTIN"])
     assert first["basis"] == "FRESH"
     with pytest.raises(core.EvaluationGuardError, match="second FRESH run"):
-        prod_run(monkeypatch, evidence_root, cities=["AUSTIN"], now="2026-11-24T00:00:05Z")
+        prod_run(monkeypatch, evidence_root, cities=["AUSTIN"], now="2026-11-01T00:00:05Z")
     assert len(os.listdir(evidence_root)) == 1
-    again, _ = prod_run(monkeypatch, evidence_root, cities=["AUSTIN"], now="2026-11-24T00:00:09Z",
-                        guard_cfg=core.GuardConfig(override_reason="owner-approved rerun"))
-    assert again["guard"]["prior_fresh_runs"] and again["guard"]["override_reason"] == "owner-approved rerun"
+    # an "owner-approved rerun" text no longer reopens the one-shot read
+    with pytest.raises(core.EvaluationGuardError, match="take no override"):
+        prod_run(monkeypatch, evidence_root, cities=["AUSTIN"], now="2026-11-01T00:00:09Z",
+                 guard_cfg=core.GuardConfig(override_reason="owner-approved rerun"))
+    assert len(os.listdir(evidence_root)) == 1
 
     other_root = str(tmp_path / "evidence_crash")
     with monkeypatch.context() as m:
@@ -1283,13 +1343,21 @@ def test_port_second_fresh_run_is_refused_even_after_a_first_run_that_crashed(mo
     assert os.path.isfile(os.path.join(other_root, run_dir, "run_started.json"))
     assert not os.path.exists(os.path.join(other_root, run_dir, "report.json"))
     with pytest.raises(core.EvaluationGuardError, match="second FRESH run"):
-        prod_run(monkeypatch, other_root, cities=["AUSTIN"], now="2026-11-24T00:01:00Z")
+        prod_run(monkeypatch, other_root, cities=["AUSTIN"], now="2026-11-01T00:01:00Z")
 
 
-def test_port_nondefault_block_lengths_in_a_fresh_run_are_refused_without_an_override(monkeypatch, evidence_root, capsys):
+def test_port_nondefault_block_lengths_in_a_fresh_run_are_refused_and_no_override_helps(monkeypatch, evidence_root, capsys, tmp_path):
+    # Isolate the block-length refusal from the conductor-basis pre-check: every city at the Drake point (AUSTIN's 100 C
+    # since v3 would otherwise be refused first for lacking refit artifacts in this synthetic world).
+    table = {c: dict(v) for c, v in config.PRODUCTION_CONDUCTORS.items()}
+    table["AUSTIN"]["max_temp_c"] = 75.0
+    monkeypatch.setattr(config, "PRODUCTION_CONDUCTORS", table)
     monkeypatch.setattr(core, "utcnow", lambda: pd.Timestamp(INSTANT))
-    assert conf.main(["--evidence-root", evidence_root, "--block-lengths", "1", "2"]) == 2
-    assert "override" in capsys.readouterr().err
+    deciding = ["--vetoes", write_veto_file(tmp_path), "--protocol-status", "signed"]
+    assert conf.main(["--evidence-root", evidence_root, *deciding, "--block-lengths", "1", "2"]) == 2
+    assert "no override" in capsys.readouterr().err
+    assert conf.main(["--evidence-root", evidence_root, *deciding, "--block-lengths", "1", "2", "--override-reason", "x"]) == 2
+    assert "no override" in capsys.readouterr().err
     assert not os.path.exists(evidence_root)
 
 
@@ -1312,7 +1380,7 @@ def test_the_real_fresh_cache_paths_are_refused_and_the_frozen_window_paths_are_
             pd.read_csv(path)
         core.assert_not_fresh_experiment_cache(FROZEN_CACHE.format(city=city))
     # a FRESH-window cache is allowed only inside the run's own evidence directory
-    inside = tmp_path / "evidence" / "reconstructed_frames_x" / "frames" / "anchored_pair_frame_AUSTIN_2026-09-28_2026-11-16_lead24_previous_runs.csv"
+    inside = tmp_path / "evidence" / "reconstructed_frames_x" / "frames" / "anchored_pair_frame_AUSTIN_2026-09-28_2026-10-24_lead24_previous_runs.csv"
     core.assert_not_fresh_experiment_cache(str(inside), allow_dir=str(tmp_path / "evidence"))
     with pytest.raises(core.EvaluationGuardError):
         core.assert_not_fresh_experiment_cache(str(inside), allow_dir=str(tmp_path / "elsewhere"))
@@ -1340,7 +1408,7 @@ def test_no_evaluator_mode_opens_a_fresh_experiment_cache_outside_its_own_eviden
     write_logs(fresh_logs, ["AUSTIN"], FRESH_LOG_SHIFT_DAYS)
     # count-only (permitted at any time: no request, no ampacity)
     counts = score_mod.count_only_report(str(fresh_logs), ["AUSTIN"], core.GuardConfig())
-    assert counts["cities"]["AUSTIN"]["counters"]["in_scope_rows"] == 120
+    assert counts["cities"]["AUSTIN"]["counters"]["in_scope_rows"] == 28
     # dry run of the port
     plan = conf.dry_run(cities=CITIES, guard_cfg=core.GuardConfig(), evidence_root=evidence_root, now=DEV_NOW)
     assert len(plan["planned_requests"]) == 8
@@ -1378,7 +1446,8 @@ def test_the_port_refuses_a_preexisting_fresh_window_cache_before_anchored_pair_
     monkeypatch.setattr(core, "new_evidence_dir", seeded_new_evidence_dir)
     monkeypatch.setattr(forecast_experiment, "anchored_pair_frame", lambda *a, **k: called.append(a) or real_frame(*a, **k))
     with pytest.raises(core.EvaluationGuardError, match="already exists"):
-        conf.run_confirmation(cities=["AUSTIN"], guard_cfg=core.GuardConfig(), evidence_root=evidence_root, now=INSTANT)
+        conf.run_confirmation(cities=["AUSTIN"], guard_cfg=core.GuardConfig(), evidence_root=evidence_root, now=INSTANT,
+                              vetoes=no_veto_record())
     assert called == [] and server.calls == []
 
 
@@ -1419,6 +1488,7 @@ def test_each_tool_reports_only_its_own_row_source(logs_base, port_base):
 
 
 def test_apply_ship_rule_refuses_a_family_that_mixes_row_sources(port_base, logs_base):
+    """The retired v3 module (frozen, byte-identical since d71c501) still refuses mixed sources."""
     mixed = copy.deepcopy(port_base.report["family"])
     mixed["comparisons"][4]["row_source"] = "shadow_logs"
     with pytest.raises(ValueError, match="mixes row sources"):
@@ -1460,13 +1530,29 @@ def test_build_family_report_refuses_error_frames_tagged_with_two_row_sources(mo
         real({"AUSTIN": log_frames["AUSTIN"]}, row_source="pooled")
 
 
+def test_apply_ship_rule_v4_refuses_a_family_that_mixes_row_sources(port_base, logs_base):
+    truth = port_base.report["truth_stats"]
+    mixed = copy.deepcopy(port_base.report["family"])
+    mixed["comparisons"][4]["row_source"] = "shadow_logs"
+    with pytest.raises(ValueError, match="mixes row sources"):
+        decision_v4.apply_ship_rule_v4(mixed, truth_stats=truth, round_name="v4-read1", label="headline", require_vetoes=False)
+    relabelled = copy.deepcopy(logs_base.report["family"])
+    relabelled["row_source"] = "reconstructed_frames"
+    with pytest.raises(ValueError, match="row source"):
+        decision_v4.apply_ship_rule_v4(relabelled, truth_stats=truth, round_name="v4-read1", label="live", require_vetoes=False)
+    # the live-system check can never carry the headline label
+    with pytest.raises(ValueError, match="never decides"):
+        decision_v4.apply_ship_rule_v4(logs_base.report["family"], truth_stats=logs_base.report["truth_stats"],
+                                       round_name="v4-read1", label="headline", require_vetoes=False)
+
+
 def test_combined_summary_keeps_the_two_sources_apart_and_never_adds_their_counts(small_reports):
     logs, port = small_reports.logs, small_reports.port
     assert logs["per_city"]["AUSTIN"]["n_scored"][RAW] == 50 and port["per_city"]["AUSTIN"]["n_scored"][RAW] == 190
-    text = decision.combined_summary(port, logs)
-    # the runbook's one-liner feeds the two saved report.json files to combined_summary: same lines (report.json is
+    text = decision_v4.combined_summary_v4(port, logs)
+    # the runbook's one-liner feeds the two saved report.json files to combined_summary_v4: same lines (report.json is
     # written with sorted keys, so only the order of the three candidate lines inside a section can differ)
-    from_disk = decision.combined_summary(read_json(port), read_json(logs))
+    from_disk = decision_v4.combined_summary_v4(read_json(port), read_json(logs))
     assert sorted(from_disk.splitlines()) == sorted(text.splitlines())
     head, rest = text.split("## Live-system check")
     live, agreement = rest.split("## Agreement")
@@ -1474,14 +1560,17 @@ def test_combined_summary_keeps_the_two_sources_apart_and_never_adds_their_count
     assert "row source: shadow_logs" in live and "45 to 50" in live and "190" not in live
     assert "240" not in text and "235" not in text                      # 50 + 190 and 45 + 190 never appear
     # the headline decision is exactly the reconstructed report's decision; the live check is the logs report's own
-    assert f"Action: ship {port['decision']['action']['ship']} ({port['decision']['action']['level']})" in head
-    assert f"Action: ship {logs['decision']['action']['ship']} ({logs['decision']['action']['level']})" in live
-    assert f"Working choice: {port['decision']['working_choice']}" in head
+    hd, ld = port["decision"], logs["decision"]
+    assert (f"Pick: {hd['pick']}" if hd["pick"] else "No pick.") in head
+    assert f"Reported pick: None (live-system check, never decides). Would-be outcome under the v4 rule: " \
+           f"{ld['rule_outcome'] or 'no candidate qualifies'}." in live
     assert "never changes the headline decision" in agreement
-    assert port["decision"]["label"] == "headline decision" and logs["decision"]["label"] == "live-system check"
+    assert hd["label"] == "headline decision" and ld["label"] == "live-system check, never decides"
+    assert hd["rule"] == ld["rule"] == "v4" and ld["pick"] is None
+    for pair in ((logs, port), (port, port), (logs, logs)):
+        with pytest.raises(ValueError, match="never swapped or duplicated"):
+            decision_v4.combined_summary_v4(*pair)
     with pytest.raises(ValueError, match="never swapped or duplicated"):
-        decision.combined_summary(logs, port)
+        decision_v4.combined_summary_v4(port, logs, port)               # a secondary that is the headline report itself
     with pytest.raises(ValueError, match="never swapped or duplicated"):
-        decision.combined_summary(port, port)
-    with pytest.raises(ValueError, match="never swapped or duplicated"):
-        decision.combined_summary(logs, logs)
+        decision_v4.combined_summary_v4(port, logs, logs)               # a secondary from the wrong row source

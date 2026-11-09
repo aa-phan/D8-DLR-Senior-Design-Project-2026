@@ -1,0 +1,83 @@
+{
+  "archive_rows_by_city": {
+    "AUSTIN": 504,
+    "CORPUS_CHRISTI": 504,
+    "EL_PASO": 504,
+    "MIDLAND": 504
+  },
+  "backfill_argv": [
+    "backend/real_data_validation.py",
+    "replay",
+    "--archive",
+    "data/historical/real_data_validation_2026-09-08_2026-09-28.csv",
+    "--trace",
+    "data/historical/real_data_validation_2026-09-08_2026-09-28_trace.jsonl",
+    "--start",
+    "2026-09-08T00:00:00Z",
+    "--end",
+    "2026-09-28T23:00:00Z",
+    "--step-hours",
+    "1",
+    "--method",
+    "ml",
+    "--warmup-hours",
+    "168",
+    "--archive-out",
+    "data/historical/real_data_validation_2026-09-08_2026-09-28_replay_ml_p7.csv",
+    "--trace-out",
+    "data/historical/real_data_validation_2026-09-08_2026-09-28_replay_ml_p7_trace.jsonl",
+    "--log-out",
+    "data/historical/real_data_validation_2026-09-08_2026-09-28_replay_ml_p7_log.csv",
+    "--fidelity-out",
+    "data/historical/real_data_validation_2026-09-08_2026-09-28_replay_ml_p7_fidelity.json"
+  ],
+  "cities": [
+    "AUSTIN",
+    "CORPUS_CHRISTI",
+    "MIDLAND",
+    "EL_PASO"
+  ],
+  "command": "PYTHONPATH=backend .venv/bin/python -c 'from dotenv import load_dotenv; load_dotenv('\"'\"'.env'\"'\"'); import sys, backfill_archive; sys.exit(backfill_archive.main(['\"'\"'backend/real_data_validation.py'\"'\"', '\"'\"'replay'\"'\"', '\"'\"'--archive'\"'\"', '\"'\"'data/historical/real_data_validation_2026-09-08_2026-09-28.csv'\"'\"', '\"'\"'--trace'\"'\"', '\"'\"'data/historical/real_data_validation_2026-09-08_2026-09-28_trace.jsonl'\"'\"', '\"'\"'--start'\"'\"', '\"'\"'2026-09-08T00:00:00Z'\"'\"', '\"'\"'--end'\"'\"', '\"'\"'2026-09-28T23:00:00Z'\"'\"', '\"'\"'--step-hours'\"'\"', '\"'\"'1'\"'\"', '\"'\"'--method'\"'\"', '\"'\"'ml'\"'\"', '\"'\"'--warmup-hours'\"'\"', '\"'\"'168'\"'\"', '\"'\"'--archive-out'\"'\"', '\"'\"'data/historical/real_data_validation_2026-09-08_2026-09-28_replay_ml_p7.csv'\"'\"', '\"'\"'--trace-out'\"'\"', '\"'\"'data/historical/real_data_validation_2026-09-08_2026-09-28_replay_ml_p7_trace.jsonl'\"'\"', '\"'\"'--log-out'\"'\"', '\"'\"'data/historical/real_data_validation_2026-09-08_2026-09-28_replay_ml_p7_log.csv'\"'\"', '\"'\"'--fidelity-out'\"'\"', '\"'\"'data/historical/real_data_validation_2026-09-08_2026-09-28_replay_ml_p7_fidelity.json'\"'\"']))'",
+  "files": {
+    "archive": {
+      "bytes": 214981,
+      "path": "data/historical/real_data_validation_2026-09-08_2026-09-28_replay_ml_p7.csv",
+      "sha256": "77fbe15b2d249f0e12aa337d356fafd1119189fe8826963c947e08576efffe51"
+    },
+    "log": {
+      "bytes": 114051,
+      "path": "data/historical/real_data_validation_2026-09-08_2026-09-28_replay_ml_p7_log.csv",
+      "sha256": "22e67f0450719561019964310eadad9b8e19932ccbb2c182dcc1b1838dc2f9fd"
+    },
+    "trace": {
+      "bytes": 2533301,
+      "path": "data/historical/real_data_validation_2026-09-08_2026-09-28_replay_ml_p7_trace.jsonl",
+      "sha256": "02bfbc03340ab3253e00adadb580c4a722058ec9fca25dc05650002df9e1beea"
+    }
+  },
+  "forecast_method": "ml",
+  "git": {
+    "backend_dirty": false,
+    "head": "dae287ac49044b272e979f698e752425eff1d5d4"
+  },
+  "label": "PROVISIONAL (OD-5): static ratings, rating bounds and line bearings are unconfirmed assumptions; this record measures, it does not decide.",
+  "models": {
+    "anomaly_AUSTIN.joblib": "2ecaead8d2be2fb7bcc179bef82958b536f73f34b6959b9b63a22f0faa83f6a4",
+    "anomaly_CORPUS_CHRISTI.joblib": "9fbc26ab8907a033e013b4e67881b4bc0d399de74f912ba7ee9423fa920c8cc0",
+    "anomaly_EL_PASO.joblib": "d4431d56fabd8514df228b585ccc5c156a2c12b7653f57363236c9c79a7aaf37",
+    "anomaly_MIDLAND.joblib": "d1b2ac321a79ec77a6d16314c3a2b8cfc6cd370e38a526b4370cc758b03c4f9b",
+    "forecast_AUSTIN.joblib": "60b7e1349ccfcd2e3d6ffafd4ce582dbd3da01baae6848b5c4ebe9be005399e7",
+    "forecast_CORPUS_CHRISTI.joblib": "43d9115f2b96ce6ea2392a959c8f6c2414d5d2c9d32bf22140848cf30cbfb92d",
+    "forecast_EL_PASO.joblib": "3dc69b7e0f95e53f1c9ae539728d82d66f736bccef208db612be8c635b0b583e",
+    "forecast_MIDLAND.joblib": "875fdbb394ad4737802321f9a9798652cce13e56833eb448b7dbd7ff978669c4"
+  },
+  "schema": "real_data_validation_manifest/1",
+  "window": {
+    "end": "2026-09-28T23:00:00Z",
+    "scored_start": "2026-09-15T00:00:00Z",
+    "start": "2026-09-08T00:00:00Z",
+    "step_hours": 1.0,
+    "steps_per_city": 504,
+    "warmup_hours": 168.0
+  }
+}

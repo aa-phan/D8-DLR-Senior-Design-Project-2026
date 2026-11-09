@@ -1,0 +1,104 @@
+{
+  "bands": {
+    "AUSTIN": {
+      "0": {
+        "lower_offset_amps": -245.75117477162837,
+        "n": 196,
+        "upper_offset_amps": 274.5540478670121
+      },
+      "12": {
+        "lower_offset_amps": -242.43722932523116,
+        "n": 196,
+        "upper_offset_amps": 272.0849420254839
+      },
+      "18": {
+        "lower_offset_amps": -297.9317487207967,
+        "n": 196,
+        "upper_offset_amps": 184.25067618918735
+      },
+      "6": {
+        "lower_offset_amps": -174.81740922615631,
+        "n": 196,
+        "upper_offset_amps": 226.2106086354234
+      }
+    },
+    "CORPUS_CHRISTI": {
+      "0": {
+        "lower_offset_amps": -196.19532690217528,
+        "n": 196,
+        "upper_offset_amps": 160.78116825936434
+      },
+      "12": {
+        "lower_offset_amps": -238.97986820718023,
+        "n": 196,
+        "upper_offset_amps": 201.37880056772315
+      },
+      "18": {
+        "lower_offset_amps": -233.68813349400892,
+        "n": 196,
+        "upper_offset_amps": 230.725728163884
+      },
+      "6": {
+        "lower_offset_amps": -127.07245727981535,
+        "n": 196,
+        "upper_offset_amps": 163.7131937753743
+      }
+    },
+    "EL_PASO": {
+      "0": {
+        "lower_offset_amps": -285.8279300739182,
+        "n": 196,
+        "upper_offset_amps": 242.66377727794543
+      },
+      "12": {
+        "lower_offset_amps": -282.67440469241456,
+        "n": 196,
+        "upper_offset_amps": 222.9874515674208
+      },
+      "18": {
+        "lower_offset_amps": -286.42200123639094,
+        "n": 196,
+        "upper_offset_amps": 217.38961581159646
+      },
+      "6": {
+        "lower_offset_amps": -340.6374737094387,
+        "n": 196,
+        "upper_offset_amps": 235.05889346386107
+      }
+    },
+    "MIDLAND": {
+      "0": {
+        "lower_offset_amps": -284.158092617929,
+        "n": 196,
+        "upper_offset_amps": 299.1057686046565
+      },
+      "12": {
+        "lower_offset_amps": -295.77751925264414,
+        "n": 196,
+        "upper_offset_amps": 263.1312187690925
+      },
+      "18": {
+        "lower_offset_amps": -292.6157227435714,
+        "n": 196,
+        "upper_offset_amps": 230.9945752278207
+      },
+      "6": {
+        "lower_offset_amps": -281.58901901758844,
+        "n": 196,
+        "upper_offset_amps": 214.4295297609786
+      }
+    }
+  },
+  "conductor_basis": "production: city_point.production_city_point",
+  "method": "ml_cooling_corrected",
+  "quantiles": [
+    0.05,
+    0.95
+  ],
+  "residual": "truth_amps - ml_cooling_corrected, amperes",
+  "rows_file": "docs/data-science/exploratory/2026-11-02_horizon_comparison/rows_production.csv",
+  "rows_sha256": "1412c480292f4a2d63e61ee6ab49ae8eb67524d54590462de49b900b96693d66",
+  "schema": 1,
+  "valid_time_max": "2026-09-29T18:00:00+00:00",
+  "valid_time_min": "2026-03-18T00:00:00+00:00"
+}

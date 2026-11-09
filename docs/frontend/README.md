@@ -37,6 +37,7 @@ Read in that order: PRD → ROADMAP → specs.
 ### Other documents in this directory
 
 - [`specs/api-contract.md`](specs/api-contract.md) — a reference describing the per-city data shapes the DS backend produces that an `api/` layer would serve. It is not one of the eight component specs and carries no phase or status.
+- [`../integration/software-team-handoff.md`](../integration/software-team-handoff.md): the handoff from Data Science, covering how to get access to the live rating database, which fields serve which dashboard view, and the reading rules. The column contract it routes to is [`../integration/rest-api.md`](../integration/rest-api.md).
 - [`guides/`](guides/) — developer how-to guides (getting started, architecture, configuration, development, testing) for the Software sub-team. These describe the repo as it is today and are maintained separately from the PRD/ROADMAP/specs above.
 
 ## Where to start

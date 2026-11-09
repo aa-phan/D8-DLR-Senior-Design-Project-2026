@@ -1,33 +1,48 @@
 """
-Shared core of the per-city 2026-11-24 evaluation tooling (quick task
-261013-285): constants, the anti-peeking guard, the HTTP evidence recorder,
-archive truth, descriptive metrics, provenance and the report writer.
+Shared core of the per-city evaluation tooling (quick task 261013-285, re-pinned
+to the signed v4 protocol rounds by plan 07-06): constants, the protocol-round
+registry, the anti-peeking guard, the HTTP evidence recorder, archive truth,
+descriptive metrics, provenance and the report writer.
 
 What this is. Two evaluators share this module: the shadow-log scorer
 (`forecast_shadow_score.py`, the LIVE-SYSTEM CHECK) and the reconstructed-frame
 port (`forecast_shadow_confirm.py`, the HEADLINE for "which candidate to
 ship"). They report separately and are NEVER pooled (amendment decision 9).
-The rules come from the v2 confirmation protocol plus the v3 per-city
-amendment's owner selections
-(`docs/data-science/decisions/confirmation_protocol_v3_per_city.md`,
-"Owner selections recorded in review (2026-10-13)").
+The rules come from the v2 confirmation protocol, the v3 per-city amendment
+(`docs/data-science/decisions/confirmation_protocol_v3_per_city.md`) and, for the
+dates, the selection rule and this module's round registry, the v4 early-selection
+amendment signed 2026-11-02
+(`docs/data-science/decisions/confirmation_protocol_v4_early_selection_SIGNING_COPY.md`).
 
 Truth label. Every number here is
 "reanalysis-derived (Open-Meteo Archive reanalysis through IEEE 738), never
 sensor-validated" (`TRUTH_LABEL`).
 
+Protocol rounds. v4 names its reads: `v4-read1` (instant 2026-11-01T00:00:00Z,
+rows with valid_time before 2026-10-25T00:00:00Z), `v4-read2` (the conditional
+re-test, instant 2026-11-08T00:00:00Z, rows before 2026-11-01T00:00:00Z) and
+`v4-late-descriptive` (read 1's dates, descriptive only). They are frozen
+`ProtocolRound` values in `PROTOCOL_ROUNDS`, selected by name; the module
+defaults are `v4-read1`. The earlier single evaluation (`V3_RETIRED_INSTANT`,
+2026-11-24T00:00:00Z) is retired by signed v4 and refused for any FRESH run.
+
 Anti-peeking. No predicted-versus-truth outcome may be computed, read or
 printed for any FRESH row (valid_time on or after `FRESH_BASIS_START`) before
-2026-11-24T00:00:00Z. `check_guard` enforces this before any network call and
-before any FRESH-dated file is read, and it enforces the one-shot rule (a
-second FRESH run of the same row source into the same evidence root is refused
-even if the first run crashed). The only real-data runs permitted before the
-instant are the scorer's `--count-only` (status fields, timestamps and counts;
-no truth, no ampacity-derived number) and the port's `--dry-run` (no network).
+the selected round's instant, or while v4 is unsigned. `check_guard` enforces
+both before any network call and before any FRESH-dated file is read, and it
+enforces the one-shot rule (a second FRESH run of the same row source into the
+same evidence subroot is refused even if the first run crashed). Each round
+writes to its own subroot (`round_evidence_root`), so the rule applies per
+round. The only real-data runs permitted before the instant are the scorer's
+`--count-only` (status fields, timestamps and counts; no truth, no
+ampacity-derived number) and the port's `--dry-run` (no network).
 
-Pre-registration. The instant, the cutoff and every pre-registered statistical
-parameter have defaults here. In a FRESH run, any non-default value needs an
-explicit `--override-reason`, which is recorded in report.json and report.md.
+Pre-registration. The round's instant and cutoff and every pre-registered
+statistical parameter have defaults here. A FRESH run takes no override at all:
+any override text, any non-default date or parameter and any retired or
+unsigned state is refused, so the one guard stays armed for every v4 run. A
+non-default value in a development run still needs `--override-reason`, which is
+recorded in report.json and report.md.
 
 This module must not import `forecast_experiment_audit` (the frozen harness
 with the 590-row gate). It imports `forecast_shadow_fit_models` only for
@@ -62,15 +77,62 @@ import open_meteo_provider
 # S1. Constants (each one is pinned by a test)
 # --------------------------------------------------------------------------
 
-EVALUATION_INSTANT_DEFAULT = pd.Timestamp("2026-11-24T00:00:00Z")
-VALID_TIME_CUTOFF_DEFAULT = pd.Timestamp("2026-11-17T00:00:00Z")
+@dataclass(frozen=True)
+class ProtocolRound:
+    """One named read of signed protocol v4. Values equal the signing copy's registry (test-pinned)."""
+    name: str
+    instant: pd.Timestamp
+    cutoff: pd.Timestamp                 # valid_time strictly before this is scored
+    fetch_start: str
+    fetch_end: str
+    evidence_subdir: str
+    slots_per_city: int
+    family_alpha: float
+    descriptive_only: bool = False
+
+
+V4_READ1 = ProtocolRound(
+    name="v4-read1",
+    instant=pd.Timestamp("2026-11-01T00:00:00Z"),
+    cutoff=pd.Timestamp("2026-10-25T00:00:00Z"),
+    fetch_start="2026-09-28", fetch_end="2026-10-24",
+    evidence_subdir="v4-read1", slots_per_city=100, family_alpha=0.05,
+)
+V4_READ2 = ProtocolRound(
+    name="v4-read2",
+    instant=pd.Timestamp("2026-11-08T00:00:00Z"),
+    cutoff=pd.Timestamp("2026-11-01T00:00:00Z"),
+    fetch_start="2026-09-28", fetch_end="2026-10-31",
+    evidence_subdir="v4-read2", slots_per_city=128, family_alpha=0.05,
+)
+# The late-answer descriptive re-score reuses read 1's dates and can only describe, never decide.
+V4_LATE_DESCRIPTIVE = ProtocolRound(
+    name="v4-late-descriptive",
+    instant=V4_READ1.instant, cutoff=V4_READ1.cutoff,
+    fetch_start=V4_READ1.fetch_start, fetch_end=V4_READ1.fetch_end,
+    evidence_subdir="v4-late-descriptive", slots_per_city=V4_READ1.slots_per_city,
+    family_alpha=V4_READ1.family_alpha, descriptive_only=True,
+)
+PROTOCOL_ROUNDS: dict[str, ProtocolRound] = {
+    r.name: r for r in (V4_READ1, V4_READ2, V4_LATE_DESCRIPTIVE)
+}
+DEFAULT_ROUND = V4_READ1
+
+# The retired v3 evaluation instant: kept only so that a FRESH run at it can be refused.
+V3_RETIRED_INSTANT = pd.Timestamp("2026-11-24T00:00:00Z")
+V4_SIGNING_COPY = os.path.join(
+    "docs", "data-science", "decisions", "confirmation_protocol_v4_early_selection_SIGNING_COPY.md"
+)
+
+EVALUATION_INSTANT_DEFAULT = DEFAULT_ROUND.instant
+VALID_TIME_CUTOFF_DEFAULT = DEFAULT_ROUND.cutoff
 MODEL_FREEZE = pd.Timestamp("2026-11-01T00:00:00Z")
 # The frozen window ends 2026-09-29 (forecast_experiment_audit.FROZEN_WINDOW_END,
 # test-pinned, never imported here); the FRESH basis starts the next day.
 FROZEN_WINDOW_END_DATE = "2026-09-29"
 FRESH_BASIS_START = pd.Timestamp("2026-09-30T00:00:00Z")
-RECON_FETCH_START = "2026-09-28"
-RECON_FETCH_END = "2026-11-16"
+RECON_FETCH_START = DEFAULT_ROUND.fetch_start
+RECON_FETCH_END = DEFAULT_ROUND.fetch_end
 
 LEAD_HOURS = 24
 SLOT_HOURS = 6
@@ -99,8 +161,8 @@ NOT_MEASURED_STATEMENT = (
 )
 EXPLORATORY_STATEMENT = "exploratory: thresholds not pre-registered in a signed protocol"
 OWNER_PENDING = [
-    "sign confirmation_protocol_v3_per_city.md; until signed, results are "
-    "exploratory (amendment, unsigned-default item 5)"
+    "protocol v4 governs this evaluation: see "
+    "docs/data-science/decisions/confirmation_protocol_v4_early_selection_SIGNING_COPY.md"
 ]
 
 # S2. The fixed headline family (decision 2E). Each entry is an ordered pair
@@ -119,8 +181,8 @@ HEADLINE_FAMILY: tuple[tuple[str, str], ...] = (
 )
 FAMILY_SIZE = len(HEADLINE_FAMILY)
 
-# Pre-registered statistical defaults (S1). Changing any of them in a FRESH run
-# needs --override-reason (PD-15).
+# Pre-registered statistical defaults (S1). Changing any of them in a FRESH run is
+# refused, and no override text can help (PD-15, signed v4 rounds).
 BLOCK_LENGTHS_SLOTS = (1, 4, 8, 28)
 N_RESAMPLES = 10000
 SEED = config.FORECAST_EXPERIMENT_CORRECTION_RANDOM_STATE
@@ -128,6 +190,9 @@ MIN_PAIRED_ROWS = 8
 POWER = 0.8
 FAMILY_ALPHA = 0.05
 DECISION_MARGIN_AMPS = 5.0
+# v4 replaces the fixed 5 A bar by this fraction of a city's mean truth ampacity
+# (selection rule, `forecast_shadow_decision_v4.RELATIVE_MARGIN_FRACTION`).
+RELATIVE_MARGIN_FRACTION = 0.02
 CONSISTENCY_MIN_CITIES = 3
 
 PRE_REGISTERED_PARAM_DEFAULTS: dict = {
@@ -137,6 +202,7 @@ PRE_REGISTERED_PARAM_DEFAULTS: dict = {
     "min_paired_rows": MIN_PAIRED_ROWS,
     "power": POWER,
     "decision_margin_amps": DECISION_MARGIN_AMPS,
+    "relative_margin_fraction": RELATIVE_MARGIN_FRACTION,
     "consistency_min_cities": CONSISTENCY_MIN_CITIES,
 }
 
@@ -195,7 +261,7 @@ FLAG_V2_LOGGED = "V2_logged_hour_reading_compares_a_different_hour"
 FLAG_V3 = "V3_live_persistence_definition"
 FLAG_V4 = "V4_reanalysis_truth_shared_weather"
 
-# PD-01..PD-17: id -> (title, default text). Parameters that can change at run
+# PD-01..PD-18: id -> (title, default text). Parameters that can change at run
 # time are overlaid by `planner_defaults_in_force`.
 PLANNER_DEFAULTS: dict[str, dict] = {
     "PD-01": {"title": "port model source", "default": "the 12 frozen per-city artifacts (not a train-only refit)"},
@@ -207,19 +273,22 @@ PLANNER_DEFAULTS: dict[str, dict] = {
     "PD-07": {"title": "minimum paired rows", "default": MIN_PAIRED_ROWS},
     "PD-08": {"title": "MDD power", "default": POWER},
     "PD-09": {"title": "resampling", "default": f"{N_RESAMPLES} resamples, seed {SEED}"},
-    "PD-10": {"title": "ship-rule readings", "default": f"margin {DECISION_MARGIN_AMPS} A, consistency {CONSISTENCY_MIN_CITIES} cities"},
+    "PD-10": {"title": "ship-rule readings",
+              "default": f"v4 relative margin {RELATIVE_MARGIN_FRACTION:.0%} of the city's mean truth ampacity "
+                         f"(pooled, paired-row-weighted), consistency {CONSISTENCY_MIN_CITIES} cities"},
     "PD-11": {"title": "logs: reference own target hour", "default": "decision_time + 24 h rounded to the nearest whole UTC hour (half past rounds up)"},
     "PD-12": {"title": "first-logged", "default": "first eligible line in file order"},
     "PD-13": {"title": "underlying weather model", "default": SCORED_FORECAST_MODEL},
     "PD-14": {"title": "bundle ampacity", "default": "not scored"},
-    "PD-15": {"title": "parameter changes", "default": "any non-default value in a FRESH run requires --override-reason"},
+    "PD-15": {"title": "parameter changes", "default": "any non-default value in a FRESH run is refused (signed v4 rounds take no override)"},
     "PD-16": {"title": "freeze check", "default": "artifact commits at or after 2026-11-01T00:00Z are flagged, not refused"},
     "PD-17": {"title": "evidence root", "default": "data/shadow/evaluation"},
+    "PD-18": {"title": "protocol round", "default": DEFAULT_ROUND.name},
 }
 _PD_PARAM_MAP = {
     "block_lengths": "PD-03", "min_paired_rows": "PD-07", "power": "PD-08",
     "n_resamples": "PD-09", "seed": "PD-09",
-    "decision_margin_amps": "PD-10", "consistency_min_cities": "PD-10",
+    "decision_margin_amps": "PD-10", "relative_margin_fraction": "PD-10", "consistency_min_cities": "PD-10",
 }
 
 EVIDENCE_ROOT_DEFAULT = os.path.join("data", "shadow", "evaluation")
@@ -233,6 +302,46 @@ class EvaluationGuardError(RuntimeError):
 
 class LeakageProbeError(RuntimeError):
     """Raised by the port when a candidate reads truth it must not see."""
+
+
+# --------------------------------------------------------------------------
+# Protocol rounds and the v4 signature
+# --------------------------------------------------------------------------
+
+def round_named(name: str) -> ProtocolRound:
+    """The signed round called `name`; KeyError listing the three names for anything else."""
+    try:
+        return PROTOCOL_ROUNDS[name]
+    except KeyError:
+        raise KeyError(
+            f"unknown protocol round {name!r}; the signed v4 rounds are {sorted(PROTOCOL_ROUNDS)}"
+        ) from None
+
+
+def round_evidence_root(base_root: str, rnd: ProtocolRound) -> str:
+    """The evidence subroot of one round (the one-shot rule applies per subroot)."""
+    return os.path.join(base_root, rnd.evidence_subdir)
+
+
+_SIGNATURE_LINE = re.compile(r"^- Signature:(?P<text>.*)$", re.MULTILINE)
+
+
+def v4_signed(repo_root: Optional[str] = None) -> bool:
+    """
+    True when the v4 signing copy exists and its `- Signature:` line carries text
+    other than underscores and spaces. Read before any FRESH run (SEL-01); never
+    reads an outcome. `repo_root` defaults to the parent of `backend/`.
+    """
+    if repo_root is None:
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    path = os.path.join(repo_root, V4_SIGNING_COPY)
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError:
+        return False
+    match = _SIGNATURE_LINE.search(text)
+    return bool(match and match.group("text").strip(" _\t\r"))
 
 
 # --------------------------------------------------------------------------
@@ -319,6 +428,13 @@ class GuardConfig:
     evaluation_instant: pd.Timestamp = EVALUATION_INSTANT_DEFAULT
     valid_time_cutoff: pd.Timestamp = VALID_TIME_CUTOFF_DEFAULT
     override_reason: Optional[str] = None
+    round_name: str = DEFAULT_ROUND.name
+
+
+def guard_for_round(name: str) -> GuardConfig:
+    """The guard of a signed round: its own instant and cutoff, no override."""
+    rnd = round_named(name)
+    return GuardConfig(evaluation_instant=rnd.instant, valid_time_cutoff=rnd.cutoff, round_name=rnd.name)
 
 
 def nondefault_params(params: Optional[dict]) -> dict:
@@ -368,16 +484,24 @@ def check_guard(guard: GuardConfig, *, valid_times, row_source: str, now, eviden
     Validate that this run may proceed and return the guard record. Called
     BEFORE any network call and before any FRESH-dated file is read.
 
+    The guard names a signed protocol round (`guard.round_name`); non-default
+    dates are measured against that round's instant and cutoff, so selecting a
+    round never needs an override and both refusals stay armed.
+
     Raises:
-        ValueError: a cutoff at or after the instant, or a non-default instant /
-            cutoff (any basis) or non-default pre-registered parameter (FRESH
-            runs, PD-15) without an override reason.
-        EvaluationGuardError: a FRESH run before the instant without an
-            override, or a second FRESH run of the same row source into the
-            same evidence root without an override.
+        KeyError: an unknown round name.
+        ValueError: a cutoff at or after the instant; a FRESH run at the retired
+            v3 instant; a non-default instant / cutoff (any basis) without an
+            override reason; a non-default pre-registered parameter in a FRESH
+            run (PD-15).
+        EvaluationGuardError: a FRESH run with any override text; a FRESH run
+            while protocol v4 is unsigned (SEL-01); a FRESH run before the
+            round's instant; a second FRESH run of the same row source into the
+            same evidence subroot. None of these takes an override.
     """
     if row_source not in ROW_SOURCES:
         raise ValueError(f"check_guard: unknown row_source {row_source!r}")
+    rnd = round_named(guard.round_name)
     instant = to_utc(guard.evaluation_instant)
     cutoff = to_utc(guard.valid_time_cutoff)
     now_ts = to_utc(now)
@@ -393,37 +517,58 @@ def check_guard(guard: GuardConfig, *, valid_times, row_source: str, now, eviden
     times = [to_utc(v) for v in valid_times]
     basis = "FRESH" if any(t >= FRESH_BASIS_START for t in times) else "development"
 
+    if basis == "FRESH":
+        # Signed v4 rounds take no override: the instant refusal, the one-shot refusal and the
+        # retired-instant refusal below must never be switchable by text (SEL-01, SEL-04).
+        if override is not None:
+            raise EvaluationGuardError(
+                "refusing a FRESH run with an override reason: signed v4 rounds take no override; "
+                "select a round by name (SEL-04)"
+            )
+        if instant == V3_RETIRED_INSTANT:
+            raise ValueError(
+                f"check_guard: the 2026-11-24 evaluation is retired by signed protocol v4 "
+                f"(instant {instant.isoformat()}); select one of {sorted(PROTOCOL_ROUNDS)}"
+            )
+        if not v4_signed():
+            raise EvaluationGuardError(
+                "protocol v4 is not signed; no FRESH outcome may be computed (SEL-01)"
+            )
+
     nd_dates = {}
-    if instant != EVALUATION_INSTANT_DEFAULT:
+    if instant != rnd.instant:
         nd_dates["evaluation_instant"] = instant.isoformat()
-    if cutoff != VALID_TIME_CUTOFF_DEFAULT:
+    if cutoff != rnd.cutoff:
         nd_dates["valid_time_cutoff"] = cutoff.isoformat()
     if nd_dates and override is None:
         raise ValueError(
-            f"check_guard: non-default pre-registered dates {nd_dates} require --override-reason"
+            f"check_guard: non-default pre-registered dates {nd_dates} for round {rnd.name!r} "
+            f"require --override-reason"
         )
-    if basis == "FRESH" and nd_params and override is None:
+    if basis == "FRESH" and nd_params:
         raise ValueError(
-            f"check_guard: non-default pre-registered parameters {nd_params} in a FRESH run "
-            f"require --override-reason (PD-15)"
+            f"check_guard: non-default pre-registered parameters {nd_params} in a FRESH run are "
+            f"refused (PD-15); signed v4 rounds take no override"
         )
 
     prior = _prior_fresh_runs(evidence_root, row_source) if basis == "FRESH" else []
     if basis == "FRESH":
-        if now_ts < instant and override is None:
+        if now_ts < instant:
             raise EvaluationGuardError(
                 f"refusing to evaluate FRESH rows (valid_time on or after {FRESH_BASIS_START.isoformat()}) "
-                f"at {now_ts.isoformat()}: the evaluation instant is {instant.isoformat()}. "
+                f"at {now_ts.isoformat()}: the evaluation instant of round {rnd.name!r} is {instant.isoformat()}. "
                 f"No outcome-based figure for a FRESH row may be produced before then."
             )
-        if prior and override is None:
+        if prior:
             raise EvaluationGuardError(
                 f"refusing a second FRESH run of row source {row_source!r}: prior run(s) {prior} "
-                f"already exist under {evidence_root!r} (one-shot evaluation, even if that run crashed). "
-                f"Pass --override-reason to override."
+                f"already exist under {evidence_root!r} (one-shot evaluation per round, even if that run "
+                f"crashed). Signed v4 rounds take no override."
             )
 
     return {
+        "round": rnd.name,
+        "round_descriptive_only": rnd.descriptive_only,
         "evaluation_instant": instant.isoformat(),
         "valid_time_cutoff": cutoff.isoformat(),
         "fresh_basis_start": FRESH_BASIS_START.isoformat(),
@@ -947,6 +1092,8 @@ def render_header(report: dict) -> str:
         lines += ["", "**DEVELOPMENT DATA - not a confirmation result**", ""]
     lines.append(f"Protocol status: {status}" + (f" ({EXPLORATORY_STATEMENT})" if status != "signed" else ""))
     lines += [
+        f"Round: {guard.get('round', DEFAULT_ROUND.name)}"
+        + (" (descriptive only)" if guard.get("round_descriptive_only") else ""),
         f"Evaluation instant: {guard.get('evaluation_instant')}",
         f"Valid-time cutoff (strict, valid_time < cutoff): {guard.get('valid_time_cutoff')}",
         f"Now evaluated: {guard.get('now_evaluated')}",
@@ -1023,12 +1170,55 @@ def render_family(report: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _render_decision_v4(dec: dict) -> list[str]:
+    """The signed-v4 decision in plain form: label, per-city bars, each candidate's level with its bar,
+    consistency, vetoes with their source, then the single pick or the no-pick statement and the statements."""
+    lines = [f"Label: {dec.get('label')}. Round: {dec.get('round')}. Rule: v4. Protocol status: {dec.get('protocol_status')}.",
+             "", f"Bars: {(dec.get('fraction') or 0) * 100:g}% of each city's mean truth "
+                 f"ampacity over its scored rows (amps):"]
+    bars = (dec.get("bars") or {}).get("per_city") or {}
+    for city, bar in bars.items():
+        lines.append(f"- Bar {city}: {_f(bar)} A" if bar is not None else f"- Bar {city}: n/a A (no truth rows)")
+    lines += ["", "Each candidate against raw_forecast (pooled benefit against the pooled bar):"]
+    for cand, lv in (dec.get("levels") or {}).items():
+        cons = (dec.get("consistency") or {}).get(cand) or {}
+        veto = (dec.get("vetoes") or {}).get(cand) or {}
+        if veto.get("vetoed"):
+            by = " and ".join(b.upper() for b in ("ablation", "test") if veto.get(b))
+            veto_text = f"vetoed by {by}; veto records consulted: {veto.get('source')}"
+        else:
+            veto_text = f"not vetoed; veto records consulted: {veto.get('source')}"
+        lines.append(
+            f"- {cand} vs raw_forecast: **{lv['level']}** (benefit {_f(lv.get('benefit_amps'))} A, pooled bar "
+            f"{_f(lv.get('bar_amps'))} A, Holm-adjusted p {_f(lv.get('p_holm_adjusted'), 4)}; favoured in "
+            f"{cons.get('cities_favoring')} of {cons.get('cities_with_data')} cities, "
+            f"{'consistent' if cons.get('consistent') else 'not consistent'}; {veto_text})")
+    lines.append("")
+    for alt, d in (dec.get("alternatives_vs_default") or {}).items():
+        lines.append(f"- {alt} vs {DEFAULT_CHOICE}: pooled margin {_f(d.get('margin_over_default_amps'))} A against a pooled "
+                     f"bar of {_f(d.get('bar_amps'))} A, favoured in {d.get('cities_favoring')} of "
+                     f"{d.get('cities_with_data')} cities, consistently better: {d.get('consistently_better')}")
+    lines.append("")
+    if dec.get("pick") is not None:
+        lines.append(f"Pick: {dec['pick']}")
+    elif str(dec.get("label", "")).startswith("headline"):
+        lines.append(dec.get("statement") or "No pick.")
+    else:
+        lines.append(f"Reported pick: None ({dec.get('label')}). "
+                     f"Would-be outcome under the v4 rule: {dec.get('rule_outcome') or 'no candidate qualifies'}.")
+    lines.append("")
+    lines += [f"- {s}" for s in dec.get("statements") or []]
+    return lines
+
+
 def render_decision(report: dict) -> str:
     dec = report.get("decision")
     label = "headline decision" if report["row_source"] == HEADLINE_ROW_SOURCE else "live-system check"
     lines = [f"## Decision ({label})", ""]
     if not dec:
         return "\n".join(lines + ["(not computed)"]) + "\n"
+    if dec.get("rule") == "v4":
+        return "\n".join(lines + _render_decision_v4(dec)) + "\n"
     for cand, lv in (dec.get("levels") or {}).items():
         lines.append(f"- {cand} vs raw_forecast: **{lv['level']}** (benefit {_f(lv.get('benefit_amps'))} A, "
                      f"Holm rejected: {lv.get('holm_rejected')}, favoured in {lv.get('cities_favoring')} of {lv.get('cities_with_data')} cities)")

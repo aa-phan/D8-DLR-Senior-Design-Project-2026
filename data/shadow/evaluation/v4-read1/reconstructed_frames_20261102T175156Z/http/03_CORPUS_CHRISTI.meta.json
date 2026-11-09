@@ -1,0 +1,21 @@
+{
+  "body_file": "03_CORPUS_CHRISTI.body",
+  "byte_length": 26594,
+  "content_type": "application/json; charset=utf-8",
+  "date_header": "Mon, 02 Nov 2026 17:51:58 GMT",
+  "error": null,
+  "params": {
+    "end_date": "2026-10-24",
+    "hourly": "temperature_2m,wind_speed_10m,wind_direction_10m,shortwave_radiation,relative_humidity_2m",
+    "latitude": 27.7635,
+    "longitude": -97.4033,
+    "start_date": "2026-09-28",
+    "timezone": "UTC",
+    "wind_speed_unit": "ms"
+  },
+  "retrieval_completed_at_utc": "2026-11-02T17:51:58.757286+00:00",
+  "retrieval_started_at_utc": "2026-11-02T17:51:58.184199+00:00",
+  "sha256": "b4502a78b9ba904704c5abbc9bafffa9b9d6cabbdd7439c2a8b2109f38553070",
+  "status_code": 200,
+  "url": "https://archive-api.open-meteo.com/v1/archive"
+}

@@ -30,7 +30,15 @@ import config
 # test and goes into FINGERPRINTED_CONFIG_NAMES. Changing the snapshot recipe also
 # changes every fingerprint, so bump RATING_CONFIG_SNAPSHOT_SCHEMA when doing it.
 
-RATING_CONFIG_SNAPSHOT_SCHEMA = 1
+# Schema 2 (Phase 7, COND-01): the recipe now reads the per-city production conductor
+# table through `city_point.production_city_point` and fingerprints PRODUCTION_CONDUCTORS.
+# The Phase 3 copies of city_point have no such resolver, so for them
+# `rating_config_snapshot` falls back to the Drake `city_point.city_point` path and to the
+# schema-1 recipe (`_PHASE3_SNAPSHOT_SCHEMA`, without `_SCHEMA_2_CONFIG_NAMES`): exactly
+# what produced the backfill rows, so their fingerprints still reproduce.
+RATING_CONFIG_SNAPSHOT_SCHEMA = 2
+_PHASE3_SNAPSHOT_SCHEMA = 1
+_SCHEMA_2_CONFIG_NAMES = ("PRODUCTION_CONDUCTORS",)
 
 # The modules the snapshot reads (plan 04-03 materializes them from Phase 3's commit).
 RATING_CONFIG_SOURCE_FILES = ("backend/config.py", "backend/city_point.py", "backend/thermal_model.py")
@@ -56,6 +64,7 @@ FINGERPRINTED_CONFIG_NAMES = (
     "CITY_COORDINATES",
     "SUBCONDUCTORS_PER_PHASE",
     "DEFAULT_CONDUCTOR_CONFIG_KWARGS",
+    "PRODUCTION_CONDUCTORS",
     "LINE_VOLTAGE_KV",
     "POWER_FACTOR",
     "ANOMALY_CONTROL_LIMIT_K_BY_LOCATION",
@@ -76,6 +85,14 @@ FINGERPRINTED_CONFIG_NAMES = (
 UNFINGERPRINTED_CONFIG_NAMES = {
     "LOCATIONS": "the city set; city is a key column of the row",
     "conductor_kwargs_for": "a function; its result is fingerprinted as the city's ConductorConfig attributes",
+    "production_conductor_kwargs_for": (
+        "a function; its result is fingerprinted as the city's ConductorConfig attributes "
+        "and through PRODUCTION_CONDUCTORS"
+    ),
+    "PRODUCTION_CONDUCTOR_SOURCES": "provenance text; the values it describes are fingerprinted",
+    "PRODUCTION_CONDUCTOR_FIELDS": "field list; the values are fingerprinted",
+    "PRODUCTION_CONDUCTOR_RANGES": "validation ranges; accepted values are fingerprinted",
+    "PRODUCTION_CONDUCTOR_SOURCE_PROVISIONAL": "provenance text",
     "DEFAULT_RATING_BOUNDS": "fallback for a monitor built without a city; the per-city path passes the city's bounds",
     "DELTA_FRACTION": "G5 is off on the per-city path: city_rating passes delta_fraction=inf",
     "DEFAULT_STATIC_RATING": "fallback for a location outside STATIC_RATINGS; the four cities all have an entry",
@@ -119,9 +136,18 @@ def rating_config_snapshot(city: str) -> dict:
     bounds and bearing, and each fingerprinted config constant reduced to the
     city's entry.
     """
-    point = city_point.city_point(city)
+    # Resolved at call time. The Phase 3 backfill child loads a Phase 3 city_point, which has no
+    # production resolver; it falls back to the Drake path (and the schema-1 recipe) that produced
+    # the backfill rows.
+    resolve = getattr(city_point, "production_city_point", city_point.city_point)
+    point = resolve(city)
+    legacy = resolve is city_point.city_point
+    schema = _PHASE3_SNAPSHOT_SCHEMA if legacy else RATING_CONFIG_SNAPSHOT_SCHEMA
+    names = tuple(
+        name for name in FINGERPRINTED_CONFIG_NAMES if not (legacy and name in _SCHEMA_2_CONFIG_NAMES)
+    )
     return {
-        "snapshot_schema": RATING_CONFIG_SNAPSHOT_SCHEMA,
+        "snapshot_schema": schema,
         "city": city,
         "conductor": {
             name: _per_city(attr, city) for name, attr in sorted(vars(point.conductor).items())
@@ -134,7 +160,7 @@ def rating_config_snapshot(city: str) -> dict:
         },
         "config": {
             name: _per_city(getattr(config, name, None), city)
-            for name in FINGERPRINTED_CONFIG_NAMES
+            for name in names
         },
     }
 

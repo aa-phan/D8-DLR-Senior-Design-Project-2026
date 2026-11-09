@@ -6,6 +6,7 @@ file lives under `tmp_path`. No test reads `data/experiment` or any real log.
 
 from __future__ import annotations
 
+import argparse
 import builtins
 import json
 import os
@@ -259,12 +260,12 @@ def test_valid_time_off_the_six_hour_grid_is_a_lead_mismatch():
 
 
 def test_cutoff_is_strict():
-    at = make_row("AUSTIN", "2026-11-17T00:00:00Z")
-    before = make_row("AUSTIN", "2026-11-16T18:00:00Z")
-    after = make_row("AUSTIN", "2026-11-17T06:00:00Z")
+    at = make_row("AUSTIN", "2026-10-25T00:00:00Z")           # the v4-read1 cutoff: the first unscored slot
+    before = make_row("AUSTIN", "2026-10-24T18:00:00Z")       # the last scored slot (100th)
+    after = make_row("AUSTIN", "2026-10-25T06:00:00Z")
     frame, counters, _ = _select([at, before, after])
     assert counters["at_or_after_cutoff"] == 2
-    assert list(frame["valid_time"]) == [pd.Timestamp("2026-11-16T18:00:00Z")]
+    assert list(frame["valid_time"]) == [pd.Timestamp("2026-10-24T18:00:00Z")]
 
 
 def test_first_logged_duplicate_wins_and_duplicates_are_listed_with_inversions():
@@ -640,12 +641,16 @@ def test_fresh_run_at_the_instant_then_second_run_is_refused(tmp_path, monkeypat
     assert report["basis"] == "FRESH" and "DEVELOPMENT DATA" not in open(report["report_paths"]["report_md"]).read()
     with pytest.raises(core.EvaluationGuardError):
         score_mod.score(str(d), cities=["AUSTIN"], guard_cfg=guard_cfg(), evidence_root=ev, now=INSTANT + pd.Timedelta(hours=2))
-    again = score_mod.score(str(d), cities=["AUSTIN"], guard_cfg=guard_cfg(override_reason="rerun"), evidence_root=ev,
-                            now=INSTANT + pd.Timedelta(hours=2))
-    assert again["guard"]["override_reason"] == "rerun" and len(again["guard"]["prior_fresh_runs"]) == 1
+    # signed v4 rounds take no override: the old "rerun" text no longer lets a second FRESH run through
+    with pytest.raises(core.EvaluationGuardError, match="take no override"):
+        score_mod.score(str(d), cities=["AUSTIN"], guard_cfg=guard_cfg(override_reason="rerun"), evidence_root=ev,
+                        now=INSTANT + pd.Timedelta(hours=2))
+    assert len(os.listdir(ev)) == 1
 
 
-def test_cli_guard_refusal_exits_2_with_message_and_no_network(tmp_path, capsys):
+def test_cli_guard_refusal_exits_2_with_message_and_no_network(tmp_path, capsys, monkeypatch):
+    # the CLI exposes no clock, so pin it before the round's instant: the run must be refused
+    monkeypatch.setattr(core, "utcnow", lambda: INSTANT - pd.Timedelta(days=3))
     d = tmp_path / "logs"
     d.mkdir()
     write_log(d / "AUSTIN.jsonl", [make_row("AUSTIN", "2026-10-20T00:00:00Z")])
@@ -655,6 +660,11 @@ def test_cli_guard_refusal_exits_2_with_message_and_no_network(tmp_path, capsys)
     rc = score_mod.main(["--predictions-dir", str(d), "--cities", "AUSTIN", "--evidence-root", str(tmp_path / "ev"),
                          "--evaluation-instant", "2026-12-01T00:00:00Z"])
     assert rc == 2 and "override" in capsys.readouterr().err
+    # an override reason cannot make a FRESH run through, not even with a non-default instant
+    rc = score_mod.main(["--predictions-dir", str(d), "--cities", "AUSTIN", "--evidence-root", str(tmp_path / "ev"),
+                         "--evaluation-instant", "2026-12-01T00:00:00Z", "--override-reason", "please"])
+    assert rc == 2 and "no override" in capsys.readouterr().err
+    assert not (tmp_path / "ev").exists()
 
 
 def test_cli_rejects_unknown_city_and_exposes_no_clock(capsys):
@@ -690,9 +700,12 @@ def test_score_attaches_the_nine_test_family_and_the_live_system_decision(tmp_pa
     assert core.FLAG_V2 in by[("reference_ml_refit_24h", "raw_forecast")]["flags"]
     assert core.FLAG_V3 in by[("ml_wind_corrected", "persistence_24h")]["flags"]
     dec = report["decision"]
-    assert dec["row_source"] == "shadow_logs" and dec["label"] == "live-system check" and dec["protocol_status"] == "unsigned"
+    assert dec["rule"] == "v4" and dec["row_source"] == "shadow_logs" and dec["protocol_status"] == "unsigned"
+    assert dec["label"] == "live-system check, never decides" and dec["pick"] is None and "rule_outcome" in dec
+    assert dec["round"] == "v4-read1" and report["round"] == "v4-read1"
     assert dec["levels"]["ml_wind_corrected"]["benefit_amps"] == pytest.approx(10.0, abs=1e-9)
-    assert dec["working_choice"] in core.CANDIDATES and core.NOT_MEASURED_STATEMENT in dec["statements"]
+    assert tuple(dec["levels"]) == core.REAL_CANDIDATES and core.NOT_MEASURED_STATEMENT in dec["statements"]
+    assert "working_choice" not in dec and "action" not in dec                       # no v3 field survives
     ss = report["sample_size"]
     assert len(ss["pairs"]) == 9 and ss["pooled_nominal"]["label"] == "nominal, not effective"
     assert all(not p["targets"]["tail_rate_target_met"] and not p["targets"]["mdd_target_met"] for p in ss["pairs"])
@@ -705,13 +718,16 @@ def test_score_attaches_the_nine_test_family_and_the_live_system_decision(tmp_pa
     assert "descriptive, uncorrected" in md and core.FLAG_V2 in md and "NON-DEFAULT" in md
 
 
-def test_fresh_run_with_a_nondefault_parameter_needs_an_override_and_creates_nothing(tmp_path):
+def test_fresh_run_with_a_nondefault_parameter_is_refused_with_or_without_text_and_creates_nothing(tmp_path):
     d = tmp_path / "logs"
     d.mkdir()
     write_log(d / "AUSTIN.jsonl", [make_row("AUSTIN", "2026-10-20T00:00:00Z")])
-    with pytest.raises(ValueError, match="override"):
+    with pytest.raises(ValueError, match="refused"):
         score_mod.score(str(d), cities=["AUSTIN"], guard_cfg=guard_cfg(), evidence_root=str(tmp_path / "ev"), now=INSTANT,
                         params={"decision_margin_amps": 7.0})
+    with pytest.raises(core.EvaluationGuardError, match="take no override"):
+        score_mod.score(str(d), cities=["AUSTIN"], guard_cfg=guard_cfg(override_reason="owner says so"),
+                        evidence_root=str(tmp_path / "ev"), now=INSTANT, params={"decision_margin_amps": 7.0})
     assert not (tmp_path / "ev").exists()
 
 
@@ -735,6 +751,166 @@ def test_cli_exposes_the_preregistered_parameters_and_no_row_gate_or_family_size
     rc = score_mod.main(["--predictions-dir", str(d), "--cities", *cities, "--evidence-root", str(tmp_path / "ev"),
                          "--n-resamples", "300"])
     assert rc == 0
-    (run,) = os.listdir(tmp_path / "ev")
-    saved = json.loads(open(tmp_path / "ev" / run / "report.json").read())
+    # the scoring run writes into its round's own evidence subroot
+    assert os.listdir(tmp_path / "ev") == ["v4-read1"]
+    (run,) = os.listdir(tmp_path / "ev" / "v4-read1")
+    saved = json.loads(open(tmp_path / "ev" / "v4-read1" / run / "report.json").read())
     assert saved["config"]["params"]["n_resamples"] == 300 and saved["guard"]["nondefault_params"] == {"n_resamples": 300}
+    assert saved["guard"]["round"] == "v4-read1"
+
+
+# --------------------------------------------------------------------------
+# 07-06: --round selects a signed protocol round (v4)
+# --------------------------------------------------------------------------
+
+def test_cli_lists_the_signed_rounds_and_defaults_to_read_1():
+    parser = score_mod.build_parser()
+    action = next(a for a in parser._actions if "--round" in a.option_strings)
+    assert sorted(action.choices) == ["v4-late-descriptive", "v4-read1", "v4-read2"]
+    assert "--round {v4-late-descriptive,v4-read1,v4-read2}" in parser.format_help()
+    assert parser.parse_args([]).round == "v4-read1"
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--round", "v3"])
+
+
+def test_guard_from_args_builds_the_selected_rounds_guard():
+    parser = score_mod.build_parser()
+    g1 = score_mod._guard_from_args(parser.parse_args([]))
+    assert (g1.round_name, g1.evaluation_instant, g1.valid_time_cutoff) == (
+        "v4-read1", pd.Timestamp("2026-11-01T00:00:00Z"), pd.Timestamp("2026-10-25T00:00:00Z"))
+    g2 = score_mod._guard_from_args(parser.parse_args(["--round", "v4-read2"]))
+    assert (g2.round_name, g2.evaluation_instant, g2.valid_time_cutoff, g2.override_reason) == (
+        "v4-read2", pd.Timestamp("2026-11-08T00:00:00Z"), pd.Timestamp("2026-11-01T00:00:00Z"), None)
+    # an object without a round attribute (the confirm port's namespace) gets read 1
+    legacy = argparse.Namespace(evaluation_instant=None, valid_time_cutoff=None, override_reason=None)
+    assert score_mod._guard_from_args(legacy) == g1
+    # an explicit date goes on top of the round and is then non-default for the guard
+    g3 = score_mod._guard_from_args(parser.parse_args(["--round", "v4-read2", "--valid-time-cutoff", "2026-10-31T00:00:00Z"]))
+    assert g3.round_name == "v4-read2" and g3.valid_time_cutoff == pd.Timestamp("2026-10-31T00:00:00Z")
+    assert g3.evaluation_instant == g2.evaluation_instant
+
+
+def test_round_read_2_scores_into_the_read_2_subroot_with_read_2_dates(tmp_path, monkeypatch):
+    d = tmp_path / "logs"
+    d.mkdir()
+    rows = [make_row("AUSTIN", pd.Timestamp("2026-10-30T00:00:00Z") + pd.Timedelta(hours=6 * k)) for k in range(4)]
+    write_log(d / "AUSTIN.jsonl", rows)
+    install_archive(monkeypatch)
+    base = tmp_path / "ev"
+    monkeypatch.setattr(core, "utcnow", lambda: pd.Timestamp("2026-11-08T00:00:00Z"))
+    rc = score_mod.main(["--round", "v4-read2", "--predictions-dir", str(d), "--cities", "AUSTIN",
+                         "--evidence-root", str(base)])
+    assert rc == 0
+    assert os.listdir(base) == ["v4-read2"]                    # nothing under read 1's subroot
+    (run,) = os.listdir(base / "v4-read2")
+    saved = json.loads((base / "v4-read2" / run / "report.json").read_text())
+    assert saved["guard"]["round"] == "v4-read2" and saved["guard"]["defaults_used"] is True
+    assert saved["guard"]["evaluation_instant"] == "2026-11-08T00:00:00+00:00"
+    assert saved["guard"]["valid_time_cutoff"] == "2026-11-01T00:00:00+00:00"
+    assert saved["guard"]["override_reason"] is None
+    assert saved["decision"]["round"] == "v4-read2" and saved["decision"]["rule"] == "v4" and saved["round"] == "v4-read2"
+    # the same run again is refused (one shot per round), and read 1 is still open
+    rc = score_mod.main(["--round", "v4-read2", "--predictions-dir", str(d), "--cities", "AUSTIN",
+                         "--evidence-root", str(base)])
+    assert rc == 2
+    assert os.listdir(base) == ["v4-read2"] and len(os.listdir(base / "v4-read2")) == 1
+
+
+def test_round_read_2_is_refused_before_its_own_instant_even_after_read_1s(tmp_path, monkeypatch, capsys):
+    d = tmp_path / "logs"
+    d.mkdir()
+    write_log(d / "AUSTIN.jsonl", [make_row("AUSTIN", "2026-10-30T00:00:00Z")])
+    monkeypatch.setattr(core, "utcnow", lambda: pd.Timestamp("2026-11-02T00:00:00Z"))   # after read 1, before read 2
+    rc = score_mod.main(["--round", "v4-read2", "--predictions-dir", str(d), "--cities", "AUSTIN",
+                         "--evidence-root", str(tmp_path / "ev")])
+    assert rc == 2 and "2026-11-08" in capsys.readouterr().err
+    assert not (tmp_path / "ev").exists()
+
+
+def test_count_only_ignores_the_round_and_never_needs_one(tmp_path):
+    d = tmp_path / "logs"
+    d.mkdir()
+    write_log(d / "AUSTIN.jsonl", [make_row("AUSTIN", "2026-10-20T00:00:00Z")])
+    out = tmp_path / "counts.json"
+    for extra in ([], ["--round", "v4-read2"]):
+        assert score_mod.main(["--count-only", "--predictions-dir", str(d), "--cities", "AUSTIN", "--out", str(out),
+                               "--evidence-root", str(tmp_path / "ev"), *extra]) == 0
+    assert not (tmp_path / "ev").exists()
+
+
+# --------------------------------------------------------------------------
+# 07-07: the v4 rule as the live-system label (never decides)
+# --------------------------------------------------------------------------
+
+def _live_report(tmp_path, monkeypatch, *, cities=("AUSTIN", "CORPUS_CHRISTI", "MIDLAND", "EL_PASO"), n=10, **kwargs):
+    d = tmp_path / "logs"
+    _write_dev_logs(d, list(cities), n=n)
+    calls = install_archive(monkeypatch, fail_cities=kwargs.pop("fail_cities", ()))
+    kwargs.setdefault("params", {"n_resamples": 300})
+    kwargs.setdefault("guard_cfg", guard_cfg())
+    return score_mod.score(str(d), cities=list(cities), evidence_root=str(tmp_path / "ev"),
+                           now=pd.Timestamp("2026-10-13T12:00:00Z"), **kwargs), calls
+
+
+def test_truth_stats_are_the_per_city_mean_of_the_raw_forecasts_truth_over_scored_rows(tmp_path, monkeypatch):
+    report, _ = _live_report(tmp_path, monkeypatch)
+    assert set(report["truth_stats"]) == set(config.LOCATIONS)
+    for city in config.LOCATIONS:
+        truth = [truth_at(city, r["valid_time"]) for r in _dev_rows(city)]
+        got = report["truth_stats"][city]
+        assert got["n_truth_rows"] == 10 and isinstance(got["n_truth_rows"], int)
+        assert got["mean_truth_amps"] == pytest.approx(float(np.mean(truth)), abs=1e-9, rel=0)
+        assert report["decision"]["bars"]["per_city"][city] == pytest.approx(0.02 * float(np.mean(truth)), abs=1e-9, rel=0)
+
+
+def test_the_live_label_is_applied_without_vetoes_and_with_the_registered_parameters(tmp_path, monkeypatch):
+    import forecast_shadow_decision_v4 as v4
+    seen = []
+    real = v4.apply_ship_rule_v4
+    monkeypatch.setattr(v4, "apply_ship_rule_v4", lambda *a, **k: seen.append(k) or real(*a, **k))
+    _live_report(tmp_path, monkeypatch, protocol_status="signed")
+    (kwargs,) = seen
+    assert kwargs["label"] == "live" and kwargs["vetoes"] is None and kwargs["require_vetoes"] is False
+    assert kwargs["round_name"] == "v4-read1" and kwargs["protocol_status"] == "signed"
+    assert kwargs["fraction"] == 0.02 and kwargs["min_cities"] == 3
+
+
+def test_a_large_model_benefit_gives_a_would_be_outcome_but_the_reported_pick_stays_none(tmp_path, monkeypatch):
+    monkeypatch.setitem(DELTAS, "raw_forecast", 200.0)       # raw overrates by 200 A, wind by 10 A: benefit 190 A >> the bar
+    report, _ = _live_report(tmp_path, monkeypatch, protocol_status="signed")
+    dec = report["decision"]
+    assert dec["levels"]["ml_wind_corrected"]["benefit_amps"] == pytest.approx(190.0, abs=1e-9)
+    assert dec["levels"]["ml_wind_corrected"]["level"] in ("supported", "indicated, not resolved")
+    assert dec["rule_outcome"] == "ml_wind_corrected" and dec["pick"] is None
+    assert dec["label"] == "live-system check, never decides"
+    assert "its pick is always None" in dec["statement"]
+    md = open(os.path.join(report["evidence_dir"], "report.md")).read()
+    section = md.split("## Decision (live-system check)")[1].split("\n## ")[0]
+    assert "Reported pick: None" in section and "\nPick:" not in section and "Would-be outcome under the v4 rule: ml_wind_corrected" in section
+
+
+def test_the_scorer_names_its_round_from_the_guard_and_refuses_a_disagreeing_round_name(tmp_path, monkeypatch):
+    report, _ = _live_report(tmp_path, monkeypatch, cities=("AUSTIN",), guard_cfg=core.guard_for_round("v4-late-descriptive"))
+    assert report["decision"]["round"] == "v4-late-descriptive" and report["round"] == "v4-late-descriptive"
+    d = tmp_path / "logs"
+    with pytest.raises(ValueError, match="round"):
+        score_mod.score(str(d), cities=["AUSTIN"], guard_cfg=core.guard_for_round("v4-read2"), round_name="v4-read1",
+                        evidence_root=str(tmp_path / "ev2"), now=pd.Timestamp("2026-10-13T12:00:00Z"))
+    assert not (tmp_path / "ev2").exists()
+
+
+def test_a_city_whose_truth_fetch_fails_has_no_truth_stats_and_cannot_be_consistent(tmp_path, monkeypatch):
+    report, calls = _live_report(tmp_path, monkeypatch, fail_cities=("MIDLAND", "EL_PASO"))
+    assert set(report["truth_stats"]) == {"AUSTIN", "CORPUS_CHRISTI"}
+    dec = report["decision"]
+    assert set(dec["bars"]["per_city"]) == {"AUSTIN", "CORPUS_CHRISTI"}
+    assert all(not dec["consistency"][c]["possible"] and dec["consistency"][c]["cities_with_data"] == 2 for c in core.REAL_CANDIDATES)
+    assert dec["rule_outcome"] is None and dec["pick"] is None
+    assert len(calls) == 4                                    # one archive request per city, never retried
+
+
+def test_the_v3_decision_module_is_no_longer_imported_by_the_scorer():
+    import ast
+    tree = ast.parse(open(score_mod.__file__, encoding="utf-8").read())
+    imported = {a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
+    assert "forecast_shadow_decision" not in imported and "forecast_shadow_decision_v4" in imported

@@ -273,7 +273,7 @@ class _RaisingDetector:
 
 
 def _monitor(detector=None):
-    point = city_point.city_point(_CITY)
+    point = city_point.production_city_point(_CITY)
     return DLRSafetyMonitor(
         static_rating=point.static_rating, conductor=point.conductor,
         rating_bounds=point.rating_bounds, delta_fraction=float("inf"),
@@ -394,6 +394,171 @@ def test_g6_trips_are_ordered_by_deviation_and_capped_per_city():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# B5 (D-18): which method gated G6, per city
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _g6_row(hour, method, **kw):
+    row = _row(hour, **kw)
+    row["g6_forecast_method"] = method
+    return row
+
+
+def test_flatten_record_maps_the_g6_method_and_band_to_named_columns():
+    flat = rdv._flatten_record({
+        "city": _CITY,
+        "pipeline": {
+            "history_rows": 9, "forecast_used_by_g6": False, "g6_forecast_method": "naive",
+            "g6_forecast": {"amps": 1200.0, "ci_lower_amps": 1150.0, "ci_upper_amps": 1250.0,
+                            "n_observations": 14, "horizon_min": 60.0, "method": "naive"},
+            "forecast": {"amps": 1300.0, "ci_lower_amps": 1100.0, "ci_upper_amps": 1500.0,
+                         "n_observations": 100, "horizon_min": 60.0}}})
+
+    assert flat["g6_forecast_method"] == "naive"
+    assert (flat["g6_amps"], flat["g6_ci_lower"], flat["g6_ci_upper"]) == (1200.0, 1150.0, 1250.0)
+    assert flat["fc_amps"] == 1300.0           # the stored forecast keeps its own columns
+    assert "pipeline_g6_forecast" not in flat and "pipeline_g6_forecast_method" not in flat
+
+
+def test_flatten_record_leaves_the_g6_columns_out_of_a_record_that_has_no_such_key():
+    flat = rdv._flatten_record({"city": _CITY, "pipeline": {"history_rows": 9}})
+
+    assert "g6_forecast_method" not in flat
+    for column in ("g6_amps", "g6_ci_lower", "g6_ci_upper"):
+        assert column not in flat
+
+
+def test_flatten_record_keeps_a_null_g6_method_as_recorded():
+    flat = rdv._flatten_record({
+        "city": _CITY, "pipeline": {"g6_forecast_method": None, "g6_forecast": None}})
+
+    assert "g6_forecast_method" in flat and flat["g6_forecast_method"] is None
+    assert flat["g6_amps"] is None
+
+
+def test_classify_steps_passes_the_g6_columns_through(tmp_path):
+    records = [_trace_record(h) for h in range(_HOURS)]
+    for h, record in enumerate(records):
+        record["pipeline"]["g6_forecast_method"] = "naive" if h % 2 else "ml"
+        record["pipeline"]["g6_forecast"] = {
+            "amps": 1.0 + h, "ci_lower_amps": 0.5 + h, "ci_upper_amps": 1.5 + h,
+            "n_observations": 14, "horizon_min": 60.0, "method": record["pipeline"]["g6_forecast_method"]}
+    trace = tmp_path / "trace.jsonl"
+    trace.write_text("\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8")
+
+    frame = rdv.classify_steps(
+        rdv.load_trace(trace), None, [_CITY], rdv.expected_steps(_START, _ts(_HOURS - 1)),
+        pd.Timestamp(_START), _WARMUP_H)
+
+    assert list(frame["g6_forecast_method"]) == ["ml", "naive"] * (_HOURS // 2)
+    assert list(frame["g6_amps"]) == [1.0 + h for h in range(_HOURS)]
+    assert list(frame["g6_ci_lower"]) == [0.5 + h for h in range(_HOURS)]
+    assert list(frame["g6_ci_upper"]) == [1.5 + h for h in range(_HOURS)]
+
+
+def test_g6_band_table_counts_each_method_exactly():
+    frame = _steps([
+        _g6_row(0, "ml"),
+        _g6_row(1, "ml", outcome="G6", alerts=_trip_alert("from forecast center")),
+        _g6_row(2, "naive"),
+        _g6_row(3, "ewm"),
+        _g6_row(4, None, fc=None),
+        _g6_row(5, "NAIVE"),                       # exact string match: not "naive"
+        _g6_row(6, "ml", outcome="G4_low"),        # never reached G6
+        _g6_row(7, "ml", period="warmup"),         # not scored
+    ])
+
+    table = rdv.g6_band_table(frame, [_CITY])
+
+    assert list(table.columns) == rdv.G6_BAND_COLUMNS == [
+        "city", "n_g6_evaluated", "n_band_ml", "n_band_naive", "n_band_other", "n_no_band",
+        "band_share", "g6_method_recorded"]
+    row = table.iloc[0]
+    assert row["city"] == _CITY
+    assert row["n_g6_evaluated"] == 6
+    assert row["n_band_ml"] == 2 and row["n_band_naive"] == 1
+    assert row["n_band_other"] == 2 and row["n_no_band"] == 1
+    assert row["band_share"] == pytest.approx(5 / 6)
+    assert bool(row["g6_method_recorded"]) is True
+    assert row["n_band_ml"] + row["n_band_naive"] + row["n_band_other"] + row["n_no_band"] \
+        == row["n_g6_evaluated"]
+
+
+def test_g6_band_table_without_the_key_reports_na_not_zero():
+    # A trace written before B5 (the Phase 3 run) has no g6_forecast_method column.
+    frame = _steps([_row(0), _row(1), _row(2, outcome="G6", alerts=_trip_alert("x"))])
+
+    row = rdv.g6_band_table(frame, [_CITY]).iloc[0]
+
+    assert row["n_g6_evaluated"] == 3
+    assert bool(row["g6_method_recorded"]) is False
+    for column in ("n_band_ml", "n_band_naive", "n_band_other", "n_no_band", "band_share"):
+        assert pd.isna(row[column]), column
+
+
+def test_g6_band_table_city_with_no_g6_step_has_zero_counts_and_an_empty_share():
+    frame = _steps([_g6_row(0, "ml", outcome="G4_low"), _g6_row(1, "ml", period="warmup")])
+
+    row = rdv.g6_band_table(frame, [_CITY]).iloc[0]
+
+    assert row["n_g6_evaluated"] == 0
+    assert bool(row["g6_method_recorded"]) is True
+    assert row["n_band_ml"] == 0 and row["n_band_naive"] == 0
+    assert row["n_band_other"] == 0 and row["n_no_band"] == 0
+    assert pd.isna(row["band_share"])
+
+
+def test_g6_band_table_has_one_row_per_city_in_the_order_given():
+    other = "EL_PASO"
+    frame = _steps([_g6_row(0, "ml"), _g6_row(1, "naive", city=other), _g6_row(2, None, city=other, fc=None)])
+
+    table = rdv.g6_band_table(frame, [other, _CITY])
+
+    assert list(table["city"]) == [other, _CITY]
+    assert list(table["n_g6_evaluated"]) == [2, 1]
+    assert list(table["n_band_naive"]) == [1, 0]
+    assert table.iloc[0]["band_share"] == pytest.approx(0.5)
+
+
+def test_report_writes_the_g6_band_table_and_lists_it_in_tables_md(tmp_path):
+    records = [_trace_record(h, temp=10.0 + 2.0 * h) for h in range(_HOURS)]
+    for h, record in enumerate(records):
+        method = "naive" if h in (3, 4) else ("ml" if h != 7 else None)
+        record["pipeline"]["g6_forecast_method"] = method
+        record["pipeline"]["g6_forecast"] = None if method is None else dict(
+            record["pipeline"]["forecast"], method=method)
+
+    code1, first = _report(tmp_path, records, "run1")
+    code2, second = _report(tmp_path, records, "run2")
+
+    assert code1 == 0 and code2 == 0
+    for name in ("val02_g6_band_by_city.csv", "tables.md"):
+        assert (first / name).read_bytes() == (second / name).read_bytes(), name
+    band = pd.read_csv(first / "val02_g6_band_by_city.csv")
+    assert list(band.columns) == rdv.G6_BAND_COLUMNS
+    row = band.iloc[0]
+    assert row["city"] == _CITY and row["n_g6_evaluated"] == _HOURS - 2   # two warm-up steps
+    assert row["n_band_ml"] == 3 and row["n_band_naive"] == 2 and row["n_no_band"] == 1
+    assert row["band_share"] == pytest.approx(5 / 6, abs=1e-4)
+    tables = (first / "tables.md").read_text(encoding="utf-8")
+    assert "val02_g6_band_by_city.csv" in tables
+    assert "G6 band engagement (B5)" in tables
+    assert tables.index("# VAL-02 tables") < tables.index("G6 band engagement (B5)")
+
+
+def test_report_on_a_trace_without_g6_method_leaves_the_counts_empty(tmp_path):
+    records = [_trace_record(h, temp=10.0 + 2.0 * h) for h in range(_HOURS)]
+
+    code, out_dir = _report(tmp_path, records, "run")
+
+    assert code == 0
+    row = pd.read_csv(out_dir / "val02_g6_band_by_city.csv").iloc[0]
+    assert row["n_g6_evaluated"] == _HOURS - 2
+    assert bool(row["g6_method_recorded"]) is False
+    for column in ("n_band_ml", "n_band_naive", "n_band_other", "n_no_band", "band_share"):
+        assert pd.isna(row[column]), column
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # report: VAL-02 files, deterministic
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -407,7 +572,7 @@ def _ts(hour):
 
 
 def _trace_record(hour, temp=15.0, g6_trip=False):
-    point = city_point.city_point(_CITY)
+    point = city_point.production_city_point(_CITY)
     wind, solar = 3.0, 300.0
     computed = float(rdv.computed_amps(_CITY, temp, wind, solar))
     centre = computed + (50.0 if hour == 4 else 20.0 * (hour % 3 - 1))  # hour 4 misses the +-30 band
