@@ -8,6 +8,11 @@
 -- editor once, right after applying supabase/migrations/20261108120000_day_ahead_forecast_store.sql
 -- (plan 08-07). This directory is never applied by the Supabase CLI; it is not a migration.
 --
+-- Run it before the exposure migration (20261108120100), not after. Once that migration is applied the
+-- check day_ahead_forecast_not_readable_by_anon_or_authenticated is false on purpose, because the
+-- public keys may now read the table. Do not revoke the public grant to turn it true; after the
+-- exposure use supabase/ops/verify_exposure.sql.
+--
 -- What each check proves, in plain English:
 --   day_ahead_forecast_exists                    the day-ahead table is there
 --   day_ahead_forecast_rls_enabled               row-level security is switched on for it

@@ -811,5 +811,9 @@ Until then the stage keeps serving the files the manifest names.
 - To run the ratings without the stage (a local run, for example when testing a rating change):
   `PYTHONPATH=backend .venv/bin/python backend/dlr_live_run.py --no-day-ahead`. The scheduled workflow never
   passes it.
-- The owner's one-query check of the write side after the migration is applied is
-  `supabase/ops/verify_day_ahead_store.sql` in the SQL editor: every `ok` must be true.
+- The owner's one-query check of the write side is `supabase/ops/verify_day_ahead_store.sql` in the SQL
+  editor. Run it once, right after the store migration is applied and before the exposure migration
+  (`20261108120100`); at that point every `ok` must be true. After the exposure, the check
+  `day_ahead_forecast_not_readable_by_anon_or_authenticated` is false on purpose, because the public keys
+  are now allowed to read the table. Do not revoke the public grant because of it. To check the live
+  setup after the exposure, use `supabase/ops/verify_exposure.sql` instead.
