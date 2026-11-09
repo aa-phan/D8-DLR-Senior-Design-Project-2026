@@ -43,7 +43,7 @@ The wheelhouse held exactly these three files, nothing else.
 | Step 3 | session B: first run on a converted case, 26 PASS 1 FAIL (`load_flow`, exit 6), see "Finding from session B"; run on an unconverted case, 27 PASS 0 FAIL 0 SKIP, exit 0 |
 | Step 4 | session B: pass, 29 PASS 0 FAIL 0 SKIP, exit 0 (`rating_write` and `scale_load` PASS) |
 | Step 5 | session B: pass, exit 0, `validation: ok`, 28 of 28 contingencies screened, rows planned 1 run, 4 dispatched capacity, 4 voltage margin, 225 contingency result. Without the Supabase read settings: outcome `fallback`, `city_rating=0 static=4`. With `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` set: outcome `ok`, `city_rating=4 static=0` (live ratings read). Nothing written to the database either time |
-| Step 6 | pending |
+| Step 6 | session B, in progress: render pass (exit 0); first registration refused with `The task XML is malformed ... unable to switch the encoding` (HRESULT 0x8004131a), see "Finding from step 6"; with the declaration rewritten to UTF-16 in the string, registration passed, task state Ready, `LastTaskResult 267011` (not yet run), `NextRunTime` 15 seconds past the :15 mark, `NumberOfMissedRuns 0`. Three-hour run check, overlap test and removal pending |
 
 ## Finding from step 2 (gap-closure item, C-4: no code edited on the laptop)
 
@@ -68,6 +68,10 @@ Case setup used: the public IEEE 39-bus New England system (39 buses, 34 lines, 
 2. **A saved case from PSS/E 33 loads directly in 36.4** (the plain 39-bus case was saved by an older release; `load_case` PASS).
 3. **`signature:branch_chng_3` PASS** (7 parameters present, one extra parameter not in the table). The expected-risk row did not fail, so `SURFACE` and the adapter need no change.
 4. **The dry run reads live ratings** with only the two read settings; no database login is needed. With them absent the read counts as a failed read and every city falls back to the static rating.
+
+## Finding from step 6 (2026-11-09)
+
+The runbook's registration command, `Register-ScheduledTask -Xml` with the file read as a UTF-8 string, fails on this laptop: the template's declaration says `encoding="UTF-8"` while the in-memory string is UTF-16. Rewriting the declaration to `encoding="UTF-16"` in the string (a `-replace` on the first line, no file edited) lets the XML register. The runbook command is updated. Open: whether the renderer should emit a UTF-16 declaration itself (a code change for a later gap-closure plan; the replace works meanwhile). Registration worked for the laptop's own account; the account has administrator rights, so U15 (a standard user can register) is not isolated. `NextRunTime` came back 15 seconds past :15, not exactly :15; to be compared with the actual start times.
 
 ## Claims cleared
 

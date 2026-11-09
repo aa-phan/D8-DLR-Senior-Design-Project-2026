@@ -203,11 +203,11 @@ Render the XML for the smoke task. It runs `--dry-run --allow-placeholder`, so i
 <PYTHON> -X utf8 "<REPO>\backend\psse_render_task.py" --config "<CONFIG>" --work-dir "<WORKDIR>" --out "<OUT>" --dry-run --allow-placeholder
 ```
 
-Register it for your own account with typed cmdlets. Import the XML as a string so the file encoding is not guessed `[UNVERIFIED until step 6]` (U17).
+Register it for your own account with typed cmdlets. Import the XML as a string so the file encoding is not guessed, and rewrite its declaration to UTF-16 first: the template declares UTF-8, but PowerShell passes the string in memory as UTF-16, and without the rewrite `Register-ScheduledTask` stops with "The task XML is malformed ... unable to switch the encoding" (seen on the second laptop session; with the rewrite it registered) (U17).
 
 <!-- cmd: manual -->
 ```
-$xml = Get-Content -Raw -Encoding UTF8 "<OUT>"
+$xml = (Get-Content -Raw -Encoding UTF8 "<OUT>") -replace '^<\?xml[^>]*\?>', '<?xml version="1.0" encoding="UTF-16"?>'
 Register-ScheduledTask -TaskName "DLR-PSSE-Hourly-DryRun" -Xml $xml
 Get-ScheduledTaskInfo -TaskName "DLR-PSSE-Hourly-DryRun" | Format-List LastRunTime, LastTaskResult, NextRunTime, NumberOfMissedRuns
 ```
