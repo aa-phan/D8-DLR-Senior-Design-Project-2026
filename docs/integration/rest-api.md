@@ -13,7 +13,7 @@
 - The interface is Supabase's REST service (PostgREST). You need two values: `SUPABASE_URL` (the project URL) and `SUPABASE_PUBLISHABLE_KEY` (the publishable key).
 - **The Data Science owner gives both values to each team directly.** They are never written into this repository, into these docs or into the examples (D-10). The examples read them from the environment variables of the same names.
 - Send the key in the `apikey` header only, never in an `Authorization` header and never in the URL. The supabase-js client does this for you.
-- The publishable key maps to the read-only `anon` role: it can read `latest_rating` and `city_rating` and nothing else. The secret key (`sb_secret_...`) and any `service_role` token are never for consumers; if you hold one, do not use it for this.
+- The publishable key maps to the read-only `anon` role: it can read `latest_rating` and `city_rating` and, once the owner applies the day-ahead expose migration, `day_ahead_forecast`, `day_ahead_upcoming` and `day_ahead_status`, and nothing else. The secret key (`sb_secret_...`) and any `service_role` token are never for consumers; if you hold one, do not use it for this.
 - Rotation: if the key is exposed or retired, the DS owner issues a new publishable key to each team, you switch, and the old key is retired. Nothing else changes.
 - Base URL for every call below: `$SUPABASE_URL/rest/v1/`.
 
@@ -23,13 +23,16 @@
 |---|---|
 | `GET /rest/v1/latest_rating` | Exactly four rows, one per city (`AUSTIN`, `CORPUS_CHRISTI`, `MIDLAND`, `EL_PASO`): the newest row of each city, with `age_minutes`, `is_stale` and `is_provisional` added. Use `?select=...&order=city`. |
 | `GET /rest/v1/city_rating` | The full per-city history (OD-6: public). Filters `eq.`, `in.`, `gte.`, `lt.` work on every column of `latest_rating` and on the stored diagnostics listed in [`city_rating_v1.md`](../data-science/schema/city_rating_v1.md). Always give an explicit `order`. Page with `limit` and `offset`, or with the `Range` header. |
+| `GET /rest/v1/day_ahead_upcoming` | The day-ahead forecast values whose target is still in the future, ordered by `city` then `valid_time`, with `lead_minutes` added (26 columns). Labelled `day-ahead-24h; engineering-selection; not-validated`. See "Day-ahead forecast". Readable once the owner applies the expose migration `20261108120100_expose_day_ahead_forecast.sql`. |
+| `GET /rest/v1/day_ahead_status` | Exactly four rows, one per city: when the next target is, how many future values exist, when the newest was issued, which targets due within the next 12 hours have no value, and `is_late` (7 columns). |
+| `GET /rest/v1/day_ahead_forecast` | The full day-ahead history (OD-6: public), 25 columns, including targets that have passed. Always give an explicit `order` and page it like `city_rating`. |
 | `GET /rest/v1/rpc/assert_fresh?max_age_minutes=90` | A freshness check across all four cities: HTTP 200 with a small JSON document when every city is fresh, HTTP 503 (code `PT503`) naming the missing or stale cities when not, HTTP 400 (code `22023`) for a bad parameter. |
 
 Details that matter:
 
 - **`latest_rating`** has one row per city, always the newest by `valid_time`, fallback rows included. Filter and order it like a table.
 - **`city_rating` paging.** The service returns at most 1000 rows per request, silently: there is no error and no warning when a result is cut. Page with an explicit unique order (`order=valid_time.asc` is unique within one city; for several cities use `order=valid_time.asc,city.asc`) and keep going until a page comes back empty. Bound the range with `valid_time=gte.<start>` and `valid_time=lt.<end>` (two filters on the same column are allowed) so rows appended while you page cannot shift your offsets. `Prefer: count=exact` with `Range-Unit: items` and `Range: 0-0` returns the total after the slash of `Content-Range` (for example `0-0/2500`).
-- **`rpc/assert_fresh`** answers `{"ok": true, "cities": 4, "max_age_minutes": 90, "oldest_valid_time": "..."}` with HTTP 200. When a city has no row or only an older one it answers HTTP 503 with code `PT503` and a `details` text of the form `missing=... stale=...`. A `max_age_minutes` outside 0 to 10080 is HTTP 400 with code `22023`. It is documented here, and the DS owner runs it as the permanent alarm; the examples do not need it (D-12).
+- **`rpc/assert_fresh`** answers `{"ok": true, "cities": 4, "max_age_minutes": 90, "oldest_valid_time": "..."}` with HTTP 200. When a city has no row or only an older one it answers HTTP 503 with code `PT503` and a `details` text of the form `missing=... stale=...`. A `max_age_minutes` outside 0 to 10080 is HTTP 400 with code `22023`. Once the owner applies the day-ahead expose migration, the same call also fails with HTTP 503 (`PT503`) when the day-ahead feed has stalled: the `details` text then reads `missing=... stale=... day_ahead_late=CITY@UTC-time,...`, and the HTTP 200 body gains `day_ahead_armed` (true once the day-ahead table holds its first value; the day-ahead part of the alarm is armed by the first value, so an empty feed cannot raise a false alarm). It is documented here, and the DS owner runs it as the permanent alarm; the examples do not need it (D-12).
 
 ## `latest_rating` columns
 
@@ -122,7 +125,7 @@ The identity columns are how a change shows up (D-01). If `config_fingerprint`, 
 | 401 or 403 | `42501` | Permission denied: any write, or a read of a table consumers may not read. |
 | 404 | `PGRST202`, `PGRST205` | Unknown table or function, or the service is reloading its schema after a change; retry shortly. |
 | 406 | `PGRST116` | You asked for exactly one object (`Accept: application/vnd.pgrst.object+json`) and the result had zero or several rows. |
-| 503 | `PT503` | `rpc/assert_fresh` found a city with no row or only a stale one; `details` names the cities. |
+| 503 | `PT503` | `rpc/assert_fresh` found a city with no row or only a stale one, or (once armed by the first day-ahead value) a day-ahead target that is late; `details` names the cities, and `day_ahead_late=...` names each late city and target. |
 
 ## Write protection and visibility
 
@@ -166,4 +169,68 @@ Since April 2026 the publishable key can no longer read the service's OpenAPI de
 
 ## Monitoring
 
-The DS owner runs a permanent freshness alarm on `rpc/assert_fresh` (see section 14 of the [live runbook](../data-science/decisions/dlr_live_runbook.md)). Consumers still check `is_stale` on every row they use: the alarm tells the owner, not your code.
+The DS owner runs a permanent freshness alarm on `rpc/assert_fresh` (see section 14 of the [live runbook](../data-science/decisions/dlr_live_runbook.md)). Consumers still check `is_stale` on every row they use: the alarm tells the owner, not your code. The same alarm URL also fails with `day_ahead_late=...` when the day-ahead feed stalls, armed by the first day-ahead value; there is no new alarm job.
+
+## Day-ahead forecast
+
+**Label:** `day-ahead-24h; engineering-selection; not-validated`. Show it wherever you show a day-ahead value.
+
+A 24-hour-ahead estimate from ml_cooling_corrected. It has more error than the 60-minute forecast because it looks further ahead. On past data (TEST window, Mar-Sep 2026) its typical error was about 23 A (~1.7% of rating) larger. It is the owner's engineering choice, not picked by the signed selection rule, and it never sets or checks the live rating.
+
+- **Evidence, exploratory.** The "about 23 A" and "about 1.7%" are from the horizon comparison on the TEST window, an exploratory analysis that was not pre-registered: [`REPORT.md`](../data-science/exploratory/2026-11-02_horizon_comparison/REPORT.md) (`docs/data-science/exploratory/2026-11-02_horizon_comparison/REPORT.md`). They describe past data, not future error. The value has no safety role: it is not validated, it never gates a rating, and it is separate from the 60-minute forecast in `city_rating` that does.
+- **What "24 h" means.** It is the age of the weather run behind the value (`forecast_run_init_time` is exactly 24 hours before `valid_time`), not how early you get the value. A value is issued 0 to 18 hours before its target. `issued_at`, `forecast_run_init_time` and `anchor_observation_time` let you compute both leads for every row.
+- **Targets.** One value per city for each 00, 06, 12 and 18 UTC hour. A target that has passed is never filled afterwards; it stays empty.
+- **Issue rule.** A target is due from about 18 hours before it, and the hourly job issues it as soon as it is due and retries every hour. A value issued late shows a later `issued_at`. Rows are written once and never rewritten.
+- **Band rule.** `forecast_ci_lower_amps` and `forecast_ci_upper_amps` are the 5-95% empirical band, one per city and target hour. At launch every band comes from the TEST split, measured against reanalysis truth with a 24 h anchor (`band_source` is `test-split`). A band switches on its own to `live-rolling` once 60 graded pairs exist for its city and hour, using the newest 120, and only when it brackets the value; the live band is measured against the station-composed rating, with hours where the live rating was the static fallback left out. The two measurements differ, so the width can change when `band_source` changes.
+- **Late rule.** A 6-hourly target due within the next 12 hours with no value marks its city late, once the feed has its first value (armed by the first value). `day_ahead_status.is_late` and `missing_targets` show it, and the permanent alarm reads the same rule (`day_ahead_late=...` in the `rpc/assert_fresh` details).
+- **Out-of-range values are published as computed.** The live rating falls back to the static rating when a computed value is outside its bounds; the day-ahead value does not. A value outside the rating bounds is still published (on the first live run two MIDLAND values were below 1250 A) and the pipeline logs a warning.
+- **Amperes only.** There is no MW column; convert as for `city_rating`, with the line voltage and power factor of the rating rows.
+
+Column-by-column storage details, the identity columns, the versioning rule and the run log are in [`day_ahead_forecast_v1.md`](../data-science/schema/day_ahead_forecast_v1.md).
+
+## `day_ahead_upcoming` columns
+
+The view has 26 columns, in this order: the 25 columns of `day_ahead_forecast`, then `lead_minutes`. Every row is a future target with a value. Every `*_amps` value carries the day-ahead label and is not validated.
+
+| Column | Type | Unit | Meaning |
+|---|---|---|---|
+| `city` | text | none (identifier) | City key: `AUSTIN`, `CORPUS_CHRISTI`, `MIDLAND` or `EL_PASO`. |
+| `valid_time` | timestamptz | UTC instant | The target hour: 00, 06, 12 or 18 UTC. Always in the future in this view. |
+| `issued_at` | timestamptz | UTC instant | When the issuing run decided to issue the value, before `valid_time`. A catch-up issue carries a later value. |
+| `forecast_run_init_time` | timestamptz | UTC instant | Start of the weather run behind the value, exactly 24 hours before `valid_time` (the age of the weather run, not the lead from `issued_at`). |
+| `horizon_minutes` | integer | minutes | Age of the weather run at `valid_time`; always 1440. |
+| `forecast_amps` | double precision | A, per conductor | The day-ahead forecast of the ampacity at `valid_time`. Not validated; see the label. |
+| `forecast_ci_lower_amps` | double precision | A, per conductor | Lower edge (5%) of the empirical band. |
+| `forecast_ci_upper_amps` | double precision | A, per conductor | Upper edge (95%) of the empirical band. |
+| `band_source` | text | none (category) | `test-split` (launch band) or `live-rolling`. |
+| `band_n` | integer | count | Number of residuals behind the band. |
+| `band_pairs_through` | timestamptz | UTC instant | `valid_time` of the newest live pair behind a `live-rolling` band; NULL for `test-split`. |
+| `band_artifact_sha256` | text | none (identifier) | sha256 of the TEST band artifact file; always recorded. |
+| `forecast_method` | text | none (label) | Always `ml_cooling_corrected`. |
+| `cooling_model_sha256` | text | none (identifier) | sha256 of the cooling model file the value came from. |
+| `cooling_model_source` | text | none (category) | `refit` or `frozen`. |
+| `anchor_observation_time` | timestamptz | UTC instant | Time of the station observation the correction used; can be hours before `valid_time`. |
+| `anchor_source` | text | none (label) | Provider of the anchor observation (`tceq` or `synoptic`). |
+| `label` | text | none (label) | `day-ahead-24h; engineering-selection; not-validated`. |
+| `config_version` | text | none (label) | Human-readable label of the rating assumption set. |
+| `config_fingerprint` | text | none (identifier) | Automatic identity of the city's rating assumptions. |
+| `run_id` | text | none (identifier) | The workflow run that issued the value. |
+| `run_attempt` | integer | count | Attempt number of that workflow run. |
+| `pipeline_version` | text | none (identifier) | Short git commit of the pipeline code. |
+| `schema_version` | integer | version | Row schema version; 1 here. |
+| `first_written_at` | timestamptz | UTC instant | When the row was inserted; never changes. |
+| `lead_minutes` | integer | minutes | Computed. Whole minutes from your request to `valid_time`, rounded up, so always at least 1 here. |
+
+## `day_ahead_status` columns
+
+The view always has four rows, one per city, and seven columns in this order. Check every city, never only the row count.
+
+| Column | Type | Unit | Meaning |
+|---|---|---|---|
+| `city` | text | none (identifier) | City key. |
+| `checked_at` | timestamptz | UTC instant | The moment of your request; every other column is computed as of it. |
+| `next_target_time` | timestamptz | UTC instant | The first 00, 06, 12 or 18 UTC target after `checked_at`. |
+| `upcoming_count` | integer | count | Stored day-ahead values for the city whose `valid_time` is after `checked_at`. |
+| `newest_issued_at` | timestamptz | UTC instant | The newest `issued_at` of the city, past or future; NULL when the city has no value. |
+| `missing_targets` | timestamptz[] | UTC instants | Every target due within the next 12 hours (after `checked_at`, up to 12 hours later) that has no stored value; an empty array when none. |
+| `is_late` | boolean | none (flag) | True when `missing_targets` is not empty and the table holds at least one row (armed by the first value); false otherwise. |

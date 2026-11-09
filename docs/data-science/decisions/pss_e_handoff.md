@@ -74,6 +74,10 @@ This is deliberately not resolved here; it needs a conversation with the Power S
 - The per-city conductor values Power Systems is to confirm (Phase 7, COND-01). Today one Drake conductor configuration is used for every city, with assumed subconductor counts and line bearings.
 - The provisional caveat: every row stays provisional (OD-5) until Phase 7's go (REVAL-01) lifts the label.
 
+## Day-ahead forecast (2026-11)
+
+A second, separate value is now stored for each city: a 24-hour-ahead forecast for each 00, 06, 12 and 18 UTC hour, with a 5-95% band, labelled `day-ahead-24h; engineering-selection; not-validated`. It is information only: not validated, no safety role, and it never sets or checks the hourly rating or the 60-minute forecast above. How to read it is in [`rest-api.md`](../../integration/rest-api.md) and the columns, the issue rule and the band rule are in [`day_ahead_forecast_v1.md`](../schema/day_ahead_forecast_v1.md); both become readable when the owner applies the day-ahead expose migration.
+
 ---
 *Captured: 2026-09-24, during Track 2 (ML Model Development) Phase 1 discussion — not itself part
 of that phase's scope, recorded as a standalone note per the user's request.*
