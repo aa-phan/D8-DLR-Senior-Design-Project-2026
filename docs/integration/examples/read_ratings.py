@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Read the current dynamic line rating of every city, and one city's history, over REST.
+"""Read the current dynamic line rating of every city, one city's history, and the day-ahead
+forecast, over REST.
 
 What it prints
   1. One line per city from the view `latest_rating` (the current row of each city): the rating
@@ -8,6 +9,13 @@ What it prints
   2. For one city (--city, default AUSTIN), how many hourly rows the table `city_rating` holds
      between --start and --end (default: the last seven days), read in pages of 1000 rows, with
      the first and last `valid_time`.
+  3. The day-ahead forecast (Phase 8): the upcoming targets of every city from the view
+     `day_ahead_upcoming` (one value per city at each of the 00, 06, 12 and 18 UTC targets, with
+     the band, the lead in minutes and where the band came from), then one status line per city
+     from the view `day_ahead_status` (how many targets are upcoming, whether the feed is late
+     and which targets are missing). These values carry the label
+         day-ahead-24h; engineering-selection; not-validated
+     They are NOT the live rating, and they never set or check it.
 
 Requirements
   * Python 3.7 or newer, standard library only. Nothing to install.
@@ -28,8 +36,9 @@ The script only reads (HTTP GET), writes no file and keeps no state, so it is sa
 repeatedly, at the same time as other copies of itself, or to interrupt. The key travels in the
 `apikey` header only. TLS certificates are verified with Python's defaults.
 
-Exit status: 0 success; 1 the service answered with an error, could not be reached, or did not
-return all four cities; 2 a missing environment variable or an unusable argument.
+Exit status: 0 success (a late day-ahead feed is printed, not an error); 1 the service answered
+with an error, could not be reached, or did not return all four cities (also for the day-ahead
+status); 2 a missing environment variable or an unusable argument.
 
 All rating values are PROVISIONAL (see docs/integration/rest-api.md). A row whose status is
 "fallback" is a valid published rating (the static value), not an error.
@@ -51,6 +60,11 @@ ENV_URL = "SUPABASE_URL"
 ENV_KEY = "SUPABASE_PUBLISHABLE_KEY"
 LATEST_SELECT = ("city,valid_time,rating_amps,rating_mw,status,fallback_gates,"
                  "age_minutes,is_stale,is_provisional")
+DAY_AHEAD_UPCOMING_SELECT = ("city,valid_time,issued_at,lead_minutes,forecast_amps,forecast_ci_lower_amps,"
+                             "forecast_ci_upper_amps,band_source,band_n,label")
+DAY_AHEAD_STATUS_SELECT = "city,next_target_time,upcoming_count,newest_issued_at,missing_targets,is_late"
+DAY_AHEAD_LABEL = "day-ahead-24h; engineering-selection; not-validated"
+STAMP = "%Y-%m-%dT%H:%M:%SZ"
 
 _TS = re.compile(r"^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})(?:\.(\d+))?(Z|[+-]\d{2}(?::?\d{2})?)?$")
 
@@ -153,6 +167,50 @@ def _print_latest(rows):
             row.get("status"), row.get("age_minutes"), row.get("is_stale"), row.get("is_provisional"), gates))
 
 
+def _utc(value):
+    """A PostgREST timestamp as UTC text ending in Z, or the text unchanged if it cannot be read."""
+    try:
+        return parse_ts(value).astimezone(timezone.utc).strftime(STAMP)
+    except ValueError:
+        return str(value)
+
+
+def _city_order(row):
+    return CITIES.index(row["city"]) if row.get("city") in CITIES else len(CITIES)
+
+
+def _print_day_ahead(upcoming, status):
+    """Part 3 output. Every line is indented, so none can be read as a Part 1 city line."""
+    upcoming = sorted(upcoming, key=lambda r: (_city_order(r), _utc(r.get("valid_time"))))
+    status = sorted(status, key=_city_order)
+    labels = []
+    for row in upcoming:
+        if row.get("label") not in labels:
+            labels.append(row.get("label"))
+    print("")
+    print("Day-ahead forecast: upcoming targets (view day_ahead_upcoming)")
+    print("label: %s" % (" | ".join(str(label) for label in labels) or DAY_AHEAD_LABEL))
+    print("this is not the live rating: it never sets or checks it, and it is not validated")
+    if not upcoming:
+        print("no upcoming day-ahead values")
+    for row in upcoming:
+        print("  %-15s %s  %7s A  band %s to %s A  lead %s min  %s n=%s" % (
+            row.get("city"), _utc(row.get("valid_time")), _number(row.get("forecast_amps"), "%.1f"),
+            _number(row.get("forecast_ci_lower_amps"), "%.1f"), _number(row.get("forecast_ci_upper_amps"), "%.1f"),
+            row.get("lead_minutes"), row.get("band_source"), row.get("band_n")))
+    print("")
+    print("Day-ahead status per city (view day_ahead_status)")
+    late = []
+    for row in status:
+        missing = [_utc(t) for t in (row.get("missing_targets") or [])]
+        print("  %-15s upcoming %s  late=%s  missing %s" % (
+            row.get("city"), row.get("upcoming_count"), row.get("is_late"), ", ".join(missing) or "-"))
+        if row.get("is_late"):
+            late.append("%s (missing %s)" % (row.get("city"), ", ".join(missing) or "-"))
+    if late:
+        print("day-ahead feed is LATE for %s" % "; ".join(late))
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Read DLR ratings from the Supabase REST interface.")
     parser.add_argument("--city", choices=CITIES, default="AUSTIN", help="city for the history part")
@@ -193,6 +251,15 @@ def main(argv=None):
             stamp = "%Y-%m-%dT%H:%M:%SZ"
             print("first valid_time: %s" % parse_ts(rows[0]["valid_time"]).astimezone(timezone.utc).strftime(stamp))
             print("last valid_time:  %s" % parse_ts(rows[-1]["valid_time"]).astimezone(timezone.utc).strftime(stamp))
+
+        # Part 3: the day-ahead targets and the per-city status (not the live rating).
+        upcoming = get("day_ahead_upcoming", [("select", DAY_AHEAD_UPCOMING_SELECT), ("order", "city,valid_time")])
+        status = get("day_ahead_status", [("select", DAY_AHEAD_STATUS_SELECT), ("order", "city")])
+        _print_day_ahead(upcoming, status)
+        absent = [city for city in CITIES if city not in [row.get("city") for row in status]]
+        if absent:
+            print("day_ahead_status is missing: %s" % ", ".join(absent), file=sys.stderr)
+            return 1
     except RuntimeError as error:
         print(str(error), file=sys.stderr)
         return 1
