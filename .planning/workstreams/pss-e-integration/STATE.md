@@ -29,7 +29,7 @@ higher than the static rating.
 Phase: 1 of 3 (Result-Table Spec and Rating I/O)
 Plan: 0 of TBD in current phase
 Status: Ready to plan
-Last activity: 2026-10-26 — Roadmap created (3 phases, 16 requirements mapped)
+Last activity: 2026-11-09 - Completed quick task 261109-o6v: Add PSS/E results migration and dlr_psse_writer role
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -55,7 +55,7 @@ Progress: [░░░░░░░░░░] 0%
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
-- [Milestone]: No standalone migration; the four result tables and the PSS/E write grant ship in production-pipeline Phase 6, and this workstream hands it the spec (DBX-01).
+- [Milestone]: ~~No standalone migration~~ Superseded 2026-11-09: the four result tables and the `dlr_psse_writer` role shipped as the separate owner migration `20261109233541_psse_results.sql` (quick 261109-o6v), applied live (DBX-01, DBX-02).
 - [Milestone]: Dashboard is out of scope; Power Systems owns the case and the branch mapping; `psspy` API choices belong to the implementer.
 - [Milestone]: Static rating is the fallback when a `city_rating` row is missing, older than 90 minutes or provisional (IN-01).
 
@@ -69,6 +69,12 @@ None yet.
 - Power Systems has not yet supplied the case file, the city-to-branch mapping or laptop access. Phase 2 builds against a placeholder mapping and a fake `psspy`; Phase 3 cannot finish without the real ones.
 - Every `city_rating` row is provisional until production-pipeline Phase 7's go, so studies in this milestone run on static ratings.
 - REQUIREMENTS.md said 17 v1 requirements; it defines 16. Corrected to 16 in its Traceability section on 2026-10-26.
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 261109-o6v | Add PSS/E results migration and dlr_psse_writer role | 2026-11-09 | edbb2fd | [261109-o6v-add-pss-e-results-migration-and-dlr-psse](./quick/261109-o6v-add-pss-e-results-migration-and-dlr-psse/) |
 
 ## Deferred Items
 
