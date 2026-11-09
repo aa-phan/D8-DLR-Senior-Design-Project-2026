@@ -80,7 +80,7 @@ A second, separate value is now stored for each city: a 24-hour-ahead forecast f
 
 ### Which target hour to use
 
-Each city has four targets a day, at 00, 06, 12 and 18 UTC. For a next-day study, pick the target closest to the study hour; There is no interpolation by Data Science: no value is published for an hour in between, so interpolating is the study's own choice and should be stated as such. The Central times of the four targets:
+Each city has four targets a day, at 00, 06, 12 and 18 UTC. For a next-day study, pick the target closest to the study hour, among the targets that are already published. A value appears only about 18 hours before its target, so at any moment each city has at most three upcoming targets and a study hour further away than that has no value yet. There is no interpolation by Data Science: no value is published for an hour in between, so interpolating is the study's own choice and should be stated as such. The Central times of the four targets:
 
 | Target | Central, November to March (CST, UTC-6) | Central, March to November (CDT, UTC-5) |
 |---|---|---|
@@ -101,7 +101,7 @@ The value has no safety role and is not validated. It is an engineering selectio
 
 ### Empty or late targets
 
-A target the pipeline could not compute stays empty: no substitute value is published. If a target you need is not in the list, read `day_ahead_status`: `is_late` is true when a target due within the next 12 hours has no value, and `missing_targets` names them. Wait for the next hourly run or ask the Data Science owner; never borrow the value of another city or another hour. A target that has passed is never filled afterwards.
+A target the pipeline could not compute stays empty: no substitute value is published. A target more than 18 hours away is not late, it is only not yet due: it is simply absent until about 18 hours before, and `day_ahead_status` will not flag it. If a target within 18 hours is not in the list, read `day_ahead_status`: `is_late` is true when a target due within the next 12 hours has no value, and `missing_targets` names them. Wait for the next hourly run or ask the Data Science owner; never borrow the value of another city or another hour. A target that has passed is never filled afterwards.
 
 ### Running the example and converting to megawatts
 

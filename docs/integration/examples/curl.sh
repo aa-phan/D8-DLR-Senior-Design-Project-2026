@@ -7,7 +7,8 @@
 #    rows (the service returns at most 1000 per request), ordered by valid_time ascending so no
 #    row repeats or is skipped, after one HEAD request that reads the total row count.
 # 3. The day-ahead forecast: the upcoming targets of every city from the view day_ahead_upcoming
-#    (one value per city at each 00, 06, 12 and 18 UTC target, ordered by city then target time),
+#    (the targets issued so far at 00, 06, 12 or 18 UTC; a value appears about 18 h before its target,
+#    so at most three per city; ordered by city then target time),
 #    then one status row per city from the view day_ahead_status (upcoming_count, is_late and
 #    missing_targets). Day-ahead values carry the label
 #    day-ahead-24h; engineering-selection; not-validated, are not the live rating, and never gate it.

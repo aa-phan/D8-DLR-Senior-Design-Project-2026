@@ -10,7 +10,8 @@ What it prints
      between --start and --end (default: the last seven days), read in pages of 1000 rows, with
      the first and last `valid_time`.
   3. The day-ahead forecast (Phase 8): the upcoming targets of every city from the view
-     `day_ahead_upcoming` (one value per city at each of the 00, 06, 12 and 18 UTC targets, with
+     `day_ahead_upcoming` (the targets issued so far, at 00, 06, 12 or 18 UTC: a value appears about
+     18 hours before its target, so at most three per city, with
      the band, the lead in minutes and where the band came from), then one status line per city
      from the view `day_ahead_status` (how many targets are upcoming, whether the feed is late
      and which targets are missing). These values carry the label

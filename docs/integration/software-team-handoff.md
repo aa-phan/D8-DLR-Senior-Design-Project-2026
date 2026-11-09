@@ -53,7 +53,7 @@ Expect four rows, one per city. Complete, runnable versions, including history p
 |---|---|---|
 | `latest_rating` | View. Always four rows, the newest row of each city, with 34 columns. | Anything that shows "now": the status page, current values, freshness badges. |
 | `city_rating` | Table. One row per city per hour, every stored column. Backfill rows (`origin` = `backfill`) cover 2026-09-08 to 2026-09-28; live rows follow from go-live, so expect a gap between the two. | Charts and history: DLR against static over time, forecast bands, gate history, weather inputs. |
-| `day_ahead_upcoming` | View. The day-ahead targets that are still to come, one row per city and per 00, 06, 12 and 18 UTC target, with 26 columns. | The next-day panel: the expected current with its band and its label. |
+| `day_ahead_upcoming` | View. The day-ahead targets that are still to come, one row per city and per 00, 06, 12 and 18 UTC target that has been issued so far (at most three targets per city, because a value appears only about 18 hours before its target), with 26 columns. | The next-day panel: the expected current with its band and its label. |
 | `day_ahead_status` | View. Always four rows, one per city, with 7 columns. | A feed status badge: on time or late, and which targets are missing. |
 | `day_ahead_forecast` | Table. Every day-ahead value ever issued, one row per city and target, with 25 columns. | History of past day-ahead values, for example to compare them with what happened. |
 | `rpc/assert_fresh` | Function. HTTP 200 when all four cities are fresh, HTTP 503 naming the stale or missing ones. | An optional health check. The Data Science owner already runs it as a permanent alarm. |
@@ -106,7 +106,7 @@ Each rule below is stated in full in the contract section named in brackets.
 
 ## Day-ahead forecast
 
-Besides the live rating, the database holds a second, separate value for each city: a day-ahead forecast of the current the line can carry, one value for each 00, 06, 12 and 18 UTC hour. It is meant for looking at the next day. Every value carries the label `day-ahead-24h; engineering-selection; not-validated`, which says three things: it comes from a forecast made about a day ahead, it is the owner's engineering choice rather than a model picked by a signed rule, and it has not been validated.
+Besides the live rating, the database holds a second, separate value for each city: a day-ahead forecast of the current the line can carry, one value for each 00, 06, 12 and 18 UTC hour. It is meant for looking at the day ahead, with a short lookahead: a value appears about 18 hours before its target hour, so the view holds at most three upcoming targets per city and nothing for a target further away. Every value carries the label `day-ahead-24h; engineering-selection; not-validated`, which says three things: it comes from a forecast made about a day ahead, it is the owner's engineering choice rather than a model picked by a signed rule, and it has not been validated.
 
 What to read:
 
@@ -125,6 +125,7 @@ The easy mistakes:
 - **Always show the band and the label next to the value.** `forecast_ci_lower_amps` and `forecast_ci_upper_amps` are the 5-95% band; a bare `forecast_amps` hides the uncertainty. `band_source` says how the band was measured. Show `label` as it is.
 - **"24 h" is the age of the weather run, not how early you get the value.** A value is issued 0-18 h before its target, so `issued_at` and `valid_time` differ by less than a day.
 - **Values exist only at 00/06/12/18 UTC.** Do not draw a line between them as if they were hourly. Convert to local time in the client, as for every timestamp.
+- **A target more than 18 hours away is not late, it is only not yet due.** Nothing is published for it yet, `is_late` stays false and `missing_targets` stays empty. Show "not yet available", not an error.
 - **An empty or late target stays empty.** Show it as missing; never fill it from another hour or city. A target that has passed is not filled afterwards.
 - **`is_late` is the stall flag.** It turns true when a target due within the next 12 hours has no value; `missing_targets` lists them. A late feed is a status to show, not an error to throw.
 
