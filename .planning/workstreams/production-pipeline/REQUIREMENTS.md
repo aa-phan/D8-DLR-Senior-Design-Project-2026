@@ -193,7 +193,7 @@ proposals.
   rolling band once 60 graded live pairs exist (newest 120, used only when it brackets the value),
   where the actual is the weather-computed rating at the target hour and static-fallback hours are
   excluded. Every row records its band source and sample size (D-05, D-06, D-07, D-08).
-- [ ] **DAY-04**: The stage never delays, blocks or changes live ratings. The 60-minute G6 forecast
+- [x] **DAY-04**: The stage never delays, blocks or changes live ratings. The 60-minute G6 forecast
   stays `ml`. The job's exit code is fixed from the ratings before the stage starts. Day-ahead
   outcomes go to `pipeline_run.day_ahead` (additive). The stage shares the existing 4 x 300 s child
   budget inside the 30-minute job (D-02, D-15).
@@ -291,7 +291,7 @@ proposals.
 | DAY-01 | Phase 8 | Complete |
 | DAY-02 | Phase 8 | Complete |
 | DAY-03 | Phase 8 | Complete |
-| DAY-04 | Phase 8 | Pending |
+| DAY-04 | Phase 8 | Complete |
 | DAY-05 | Phase 8 | Complete |
 | DAY-06 | Phase 8 | Pending |
 | DAY-07 | Phase 8 | Pending |
