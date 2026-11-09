@@ -15,6 +15,7 @@ live Supabase project, a remote or the network.
 
 import contextlib
 import glob
+import hashlib
 import os
 import re
 from datetime import datetime, timedelta, timezone
@@ -29,6 +30,11 @@ _MIGRATIONS_DIR = local_pg.MIGRATIONS_DIR
 _STORE_MIGRATION = "20261108120000_day_ahead_forecast_store.sql"
 _EXPOSE_MIGRATION = "20261108120100_expose_day_ahead_forecast.sql"
 _EXPOSE_PATH = os.path.join(_MIGRATIONS_DIR, _EXPOSE_MIGRATION)
+
+# Applied to the live project by the owner on 2026-11-09 (plan 08-11); the file may not be edited afterwards.
+_APPLIED_EXPOSE_MIGRATION_SHA256 = {
+    "20261108120100_expose_day_ahead_forecast.sql": "253a539ec0dc41c47f31ec596855e8852769ce6993d587ebdf6e406aedcab816",
+}
 
 _PUBLISHED = ("day_ahead_forecast", "day_ahead_upcoming", "day_ahead_status")
 
@@ -110,6 +116,13 @@ def _function_statement():
 # --------------------------------------------------------------------------------------------------
 # text: what the file says
 # --------------------------------------------------------------------------------------------------
+
+def test_expose_migration_is_unchanged_after_apply():
+    # The file is applied to the live project; a later edit would make the repo disagree with it.
+    for name, expected in _APPLIED_EXPOSE_MIGRATION_SHA256.items():
+        with open(os.path.join(_MIGRATIONS_DIR, name), "rb") as handle:
+            assert hashlib.sha256(handle.read()).hexdigest() == expected, name
+
 
 def test_text_the_file_sorts_after_the_write_side_migration_and_is_the_only_expose_file():
     names = sorted(os.path.basename(p) for p in glob.glob(os.path.join(_MIGRATIONS_DIR, "*.sql")))

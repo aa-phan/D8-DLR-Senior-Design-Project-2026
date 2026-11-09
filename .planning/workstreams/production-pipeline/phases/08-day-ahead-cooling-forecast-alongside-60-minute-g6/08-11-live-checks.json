@@ -1,0 +1,63 @@
+{
+  "checks": [
+    {
+      "name": "rest_upcoming_rows_are_future_and_ordered",
+      "ok": true,
+      "detail": "12 rows, every target in the future, ordered by city then valid_time"
+    },
+    {
+      "name": "rest_upcoming_columns_match_the_contract",
+      "ok": true,
+      "detail": "every row has exactly the 26 contract columns, in order"
+    },
+    {
+      "name": "rest_status_has_four_cities_none_late",
+      "ok": true,
+      "detail": "four cities, the 7 contract columns, none late"
+    },
+    {
+      "name": "rest_table_is_readable",
+      "ok": true,
+      "detail": "readable, the 25 contract columns, newest target 2026-11-09T18:00:00+00:00"
+    },
+    {
+      "name": "rest_assert_fresh_ok_and_armed",
+      "ok": true,
+      "detail": "HTTP 200, ok true, day_ahead_armed true"
+    },
+    {
+      "name": "rest_anon_insert_into_table_refused",
+      "ok": true,
+      "detail": "refused by privilege (HTTP 401 42501 permission denied)"
+    },
+    {
+      "name": "rest_anon_write_to_upcoming_view_refused",
+      "ok": true,
+      "detail": "refused by privilege (HTTP 401, code 42501)"
+    },
+    {
+      "name": "rest_pipeline_run_hidden",
+      "ok": true,
+      "detail": "not readable (HTTP 401 42501)"
+    }
+  ],
+  "attempts": [
+    {
+      "name": "anon_insert_into_table",
+      "method": "POST",
+      "path": "day_ahead_forecast",
+      "status": 401,
+      "code": "42501",
+      "verdict": "pass"
+    },
+    {
+      "name": "anon_write_to_upcoming_view",
+      "method": "PATCH",
+      "path": "day_ahead_upcoming",
+      "status": 401,
+      "code": "42501",
+      "verdict": "pass"
+    }
+  ],
+  "exit_code": 0
+}
