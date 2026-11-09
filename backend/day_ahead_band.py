@@ -345,7 +345,8 @@ def band_for(conn, city: str, valid_time, point_amps: float, artifact: dict, art
     others, to the live rolling band, source "live-rolling", once LIVE_BAND_MIN_PAIRS graded pairs
     exist (the newest LIVE_BAND_WINDOW are used) and only when the live 5% offset is below zero and
     the 95% offset above it; otherwise it keeps the TEST band. The TEST artifact's sha256 is always
-    recorded: it stays the fallback. `conn` None (a local run with no store) is the TEST band.
+    recorded: it stays the fallback. `conn` None (a local run with no store) is the TEST band, and so
+    is a live-band query that raises (logged by exception type only).
     """
     hour = _utc_hour(valid_time)
     try:
@@ -357,10 +358,20 @@ def band_for(conn, city: str, valid_time, point_amps: float, artifact: dict, art
         raise BandArtifactError(f"band artifact has no usable band for {city} at {hour:02d} UTC") from exc
     source, pairs_through = "test-split", None
     if conn is not None:
-        live = _live_offsets(
-            conn, city, hour, config_fingerprint=config_fingerprint,
-            cooling_model_sha256=cooling_model_sha256, decision_time=decision_time,
-        )
+        try:
+            live = _live_offsets(
+                conn, city, hour, config_fingerprint=config_fingerprint,
+                cooling_model_sha256=cooling_model_sha256, decision_time=decision_time,
+            )
+        except Exception as exc:  # noqa: BLE001 - the TEST band is the contract's fallback (WR-01)
+            # A live-band query that fails must not stop publication: the TEST band is valid and
+            # already in hand. Only the exception type is logged (the message could carry the
+            # database URL), and the row is stamped "test-split" so consumers see which band it is.
+            logger.warning(
+                "band_for: live band query for %s at %02d UTC failed (%s) -- keeping the TEST band",
+                city, hour, type(exc).__name__,
+            )
+            live = None
         if live is not None:
             lower_offset, upper_offset, n, pairs_through = live
             source = "live-rolling"

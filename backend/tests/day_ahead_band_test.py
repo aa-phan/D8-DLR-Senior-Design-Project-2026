@@ -501,6 +501,27 @@ def test_live_pairs_returns_newest_first_with_the_residual_sign(admin, writer):
     assert [pd.Timestamp(valid_time) for valid_time, _ in pairs] == [_valid_time(_HOUR, 2), _valid_time(_HOUR, 1)]
 
 
+def test_a_failing_live_query_falls_back_to_the_test_band_and_logs_only_the_exception_type(
+        monkeypatch, caplog):
+    """WR-01: the TEST band is the contract's fallback, so a live-query fault must not stop a row."""
+    secret = "postgresql://user:hunter2@db.example.invalid:5432/postgres"
+
+    def boom(*args, **kwargs):
+        raise RuntimeError(f"statement timeout talking to {secret}")
+
+    monkeypatch.setattr(day_ahead_band, "live_pairs", boom)
+    with caplog.at_level(logging.WARNING, logger=day_ahead_band.logger.name):
+        choice = _band(object())  # any non-None conn: the query itself is what fails
+
+    offsets = _committed_artifact()["bands"][_CITY][str(_HOUR)]
+    assert choice.source == "test-split" and choice.pairs_through is None and choice.n == offsets["n"]
+    assert choice.lower_amps == pytest.approx(_POINT + offsets["lower_offset_amps"])
+    assert choice.upper_amps == pytest.approx(_POINT + offsets["upper_offset_amps"])
+    logged = "\n".join(record.getMessage() for record in caplog.records)
+    assert "RuntimeError" in logged
+    assert "hunter2" not in logged and "statement timeout" not in logged
+
+
 def test_conn_none_returns_the_test_band_without_a_database():
     choice = _band(None)
     offsets = _committed_artifact()["bands"][_CITY][str(_HOUR)]

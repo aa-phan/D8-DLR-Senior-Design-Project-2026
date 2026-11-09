@@ -452,6 +452,24 @@ def test_redaction_an_unexpected_error_is_named_by_type_and_redacted(store, tmp_
     assert _rows(store) == []
 
 
+def test_a_failing_live_band_query_still_issues_every_target_on_the_test_band(store, tmp_path, monkeypatch):
+    """WR-01: a live-band query fault falls back to the TEST band; it does not block publication."""
+    _stub_weather(monkeypatch)
+    _trust_band(monkeypatch, tmp_path)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("live pairs query failed")
+
+    monkeypatch.setattr(day_ahead_band, "live_pairs", boom)
+
+    code, output = _run(tmp_path)
+
+    assert code == 0 and output["outcome"] == "issued"
+    assert output["issued"] == [_iso(t) for t in _DUE] and output["not_issued"] == {}
+    assert set(output["band_sources"].values()) == {"test-split"}
+    assert {row[6] for row in _rows(store)} == {"test-split"} and len(_rows(store)) == len(_DUE)
+
+
 # --------------------------------------------------------------------------------------------------
 # no_store, out_of_bounds
 # --------------------------------------------------------------------------------------------------
