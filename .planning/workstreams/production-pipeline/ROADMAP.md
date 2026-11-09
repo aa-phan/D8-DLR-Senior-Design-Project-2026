@@ -51,7 +51,7 @@ infrastructure was replaced on 2026-10-21; see "Re-sequencing" above.)
 - [x] **Phase 5: Scheduled Live Runs** — new workflow, cron-job.org trigger, failure isolation, runbook (completed 2026-10-26)
 - [x] **Phase 6: Exposure & E2E Verification** — REST via RLS, `latest_rating` view, soak test (completed 2026-11-01)
 - [x] **Phase 7: Per-City Conductors, Shadow Refit and Early Model Selection** — protocol v4, per-city conductor configs, cooling/reference refit, selection from 2026-11-01, re-validation and go/no-go (parallel with 4-6) (completed 2026-11-07)
-- [ ] **Phase 8: Day-Ahead Cooling Forecast Alongside 60-Minute G6** — serve `ml_cooling_corrected` as a labelled higher-error day-ahead forecast alongside the 60-minute G6 `ml` forecast
+- [x] **Phase 8: Day-Ahead Cooling Forecast Alongside 60-Minute G6** — serve `ml_cooling_corrected` as a labelled higher-error day-ahead forecast alongside the 60-minute G6 `ml` forecast (completed 2026-11-09)
 
 ## Phase Details
 
@@ -409,7 +409,7 @@ and API exposure, and which conductor-dependent artifacts are served (AUSTIN ref
      meaning of "24 h", and is published only after the expose step, together with the three consumer
      examples (which also read the day-ahead targets and status and ran live first) and the Software
      and PSS/E handoff notes (D-18).
-**Plans:** 12/12 plans executed
+**Plans:** 12/12 plans complete
 
 Plans:
 *Go-live order (D-17, research Pitfall 4):* write-side code first (waves 1-3), then the owner confirms the
@@ -457,4 +457,4 @@ is never pending while the write side is pushed.
 | 5. Scheduled Live Runs | 8/8 | Complete    | 2026-10-26 |
 | 6. Exposure & E2E Verification | 13/13 | Complete    | 2026-11-01 |
 | 7. Per-City Conductors, Shadow Refit and Early Model Selection | 19/19 | Complete    | 2026-11-07 |
-| 8. Day-Ahead Cooling Forecast Alongside 60-Minute G6 | 12/12 | In Progress | - |
+| 8. Day-Ahead Cooling Forecast Alongside 60-Minute G6 | 12/12 | Complete    | 2026-11-09 |
