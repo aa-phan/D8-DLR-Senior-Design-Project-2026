@@ -1,21 +1,24 @@
 -- supabase/ops/verify_exposure.sql
 --
--- Production-pipeline Phase 6 (API-01, OD-6): the read-only exposure check.
+-- Production-pipeline Phase 6 (API-01, OD-6) and Phase 8 (DAY-06, D-09, D-10, D-12): the read-only
+-- exposure check.
 --
 -- One SELECT, no writes. It returns one row per check: (check_name, ok, detail). Every ok
 -- must be true. The local test (backend/tests/expose_migration_test.py) runs this same file
 -- on a throwaway Postgres; the owner runs it in the Supabase SQL editor in plans 06-09
 -- (after the apply), 06-12 (after the soak) and 06-13 (the post-2026-10-30 permission
--- re-check). This directory is never applied by the Supabase CLI; it is not a migration.
+-- re-check), and again in Phase 8 after the day-ahead expose migration. This directory is never applied by the Supabase CLI; it is not a migration.
 --
 -- What each check proves, in plain English:
 --   latest_rating_is_security_invoker       the view obeys the table's access rules; it is not a back door
 --   city_rating_rls_enabled                 row-level security is switched on for the ratings table
 --   read_policy_city_rating_public_read     the one read rule exists, for the public roles, for SELECT only
 --   no_write_policy_for_anon_or_authenticated  no rule lets the public roles insert, change or delete rows
---   anon_authenticated_grants_are_select_on_two_objects_only
+--   anon_authenticated_grants_are_select_on_published_objects_only
 --                                           the database's own permission list gives the public roles
---                                           read access to exactly the ratings table and the view, nothing else
+--                                           read access to exactly the five published objects (the ratings
+--                                           table and view, the day-ahead table and its two views), 10 of 10
+--                                           grants, nothing else
 --   anon_authenticated_hold_no_write_or_column_privilege_in_public
 --                                           asks the database's privilege functions directly, so column-level
 --                                           grants and privileges inherited through role membership show up too
@@ -32,8 +35,24 @@
 --   is_stale_matches_age_minutes            the stale flag never contradicts the minutes shown (stale = more than 90)
 --   is_provisional_matches_the_labels       the provisional flag is true exactly when a row's label says provisional
 --   index_city_rating_city_valid_desc_present  the index that keeps "newest row per city" fast exists
+-- Phase 8 (the day-ahead forecast and its two views):
+--   day_ahead_forecast_rls_enabled          row-level security is switched on for the day-ahead table
+--   read_policy_day_ahead_forecast_public_read  the one read rule exists on it, for the public roles, for SELECT only
+--   day_ahead_upcoming_is_security_invoker  the upcoming-targets view obeys the table's access rules
+--   day_ahead_status_is_security_invoker    the status view obeys the table's access rules
+--   anon_can_select_day_ahead_forecast      the public key can read the day-ahead table, past targets included
+--   anon_can_select_day_ahead_upcoming      the public key can read the upcoming targets
+--   anon_can_select_day_ahead_status        the public key can read the per-city status and late flag
+--   day_ahead_upcoming_matches_the_contract the upcoming view has its 26 columns, the last one lead_minutes
+--   day_ahead_status_has_the_four_cities    the status view always lists all four cities
+--   day_ahead_view_columns_all_commented    every column of both day-ahead views has its unit-first description
+--   assert_fresh_has_one_signature          the alarm function exists once, so the alarm URL cannot meet an overload
 
 with
+-- The five objects the public roles may read: Phase 6 (two) and Phase 8 (three).
+published(relation) as (
+    values ('city_rating'), ('latest_rating'), ('day_ahead_forecast'), ('day_ahead_upcoming'), ('day_ahead_status')
+),
 -- Every privilege a role other than the table owner holds on a public relation, for anon,
 -- authenticated and PUBLIC (a PUBLIC grant reaches anon as well).
 grants as (
@@ -49,15 +68,15 @@ grants as (
 ),
 extra_grants as (
     select * from grants
-     where not (privilege = 'SELECT' and relation in ('city_rating', 'latest_rating'))
+     where not (privilege = 'SELECT' and relation in (select relation from published))
 ),
 select_grants as (
     select * from grants
-     where privilege = 'SELECT' and relation in ('city_rating', 'latest_rating')
+     where privilege = 'SELECT' and relation in (select relation from published)
        and grantee in ('anon', 'authenticated')
 ),
 -- Relations in public where anon or authenticated hold a write, trigger or column-level privilege
--- (reading is allowed only on the two published objects).
+-- (reading is allowed only on the five published objects).
 public_role_privileges as (
     select c.relname::text as relation, r.rolname
       from pg_class c
@@ -67,7 +86,7 @@ public_role_privileges as (
        and c.relkind in ('r', 'p', 'v', 'm', 'f')
        and (has_table_privilege(r.rolname, c.oid, 'insert, update, delete, truncate, references, trigger')
             or has_any_column_privilege(r.rolname, c.oid, 'insert, update, references')
-            or (c.relname not in ('city_rating', 'latest_rating')
+            or (c.relname not in (select relation from published)
                 and has_any_column_privilege(r.rolname, c.oid, 'select')))
 ),
 other_functions as (
@@ -82,6 +101,16 @@ view_columns as (
     select a.attnum, a.attname::text as column_name, col_description(a.attrelid, a.attnum) as column_comment
       from pg_attribute a
      where a.attrelid = to_regclass('public.latest_rating')
+       and a.attnum > 0
+       and not a.attisdropped
+),
+-- The columns of the two Phase 8 views.
+day_ahead_view_columns as (
+    select c.relname::text as view_name, a.attnum, a.attname::text as column_name,
+           col_description(a.attrelid, a.attnum) as column_comment
+      from pg_attribute a
+      join pg_class c on c.oid = a.attrelid
+     where a.attrelid in (to_regclass('public.day_ahead_upcoming'), to_regclass('public.day_ahead_status'))
        and a.attnum > 0
        and not a.attisdropped
 )
@@ -119,12 +148,12 @@ select check_name, ok, detail
                             and cmd in ('INSERT', 'UPDATE', 'DELETE', 'ALL')
                             and roles::text[] && array['anon', 'authenticated', 'public']), 'none')
     union all
-    select 'anon_authenticated_grants_are_select_on_two_objects_only',
-           (select count(*) from extra_grants) = 0 and (select count(*) from select_grants) = 4,
+    select 'anon_authenticated_grants_are_select_on_published_objects_only',
+           (select count(*) from extra_grants) = 0 and (select count(*) from select_grants) = 10,
            'extra grants: ' || coalesce((select string_agg(grantee || ' ' || privilege || ' on ' || relation, ', '
                                                            order by relation, grantee, privilege)
                                            from extra_grants), 'none') ||
-               '; select grants on the two objects: ' || (select count(*) from select_grants)::text || ' of 4'
+               '; select grants on the five published objects: ' || (select count(*) from select_grants)::text || ' of 10'
     union all
     -- The grants CTE above reads only pg_class.relacl, which never lists column-level grants
     -- (pg_attribute.attacl) or privileges inherited through role membership. The has_*_privilege
@@ -196,5 +225,72 @@ select check_name, ok, detail
                     where schemaname = 'public' and tablename = 'city_rating'
                       and indexname = 'city_rating_city_valid_desc_idx'),
            'index city_rating_city_valid_desc_idx on city_rating'
+    union all
+    select 'day_ahead_forecast_rls_enabled',
+           coalesce((select c.relrowsecurity from pg_class c where c.oid = to_regclass('public.day_ahead_forecast')), false),
+           'relrowsecurity=' || coalesce((select c.relrowsecurity::text
+                                            from pg_class c where c.oid = to_regclass('public.day_ahead_forecast')), 'table missing')
+    union all
+    select 'read_policy_day_ahead_forecast_public_read',
+           exists (select 1 from pg_policies
+                    where schemaname = 'public' and tablename = 'day_ahead_forecast'
+                      and policyname = 'day_ahead_forecast_public_read' and cmd = 'SELECT'
+                      and roles::text[] @> array['anon', 'authenticated']),
+           'policies on day_ahead_forecast: ' || coalesce((select string_agg(policyname || ' ' || cmd, ', ' order by policyname)
+                                                            from pg_policies
+                                                           where schemaname = 'public' and tablename = 'day_ahead_forecast'), 'none')
+    union all
+    select 'day_ahead_upcoming_is_security_invoker',
+           coalesce((select coalesce(c.reloptions, '{}') @> array['security_invoker=true']
+                       from pg_class c where c.oid = to_regclass('public.day_ahead_upcoming')), false),
+           'reloptions=' || coalesce((select c.reloptions::text
+                                        from pg_class c where c.oid = to_regclass('public.day_ahead_upcoming')), 'view missing')
+    union all
+    select 'day_ahead_status_is_security_invoker',
+           coalesce((select coalesce(c.reloptions, '{}') @> array['security_invoker=true']
+                       from pg_class c where c.oid = to_regclass('public.day_ahead_status')), false),
+           'reloptions=' || coalesce((select c.reloptions::text
+                                        from pg_class c where c.oid = to_regclass('public.day_ahead_status')), 'view missing')
+    union all
+    select 'anon_can_select_day_ahead_forecast',
+           coalesce(has_table_privilege('anon', 'public.day_ahead_forecast', 'select'), false),
+           'has_table_privilege(anon, day_ahead_forecast, select)'
+    union all
+    select 'anon_can_select_day_ahead_upcoming',
+           coalesce(has_table_privilege('anon', 'public.day_ahead_upcoming', 'select'), false),
+           'has_table_privilege(anon, day_ahead_upcoming, select)'
+    union all
+    select 'anon_can_select_day_ahead_status',
+           coalesce(has_table_privilege('anon', 'public.day_ahead_status', 'select'), false),
+           'has_table_privilege(anon, day_ahead_status, select)'
+    union all
+    select 'day_ahead_upcoming_matches_the_contract',
+           (select count(*) from day_ahead_view_columns where view_name = 'day_ahead_upcoming') = 26
+               and coalesce((select column_name from day_ahead_view_columns
+                              where view_name = 'day_ahead_upcoming' and attnum = 26), '') = 'lead_minutes',
+           'columns=' || (select count(*) from day_ahead_view_columns where view_name = 'day_ahead_upcoming')::text ||
+               ', column 26=' || coalesce((select column_name from day_ahead_view_columns
+                                            where view_name = 'day_ahead_upcoming' and attnum = 26), 'none')
+    union all
+    select 'day_ahead_status_has_the_four_cities',
+           coalesce((select array_agg(city order by city) from public.day_ahead_status)
+                    = array['AUSTIN', 'CORPUS_CHRISTI', 'EL_PASO', 'MIDLAND'], false),
+           'cities: ' || coalesce((select string_agg(city, ', ' order by city) from public.day_ahead_status), 'none')
+    union all
+    select 'day_ahead_view_columns_all_commented',
+           (select count(*) from day_ahead_view_columns) > 0
+               and (select count(*) from day_ahead_view_columns
+                     where column_comment is null or btrim(column_comment) = '') = 0,
+           'columns without a comment: ' || coalesce((select string_agg(view_name || '.' || column_name, ', '
+                                                                         order by view_name, attnum)
+                                                        from day_ahead_view_columns
+                                                       where column_comment is null or btrim(column_comment) = ''), 'none')
+    union all
+    select 'assert_fresh_has_one_signature',
+           (select count(*) from pg_proc p
+             where p.pronamespace = 'public'::regnamespace and p.proname = 'assert_fresh') = 1,
+           'functions named assert_fresh in public: ' ||
+               (select count(*) from pg_proc p
+                 where p.pronamespace = 'public'::regnamespace and p.proname = 'assert_fresh')::text
   ) as checks
  order by check_name;
