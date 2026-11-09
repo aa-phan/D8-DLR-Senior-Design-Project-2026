@@ -409,7 +409,7 @@ and API exposure, and which conductor-dependent artifacts are served (AUSTIN ref
      meaning of "24 h", and is published only after the expose step, together with the three consumer
      examples (which also read the day-ahead targets and status and ran live first) and the Software
      and PSS/E handoff notes (D-18).
-**Plans:** 10/12 plans executed
+**Plans:** 11/12 plans executed
 
 Plans:
 *Go-live order (D-17, research Pitfall 4):* write-side code first (waves 1-3), then the owner confirms the
@@ -441,7 +441,7 @@ is never pending while the write side is pushed.
 - [x] 08-10-PLAN.md — Consumer contract docs (rest-api.md, day_ahead_forecast_v1.md, PSS/E pointer); REST check; runbook section 14 (DAY-06, DAY-07, DAY-08)
 
 **Wave 7** *(after 08-10)*
-- [ ] 08-12-PLAN.md — Consumer handoff (D-18): the three examples also read `day_ahead_upcoming` and `day_ahead_status`; day-ahead sections in the Software handoff, the frontend API contract and the PSS/E note (DAY-06, DAY-08, DAY-09)
+- [x] 08-12-PLAN.md — Consumer handoff (D-18): the three examples also read `day_ahead_upcoming` and `day_ahead_status`; day-ahead sections in the Software handoff, the frontend API contract and the PSS/E note (DAY-06, DAY-08, DAY-09)
 
 **Wave 8** *(owner; after 08-09, 08-10, 08-12)*
 - [ ] 08-11-PLAN.md — Owner: expose decision, [BLOCKING] expose schema push, live consumer checks, live run of the extended examples, publish push, sha256 pin (DAY-06, DAY-07, DAY-08, DAY-09)
@@ -457,4 +457,4 @@ is never pending while the write side is pushed.
 | 5. Scheduled Live Runs | 8/8 | Complete    | 2026-10-26 |
 | 6. Exposure & E2E Verification | 13/13 | Complete    | 2026-11-01 |
 | 7. Per-City Conductors, Shadow Refit and Early Model Selection | 19/19 | Complete    | 2026-11-07 |
-| 8. Day-Ahead Cooling Forecast Alongside 60-Minute G6 | 10/12 | In Progress | - |
+| 8. Day-Ahead Cooling Forecast Alongside 60-Minute G6 | 11/12 | In Progress | - |
