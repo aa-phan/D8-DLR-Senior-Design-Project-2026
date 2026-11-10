@@ -1,7 +1,7 @@
 {
   "contract": "1.0.0",
   "flavor": "core",
-  "milestone": "v1.6 \u00e2\u20ac\u201d PSS/E Integration",
+  "milestone": "v1.6 — PSS/E Integration",
   "phases": [
     {
       "number": "1",
@@ -17,12 +17,17 @@
       "number": "3",
       "name": "Laptop Run and Handover",
       "status": "in_progress"
+    },
+    {
+      "number": "4",
+      "name": "Per-city scaling of the 39-bus case",
+      "status": "in_progress"
     }
   ],
   "next": {
-    "command": "/gsd-execute-phase 3 --ws pss-e-integration",
-    "label": "Finish 03-07 step 6, then 03-08",
-    "reason": "Phase 3 of 3 \u00b7 03-07 steps 2 to 5 passed on the laptop; 03-08 waits on the psse_* tables and writer login"
+    "command": "/gsd-plan-phase 4 --ws pss-e-integration",
+    "label": "Resume Phase 4 planning at the planner step",
+    "reason": "Research, validation file and pattern map are done; the planner and plan checker are next. Also re-check the laptop clock alignment."
   },
-  "updated_at": "2026-11-09T22:00:00.000Z"
+  "updated_at": "2026-11-10T01:30:00.000Z"
 }

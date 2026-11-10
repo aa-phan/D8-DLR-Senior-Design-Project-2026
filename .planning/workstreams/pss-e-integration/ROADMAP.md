@@ -106,7 +106,7 @@ Phases execute in numeric order: 1 → 2 → 3
 ### Phase 4: Per-city scaling of the 39-bus case
 
 **Goal:** The job runs the same study once per city on its own fresh copy of the same 39-bus network, scaled to that city's load and generation targets, so the four cities never share a solve. The targets live in the private mapping (never in git); the job applies them with its own scaling call and never executes the recorded `.idv` scripts. See `phases/04-per-city-scaling-of-the-39-bus-case/04-CONTEXT.md`.
-**Requirements**: TBD
+**Requirements**: SCL-01, SCL-02, SCL-03, SCL-04, SCL-05, SCL-06
 **Depends on:** Phase 3
 **Plans:** 0 plans
 

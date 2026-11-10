@@ -22,3 +22,12 @@ Decided with the user on 2026-11-09, before planning. No city load figures are r
 ## Out of scope
 
 Real Power Systems mapping and case review (Phase 3, step 7); the real proof write (Phase 3, step 9); changing the task XML encoding.
+
+## Decisions made after research (2026-11-09, the user)
+
+- **A city failure is all-or-nothing.** Try all four cities, then record one failed run naming each city's outcome; no result rows for any city. This keeps the live tables' rule that a non-failed run has four dispatch rows, so no owner migration is needed.
+- **No separate Mvar target.** Each city keeps the base case's load power factor (about 0.90), which is what the recorded scale steps amount to. The scaling block needs only target net load, target generation and a basis label.
+- **Do not store realised totals.** The database rows record only the basis and the method; the mapping hash in the run proves which targets were used.
+- **El Paso uses its average load** from the EIA-861 sales table, the same basis as the other three cities. The figure lives in the private mapping.
+- **Still to confirm with Power Systems:** that the same mapped lines can be used in every city's copy.
+- **Laptop checks the plan must include:** print the signature of the scaling call (and of `scal_4` if it exists) on PSS/E 36.4, a probe row that scales and reads the totals back and reloads, and a four-city dry run with timing. The researcher found only community forum documentation for the whole-case scale-to-target layout, so treat the argument layout as unverified until the laptop check.
