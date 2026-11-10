@@ -1,0 +1,375 @@
+{
+  "task": "261109-o6v",
+  "generated_at_utc": "2026-11-09T23:39:31Z",
+  "migration": {
+    "name": "20261109233541_psse_results.sql",
+    "sha256": "08e7e103eda9a77653d482ba67aea4844641d0d77f1e6d6f97213b83ccc13bd7",
+    "region_sha256": "955f349d2df66394dbec4378ddcc2d9eb61f7e37bd4eda8de4b70de16c3a6643"
+  },
+  "dry_run_before": {
+    "exit_code": 0,
+    "up_to_date": false,
+    "pending": [
+      "20261109233541_psse_results.sql"
+    ]
+  },
+  "push": {
+    "exit_code": 0,
+    "applied": [
+      "20261109233541_psse_results.sql"
+    ]
+  },
+  "dry_run_after": {
+    "exit_code": 0,
+    "up_to_date": true,
+    "pending": []
+  },
+  "exposure": {
+    "before": [
+      {
+        "check_name": "anon_authenticated_grants_are_select_on_published_objects_only",
+        "ok": true,
+        "detail": "extra grants: none; select grants on the five published objects: 10 of 10"
+      },
+      {
+        "check_name": "anon_authenticated_hold_no_write_or_column_privilege_in_public",
+        "ok": true,
+        "detail": "write, trigger or column-level privileges held by anon or authenticated (directly or inherited): none"
+      },
+      {
+        "check_name": "anon_can_select_city_rating",
+        "ok": true,
+        "detail": "has_table_privilege(anon, city_rating, select)"
+      },
+      {
+        "check_name": "anon_can_select_day_ahead_forecast",
+        "ok": true,
+        "detail": "has_table_privilege(anon, day_ahead_forecast, select)"
+      },
+      {
+        "check_name": "anon_can_select_day_ahead_status",
+        "ok": true,
+        "detail": "has_table_privilege(anon, day_ahead_status, select)"
+      },
+      {
+        "check_name": "anon_can_select_day_ahead_upcoming",
+        "ok": true,
+        "detail": "has_table_privilege(anon, day_ahead_upcoming, select)"
+      },
+      {
+        "check_name": "anon_can_select_latest_rating",
+        "ok": true,
+        "detail": "has_table_privilege(anon, latest_rating, select)"
+      },
+      {
+        "check_name": "anon_executable_public_functions_are_assert_fresh_only",
+        "ok": true,
+        "detail": "other functions anon may execute: none"
+      },
+      {
+        "check_name": "assert_fresh_has_one_signature",
+        "ok": true,
+        "detail": "functions named assert_fresh in public: 1"
+      },
+      {
+        "check_name": "city_rating_rls_enabled",
+        "ok": true,
+        "detail": "relrowsecurity=true"
+      },
+      {
+        "check_name": "day_ahead_forecast_rls_enabled",
+        "ok": true,
+        "detail": "relrowsecurity=true"
+      },
+      {
+        "check_name": "day_ahead_status_has_the_four_cities",
+        "ok": true,
+        "detail": "cities: AUSTIN, CORPUS_CHRISTI, EL_PASO, MIDLAND"
+      },
+      {
+        "check_name": "day_ahead_status_is_security_invoker",
+        "ok": true,
+        "detail": "reloptions={security_invoker=true}"
+      },
+      {
+        "check_name": "day_ahead_upcoming_is_security_invoker",
+        "ok": true,
+        "detail": "reloptions={security_invoker=true}"
+      },
+      {
+        "check_name": "day_ahead_upcoming_matches_the_contract",
+        "ok": true,
+        "detail": "columns=26, column 26=lead_minutes"
+      },
+      {
+        "check_name": "day_ahead_view_columns_all_commented",
+        "ok": true,
+        "detail": "columns without a comment: none"
+      },
+      {
+        "check_name": "index_city_rating_city_valid_desc_present",
+        "ok": true,
+        "detail": "index city_rating_city_valid_desc_idx on city_rating"
+      },
+      {
+        "check_name": "is_provisional_matches_the_labels",
+        "ok": true,
+        "detail": "rows checked=4"
+      },
+      {
+        "check_name": "is_stale_matches_age_minutes",
+        "ok": true,
+        "detail": "rows checked=4"
+      },
+      {
+        "check_name": "latest_rating_columns_all_commented",
+        "ok": true,
+        "detail": "columns without a comment: none"
+      },
+      {
+        "check_name": "latest_rating_ends_with_the_computed_columns",
+        "ok": true,
+        "detail": "columns 32-34: age_minutes, is_stale, is_provisional"
+      },
+      {
+        "check_name": "latest_rating_has_34_columns",
+        "ok": true,
+        "detail": "columns=34"
+      },
+      {
+        "check_name": "latest_rating_has_the_four_cities",
+        "ok": true,
+        "detail": "cities: AUSTIN, CORPUS_CHRISTI, EL_PASO, MIDLAND"
+      },
+      {
+        "check_name": "latest_rating_is_security_invoker",
+        "ok": true,
+        "detail": "reloptions={security_invoker=true}"
+      },
+      {
+        "check_name": "latest_rating_one_row_per_city",
+        "ok": true,
+        "detail": "rows=4"
+      },
+      {
+        "check_name": "no_write_policy_for_anon_or_authenticated",
+        "ok": true,
+        "detail": "write policies reaching the public roles: none"
+      },
+      {
+        "check_name": "pipeline_run_not_readable_by_anon",
+        "ok": true,
+        "detail": "anon select=false, authenticated select=false"
+      },
+      {
+        "check_name": "read_policy_city_rating_public_read",
+        "ok": true,
+        "detail": "policies on city_rating: city_rating_public_read SELECT, dlr_writer_all ALL"
+      },
+      {
+        "check_name": "read_policy_day_ahead_forecast_public_read",
+        "ok": true,
+        "detail": "policies on day_ahead_forecast: day_ahead_forecast_public_read SELECT, dlr_writer_all ALL"
+      }
+    ],
+    "after": [
+      {
+        "check_name": "anon_authenticated_grants_are_select_on_published_objects_only",
+        "ok": true,
+        "detail": "extra grants: none; select grants on the five published objects: 10 of 10"
+      },
+      {
+        "check_name": "anon_authenticated_hold_no_write_or_column_privilege_in_public",
+        "ok": true,
+        "detail": "write, trigger or column-level privileges held by anon or authenticated (directly or inherited): none"
+      },
+      {
+        "check_name": "anon_can_select_city_rating",
+        "ok": true,
+        "detail": "has_table_privilege(anon, city_rating, select)"
+      },
+      {
+        "check_name": "anon_can_select_day_ahead_forecast",
+        "ok": true,
+        "detail": "has_table_privilege(anon, day_ahead_forecast, select)"
+      },
+      {
+        "check_name": "anon_can_select_day_ahead_status",
+        "ok": true,
+        "detail": "has_table_privilege(anon, day_ahead_status, select)"
+      },
+      {
+        "check_name": "anon_can_select_day_ahead_upcoming",
+        "ok": true,
+        "detail": "has_table_privilege(anon, day_ahead_upcoming, select)"
+      },
+      {
+        "check_name": "anon_can_select_latest_rating",
+        "ok": true,
+        "detail": "has_table_privilege(anon, latest_rating, select)"
+      },
+      {
+        "check_name": "anon_executable_public_functions_are_assert_fresh_only",
+        "ok": true,
+        "detail": "other functions anon may execute: none"
+      },
+      {
+        "check_name": "assert_fresh_has_one_signature",
+        "ok": true,
+        "detail": "functions named assert_fresh in public: 1"
+      },
+      {
+        "check_name": "city_rating_rls_enabled",
+        "ok": true,
+        "detail": "relrowsecurity=true"
+      },
+      {
+        "check_name": "day_ahead_forecast_rls_enabled",
+        "ok": true,
+        "detail": "relrowsecurity=true"
+      },
+      {
+        "check_name": "day_ahead_status_has_the_four_cities",
+        "ok": true,
+        "detail": "cities: AUSTIN, CORPUS_CHRISTI, EL_PASO, MIDLAND"
+      },
+      {
+        "check_name": "day_ahead_status_is_security_invoker",
+        "ok": true,
+        "detail": "reloptions={security_invoker=true}"
+      },
+      {
+        "check_name": "day_ahead_upcoming_is_security_invoker",
+        "ok": true,
+        "detail": "reloptions={security_invoker=true}"
+      },
+      {
+        "check_name": "day_ahead_upcoming_matches_the_contract",
+        "ok": true,
+        "detail": "columns=26, column 26=lead_minutes"
+      },
+      {
+        "check_name": "day_ahead_view_columns_all_commented",
+        "ok": true,
+        "detail": "columns without a comment: none"
+      },
+      {
+        "check_name": "index_city_rating_city_valid_desc_present",
+        "ok": true,
+        "detail": "index city_rating_city_valid_desc_idx on city_rating"
+      },
+      {
+        "check_name": "is_provisional_matches_the_labels",
+        "ok": true,
+        "detail": "rows checked=4"
+      },
+      {
+        "check_name": "is_stale_matches_age_minutes",
+        "ok": true,
+        "detail": "rows checked=4"
+      },
+      {
+        "check_name": "latest_rating_columns_all_commented",
+        "ok": true,
+        "detail": "columns without a comment: none"
+      },
+      {
+        "check_name": "latest_rating_ends_with_the_computed_columns",
+        "ok": true,
+        "detail": "columns 32-34: age_minutes, is_stale, is_provisional"
+      },
+      {
+        "check_name": "latest_rating_has_34_columns",
+        "ok": true,
+        "detail": "columns=34"
+      },
+      {
+        "check_name": "latest_rating_has_the_four_cities",
+        "ok": true,
+        "detail": "cities: AUSTIN, CORPUS_CHRISTI, EL_PASO, MIDLAND"
+      },
+      {
+        "check_name": "latest_rating_is_security_invoker",
+        "ok": true,
+        "detail": "reloptions={security_invoker=true}"
+      },
+      {
+        "check_name": "latest_rating_one_row_per_city",
+        "ok": true,
+        "detail": "rows=4"
+      },
+      {
+        "check_name": "no_write_policy_for_anon_or_authenticated",
+        "ok": true,
+        "detail": "write policies reaching the public roles: none"
+      },
+      {
+        "check_name": "pipeline_run_not_readable_by_anon",
+        "ok": true,
+        "detail": "anon select=false, authenticated select=false"
+      },
+      {
+        "check_name": "read_policy_city_rating_public_read",
+        "ok": true,
+        "detail": "policies on city_rating: city_rating_public_read SELECT, dlr_writer_all ALL"
+      },
+      {
+        "check_name": "read_policy_day_ahead_forecast_public_read",
+        "ok": true,
+        "detail": "policies on day_ahead_forecast: day_ahead_forecast_public_read SELECT, dlr_writer_all ALL"
+      }
+    ],
+    "unchanged": true,
+    "detail_differences": []
+  },
+  "psse_verify": [
+    {
+      "check_name": "psse_tables_exist",
+      "ok": true,
+      "detail": "4 of 4 tables exist, missing: none"
+    },
+    {
+      "check_name": "psse_tables_rls_enabled",
+      "ok": true,
+      "detail": "4 of 4 tables have row-level security on"
+    },
+    {
+      "check_name": "anon_authenticated_hold_nothing_on_psse_tables",
+      "ok": true,
+      "detail": "permission-list entries: 0, table privileges held: 0, column privileges held: 0"
+    },
+    {
+      "check_name": "dlr_psse_writer_holds_exactly_insert_select_on_psse_tables",
+      "ok": true,
+      "detail": "8 of 8 INSERT/SELECT entries, 8 entries in all, other privileges held: 0, column UPDATE held on 0 tables"
+    },
+    {
+      "check_name": "dlr_psse_writer_holds_nothing_on_other_relations",
+      "ok": true,
+      "detail": "7 other relations checked, offenders: none"
+    },
+    {
+      "check_name": "dlr_psse_writer_policies_are_insert_and_select_only",
+      "ok": true,
+      "detail": "8 policies on the four tables, 8 of 8 as expected, found: psse_contingency_result.dlr_psse_writer_insert INSERT, psse_contingency_result.dlr_psse_writer_select SELECT, psse_dispatched_capacity.dlr_psse_writer_insert INSERT, psse_dispatched_capacity.dlr_psse_writer_select SELECT, psse_run.dlr_psse_writer_insert INSERT, psse_run.dlr_psse_writer_select SELECT, psse_voltage_margin.dlr_psse_writer_insert INSERT, psse_voltage_margin.dlr_psse_writer_select SELECT"
+    },
+    {
+      "check_name": "dlr_psse_writer_role_attributes",
+      "ok": true,
+      "detail": "canlogin=true, super=false, createrole=false, createdb=false, bypassrls=false, replication=false"
+    }
+  ],
+  "role_login": {
+    "connected": true,
+    "attempts": 1,
+    "current_user": "dlr_psse_writer",
+    "psse_select_ok": true,
+    "psse_run_rows": 0,
+    "insert_privilege_on_all_four": true,
+    "any_update_delete_truncate": false,
+    "city_rating_refused": true,
+    "conn_file_mode": "600",
+    "conn_format": "session pooler; user dlr_psse_writer.<project_ref>; host = the project's pooler host (same as SUPABASE_DB_URL); port 5432; database postgres; sslmode=require"
+  },
+  "redaction_scan": "clean"
+}

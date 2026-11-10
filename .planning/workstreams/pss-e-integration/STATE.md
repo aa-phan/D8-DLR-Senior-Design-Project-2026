@@ -5,7 +5,7 @@ milestone_name: PSS/E Integration
 current_phase: 3
 current_phase_name: Laptop Run and Handover
 status: laptop_steps_2_to_5_passed
-stopped_at: 03-07 steps 2 to 5 passed on the laptop (session B, 2026-11-09); step 6 pending; 03-08 waits on the psse_* tables and writer login
+stopped_at: 03-07 steps 2 to 5 passed on the laptop (session B, 2026-11-09); step 6 in progress (three hourly runs); the psse_* tables and writer role are live, 03-08 waits on the writer connection string and Power Systems' mapping
 last_updated: "2026-11-09T22:00:00.000Z"
 last_activity: 2026-11-09
 last_activity_desc: Laptop session B - selftest, probe, write check and dry run (live ratings read) all pass on the 39-bus case
@@ -32,8 +32,8 @@ higher than the static rating.
 
 Phase: 3 (Laptop Run and Handover) — EXECUTING
 Plan: 03-01 to 03-06 and gap-closure 03-09 done; 03-07 steps 2 to 5 passed on the laptop (step 6, the Task Scheduler dry-run task, pending), then 03-08
-Status: Laptop available; 03-08 and a real run wait on the psse_* tables and dlr_psse_writer login (production-pipeline owner) and on Power Systems' real mapping. Phases 1 and 2 verified (human_needed)
-Last activity: 2026-11-09 — laptop session B recorded in 03-07-LAPTOP-RECORD.md
+Status: Laptop available; the psse_* tables and dlr_psse_writer are live (owner migration, 2026-11-09), so 03-08 now waits on the writer connection string reaching the laptop and on Power Systems' real mapping. Phases 1 and 2 verified (human_needed)
+Last activity: 2026-11-09 — laptop session B recorded in 03-07-LAPTOP-RECORD.md; owner quick task 261109-o6v added the psse_results migration and dlr_psse_writer role
 
 Progress: [█████████░] 95%
 
@@ -68,7 +68,7 @@ Progress: [█████████░] 95%
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
-- [Milestone]: No standalone migration; the four result tables and the PSS/E write grant ship in production-pipeline Phase 6, and this workstream hands it the spec (DBX-01).
+- [Milestone]: ~~No standalone migration~~ Superseded 2026-11-09: the four result tables and the `dlr_psse_writer` role shipped as the separate owner migration `20261109233541_psse_results.sql` (quick 261109-o6v), applied live (DBX-01, DBX-02).
 - [Milestone]: Dashboard is out of scope; Power Systems owns the case and the branch mapping; `psspy` API choices belong to the implementer.
 - [Milestone]: Static rating is the fallback when a `city_rating` row is missing, older than 90 minutes or provisional (IN-01).
 - [Phase 1]: 01-01: result-table DDL stays reference-only; dlr_psse_writer holds INSERT and SELECT on the four psse_* tables, applied MVA enforced as sqrt(3) x kV x circuit amps / 1000 (no power factor) — D-01, D-03, D-06; proven on local Postgres 18.6 with Supabase legacy default grants
@@ -85,10 +85,16 @@ None yet.
 
 ### Blockers/Concerns
 
-- The deadline (about 2026-11-02) has passed. Production-pipeline Phases 6, 7 and 8 are complete and archived on main (merged into this branch 2026-11-09), and none of them added the four `psse_*` tables or the `dlr_psse_writer` role (a search of main finds no `psse_run`, `dlr_psse_writer` or related migration). Phase 3's real run and plan 03-08 need that migration, a new follow-on one. The request to the owner is in `docs/data-science/decisions/psse_message_to_aaron.md`; the user will ask in person.
+- The deadline (about 2026-11-02) has passed. Production-pipeline Phases 6, 7 and 8 are complete and archived on main (merged into this branch 2026-11-09), and none of them added the four `psse_*` tables or the `dlr_psse_writer` role. Resolved 2026-11-09: the owner added them as a standalone migration (quick task 261109-o6v, `supabase/migrations/20261109233541_psse_results.sql`, applied live, `verify_psse_results.sql` 7 checks ok, the writer login connects and is refused on `city_rating`). What is still needed: the writer's connection string (`SUPABASE_PSSE_DB_URL`) delivered to the laptop directly, never through git or chat.
 - Power Systems has not yet supplied the real city-to-branch mapping or confirmed the case. The laptop is available and the job has run end to end (dry run) on the public 39-bus case with a throwaway mapping. The real case must be an unconverted saved case and fit within the free edition's 50 buses. The user will raise the mapping in person; the email draft will not be sent.
 - The 2026-11-09 dry run read four live `city_rating` rows with outcome `ok`, so ratings are no longer all static or provisional at the read. Production-pipeline Phase 7's go was recorded on main; this has not been re-checked row by row.
 - REQUIREMENTS.md said 17 v1 requirements; it defines 16. Corrected to 16 in its Traceability section on 2026-10-26.
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 261109-o6v | Add PSS/E results migration and dlr_psse_writer role | 2026-11-09 | edbb2fd | [261109-o6v-add-pss-e-results-migration-and-dlr-psse](./quick/261109-o6v-add-pss-e-results-migration-and-dlr-psse/) |
 
 ## Deferred Items
 
@@ -101,7 +107,7 @@ Items acknowledged and deferred at milestone close, most recent first:
 ## Session Continuity
 
 Last session: 2026-11-09
-Stopped at: 03-07 steps 2 to 5 passed on the laptop; next is step 6 (Task Scheduler dry-run task), then 03-08 once the psse_* tables and writer login exist
+Stopped at: 03-07 steps 2 to 5 passed on the laptop; next is step 6 (Task Scheduler dry-run task), then 03-08 (the tables and writer role exist; it needs the writer connection string on the laptop)
 Resume file: None
 
 ## Session note 2026-11-08 (end of day)
@@ -113,3 +119,7 @@ Tomorrow: (1) send POWER-SYSTEMS-EMAIL-DRAFT.md (case is the IEEE 39-bus New Eng
 
 Laptop reached. Done: pushed the three docs commits and merged main into the branch (clean, tests pass); on the laptop selftest (6 PASS), probe (27 PASS) and probe with the write check (29 PASS) pass, and a dry run on the public 39-bus case with a throwaway mapping completes with live ratings (outcome ok, 28 of 28 contingencies). Found: a converted (cnv) case fails the load flow; use an unconverted case (runbook step 3 note). Full record: phases/03-laptop-run-and-handover/03-07-LAPTOP-RECORD.md.
 Next: (1) laptop: git pull, then runbook step 6 (Task Scheduler dry-run task); (2) ask the production-pipeline owner for the psse_* migration and the dlr_psse_writer login (message already in the repo, updated 2026-11-09); (3) in person with Power Systems: real mapping and confirm the case is unconverted and within 50 buses; (4) then 03-08 (credential proof, proof write, real task).
+
+## Update 2026-11-09 (evening)
+
+The owner applied the psse_results migration and created `dlr_psse_writer` (quick task 261109-o6v, merged into this branch). The writer string is held by the owner in an owner-only file and must be sent to the laptop's user directly. Next on the laptop: step 6 checks (6:15 and 7:15 runs, overlap test, remove the task), then runbook steps 8 and 9 (credential proof, proof write and read-back) with `PSSE_SITE_DIR` and `SUPABASE_PSSE_DB_URL` added to the config.
