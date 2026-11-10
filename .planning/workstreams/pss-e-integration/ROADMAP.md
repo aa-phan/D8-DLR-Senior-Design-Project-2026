@@ -102,3 +102,13 @@ Phases execute in numeric order: 1 → 2 → 3
 | 1. Result-Table Spec and Rating I/O | 5/5 | In Progress | - |
 | 2. Study on Power Systems' Case | 7/7 | In Progress | - |
 | 3. Laptop Run and Handover | 6/8 | In Progress | - |
+
+### Phase 4: Per-city scaling of the 39-bus case
+
+**Goal:** The job runs the same study once per city on its own fresh copy of the same 39-bus network, scaled to that city's load and generation targets, so the four cities never share a solve. The targets live in the private mapping (never in git); the job applies them with its own scaling call and never executes the recorded `.idv` scripts. See `phases/04-per-city-scaling-of-the-39-bus-case/04-CONTEXT.md`.
+**Requirements**: TBD
+**Depends on:** Phase 3
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 4 to break down)

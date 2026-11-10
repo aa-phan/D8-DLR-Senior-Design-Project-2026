@@ -83,6 +83,10 @@ Recent decisions affecting current work:
 
 None yet.
 
+### Roadmap Evolution
+
+- Phase 4 added: Per-city scaling of the 39-bus case (2026-11-09)
+
 ### Blockers/Concerns
 
 - The deadline (about 2026-11-02) has passed. Production-pipeline Phases 6, 7 and 8 are complete and archived on main (merged into this branch 2026-11-09), and none of them added the four `psse_*` tables or the `dlr_psse_writer` role. Resolved 2026-11-09: the owner added them as a standalone migration (quick task 261109-o6v, `supabase/migrations/20261109233541_psse_results.sql`, applied live, `verify_psse_results.sql` 7 checks ok, the writer login connects and is refused on `city_rating`). What is still needed: the writer's connection string (`SUPABASE_PSSE_DB_URL`) delivered to the laptop directly, never through git or chat.
@@ -123,3 +127,5 @@ Next: (1) laptop: git pull, then runbook step 6 (Task Scheduler dry-run task); (
 ## Update 2026-11-09 (evening)
 
 The owner applied the psse_results migration and created `dlr_psse_writer` (quick task 261109-o6v, merged into this branch). The writer string is held by the owner in an owner-only file and must be sent to the laptop's user directly. Next on the laptop: step 6 checks (6:15 and 7:15 runs, overlap test, remove the task), then runbook steps 8 and 9 (credential proof, proof write and read-back) with `PSSE_SITE_DIR` and `SUPABASE_PSSE_DB_URL` added to the config.
+
+Evening update: runbook step 8 passed on the laptop (`credcheck` 16 PASS, with `--write-proof` 18 PASS, rolled back). The user decided to defer the real proof write (step 9, decision 1 of 03-08) until Power Systems' real mapping and case exist; no rows were written to the live psse_* tables. Remaining: finish step 6 (overlap test, remove the task), then step 7 (real case and mapping) and steps 9 and 10.

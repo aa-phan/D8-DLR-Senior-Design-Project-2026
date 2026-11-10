@@ -44,6 +44,8 @@ The wheelhouse held exactly these three files, nothing else.
 | Step 4 | session B: pass, 29 PASS 0 FAIL 0 SKIP, exit 0 (`rating_write` and `scale_load` PASS) |
 | Step 5 | session B: pass, exit 0, `validation: ok`, 28 of 28 contingencies screened, rows planned 1 run, 4 dispatched capacity, 4 voltage margin, 225 contingency result. Without the Supabase read settings: outcome `fallback`, `city_rating=0 static=4`. With `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` set: outcome `ok`, `city_rating=4 static=0` (live ratings read). Nothing written to the database either time |
 | Step 6 | session B, in progress: render pass (exit 0); first registration refused with `The task XML is malformed ... unable to switch the encoding` (HRESULT 0x8004131a), see "Finding from step 6"; with the declaration rewritten to UTF-16 in the string, registration passed, task state Ready, `LastTaskResult 267011` (not yet run), `NextRunTime` 15 seconds past the :15 mark, `NumberOfMissedRuns 0`. Three-hour run check, overlap test and removal pending |
+| Step 8 | session B: pass. psycopg 3.3.6 imports from the site folder on Python 3.14; `credcheck` 16 PASS 0 FAIL 0 SKIP, exit 0 (the writer login connects through the session pooler, the REST read works). `credcheck --write-proof` 18 PASS 0 FAIL 0 SKIP, exit 0 (one synthetic run inserted inside a transaction and rolled back; nothing kept) |
+| Step 9 | deferred by the user's decision 1 of plan 03-08 (2026-11-09): rolled-back proof only. No real run was written to the live tables. The real proof write waits for the real mapping and case |
 
 ## Finding from step 2 (gap-closure item, C-4: no code edited on the laptop)
 
@@ -85,6 +87,10 @@ Cleared on the real PSS/E 36.4, Python 3.14.0, free Xplore edition:
 - U10 `signature:branch_chng_3` (PASS, see finding 3).
 - U11 the combined `scal_2` form (`scale_load` PASS with the write check).
 - U31 the job's code runs on the laptop's Python (3.14.0): selftest, probe and dry run complete.
+- U23 the session pooler accepts the role as `ROLE.PROJECT-REF` (the `credcheck` role rows PASS).
+- U24 the live grants are as the reference DDL says (the grant rows PASS; the owner's own checker also passed 7 of 7).
+- U25 the publishable key reads the ratings view and is refused on a write (the three REST rows PASS).
+- psycopg 3.3.6 (wheelhouse pin) imports and connects on Python 3.14.0 (the question the guide's decision table left open for 3.14).
 - U33 with `PSSE_ENV_MODULE=psse3604`, the launcher's own import of the helper and then `psspy` succeeds (selftest PASS; gap-closure 03-09 confirmed on the laptop).
 
 ## Claims still UNVERIFIED
