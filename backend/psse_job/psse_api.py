@@ -104,15 +104,17 @@ ScaleLayout = collections.namedtuple(
 # (apiopt 1) only initialises scaling and stays open, across case loads, until an apiopt 2 call
 # closes it, and a second apiopt 1 while one is open fails with ierr 5. So every totals read is
 # followed at once by an apiopt 2 close with no-input arguments (apiopt_close). Inferred from
-# three laptop experiments (the manual lists no ierr 5), so it stays UNVERIFIED until the
-# probe row scale_to_target passes on the laptop.
+# three laptop experiments (the manual lists no ierr 5). With the close added, the probe row
+# scale_to_target passed on the laptop on 2026-11-11 and a four-city dry run on the 39-bus
+# example completed, so the layout is HIGH; the meaning of ierr 5 itself stays inferred.
 SCALE_LAYOUT = ScaleLayout(
     sid=0, all_flag=1, apiopt_scale=0, apiopt_totals=1, apiopt_close=2, status=(None, 1, 0, 1, 0),
     scalval_load=0, scalval_gen=1, scalval_slots=7, totals_load=1, totals_gen=2,
     evidence="positions match PSS/E 36.4's scal_2 documentation (laptop, 2026-11-10); a totals "
-             "read must be closed with apiopt 2 (laptop probe, 2026-11-11); the probe row "
-             "scale_to_target has not yet passed there (runbook step 4)",
-    confidence="UNVERIFIED",
+             "read must be closed with apiopt 2 (laptop probe, 2026-11-11); with the close, the "
+             "probe row scale_to_target passed on the laptop and a four-city dry run completed "
+             "(2026-11-11, Phase 4 laptop record)",
+    confidence="HIGH",
 )
 
 CaseTotals = collections.namedtuple("CaseTotals", ["load_mw", "gen_mw"])

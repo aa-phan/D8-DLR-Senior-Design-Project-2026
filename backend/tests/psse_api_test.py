@@ -378,8 +378,8 @@ def test_tracer_scale_case_sets_and_reads_back_whole_case_totals(tmp_path):
 
 def test_scale_layout_matches_the_fake(tmp_path):
     layout = psse_api.SCALE_LAYOUT
-    assert layout.confidence == "UNVERIFIED"
-    assert "laptop" in layout.evidence and "scale_to_target" in layout.evidence
+    assert layout.confidence == "HIGH"
+    assert "laptop" in layout.evidence and "scale_to_target passed" in layout.evidence
     assert (layout.apiopt_scale, layout.apiopt_totals, layout.apiopt_close) == (0, 1, 2)
     assert fake_module.FAKE_TOTALS_LOAD == layout.totals_load
     assert fake_module.FAKE_TOTALS_GEN == layout.totals_gen

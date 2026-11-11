@@ -47,6 +47,8 @@ Step 3 (read-only probe): not re-run this session; it passed on 2026-11-09.
 Step 4 (probe with the write check, placeholder mapping allowed):
 - First run, before the fix: 30 PASS, 1 FAIL, 0 SKIP, exit 6. The failing row was `scale_to_target`: `PsseCallError (psspy.scal_2, ierr 5)`. Every other row passed, including `mapping` (0 problems, all four cities at the same voltage), `rating_write`, `scale_load` and `signature:scal_2` (5 parameters present, 1 extra).
 - Second run, after the fix: 0 FAIL, exit 0, `scale_to_target` PASS. The full row text was not pasted.
+- The probe never saves by design, and the case copy's size and date were not checked after the runs; the probe's own reload check passed.
+- Without `--allow-placeholder` the probe stops at the mapping check once a placeholder mapping is in the configuration (exit 6, "mapping file not usable"); both runs above used the flag.
 
 Step 5 (four-city dry run, placeholder mapping allowed): exit 0. `psse_run=1`, `psse_dispatched_capacity=4`, `psse_voltage_margin=4`, `psse_contingency_result=85`; `contingencies: screened=32 with_results=28`; `ratings: city_rating=4 static=0`; `outcome: ok`; `rate_set: RATEA`; `psse_version: 36.4.0`; `study_seconds: 2.0`; `validation: ok`. Nothing was written to the database.
 
