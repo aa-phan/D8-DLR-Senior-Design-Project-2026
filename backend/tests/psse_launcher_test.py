@@ -851,6 +851,73 @@ def test_dry_run_failed_study_exit1(tmp_path):
     assert "validation: ok" in box.out.getvalue()
 
 
+# The synthetic scaling targets of the committed example mapping (plan 04-01); none is a Power
+# Systems figure. Every text form of each, so a leak into the dry-run output or the log shows.
+_SYNTHETIC_TARGETS = (2430.5, 2467.25, 2455.75, 2492.5, 2504.25, 2541.75, 2529.5, 2566.25)
+
+
+def _synthetic_target_texts():
+    texts = set()
+    for value in _SYNTHETIC_TARGETS:
+        texts.update((repr(value), "%g" % value, "%.1f" % value))
+    return sorted(texts)
+
+
+class _RefusesOneCityScale(fake_module.FakePsspy):
+    """A psspy whose whole-case scaling call returns an error code, changing nothing, but only for
+    the call whose load slot is `refused_load` (one city's target)."""
+
+    def __init__(self, refused_load, **kwargs):
+        super().__init__(**kwargs)
+        self._refused_load = refused_load
+
+    def scal_2(self, sid, all, apiopt, status, scalval):  # noqa: A002 - the manual's name
+        if all == 1 and apiopt == 0 and scalval[0] == self._refused_load:
+            self.fake_calls.append(("scal_2", (), dict(
+                sid=sid, all=all, apiopt=apiopt, status=status, scalval=scalval)))
+            return (6, [], [])
+        return super().scal_2(sid=sid, all=all, apiopt=apiopt, status=status, scalval=scalval)
+
+
+def _assert_no_figure_anywhere(box):
+    for stream, text in (("out", box.out.getvalue()), ("err", box.err.getvalue()),
+                         ("log", box.log_text())):
+        for figure in _synthetic_target_texts():
+            assert figure not in text, (stream, figure)
+
+
+def test_dry_run_city_failure_names_each_city_without_figures(tmp_path):
+    """One city's scaling is refused: the dry run exits 1, names every city's outcome and the
+    first failed stage, prints no target figure and connects to nothing."""
+    connected = []
+    fake = _RefusesOneCityScale(2504.25)
+    path = str(tmp_path / "PLACEHOLDER_CASE.sav")
+    with open(path, "wb") as handle:
+        handle.write(b"MARKER - Power Systems' case")
+    fake.fake_register_case(path, fake_module.placeholder_case())
+    box = Sandbox(tmp_path, fake=fake, case_path=path)
+    assert _dry(box, connect=lambda: connected.append(1)) == 1
+    out = box.out.getvalue()
+    assert out.splitlines()[0].startswith("dry run: nothing was written")
+    assert "study failed at stage apply_ratings" in out
+    assert "1 of 4 cities failed" in out
+    assert "MIDLAND: failed at apply_ratings" in out
+    assert "AUSTIN: ok" in out
+    assert "rows:" not in out
+    assert connected == []
+    assert str(tmp_path) not in out
+    assert str(tmp_path) not in box.err.getvalue()
+    _assert_no_figure_anywhere(box)
+
+
+def test_dry_run_success_prints_no_figure(tmp_path):
+    """The same run without the refusal is a clean dry run that prints no target figure either."""
+    box = Sandbox(tmp_path)
+    assert _dry(box) == 0, box.err.getvalue()
+    assert "validation: ok" in box.out.getvalue()
+    _assert_no_figure_anywhere(box)
+
+
 def test_dry_run_validation_failure_exit1(tmp_path, monkeypatch):
     """A results object that fails validate_results is exit 1 naming the validation failure."""
     def bad_study(selection, context):

@@ -588,3 +588,21 @@ def test_other_exceptions_surface_as_themselves(tmp_path, monkeypatch):
     with pytest.raises(KeyError):
         study.make_study(fake, path, _mapping())(_selection(), None)
     assert os.listdir(tempfile.gettempdir()) == []
+
+
+def test_combined_failure_text_never_holds_a_figure(tmp_path):
+    typo = mapping.Scaling(2430500.0, TARGETS["AUSTIN"][1], "average")
+    no_generation = fake_module.placeholder_case()
+    no_generation.gens = {}
+    paths = [
+        {"fake": _ScaleIgnored()},                                   # read-back miss
+        {"fake": _ScaleRefused()},                                   # scal_2 error
+        {"mapping_": _mapping(cities={"AUSTIN": {"scaling": typo}})},  # factor bound
+        {"case": no_generation},                                     # no generation to scale
+    ]
+    for arguments in paths:
+        _, _, failure = _study_failure(tmp_path, "apply_ratings", **arguments)
+        for text in (failure.message, str(failure)):
+            _assert_no_figure(text)
+            assert "2430500" not in text
+        assert "of 4 cities failed" in failure.message
