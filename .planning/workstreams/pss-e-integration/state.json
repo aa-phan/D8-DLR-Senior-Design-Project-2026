@@ -6,28 +6,23 @@
     {
       "number": "1",
       "name": "Result-Table Spec and Rating I/O",
-      "status": "complete"
+      "status": "in_progress"
     },
     {
       "number": "2",
       "name": "Study on Power Systems' Case",
-      "status": "complete"
+      "status": "in_progress"
     },
     {
       "number": "3",
       "name": "Laptop Run and Handover",
       "status": "in_progress"
-    },
-    {
-      "number": "4",
-      "name": "Per-city scaling of the 39-bus case",
-      "status": "in_progress"
     }
   ],
   "next": {
-    "command": "/gsd-plan-phase 4 --ws pss-e-integration",
-    "label": "Resume Phase 4 planning at the planner step",
-    "reason": "Research, validation file and pattern map are done; the planner and plan checker are next. Also re-check the laptop clock alignment."
+    "command": "/gsd-progress --next",
+    "label": "Advance to the next step",
+    "reason": "Phase 4 of 4 · executing"
   },
-  "updated_at": "2026-11-10T01:30:00.000Z"
+  "updated_at": "2026-11-11T02:57:01.162Z"
 }

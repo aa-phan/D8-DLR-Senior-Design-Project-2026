@@ -2,18 +2,18 @@
 gsd_state_version: "1.0"
 milestone: v1.6
 milestone_name: PSS/E Integration
-current_phase: 3
-current_phase_name: Laptop Run and Handover
-status: laptop_steps_2_to_5_passed
+current_phase: 04
+current_phase_name: Per-city scaling of the 39-bus case
+status: executing
 stopped_at: 03-07 steps 2 to 5 passed on the laptop (session B, 2026-11-09); step 6 in progress (three hourly runs); the psse_* tables and writer role are live, 03-08 waits on the writer connection string and Power Systems' mapping
-last_updated: "2026-11-09T22:00:00.000Z"
-last_activity: 2026-11-09
-last_activity_desc: Laptop session B - selftest, probe, write check and dry run (live ratings read) all pass on the 39-bus case
-state_head: 6b8cc5e88371736055be0a125a4ba86d62f13024
+last_updated: "2026-11-11T02:57:00.882Z"
+last_activity: 2026-11-10
+last_activity_desc: Phase 04 execution started
+state_head: 197a68989b35de117ce8c7a7d459a4ecd82206ce
 progress:
-  total_phases: 3
+  total_phases: 4
   completed_phases: 2
-  total_plans: 20
+  total_plans: 27
   completed_plans: 19
 ---
 
@@ -26,14 +26,14 @@ See: .planning/PROJECT.md (shared; PSS/E integration moves in scope at milestone
 **Core value:** Each city's rating reaches PSS/E and PSS/E's results come back to the database,
 every hour the host is on, and a rating that can't be trusted never reaches a study as anything
 higher than the static rating.
-**Current focus:** Phase 3 — Laptop Run and Handover (plans 07 and 08 need the licensed laptop)
+**Current focus:** Phase 04 — Per-city scaling of the 39-bus case
 
 ## Current Position
 
-Phase: 3 (Laptop Run and Handover) — EXECUTING
-Plan: 03-01 to 03-06 and gap-closure 03-09 done; 03-07 steps 2 to 5 passed on the laptop (step 6, the Task Scheduler dry-run task, pending), then 03-08
-Status: Laptop available; the psse_* tables and dlr_psse_writer are live (owner migration, 2026-11-09), so 03-08 now waits on the writer connection string reaching the laptop and on Power Systems' real mapping. Phases 1 and 2 verified (human_needed)
-Last activity: 2026-11-09 — laptop session B recorded in 03-07-LAPTOP-RECORD.md; owner quick task 261109-o6v added the psse_results migration and dlr_psse_writer role
+Phase: 04 (Per-city scaling of the 39-bus case) — EXECUTING
+Plan: 1 of 6
+Status: Executing Phase 04
+Last activity: 2026-11-10 — Phase 04 execution started
 
 Progress: [█████████░] 95%
 
