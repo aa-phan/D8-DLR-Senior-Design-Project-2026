@@ -58,6 +58,16 @@
     ]
   ],
   [
+    "scal_2",
+    [
+      "all",
+      "apiopt",
+      "scalval",
+      "sid",
+      "status"
+    ]
+  ],
+  [
     "brndat",
     [
       "ibus",
@@ -123,16 +133,6 @@
       "sid",
       "usekv",
       "zones"
-    ]
-  ],
-  [
-    "scal_2",
-    [
-      "all",
-      "apiopt",
-      "scalval",
-      "sid",
-      "status"
     ]
   ]
 ]

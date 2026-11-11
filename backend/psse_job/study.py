@@ -8,12 +8,24 @@ the case and mapping hashes).
 
 psspy arrives as an injected module and is reached only through psse_api.PsseApi; this
 package never imports it. Every failure is contract.StudyFailed with a stage from
-constants.FAILED_STAGES. prepare_base loads Power Systems' case, indexes its lines and buses,
-checks the whole mapping against that index before anything is written to the case, writes
-each city's selected rating as per-circuit MVA at the branch's own base kV (read back), solves
-the base load flow under the strict convergence rule and saves the solved base to a private
-per-run temporary file. Later stages reload that file before every outage and every transfer
-step and never save onto the case file.
+constants.FAILED_STAGES.
+
+Phase 4 (plan 04-03: SCL-02, SCL-03, SCL-05) makes the study four independent studies on four
+fresh copies of the same case. make_study loads and indexes Power Systems' case once and checks
+the whole mapping against that index before anything is written to the case (IN-02). Then, for
+each city in constants.CITIES order, prepare_city_base loads the case file afresh, scales the
+whole case to that city's target load and generation with the job's own scal_2 call (never a
+script or an .idv file, CD-2), reads the totals back before the solve, writes only that city's
+selected rating as per-circuit MVA at the branch's own base kV (read back), solves the load flow
+under the strict convergence rule and saves the solved copy to <private temp dir>/<CITY>.sav.
+The N-1 screen, the margin search and the dispatch row of that city run on that copy. The four
+copies share one private temporary directory, removed on every path; later stages reload the
+saved copy before every outage and every transfer step and nothing is ever saved onto the case
+file. A scaling that does not take, errors or is absurd fails that city at stage apply_ratings
+with a message that names the city and the quantity but no figure.
+
+prepare_base (the four cities in one unscaled case) is kept for the component tests of the
+screen and the margin.
 
 Standard library and psse_job only, Python 3.7 syntax (D-05).
 """
@@ -41,12 +53,23 @@ StudyArea = collections.namedtuple("StudyArea", ["branch_keys", "buses", "by_cit
 BaseCase = collections.namedtuple("BaseCase", [
     "api", "case_label", "case_path", "mapping", "settings", "selection", "lines",
     "transformers", "buses", "cities", "area", "solve", "base_buses", "base_flows",
-    "saved_path", "temp_dir", "budget", "psse_version", "rate_set",
+    "saved_path", "temp_dir", "budget", "psse_version", "rate_set", "scaling",
+])
+CaseIndex = collections.namedtuple("CaseIndex", [
+    "api", "label", "case_path", "psse_version", "lines", "transformers", "buses", "resolved",
 ])
 
 _RELATIVE_TOLERANCE = 1e-6
 _KV_TOLERANCE = 1e-6
 _TEMP_PREFIX = "psse_job_"
+
+# The totals read back after the scaling call must be within this relative amount of each target.
+SCALE_TOLERANCE = 1e-3
+# A target over the case's own total must lie within these bounds (inclusive); a kW-for-MW typo
+# or a target for the wrong city is far outside them.
+SCALE_FACTOR_BOUNDS = (0.05, 20.0)
+SCALING_METHOD = ("scal_2 whole case to the city's target load and generation, load power "
+                  "factor kept, one fresh case copy per city")
 
 
 class Budget(object):
@@ -178,12 +201,17 @@ def study_area(lines, buses, resolved, settings, sinks=None):
 # -- ratings --------------------------------------------------------------------------------------
 
 
-def apply_ratings(api, resolved, mapping, selection):
+def apply_ratings(api, resolved, mapping, selection, cities=None):
     """Write each city's selected rating (per-circuit MVA at the case's base kV) to every listed
-    rate set of every mapped circuit, reading each value back (IN-03, research D-09)."""
+    rate set of every mapped circuit, reading each value back (IN-03, research D-09).
+
+    `cities` None means every city in constants.CITIES; otherwise only the given cities, in
+    constants.CITIES order (the per-city study rates one city per case copy)."""
     rate_sets = mapping.settings.rate_sets
-    cities = collections.OrderedDict()
+    result = collections.OrderedDict()
     for city in constants.CITIES:
+        if cities is not None and city not in cities:
+            continue
         choice = selection.choices[city]
         branches = resolved[city]
         kv = branches[0].base_kv
@@ -205,10 +233,10 @@ def apply_ratings(api, resolved, mapping, selection):
                             city, branch.ref.key, rate_set, read, mva))
             except (psse_api.PsseCallError, ValueError) as error:
                 raise StudyFailed("apply_ratings", "%s %s: %s" % (city, branch.ref.key, error))
-        cities[city] = CityBase(
+        result[city] = CityBase(
             city, branches, kv, tuple(mapping.cities[city].sink_buses),
             _transfer_max(mapping, city), amps_circuit, mva, tuple(before))
-    return cities
+    return result
 
 
 def _transfer_max(mapping, city):
@@ -259,28 +287,8 @@ def cleanup_base(base):
     _remove_dir(base.temp_dir)
 
 
-def prepare_base(psspy_module, case_path, mapping, selection, budget=None):
-    """Load, check, rate, solve and save the base case; see the module docstring."""
-    settings = mapping.settings
-    if budget is None:
-        budget = Budget(max_seconds=settings.max_runtime_seconds)
-    label = run_record.case_label(case_path)
-    try:
-        api = psse_api.PsseApi(psspy_module, protected_path=case_path)
-        psse_version = api.version()
-        api.load_case(case_path)
-        lines, transformers = api.branch_table()
-        buses = api.bus_table()
-    except (psse_api.PsseCallError, ValueError) as error:
-        raise StudyFailed("load_case", "case %s could not be loaded: %s" % (
-            label, getattr(error, "meaning", error)))
-    resolved, problems = check_mapping(mapping, lines, transformers, buses)
-    if problems:
-        raise StudyFailed("mapping", "; ".join(problems))
-    sinks = dict((city, mapping.cities[city].sink_buses) for city in constants.CITIES)
-    area = study_area(lines, buses, resolved, settings, sinks)
-    cities = apply_ratings(api, resolved, mapping, selection)
-    result = solve_base(api, settings)
+def _read_solved_base(api, settings):
+    """(bus table, branch loading) of the solved case, with the collapsed-solution guard."""
     try:
         base_buses = api.bus_table()
         base_flows = api.branch_loading(settings.rate_sets[0], settings.thermal_basis)
@@ -291,22 +299,148 @@ def prepare_base(psspy_module, case_path, mapping, selection, budget=None):
     if collapsed:
         raise StudyFailed("load_flow", "collapsed solution: %d in-service buses below %g pu" % (
             len(collapsed), settings.collapse_voltage_pu))
+    return base_buses, base_flows
+
+
+def _open_case(psspy_module, case_path):
+    """(api, label, psse_version, lines, transformers, buses) of the freshly loaded case; a
+    failure is StudyFailed("load_case")."""
+    label = run_record.case_label(case_path)
+    try:
+        api = psse_api.PsseApi(psspy_module, protected_path=case_path)
+        psse_version = api.version()
+        api.load_case(case_path)
+        lines, transformers = api.branch_table()
+        buses = api.bus_table()
+    except (psse_api.PsseCallError, ValueError) as error:
+        raise StudyFailed("load_case", "case %s could not be loaded: %s" % (
+            label, getattr(error, "meaning", error)))
+    return api, label, psse_version, lines, transformers, buses
+
+
+def _save_solved(api, path):
+    """Save the solved working case to `path`; a failure is StudyFailed("contingency")."""
+    try:
+        api.save_case(path)
+    except psse_api.PsseCallError as error:
+        raise StudyFailed(
+            "contingency",
+            "the solved base case could not be saved to a temporary file: %s" % error.meaning)
+
+
+def prepare_base(psspy_module, case_path, mapping, selection, budget=None):
+    """Load, check, rate, solve and save the base case with all four cities in one unscaled
+    case; see the module docstring.
+
+    Kept for the component tests of the screen and the margin (psse_contingency_test.py,
+    psse_margin_test.py, psse_study_test.py). The job runs make_study's per-city copies
+    (index_case and prepare_city_base), not this.
+    """
+    settings = mapping.settings
+    if budget is None:
+        budget = Budget(max_seconds=settings.max_runtime_seconds)
+    api, label, psse_version, lines, transformers, buses = _open_case(psspy_module, case_path)
+    resolved, problems = check_mapping(mapping, lines, transformers, buses)
+    if problems:
+        raise StudyFailed("mapping", "; ".join(problems))
+    sinks = dict((city, mapping.cities[city].sink_buses) for city in constants.CITIES)
+    area = study_area(lines, buses, resolved, settings, sinks)
+    cities = apply_ratings(api, resolved, mapping, selection)
+    result = solve_base(api, settings)
+    base_buses, base_flows = _read_solved_base(api, settings)
     temp_dir = tempfile.mkdtemp(prefix=_TEMP_PREFIX)
     try:
         saved_path = os.path.join(temp_dir, "base.sav")
-        try:
-            api.save_case(saved_path)
-        except psse_api.PsseCallError as error:
-            raise StudyFailed(
-                "contingency",
-                "the solved base case could not be saved to a temporary file: %s" % error.meaning)
+        _save_solved(api, saved_path)
     except BaseException:
         _remove_dir(temp_dir)
         raise
     return BaseCase(
         api, label, case_path, mapping, settings, selection, tuple(lines), tuple(transformers),
         buses, cities, area, result, base_buses, base_flows, saved_path, temp_dir, budget,
-        psse_version, settings_module.rate_set_label(settings))
+        psse_version, settings_module.rate_set_label(settings), None)
+
+
+# -- one copy of the case per city (Phase 4) --------------------------------------------------------
+
+
+def index_case(psspy_module, case_path, mapping):
+    """Load the case once and index it: lines, transformers and buses, then the whole mapping
+    checked against them (a problem is one `mapping` failure, as before). Reads no totals and
+    writes nothing, so a mapping failure leaves no write call behind (IN-02)."""
+    api, label, psse_version, lines, transformers, buses = _open_case(psspy_module, case_path)
+    resolved, problems = check_mapping(mapping, lines, transformers, buses)
+    if problems:
+        raise StudyFailed("mapping", "; ".join(problems))
+    return CaseIndex(api, label, case_path, psse_version, tuple(lines), tuple(transformers),
+                     buses, resolved)
+
+
+def scale_city_case(api, city, scaling):
+    """Scale the loaded case to `city`'s target load and generation and read the totals back.
+
+    Refused before the call (StudyFailed("apply_ratings"), message starting "scaling:"): a case
+    without load or generation, or a target outside SCALE_FACTOR_BOUNDS times the case's own
+    total (a kW-for-MW typo). Refused after it: a total that differs from its target by more
+    than SCALE_TOLERANCE, relative. The read-back comes before the solve, because a solve moves
+    the swing machine and any voltage-dependent load. No message holds a figure.
+    """
+    low, high = SCALE_FACTOR_BOUNDS
+
+    def refuse(text):
+        return StudyFailed("apply_ratings", "scaling: %s: %s" % (city, text))
+
+    try:
+        before = api.read_totals()
+        for quantity, own, target in (("load", before.load_mw, scaling.load_mw),
+                                      ("generation", before.gen_mw, scaling.gen_mw)):
+            if not own > 0:
+                raise refuse("the case has no %s to scale" % quantity)
+            if not low <= target / own <= high:
+                raise refuse("the %s target is outside %g to %g times the case's own total" % (
+                    quantity, low, high))
+        api.scale_case(scaling.load_mw, scaling.gen_mw)
+        after = api.read_totals()
+    except (psse_api.PsseCallError, ValueError) as error:
+        raise refuse(str(error))
+    for quantity, read, target in (("load", after.load_mw, scaling.load_mw),
+                                   ("generation", after.gen_mw, scaling.gen_mw)):
+        if not abs(read - target) <= SCALE_TOLERANCE * target:
+            raise refuse("the %s total read back differs from the target by more than %g percent"
+                         % (quantity, SCALE_TOLERANCE * 100.0))
+
+
+def scaling_record(scaling):
+    """What a row may say about the scaling: the basis and the method, never a target or a
+    realised total (CD-10; the mapping hash proves the targets)."""
+    return {"basis": scaling.basis, "method": SCALING_METHOD}
+
+
+def prepare_city_base(index, mapping, selection, city, budget, temp_dir):
+    """A BaseCase for `city` alone: a fresh load of the case file, the city's scaling, only its
+    own rating, the solve and the saved solved copy `<temp_dir>/<CITY>.sav`."""
+    api = index.api
+    settings = mapping.settings
+    try:
+        api.load_case(index.case_path)
+    except (psse_api.PsseCallError, ValueError) as error:
+        raise StudyFailed("load_case", "case %s could not be loaded for %s: %s" % (
+            index.label, city, getattr(error, "meaning", error)))
+    scaling = mapping.cities[city].scaling
+    scale_city_case(api, city, scaling)
+    one = {city: index.resolved[city]}
+    cities = apply_ratings(api, one, mapping, selection, cities=(city,))
+    result = solve_base(api, settings)
+    base_buses, base_flows = _read_solved_base(api, settings)
+    area = study_area(index.lines, index.buses, one, settings,
+                      {city: mapping.cities[city].sink_buses})
+    saved_path = os.path.join(temp_dir, city + ".sav")
+    _save_solved(api, saved_path)
+    return BaseCase(
+        api, index.label, index.case_path, mapping, settings, selection, index.lines,
+        index.transformers, index.buses, cities, area, result, base_buses, base_flows,
+        saved_path, temp_dir, budget, index.psse_version, settings_module.rate_set_label(settings),
+        scaling)
 
 
 # -- the whole study (plan 02-06) -----------------------------------------------------------------
@@ -348,39 +482,59 @@ def _with_safe_details(row):
 
 
 def make_study(psspy_module, case_path, mapping, clock=None):
-    """study(selection, context) for run_once: the base, the N-1 screen, a margin and a dispatch
-    row per city, as contract.StudyResults.
+    """study(selection, context) for run_once: for each city, on its own freshly loaded and
+    scaled copy of the case, the base load flow, the N-1 screen, a margin and a dispatch row, as
+    contract.StudyResults.
 
-    Every call builds a new PsseApi and loads the case afresh (one study per process, never an
-    adapter reused across runs), and removes its temporary files on every path.
+    Every call builds a new PsseApi, indexes the case once and loads the case file afresh for
+    every city (one study per process, never an adapter reused across runs), and removes its
+    temporary files on every path. The first failing city stops the run.
     """
     def study(selection, context):
         budget = Budget(clock, mapping.settings.max_runtime_seconds)
-        base = prepare_base(psspy_module, case_path, mapping, selection, budget)
+        index = index_case(psspy_module, case_path, mapping)
+        temp_dir = tempfile.mkdtemp(prefix=_TEMP_PREFIX)
         try:
-            screened = contingency.screen(base)
-            margins = [margin.city_margin(base, city) for city in constants.CITIES]
             dispatch_rows = []
-            for city, result in zip(constants.CITIES, margins):
+            margin_rows = []
+            contingency_rows = []
+            n_contingencies = 0
+            for city in constants.CITIES:
+                base = prepare_city_base(index, mapping, selection, city, budget, temp_dir)
+                screened = contingency.screen(base, id_prefix=city + ":")
+                result = margin.city_margin(base, city)
                 city_base = base.cities[city]
+                record = scaling_record(base.scaling)
+                details = dispatch.dispatch_details(
+                    city_base, base.settings.rate_sets, result.bounded_by)
+                details["scaling"] = dict(record)
                 try:
                     dispatch_rows.append(dispatch.build_dispatch_row(
                         selection.choices[city], city_base.line_voltage_kv,
-                        result.voltage_limit_mva,
-                        details=dispatch.dispatch_details(
-                            city_base, base.settings.rate_sets, result.bounded_by),
+                        result.voltage_limit_mva, details=details,
                         bounded_by=result.bounded_by))
                 except ValueError as error:
                     raise StudyFailed("dispatch", "%s: %s" % (city, error))
+                margin_row = dict(result.row)
+                margin_row["details"] = dict(result.row["details"], scaling=dict(record))
+                margin_rows.append(margin_row)
+                contingency_rows.extend(screened.rows)
+                n_contingencies += screened.n_contingencies
+            cap = run_record.MAX_CONTINGENCY_ROWS
+            if len(contingency_rows) > cap:
+                raise StudyFailed(
+                    "contingency", "%d violation rows across the four cities exceed the limit "
+                                   "of %d; narrow contingency.hops or the scope" % (
+                                       len(contingency_rows), cap))
             return contract.StudyResults(
                 dispatch=[_with_safe_details(row) for row in dispatch_rows],
-                margins=[_with_safe_details(result.row) for result in margins],
-                contingencies=[_with_safe_details(row) for row in screened.rows],
-                n_contingencies=screened.n_contingencies,
-                rate_set=base.rate_set,
-                psse_version=base.psse_version)
+                margins=[_with_safe_details(row) for row in margin_rows],
+                contingencies=[_with_safe_details(row) for row in contingency_rows],
+                n_contingencies=n_contingencies,
+                rate_set=settings_module.rate_set_label(mapping.settings),
+                psse_version=index.psse_version)
         finally:
-            cleanup_base(base)
+            _remove_dir(temp_dir)
     return study
 
 

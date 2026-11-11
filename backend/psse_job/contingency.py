@@ -13,6 +13,10 @@ run_record.MAX_CONTINGENCY_ROWS and an exhausted run-time budget fail the stage
 (StudyFailed("contingency", ...)); a truncated screen is never returned. Transformer,
 generator and multi-element outages are not screened.
 
+`screen(base, id_prefix="")` prefixes every contingency_id (Phase 4: the job screens each city's
+own scaled copy and passes "<CITY>:"), so rows from the four copies never share a key; the
+default keeps the raw branch key.
+
 The caller owns the base and calls study.cleanup_base(base) on every exit path.
 
 Standard library and psse_job only, Python 3.7 syntax (D-05).
@@ -64,8 +68,14 @@ def _call_failure(outage, error):
     return StudyFailed(_STAGE, "outage %s: %s" % (outage.key, getattr(error, "meaning", error)))
 
 
-def screen(base):
-    """Screen every selected outage; see the module docstring."""
+def screen(base, id_prefix=""):
+    """Screen every selected outage; see the module docstring.
+
+    Each row's contingency_id is `id_prefix` plus the outaged line's key; the job passes
+    "<CITY>:" so the same line screened on four city copies stays four distinct, attributable
+    ids. The outaged line itself is still skipped by its raw key (`skip_key`), never the
+    prefixed id.
+    """
     api = base.api
     settings = base.settings
     outages = select_outages(base)
@@ -77,7 +87,7 @@ def screen(base):
     rows = []
     for outage in outages:
         base.budget.check(_STAGE)
-        contingency_id = outage.key
+        contingency_id = id_prefix + outage.key
         try:
             api.load_case(base.saved_path)
             api.set_status(outage, False)
@@ -93,7 +103,7 @@ def screen(base):
                     flows = api.branch_loading(rate_set, settings.thermal_basis)
                     rows.extend(violations.thermal_violations(
                         flows, monitored_keys, settings, contingency_id, city_of_branch,
-                        base_flows_by_key, skip_key=contingency_id))
+                        base_flows_by_key, skip_key=outage.key))
                     rows.extend(violations.voltage_violations(
                         buses, monitored_buses, settings, contingency_id, city_of_bus,
                         base.base_buses))

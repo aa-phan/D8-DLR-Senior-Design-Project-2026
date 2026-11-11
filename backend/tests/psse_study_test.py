@@ -589,7 +589,7 @@ def test_full_study_placeholder_results_validate(tmp_path):
     assert len(results.dispatch) == 4
     assert len(results.margins) == 4
     assert len(results.contingencies) == 10
-    assert results.n_contingencies == 16
+    assert results.n_contingencies == 40
     assert results.rate_set == "RATEA"
     assert results.psse_version == "35.6.0"
     assert [row["city"] for row in results.dispatch] == list(constants.CITIES)
@@ -613,7 +613,7 @@ def test_full_study_never_saves_or_changes_the_case(tmp_path):
     before = run_record.file_sha256(path)
     callable_ = study.make_study(fake, path, _mapping())
     first = callable_(_selection(), None)
-    assert len(_fresh_case_calls(fake, path)) == 1
+    assert len(_fresh_case_calls(fake, path)) == 5
     first_saved = list(fake.fake_saved_paths)
     assert first_saved
     for saved in fake.fake_saved_paths:
@@ -623,7 +623,7 @@ def test_full_study_never_saves_or_changes_the_case(tmp_path):
     calls_before = len(fake.fake_calls)
     second = callable_(_selection(), None)
     assert second == first
-    assert len(_fresh_case_calls(fake, path)) == 2
+    assert len(_fresh_case_calls(fake, path)) == 10
     later = fake.fake_calls[calls_before:]
     assert [call for call in later if call[0] == "case"][0][1] == (path,)
     assert [call for call in later if call[0] == "save"][0][1][0] not in first_saved
@@ -787,7 +787,7 @@ def test_prepare_run_hashes_and_labels(tmp_path):
     assert prepared.mapping_error is None
     assert fake.fake_calls == []
     results = prepared.study(_selection(), None)
-    assert results.n_contingencies == 16
+    assert results.n_contingencies == 40
 
 
 def test_prepare_run_bad_mapping_becomes_mapping_failure(tmp_path):
