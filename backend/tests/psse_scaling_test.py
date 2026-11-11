@@ -165,16 +165,18 @@ def test_tracer_four_cities_each_on_its_own_scaled_copy(tmp_path):
         assert upto_save[-1][0] == "save"
         writes = [call for call in upto_save if call[0] in ("scal_2", "branch_chng_3", "fnsl", "save")]
         names = [call[0] for call in writes]
-        assert names[:3] == ["scal_2", "scal_2", "scal_2"], city
+        # totals read and its close, the scaling, the read-back and its close (every read is
+        # closed: an open read made the next one fail with ierr 5 on PSS/E 36.4)
+        assert names[:5] == ["scal_2"] * 5, city
         assert names[-2:] == ["fnsl", "save"], city
-        middle = names[3:-2]
+        middle = names[5:-2]
         assert middle and set(middle) == {"branch_chng_3"}, city
-        assert [call[2]["apiopt"] for call in writes[:3]] == [1, 0, 1], city
-        assert all(call[2]["all"] == 1 for call in writes[:3]), city
-        scale = writes[1][2]
+        assert [call[2]["apiopt"] for call in writes[:5]] == [1, 2, 0, 1, 2], city
+        assert all(call[2]["all"] == 1 for call in writes[:5]), city
+        scale = writes[2][2]
         assert scale["scalval"][:2] == list(TARGETS[city]), city
         line = MAPPED_LINE[city]
-        for call in writes[3:-2]:
+        for call in writes[5:-2]:
             assert (call[2]["ibus"], call[2]["jbus"], call[2]["ckt"]) == line, city
         saved = writes[-1][1][0]
         assert os.path.basename(saved) == city + ".sav"

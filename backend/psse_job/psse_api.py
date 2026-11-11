@@ -96,14 +96,22 @@ SURFACE_BY_NAME = {row.name: row for row in SURFACE}
 # form already uses, read as keeping each load's power factor (CD-9).
 ScaleLayout = collections.namedtuple(
     "ScaleLayout",
-    ["sid", "all_flag", "apiopt_scale", "apiopt_totals", "status", "scalval_load", "scalval_gen",
-     "scalval_slots", "totals_load", "totals_gen", "evidence", "confidence"],
+    ["sid", "all_flag", "apiopt_scale", "apiopt_totals", "apiopt_close", "status", "scalval_load",
+     "scalval_gen", "scalval_slots", "totals_load", "totals_gen", "evidence", "confidence"],
 )
+# The positions were read from PSS/E 36.4's own scal_2 documentation on 2026-11-10 and match.
+# The same day's laptop probe found a rule the documentation does not state: a totals read
+# (apiopt 1) only initialises scaling and stays open, across case loads, until an apiopt 2 call
+# closes it, and a second apiopt 1 while one is open fails with ierr 5. So every totals read is
+# followed at once by an apiopt 2 close with no-input arguments (apiopt_close). Inferred from
+# three laptop experiments (the manual lists no ierr 5), so it stays UNVERIFIED until the
+# probe row scale_to_target passes on the laptop.
 SCALE_LAYOUT = ScaleLayout(
-    sid=0, all_flag=1, apiopt_scale=0, apiopt_totals=1, status=(None, 1, 0, 1, 0),
+    sid=0, all_flag=1, apiopt_scale=0, apiopt_totals=1, apiopt_close=2, status=(None, 1, 0, 1, 0),
     scalval_load=0, scalval_gen=1, scalval_slots=7, totals_load=1, totals_gen=2,
-    evidence="FORUM questions 1720, 2551, 4673 and 6830 (community, not the manual); the "
-             "increment form is proven on PSS/E 36.4 (U11); laptop check pending (runbook step 4)",
+    evidence="positions match PSS/E 36.4's scal_2 documentation (laptop, 2026-11-10); a totals "
+             "read must be closed with apiopt 2 (laptop probe, 2026-11-11); the probe row "
+             "scale_to_target has not yet passed there (runbook step 4)",
     confidence="UNVERIFIED",
 )
 
@@ -157,6 +165,7 @@ THERMAL_BASES = ("current", "mva")
 
 _NOT_LISTED = "error code not listed in the manual excerpt"
 _SHAPE = "unexpected return shape"
+_CLOSE_FAILED = "closing the totals read failed; error code not listed in the manual excerpt"
 _UNEQUAL = "columns of unequal length"
 _COLUMN_TYPE = "unexpected column type"
 _FNSL_OPTION_COUNT = 8
@@ -523,6 +532,22 @@ class PsseApi(object):
         """SCALE_LAYOUT.status as a list, the int no-input sentinel in place of None."""
         return [self._int_sentinel if item is None else item for item in SCALE_LAYOUT.status]
 
+    def _close_totals_read(self, layout):
+        """Close the open totals read with scal_2 apiopt_close and no-input arguments.
+
+        Nothing is scaled: every status element and every scalval slot is the no-input
+        sentinel. A non-zero code raises PsseCallError, whose text holds no figure.
+        """
+        closed = self._call(
+            "scal_2", sid=layout.sid, all=layout.all_flag, apiopt=layout.apiopt_close,
+            status=[self._int_sentinel] * len(layout.status),
+            scalval=[self._real_sentinel] * layout.scalval_slots)
+        if not isinstance(closed, (tuple, list)) or not closed:
+            raise PsseCallError("scal_2", None, _SHAPE)
+        ierr = self._plain_ierr("scal_2", closed[0])
+        if ierr != 0:
+            raise PsseCallError("scal_2", ierr, _CLOSE_FAILED)
+
     def read_totals(self):
         """The whole case's total load and total generation in MW, as CaseTotals.
 
@@ -539,6 +564,9 @@ class PsseApi(object):
         ierr = self._plain_ierr("scal_2", result[0])
         if ierr != 0:
             raise PsseCallError("scal_2", ierr, _NOT_LISTED)
+        # The read is open until it is closed, and a second open read fails with ierr 5 (the
+        # laptop probe, 2026-11-11): close it before anything else can raise or return.
+        self._close_totals_read(layout)
         if len(result) < 2:
             raise PsseCallError("scal_2", None, _SHAPE)
         totals = result[1]

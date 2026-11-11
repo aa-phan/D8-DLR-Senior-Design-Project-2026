@@ -278,9 +278,10 @@ def test_report_write_check_off_by_default(tmp_path):
     assert "scale_to_target" not in _by_check(rows)
     assert _whole_case_scale_calls(fake) == []
     probe.run_probe(fake, path, mapping=_mapping(), write_check=True)
-    # one increment call (scale_load), then the four whole-case calls of scale_to_target
+    # one increment call (scale_load), then the seven whole-case calls of scale_to_target: three
+    # totals reads, each followed by its apiopt 2 close, and the one scaling
     assert [call[0] for call in _calls(fake, "branch_chng_3", "bsys", "scal_2")] == [
-        "branch_chng_3", "bsys", "scal_2", "scal_2", "scal_2", "scal_2", "scal_2"]
+        "branch_chng_3", "bsys"] + ["scal_2"] * 8
     assert len(_whole_case_scale_calls(fake)) == 1
 
 
@@ -328,17 +329,20 @@ def test_scale_to_target_scales_reads_back_and_restores(tmp_path):
     # it follows scale_load, which follows rating_write
     names = [name for name in rows if not name.startswith("signature:")]
     assert names.index("scale_to_target") == names.index("scale_load") + 1
-    # the log of the row: reload (end of scale_load), totals, scale, totals, reload, totals
+    # the log of the row: reload (end of scale_load), totals and close, scale, totals and close,
+    # reload, totals and close (each totals read is closed, or the next one fails with ierr 5)
     increment = [index for index, call in enumerate(fake.fake_calls)
                  if call[0] == "scal_2" and call[2].get("all") == 0][-1]
     tail = fake.fake_calls[increment + 1:]
-    assert [call[0] for call in tail] == ["case", "scal_2", "scal_2", "scal_2", "case", "scal_2"]
-    assert [call[2].get("apiopt") for call in tail if call[0] == "scal_2"] == [1, 0, 1, 1]
+    assert [call[0] for call in tail] == (
+        ["case"] + ["scal_2"] * 5 + ["case"] + ["scal_2"] * 2)
+    assert [call[2].get("apiopt") for call in tail if call[0] == "scal_2"] == [1, 2, 0, 1, 2, 1, 2]
     assert all(call[2].get("all") == 1 for call in tail if call[0] == "scal_2")
     scale = _whole_case_scale_calls(fake)[0][2]["scalval"]
     assert scale[0] == pytest.approx(PLACEHOLDER_LOAD_MW * PROBE_FRACTION)
     assert scale[1] == pytest.approx(PLACEHOLDER_GEN_MW * PROBE_FRACTION)
-    reload_call = tail[4]
+    reload_call = tail[6]
+    assert fake._scal_open is False
     assert path in reload_call[1] or path in reload_call[2].values()
     # never saved, the case file untouched, the loaded case back to its own totals
     assert _calls(fake, "save") == [] and fake.fake_saved_paths == []

@@ -184,6 +184,7 @@ class FakePsspy(object):
         self.fake_calls = []
         self.fake_saved_paths = []
         self.fake_subsystems = {}
+        self._scal_open = False
         self._registry = {}
         self._solved = 9
         self._iterations = 0
@@ -491,18 +492,32 @@ class FakePsspy(object):
         """
         if self.fake_state is None:
             return (1, [], [])
-        if apiopt not in (0, 1):
+        if apiopt not in (0, 1, 2):
             return (2, [], [])
         if (not isinstance(status, list) or len(status) != 5
                 or not isinstance(scalval, list) or len(scalval) != 7):
             return (4, [], [])
         if any(value != REAL_SENTINEL for value in scalval[2:]):
             return (4, [], [])
-        if apiopt == 1:
+        if apiopt in (1, 2):
             if any(value != INT_SENTINEL for value in status) or any(
                     value != REAL_SENTINEL for value in scalval):
                 return (4, [], [])
+            # PSS/E 36.4 (laptop probe, 2026-11-11): apiopt 1 opens the scaling state and it
+            # stays open across case loads until apiopt 2 closes it; apiopt 1 while open and
+            # apiopt 2 with nothing open both return ierr 5. A failed apiopt 1 leaves nothing
+            # open. The flag lives on this object, not in fake_state, so case() keeps it.
+            if apiopt == 1:
+                if self._scal_open:
+                    self._scal_open = False
+                    return (5, [], [])
+                self._scal_open = True
+                return (0, self._whole_case_totals(), [0.0, 0.0])
+            if not self._scal_open:
+                return (5, [], [])
+            self._scal_open = False
             return (0, self._whole_case_totals(), [0.0, 0.0])
+        self._scal_open = False
         if status[1] != 1 or status[3] != 1:
             return (4, [], [])
         for target in scalval[:2]:

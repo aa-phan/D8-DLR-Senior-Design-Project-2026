@@ -354,10 +354,15 @@ def _assert_totals(totals, load_mw, gen_mw):
 def test_tracer_scale_case_sets_and_reads_back_whole_case_totals(tmp_path):
     fake, api, path = _loaded(tmp_path)
     _assert_totals(api.read_totals(), 2480.0, 2520.0)
-    read_call = _last_call(fake, "scal_2")[2]
+    # a totals read is two calls: the apiopt 1 read, then the apiopt 2 close that nothing scales
+    scal_calls = [call[2] for call in fake.fake_calls if call[0] == "scal_2"]
+    read_call, close_call = scal_calls[-2], scal_calls[-1]
     assert read_call["sid"] == 0 and read_call["all"] == 1 and read_call["apiopt"] == 1
     assert read_call["status"] == [fake_module.INT_SENTINEL] * 5
     assert read_call["scalval"] == [fake_module.REAL_SENTINEL] * 7
+    assert close_call["sid"] == 0 and close_call["all"] == 1 and close_call["apiopt"] == 2
+    assert close_call["status"] == [fake_module.INT_SENTINEL] * 5
+    assert close_call["scalval"] == [fake_module.REAL_SENTINEL] * 7
     ratios = {bus: q / p for bus, (p, q) in fake.fake_state.loads.items()}
     api.scale_case(2430.5, 2467.25)
     scale_call = _last_call(fake, "scal_2")[2]
@@ -374,13 +379,91 @@ def test_tracer_scale_case_sets_and_reads_back_whole_case_totals(tmp_path):
 def test_scale_layout_matches_the_fake(tmp_path):
     layout = psse_api.SCALE_LAYOUT
     assert layout.confidence == "UNVERIFIED"
-    assert "laptop check" in layout.evidence
+    assert "laptop" in layout.evidence and "scale_to_target" in layout.evidence
+    assert (layout.apiopt_scale, layout.apiopt_totals, layout.apiopt_close) == (0, 1, 2)
     assert fake_module.FAKE_TOTALS_LOAD == layout.totals_load
     assert fake_module.FAKE_TOTALS_GEN == layout.totals_gen
     fake, api, _ = _loaded(tmp_path)
     totals = fake.scal_2(sid=0, all=1, apiopt=1, status=[fake_module.INT_SENTINEL] * 5,
                          scalval=[fake_module.REAL_SENTINEL] * 7)[1]
     assert len(totals) == fake_module.FAKE_TOTALS_LENGTH
+
+
+def _scal_modes(fake):
+    return [call[2]["apiopt"] for call in fake.fake_calls if call[0] == "scal_2"]
+
+
+def test_read_totals_closes_every_read_so_reads_can_follow_each_other(tmp_path):
+    """The laptop probe (2026-11-11): a read left open made the next apiopt 1 fail with ierr 5."""
+    fake, api, path = _loaded(tmp_path)
+    _assert_totals(api.read_totals(), 2480.0, 2520.0)
+    _assert_totals(api.read_totals(), 2480.0, 2520.0)
+    assert fake._scal_open is False
+    api.scale_case(2430.5, 2467.25)
+    _assert_totals(api.read_totals(), 2430.5, 2467.25)
+    api.load_case(path)
+    _assert_totals(api.read_totals(), 2480.0, 2520.0)  # the probe's read, scale, read, reload, read
+    assert fake._scal_open is False
+    assert _scal_modes(fake) == [1, 2, 1, 2, 0, 1, 2, 1, 2]
+
+
+def test_fake_scal_2_models_the_open_read_state(tmp_path):
+    """The fake follows what PSS/E 36.4 did on the laptop, so a missing close fails on the Mac."""
+    fake, api, path = _loaded(tmp_path)
+    int_s, real_s = fake_module.INT_SENTINEL, fake_module.REAL_SENTINEL
+    ints, reals = [int_s] * 5, [real_s] * 7
+
+    def call(apiopt):
+        return fake.scal_2(sid=0, all=1, apiopt=apiopt, status=ints, scalval=reals)[0]
+
+    assert call(2) == 5                     # nothing open to close
+    assert call(1) == 0 and fake._scal_open is True
+    assert call(1) == 5                     # a second read while one is open
+    assert fake._scal_open is False         # a failed read leaves nothing open
+    assert call(1) == 0
+    assert fake.case(path) == 0 and fake._scal_open is True   # a case load does not close it
+    assert call(1) == 5
+    assert call(1) == 0 and call(2) == 0 and fake._scal_open is False
+    assert call(1) == 0
+    scale = fake.scal_2(sid=0, all=1, apiopt=0, status=[int_s, 1, 0, 1, 0],
+                        scalval=[2430.5, 2467.25] + [real_s] * 5)
+    assert scale[0] == 0 and fake._scal_open is False         # apiopt 0 clears it too
+
+
+def test_read_totals_close_failure_raises_without_figures(tmp_path):
+    fake, api, _ = _loaded(tmp_path)
+    real = fake.scal_2
+
+    def failing_close(sid, all, apiopt, status, scalval):
+        if apiopt == 2:
+            return (5, [], [])
+        return real(sid=sid, all=all, apiopt=apiopt, status=status, scalval=scalval)
+
+    fake.scal_2 = failing_close
+    with pytest.raises(psse_api.PsseCallError) as excinfo:
+        api.read_totals()
+    assert (excinfo.value.function, excinfo.value.ierr) == ("scal_2", 5)
+    assert "closing" in excinfo.value.meaning
+    assert "2480" not in str(excinfo.value) and "2520" not in str(excinfo.value)
+    fake.scal_2 = lambda sid, all, apiopt, status, scalval: (
+        (0, _GOOD_TOTALS, []) if apiopt == 1 else None)
+    with pytest.raises(psse_api.PsseCallError) as excinfo:
+        api.read_totals()
+    assert excinfo.value.ierr is None and "shape" in excinfo.value.meaning
+
+
+def test_failed_read_issues_no_close(tmp_path):
+    fake, api, _ = _loaded(tmp_path)
+    seen = []
+
+    def read_fails(sid, all, apiopt, status, scalval):
+        seen.append(apiopt)
+        return (5, [], [])
+
+    fake.scal_2 = read_fails
+    with pytest.raises(psse_api.PsseCallError):
+        api.read_totals()
+    assert seen == [1]
 
 
 _GOOD_TOTALS = [0.0, 2480.0, 2520.0] + [0.0] * 6
@@ -482,7 +565,9 @@ def test_fake_scal_2_pins_the_whole_case_arrays(tmp_path):
     assert call(status=good_status[:4]) == 4
     assert call(scalval=good_scalval[:6]) == 4
     assert call(scalval=[float("nan"), 2467.25] + [real_s] * 5) == 4
-    assert call(apiopt=2) == 2
+    assert call(apiopt=3) == 2
+    assert call(apiopt=2, status=good_status) == 4
+    assert call(apiopt=2, status=[int_s] * 5, scalval=good_scalval) == 4
     assert call(apiopt=1, status=good_status) == 4
     assert call(apiopt=1, status=[int_s] * 5, scalval=good_scalval) == 4
     assert (dict(fake.fake_state.loads), dict(fake.fake_state.gens)) == before
