@@ -244,7 +244,7 @@ def test_tracer_run_config_file_to_postgres(clean_pg, tmp_path):
     assert stored["job_version"] == "test-launcher"
     assert stored["case_sha256"] == run_record.file_sha256(box.case_path)
     assert stored["mapping_sha256"] == run_record.file_sha256(box.values["PSSE_MAPPING_PATH"])
-    assert stored["n_contingencies"] == 16
+    assert stored["n_contingencies"] == 40
     assert [row for row in _checks(clean_pg) if not row["ok"]] == []
 
     assert run_id in box.log_text()
@@ -792,7 +792,7 @@ def test_dry_run_never_connects_and_prints_counts_only(clean_pg, tmp_path):
         assert lines[0].startswith("dry run: nothing was written")
         assert all(line.startswith(_REPORT_PREFIXES) for line in lines), out
         assert _report_counts(out) == [1, 4, 4, 10]
-        assert "contingencies: screened=16 with_results=7" in lines
+        assert "contingencies: screened=40 with_results=7" in lines
         assert "outcome: fallback" in lines
         assert "rate_set: RATEA" in lines
         assert "psse_version: 35.6.0" in lines

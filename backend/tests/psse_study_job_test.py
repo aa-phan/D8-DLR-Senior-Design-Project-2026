@@ -160,7 +160,7 @@ def test_tracer_prepare_run_fake_psspy_to_postgres(clean_pg, tmp_path):
     stored = _run_row(clean_pg, outcome.run_id)
     assert stored["rate_set"] == "RATEA"
     assert stored["psse_version"] == "35.6.0"
-    assert stored["n_contingencies"] == 16
+    assert stored["n_contingencies"] == 40
     assert stored["n_contingencies_with_results"] == 7
     assert stored["case_sha256"] == case_hash
     assert stored["mapping_sha256"] == run_record.file_sha256(EXAMPLE)
@@ -417,16 +417,27 @@ def test_written_read_failure_still_studies_static(clean_pg, tmp_path):
 
 
 def test_written_zero_violations_complete(clean_pg, tmp_path):
-    """200 MW sink loads: no violation rows is a complete run (1 + 4 + 4 + 0), EL_PASO still dlr_rating."""
+    """200 MW sink loads: no violation rows is a complete run (1 + 4 + 4 + 0), EL_PASO still dlr_rating.
+
+    Phase 4 scales every city's copy to its target, so the mapping copy here sets each city's
+    targets to the case's own totals (800 MW load, 2520 MW generation): the scaling factor is 1
+    and the sinks stay at 200 MW. Synthetic figures, not Power Systems data.
+    """
     case = fake_module.placeholder_case()
     for sink in case.loads:
         case.loads[sink] = [200.0, 200.0 * math.tan(math.acos(0.95))]
     fake, path = _registered(tmp_path, case=case)
-    outcome = _run(clean_pg, _prepare(fake, path), rows=_rows(provisional=True))
+
+    def keep_loads(data):
+        for city in data["cities"].values():
+            city["scaling"] = {"load_mw": 800.0, "gen_mw": 2520.0, "basis": "average"}
+
+    mapping_path = _mapping_copy(tmp_path, edit=keep_loads)
+    outcome = _run(clean_pg, _prepare(fake, path, mapping_path), rows=_rows(provisional=True))
     assert (outcome.outcome, outcome.status, outcome.exit_code) == ("fallback", "written", 0)
     assert _counts(clean_pg, outcome.run_id) == [1, 4, 4, 0]
     stored = _run_row(clean_pg, outcome.run_id)
-    assert stored["n_contingencies"] == 16
+    assert stored["n_contingencies"] == 40
     assert stored["n_contingencies_with_results"] == 0
     dispatch = dict((row["city"], row) for row in
                     _table_rows(clean_pg, "psse_dispatched_capacity", outcome.run_id))

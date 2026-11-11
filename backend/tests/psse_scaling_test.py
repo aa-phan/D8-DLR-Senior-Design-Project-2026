@@ -17,6 +17,7 @@ import collections
 import copy
 import datetime
 import itertools
+import json
 import os
 import sys
 import tempfile
@@ -368,6 +369,64 @@ def test_screen_prefixes_the_id_but_skips_the_outaged_line_by_its_raw_key(tmp_pa
     for contingency_id, skip_key in seen:
         assert contingency_id == "AUSTIN:" + skip_key
     assert all(row["contingency_id"].startswith("AUSTIN:") for row in screened.rows)
+
+
+def _shared_line_mapping(tmp_path):
+    """A copy of the example in which CORPUS_CHRISTI maps AUSTIN's line and sink bus."""
+    with open(EXAMPLE, encoding="utf-8") as handle:
+        raw = json.load(handle)
+    raw["cities"]["CORPUS_CHRISTI"]["branches"] = list(raw["cities"]["AUSTIN"]["branches"])
+    raw["cities"]["CORPUS_CHRISTI"]["sink_buses"] = list(raw["cities"]["AUSTIN"]["sink_buses"])
+    path = str(tmp_path / "shared_line_mapping.json")
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(raw, handle)
+    return path
+
+
+def _context():
+    return contract.RunContext(
+        run_id="psse-20261028T122000Z-00000001", started_at=NOW, case_id="PLACEHOLDER_CASE.sav",
+        case_sha256="ab" * 32, mapping_sha256="cd" * 32, job_version="abc1234")
+
+
+def test_rows_same_line_in_two_cities_unique_and_attributable(tmp_path):
+    fake, path = _registered(tmp_path)
+    selection = _selection()
+    prepared = study.prepare_run(fake, path, _shared_line_mapping(tmp_path), allow_placeholder=True)
+    results = prepared.study(selection, None)
+    run_record.validate_results(results, selection)
+
+    ids = [row["contingency_id"] for row in results.contingencies]
+    by_city = dict((city, set(item.partition(":")[2] for item in ids if item.startswith(city + ":")))
+                   for city in ("AUSTIN", "CORPUS_CHRISTI"))
+    shared = by_city["AUSTIN"] & by_city["CORPUS_CHRISTI"]
+    assert shared
+    for key in shared:
+        assert "AUSTIN:" + key in ids
+        assert "CORPUS_CHRISTI:" + key in ids
+    keys = [(row["contingency_id"], row["violation_kind"], row["element_id"])
+            for row in results.contingencies]
+    assert len(set(keys)) == len(keys)
+
+    record = run_record.build_run_record(
+        _context(), selection, NOW + datetime.timedelta(minutes=1), results=results)
+    assert record["n_contingencies_with_results"] == len(set(ids))
+    assert record["n_contingencies"] == results.n_contingencies
+
+
+def test_rows_and_record_hold_no_target_figure(tmp_path):
+    fake, path = _registered(tmp_path)
+    selection = _selection()
+    results = study.prepare_run(fake, path, EXAMPLE, allow_placeholder=True).study(selection, None)
+    record = run_record.build_run_record(
+        _context(), selection, NOW + datetime.timedelta(minutes=1), results=results)
+    rows = run_record.result_rows(record, results)
+    assert rows
+    text = json.dumps([rows, record], sort_keys=True, default=str)
+    for figure in _figure_texts():
+        assert figure not in text, figure
+    for row in results.dispatch + results.margins:
+        assert sorted(row["details"]["scaling"]) == ["basis", "method"]
 
 
 def test_apply_ratings_one_city_view(tmp_path):
