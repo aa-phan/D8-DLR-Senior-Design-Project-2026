@@ -33,7 +33,8 @@ if _BACKEND not in sys.path:
 import psse_fake_psspy as fake_module  # noqa: E402
 import psse_fakes  # noqa: E402
 from psse_job import (  # noqa: E402
-    constants, contingency, contract, mapping, ratings, run_record, study, violations,
+    constants, contingency, contract, dispatch, mapping, margin, ratings, run_record, study,
+    violations,
 )
 
 EXAMPLE = os.path.join(_ROOT, "docs", "data-science", "schema", "psse_mapping_example.json")
@@ -450,3 +451,140 @@ def test_apply_ratings_one_city_view(tmp_path):
     assert changes
     assert all((call[2]["ibus"], call[2]["jbus"], call[2]["ckt"]) == MAPPED_LINE["MIDLAND"]
                for call in changes)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Plan 04-04 (CD-8): every city is attempted, one failure names each city's outcome
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def _clock_state():
+    """(clock, state): an injected clock reading state["now"] seconds, starting at 0."""
+    state = {"now": 0.0}
+    return (lambda: state["now"]), state
+
+
+def test_failure_several_cities_first_stage_wins(tmp_path, monkeypatch):
+    def solver(case):
+        if sum(case.gens.values()) == pytest.approx(TARGETS["MIDLAND"][1], rel=1e-9):
+            return fake_module.SolveOutcome(ierr=3, solved=None, iterations=0, mismatch=0.0)
+        return fake_module.radial_solver(case)
+
+    real = margin.city_margin
+
+    def selective(base, city):
+        if city == "EL_PASO":
+            raise contract.StudyFailed("voltage_margin", "EL_PASO: no bound")
+        return real(base, city)
+
+    monkeypatch.setattr(margin, "city_margin", selective)
+    _, _, failure = _study_failure(tmp_path, "load_flow", solver=solver)
+    assert failure.message.startswith(
+        "2 of 4 cities failed; AUSTIN: ok; CORPUS_CHRISTI: ok; MIDLAND: failed at load_flow: ")
+    assert failure.message.endswith("; EL_PASO: failed at voltage_margin: no bound")
+    assert os.listdir(tempfile.gettempdir()) == []
+    _assert_no_figure(failure.message)
+
+
+def test_failure_long_messages_keep_every_city(tmp_path, monkeypatch):
+    def endless(base, city):
+        raise contract.StudyFailed("voltage_margin", "x" * 2000)
+
+    monkeypatch.setattr(margin, "city_margin", endless)
+    _, _, failure = _study_failure(tmp_path, "voltage_margin")
+    assert len(failure.message) <= constants.ERROR_MAX_CHARS
+    assert failure.message.startswith("4 of 4 cities failed; ")
+    for city in constants.CITIES:
+        assert "%s: failed at voltage_margin: %s" % (city, "x" * 180) in failure.message
+        assert "x" * 181 not in failure.message
+
+    record = run_record.build_run_record(
+        _context(), _selection(), NOW + datetime.timedelta(minutes=1),
+        failure=contract.Failure(failure.stage, failure.message))
+    for city in constants.CITIES:
+        assert city + ": failed at voltage_margin" in record["error"]
+    again = run_record.as_failed(record, failure.stage, failure.message)
+    assert len(again["error"]) <= constants.ERROR_MAX_CHARS
+    for city in constants.CITIES:
+        assert city + ": failed at voltage_margin" in again["error"]
+    assert os.listdir(tempfile.gettempdir()) == []
+
+
+def test_budget_spent_between_cities_marks_the_rest_not_attempted(tmp_path, monkeypatch):
+    clock, state = _clock_state()
+    real = dispatch.build_dispatch_row
+
+    def jumping(*args, **kwargs):
+        row = real(*args, **kwargs)
+        state["now"] = 10.0 ** 6
+        return row
+
+    monkeypatch.setattr(dispatch, "build_dispatch_row", jumping)
+    fake, path = _registered(tmp_path)
+    with pytest.raises(contract.StudyFailed) as caught:
+        study.make_study(fake, path, _mapping(), clock=clock)(_selection(), None)
+    assert caught.value.stage == "load_case"
+    budget = "run-time budget of 1500 s exceeded"
+    assert caught.value.message == (
+        "3 of 4 cities failed; AUSTIN: ok; CORPUS_CHRISTI: not attempted: %s; "
+        "MIDLAND: not attempted: %s; EL_PASO: not attempted: %s" % (budget, budget, budget))
+    assert len(_case_loads(fake, path)) == 2
+    assert len(_city_blocks(fake, path)) == 1
+    assert os.listdir(tempfile.gettempdir()) == []
+
+
+def test_budget_spent_inside_a_city(tmp_path, monkeypatch):
+    clock, state = _clock_state()
+    real = contingency.screen
+
+    def jumping(base, id_prefix=""):
+        state["now"] = 10.0 ** 6
+        return real(base, id_prefix=id_prefix)
+
+    monkeypatch.setattr(contingency, "screen", jumping)
+    fake, path = _registered(tmp_path)
+    with pytest.raises(contract.StudyFailed) as caught:
+        study.make_study(fake, path, _mapping(), clock=clock)(_selection(), None)
+    assert caught.value.stage == "contingency"
+    budget = "run-time budget of 1500 s exceeded"
+    assert caught.value.message == (
+        "4 of 4 cities failed; AUSTIN: failed at contingency: %s; "
+        "CORPUS_CHRISTI: not attempted: %s; MIDLAND: not attempted: %s; "
+        "EL_PASO: not attempted: %s" % (budget, budget, budget, budget))
+    assert len(_city_blocks(fake, path)) == 1
+    assert os.listdir(tempfile.gettempdir()) == []
+
+
+def test_index_failures_stay_immediate(tmp_path):
+    missing = study.BranchRef(90001, 90099, "1")
+    fake, path, failure = _study_failure(
+        tmp_path, "mapping", mapping_=_mapping(cities={"AUSTIN": {"branches": (missing,)}}))
+    assert "of 4 cities" not in failure.message
+    assert "90001-90099-1" in failure.message
+    assert len(_case_loads(fake, path)) == 1
+    assert not [call for call in fake.fake_calls if call[0] == "scal_2"]
+    assert os.listdir(tempfile.gettempdir()) == []
+
+    fake = fake_module.FakePsspy()
+    absent = str(tmp_path / "no_such_case.sav")
+    with pytest.raises(contract.StudyFailed) as caught:
+        study.make_study(fake, absent, _mapping())(_selection(), None)
+    assert caught.value.stage == "load_case"
+    assert "of 4 cities" not in caught.value.message
+    assert not [call for call in fake.fake_calls if call[0] == "scal_2"]
+    assert os.listdir(tempfile.gettempdir()) == []
+
+
+def test_other_exceptions_surface_as_themselves(tmp_path, monkeypatch):
+    real = contingency.screen
+
+    def broken(base, id_prefix=""):
+        if "MIDLAND" in base.cities:
+            raise KeyError("a bug, not a study failure")
+        return real(base, id_prefix=id_prefix)
+
+    monkeypatch.setattr(contingency, "screen", broken)
+    fake, path = _registered(tmp_path)
+    with pytest.raises(KeyError):
+        study.make_study(fake, path, _mapping())(_selection(), None)
+    assert os.listdir(tempfile.gettempdir()) == []
