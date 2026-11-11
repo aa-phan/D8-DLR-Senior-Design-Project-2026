@@ -76,12 +76,12 @@ requirements state what must be true, not how; `psspy` API choices are theirs.
 
 ### Per-city scaling (Phase 4)
 
-- [ ] **SCL-01**: The mapping (schema version 2) carries a per-city scaling block: target net load (MW), target generation (MW) and a basis label (average or peak). A missing or invalid block is refused before any PSS/E call.
-- [ ] **SCL-02**: For each city the job loads a fresh copy of the base case, scales the whole case to that city's targets with its own scaling call, and reads the totals back before the solve. It never runs script files named in a configuration.
-- [ ] **SCL-03**: Each city's study (load flow, N-1 screen, voltage margin, dispatched capacity) runs on that city's own copy, so no city's scaling or ratings affect another city's solve.
-- [ ] **SCL-04**: If any city's scaled case fails, the job attempts all four cities and records one failed run naming each city's outcome; no result rows are written for any city (WB-02 stays all-or-nothing).
-- [ ] **SCL-05**: Result rows stay unique and attributable per city with no schema change (contingency ids carry the city), and no city load figure is stored in the database or appears in a log line, error text or dry-run output.
-- [ ] **SCL-06**: The scale step, a probe row for it and a four-city dry run are proven on the laptop's 39-bus case.
+- [x] **SCL-01**: The mapping (schema version 2) carries a per-city scaling block: target net load (MW), target generation (MW) and a basis label (average or peak). A missing or invalid block is refused before any PSS/E call.
+- [x] **SCL-02**: For each city the job loads a fresh copy of the base case, scales the whole case to that city's targets with its own scaling call, and reads the totals back before the solve. It never runs script files named in a configuration.
+- [x] **SCL-03**: Each city's study (load flow, N-1 screen, voltage margin, dispatched capacity) runs on that city's own copy, so no city's scaling or ratings affect another city's solve.
+- [x] **SCL-04**: If any city's scaled case fails, the job attempts all four cities and records one failed run naming each city's outcome; no result rows are written for any city (WB-02 stays all-or-nothing).
+- [x] **SCL-05**: Result rows stay unique and attributable per city with no schema change (contingency ids carry the city), and no city load figure is stored in the database or appears in a log line, error text or dry-run output.
+- [x] **SCL-06**: The scale step, a probe row for it and a four-city dry run are proven on the laptop's 39-bus case.
 
 ## Future Requirements
 
@@ -118,12 +118,12 @@ requirements state what must be true, not how; `psspy` API choices are theirs.
 | SCH-01 | Phase 3 | Pending |
 | SCH-02 | Phase 3 | Pending |
 | DOC-01 | Phase 3 | Pending |
-| SCL-01 | Phase 4 | Pending |
-| SCL-02 | Phase 4 | Pending |
-| SCL-03 | Phase 4 | Pending |
-| SCL-04 | Phase 4 | Pending |
-| SCL-05 | Phase 4 | Pending |
-| SCL-06 | Phase 4 | Pending |
+| SCL-01 | Phase 4 | Complete |
+| SCL-02 | Phase 4 | Complete |
+| SCL-03 | Phase 4 | Complete |
+| SCL-04 | Phase 4 | Complete |
+| SCL-05 | Phase 4 | Complete |
+| SCL-06 | Phase 4 | Complete |
 
 **Coverage:**
 - v1 requirements: 22 total (16 original, 6 added for Phase 4 on 2026-11-09)
