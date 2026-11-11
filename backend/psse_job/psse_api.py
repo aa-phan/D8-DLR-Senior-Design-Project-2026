@@ -12,8 +12,8 @@ PSS/E API manual and the evidence for that signature. A call outside the table, 
 keyword the table does not list, is refused before it reaches psspy. The Phase 3 probe
 compares this table with the real psspy on the laptop; branch_chng_3 is the one row whose
 signature is an assumption (research A1) and is marked UNVERIFIED. The whole-case form of
-scal_2 (read_totals, scale_case) is the second unverified item: its argument layout is the
-one table SCALE_LAYOUT, UNVERIFIED until the laptop check of Phase 4 plan 04-06.
+scal_2 (read_totals, scale_case) is the second such item: its argument layout is the one
+table SCALE_LAYOUT, shown working on the laptop on 2026-11-11 (Phase 4 plan 04-06, HIGH).
 
 A load flow counts as converged only when fnsl returned ierr 0 and solved() then returned 0
 (classify_solve). The adapter never writes a rating that is not a finite number above 0 and
@@ -100,7 +100,7 @@ ScaleLayout = collections.namedtuple(
      "scalval_gen", "scalval_slots", "totals_load", "totals_gen", "evidence", "confidence"],
 )
 # The positions were read from PSS/E 36.4's own scal_2 documentation on 2026-11-10 and match.
-# The same day's laptop probe found a rule the documentation does not state: a totals read
+# The laptop probe of 2026-11-11 found a rule the documentation does not state: a totals read
 # (apiopt 1) only initialises scaling and stays open, across case loads, until an apiopt 2 call
 # closes it, and a second apiopt 1 while one is open fails with ierr 5. So every totals read is
 # followed at once by an apiopt 2 close with no-input arguments (apiopt_close). Inferred from
@@ -554,7 +554,7 @@ class PsseApi(object):
         """The whole case's total load and total generation in MW, as CaseTotals.
 
         One scal_2 call over all buses that only reads the totals array (SCALE_LAYOUT; the
-        layout is UNVERIFIED until the laptop check, plan 04-06, runbook step 4).
+        layout was shown working on the laptop on 2026-11-11, plan 04-06, runbook step 4).
         """
         layout = SCALE_LAYOUT
         result = self._call(
@@ -607,7 +607,7 @@ class PsseApi(object):
         quantity stays at the no-input sentinel and each load keeps its P/Q ratio, so the
         city keeps the base case's load power factor (CD-9). The job applies targets only
         through this call and never runs a script or response file (CD-2). The layout is
-        UNVERIFIED until the laptop check (plan 04-06, runbook step 4). Both targets must be
+        shown working on the laptop on 2026-11-11 (plan 04-06, runbook step 4). Both targets must be
         finite numbers above 0; anything else is a ValueError before psspy is called.
         """
         load = self._positive_target(load_mw, "load_mw")

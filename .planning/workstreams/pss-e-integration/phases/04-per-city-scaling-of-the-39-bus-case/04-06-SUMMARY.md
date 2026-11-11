@@ -50,14 +50,14 @@ The scaling layout was read from the installed documentation and matched. The fi
 ## Deviations
 
 - The plan's stop rule for a failed `scale_to_target` was to open a gap-closure plan. The cause was found the same night and the fix was small, so it was made directly (commit 5a30c63) with a mutation check (18 tests fail with the close removed) and the probe re-run on the laptop as the proof.
-- The `--allow-placeholder` flag is needed on the probe once a placeholder mapping is in the configuration; the runbook's step 4 command omits it. Not yet corrected in the runbook.
+- The `--allow-placeholder` flag is needed on the probe once a placeholder mapping is in the configuration; the runbook's step 4 command omits it, so commit 128cf3d added a prose instruction to step 4's "Needs" paragraph (the command block itself is unchanged).
 
 ## Known issues and next steps
 
 - U37 is documented, not measured.
 - Timing and behaviour on Power Systems' real case are unknown; the 2.0 s is the 39-bus example's.
 - Open for Power Systems: the same lines in every city's copy, El Paso's basis, and whether the base power factor is intended.
-- Runbook step 4 should mention `--allow-placeholder` for a placeholder mapping.
+- Done in 128cf3d: runbook step 4 now mentions `--allow-placeholder` for a placeholder mapping.
 
 ## Self-Check: PASSED
 

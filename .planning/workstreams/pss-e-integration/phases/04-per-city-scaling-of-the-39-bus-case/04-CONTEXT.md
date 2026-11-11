@@ -31,3 +31,8 @@ Real Power Systems mapping and case review (Phase 3, step 7); the real proof wri
 - **El Paso uses its average load** from the EIA-861 sales table, the same basis as the other three cities. The figure lives in the private mapping.
 - **Still to confirm with Power Systems:** that the same mapped lines can be used in every city's copy.
 - **Laptop checks the plan must include:** print the signature of the scaling call (and of `scal_4` if it exists) on PSS/E 36.4, a probe row that scales and reads the totals back and reloads, and a four-city dry run with timing. The researcher found only community forum documentation for the whole-case scale-to-target layout, so treat the argument layout as unverified until the laptop check.
+
+## Decisions made after execution (2026-11-11, the user)
+
+- **The history exposure is accepted, not rewritten.** The base case totals of PSS/E's public 39-bus example case appear in the pushed commits 6e59341 and 1f60eb5 (04-CONTEXT.md and 04-RESEARCH.md). They were removed from the tree in 128cf3d. History is left as pushed: the totals belong to a public example case, not to Power Systems, and no city target or El Paso figure was ever committed. The rule stays: no city figure and no case total in the tree from now on.
+- **Per-city scaled copies replace the original mapping idea.** Each city is studied on its own scaled copy of the 39-bus case; the mapping carries the per-city targets and the lines to rate (schema version 2). Whether Power Systems must still supply the branch mapping for the real run is for the user to confirm.

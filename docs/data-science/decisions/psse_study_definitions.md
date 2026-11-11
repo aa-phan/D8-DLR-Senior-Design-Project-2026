@@ -232,7 +232,7 @@ The tests run the whole study against a fake `psspy`. The fake copies the call s
 **What the fake does not prove:**
 
 - that real PSS/E accepts these calls. `branch_chng_3` (its parameter list) and the combined `scal_2` form are UNVERIFIED in the `SURFACE` table; the other rows come from a manual, a reference and examples, not from this laptop;
-- that real PSS/E scales the whole case as the `SCALE_LAYOUT` table says. The fake is built from the same table, so it cannot disagree with it. The layout is UNVERIFIED until runbook step 4 shows the probe's `scale_to_target` row passing on the laptop, and the open details are listed in "Per-city scaling";
+- that real PSS/E scales the whole case as the `SCALE_LAYOUT` table says. The fake is built from the same table, so it cannot disagree with it. The layout was shown working on the laptop on 2026-11-11 (runbook step 4: the probe's `scale_to_target` row passed once the close was added), and the remaining open details are listed in "Per-city scaling";
 - that units, margins and N-1 scope make engineering sense on Power Systems' network;
 - run time on a real case.
 
