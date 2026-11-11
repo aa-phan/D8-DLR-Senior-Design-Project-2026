@@ -11,6 +11,12 @@ This directory is the home for the Software sub-team's PRD and technical specs. 
 
 Read in that order: PRD → ROADMAP → specs.
 
+**Start here for the operator dashboard:** the Software team's workstream at [`.planning/workstreams/software-dashboard/`](../../.planning/workstreams/software-dashboard/) holds the current dashboard requirements, written against the live rating database:
+
+- [`DASHBOARD-REQUIREMENTS.md`](../../.planning/workstreams/software-dashboard/docs/DASHBOARD-REQUIREMENTS.md): what the dashboard must show an operator at a glance, which columns serve it, the UI design rules, the design tools to use, and open questions. Its ch. 3.2 lists which parts of `PRD.md` it replaces.
+- [`COLUMN-GUIDE.md`](../../.planning/workstreams/software-dashboard/docs/COLUMN-GUIDE.md): every column the dashboard can read, in plain language, with where the dashboard uses it.
+- [`REQUIREMENTS.md`](../../.planning/workstreams/software-dashboard/REQUIREMENTS.md): the same requirements as a GSD checklist.
+
 **Scope note (2026-10-12):** the Data Science side now rates four independent city points (`AUSTIN`, `CORPUS_CHRISTI`, `MIDLAND`, `EL_PASO`) and has retired transmission corridors, corridor minima and bottleneck points. These docs describe a per-city dashboard and API. The contract is `docs/data-science/decisions/point_scope.md`; read it before the PRD. Result names and shapes in these docs were read from the migrated backend on 2026-10-12; DS has not formally frozen them, so confirm before building against them. See `PRD.md` §1.1.
 
 ## Index
@@ -42,9 +48,9 @@ Read in that order: PRD → ROADMAP → specs.
 
 ## Where to start
 
-1. Resolve the two gating decisions first: confirm what remains of OD-1 (a location is now a city; the station-to-city mapping and any per-station view are still open) and decide the front-end stack (OD-11).
-2. Send the data contract requests in `PRD.md` §8 to the Data Science sub-team — F5 and F6 depend on columns the current export does not carry.
-3. Start F1 and F2 in parallel against `data/fixtures/sample_pipeline_output.csv` (the only guaranteed dev data; `outputs/` is gitignored).
+1. Read [`DASHBOARD-REQUIREMENTS.md`](../../.planning/workstreams/software-dashboard/docs/DASHBOARD-REQUIREMENTS.md) and [`COLUMN-GUIDE.md`](../../.planning/workstreams/software-dashboard/docs/COLUMN-GUIDE.md). The live database now carries the city, the fallback status, the forecast and the normal rating, so the data contract requests in `PRD.md` §8 are no longer needed.
+2. Get the connection values from the Data Science owner ([`../integration/software-team-handoff.md`](../integration/software-team-handoff.md)) and run one of the read examples in [`../integration/examples/`](../integration/examples/).
+3. Decide the front-end stack (OD-11), then plan the first phase with GSD in the `software-dashboard` workstream.
 
 ## Upstream sources
 

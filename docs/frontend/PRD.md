@@ -1,6 +1,8 @@
 <!-- generated-by: gsd-doc-writer -->
 # Software Subsystem (Dashboard + API) — Product Requirements
 
+> NOTE (2026-11-11): the data-source sections of this document (§1.1, §3 producers, §8 data contract requests, §9 observed CSV output) describe the CSV export that preceded the live rating database. The current dashboard requirements, written against the live database, are in [`DASHBOARD-REQUIREMENTS.md`](../../.planning/workstreams/software-dashboard/docs/DASHBOARD-REQUIREMENTS.md); its ch. 3.2 lists which parts of this document it replaces and which open decisions it settles. The principles here (for example SW-NF1 and SW-NF4) still apply.
+
 **Status:** Internal engineering reference. Not a course deliverable — does not replace or get submitted alongside `Project Definition.md`, `Prior Art Report.md`, or `System Design Report.md`. Written to define what the Software sub-team's subsystem (`frontend/` React dashboard and `api/` Flask backend-for-frontend) must do, grounded in those course documents and in what the Data Science (DS) subsystem actually produces today. **Nothing described here has been built** — `frontend/` and `api/` each contain only a placeholder README.
 
 **Last reviewed against repo state:** 2026-10-12 (per-city scope change; the backend migration is complete in the working tree, see §1.1)
