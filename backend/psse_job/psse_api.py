@@ -12,8 +12,8 @@ PSS/E API manual and the evidence for that signature. A call outside the table, 
 keyword the table does not list, is refused before it reaches psspy. The Phase 3 probe
 compares this table with the real psspy on the laptop; branch_chng_3 is the one row whose
 signature is an assumption (research A1) and is marked UNVERIFIED. The whole-case form of
-scal_2 (read_totals, scale_case) is the second such item: its argument layout is the one
-table SCALE_LAYOUT, shown working on the laptop on 2026-11-11 (Phase 4 plan 04-06, HIGH).
+scal_2 (read_totals, scale_case) takes its argument layout from the one table SCALE_LAYOUT,
+which was shown working on the laptop on 2026-11-11 (Phase 4 plan 04-06, HIGH).
 
 A load flow counts as converged only when fnsl returned ierr 0 and solved() then returned 0
 (classify_solve). The adapter never writes a rating that is not a finite number above 0 and
