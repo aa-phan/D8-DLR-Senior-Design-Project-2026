@@ -108,7 +108,7 @@ Phases execute in numeric order: 1 → 2 → 3
 **Goal:** The job runs the same study once per city on its own fresh copy of the same 39-bus network, scaled to that city's load and generation targets, so the four cities never share a solve. The targets live in the private mapping (never in git); the job applies them with its own scaling call and never executes the recorded `.idv` scripts. See `phases/04-per-city-scaling-of-the-39-bus-case/04-CONTEXT.md`.
 **Requirements**: SCL-01, SCL-02, SCL-03, SCL-04, SCL-05, SCL-06
 **Depends on:** Phase 3
-**Plans:** 6/6 plans executed (5 waves, run one after another in one working tree: 01 and 02 in wave 1, then 03, then 04, then 05, then 06; 01 to 05 are built and tested on the Mac, 06 is a human checklist at the laptop)
+**Plans:** 6/6 plans complete (5 waves, run one after another in one working tree: 01 and 02 in wave 1, then 03, then 04, then 05, then 06; 01 to 05 are built and tested on the Mac, 06 is a human checklist at the laptop)
 
 Plans:
 - [x] 04-01-PLAN.md — Mapping schema version 2: per-city scaling block (target load, target generation, basis), refused before any PSS/E call; the same line may serve several cities
