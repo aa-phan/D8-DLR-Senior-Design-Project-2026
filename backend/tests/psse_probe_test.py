@@ -11,6 +11,7 @@ logic only; whether the real psspy agrees with the SURFACE table is what Phase 3
 licensed laptop shows.
 """
 
+import copy
 import os
 import re
 import sys
@@ -34,7 +35,13 @@ READ_ONLY_CHECKS = (
     "version", "load_case", "branch_table", "bus_table", "column_alignment",
     "circuit_id_padding", "option_strings", "load_flow", "mapping",
 )
-WRITE_CHECKS = ("rating_write", "scale_load")
+WRITE_CHECKS = ("rating_write", "scale_load", "scale_to_target")
+# The placeholder case's own totals (four sinks and four sources), and the fraction the probe uses.
+PLACEHOLDER_LOAD_MW = 2480.0
+PLACEHOLDER_GEN_MW = 2520.0
+PROBE_FRACTION = 0.9
+# No figure of the placeholder case or of its scaled form may reach a report.
+FIGURES = ("2480", "2520", "2232", "2268")
 
 
 @pytest.fixture(autouse=True)
@@ -268,6 +275,121 @@ def test_report_write_check_off_by_default(tmp_path):
     assert _calls(fake, "branch_chng_3", "bsys", "scal_2", "save") == []
     assert "rating_write" not in _by_check(rows)
     assert "scale_load" not in _by_check(rows)
+    assert "scale_to_target" not in _by_check(rows)
+    assert _whole_case_scale_calls(fake) == []
     probe.run_probe(fake, path, mapping=_mapping(), write_check=True)
+    # one increment call (scale_load), then the four whole-case calls of scale_to_target
     assert [call[0] for call in _calls(fake, "branch_chng_3", "bsys", "scal_2")] == [
-        "branch_chng_3", "bsys", "scal_2"]
+        "branch_chng_3", "bsys", "scal_2", "scal_2", "scal_2", "scal_2", "scal_2"]
+    assert len(_whole_case_scale_calls(fake)) == 1
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# scale_to_target: the whole case scaled to 90 percent of its own totals, read back, restored
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def _whole_case_scale_calls(fake):
+    """The scal_2 calls that set new totals (all=1, apiopt=0); the totals reads are apiopt 1."""
+    return [call for call in fake.fake_calls
+            if call[0] == "scal_2" and call[2].get("all") == 1 and call[2].get("apiopt") == 0]
+
+
+class _ScaleIgnoredFake(fake_module.FakePsspy):
+    """A psspy whose whole-case scaling call reports success and changes nothing."""
+
+    def scal_2(self, sid, all, apiopt, status, scalval):  # noqa: A002 - the manual's name
+        if all == 1 and apiopt == 0:
+            before = copy.deepcopy(self.fake_state)
+            result = super().scal_2(sid=sid, all=all, apiopt=apiopt, status=status, scalval=scalval)
+            self.fake_state = before
+            return result
+        return super().scal_2(sid=sid, all=all, apiopt=apiopt, status=status, scalval=scalval)
+
+
+class _ReloadKeepsStateFake(fake_module.FakePsspy):
+    """A psspy whose case() keeps the in-memory state once a case is loaded (no undo by reload)."""
+
+    def case(self, sfile):
+        if self.fake_state is not None:
+            return 0
+        return super().case(sfile)
+
+
+def test_scale_to_target_scales_reads_back_and_restores(tmp_path):
+    fake, path = _registered(tmp_path)
+    before = run_record.file_sha256(path)
+    rows = _by_check(probe.run_probe(fake, path, mapping=_mapping(), write_check=True))
+    row = rows["scale_to_target"]
+    assert row.status == "PASS"
+    assert row.detail == (
+        "the whole case was scaled to 90 percent of its own load and generation, read back at "
+        "the targets and restored by reloading the case")
+    # it follows scale_load, which follows rating_write
+    names = [name for name in rows if not name.startswith("signature:")]
+    assert names.index("scale_to_target") == names.index("scale_load") + 1
+    # the log of the row: reload (end of scale_load), totals, scale, totals, reload, totals
+    increment = [index for index, call in enumerate(fake.fake_calls)
+                 if call[0] == "scal_2" and call[2].get("all") == 0][-1]
+    tail = fake.fake_calls[increment + 1:]
+    assert [call[0] for call in tail] == ["case", "scal_2", "scal_2", "scal_2", "case", "scal_2"]
+    assert [call[2].get("apiopt") for call in tail if call[0] == "scal_2"] == [1, 0, 1, 1]
+    assert all(call[2].get("all") == 1 for call in tail if call[0] == "scal_2")
+    scale = _whole_case_scale_calls(fake)[0][2]["scalval"]
+    assert scale[0] == pytest.approx(PLACEHOLDER_LOAD_MW * PROBE_FRACTION)
+    assert scale[1] == pytest.approx(PLACEHOLDER_GEN_MW * PROBE_FRACTION)
+    reload_call = tail[4]
+    assert path in reload_call[1] or path in reload_call[2].values()
+    # never saved, the case file untouched, the loaded case back to its own totals
+    assert _calls(fake, "save") == [] and fake.fake_saved_paths == []
+    assert run_record.file_sha256(path) == before
+    assert sum(load[0] for load in fake.fake_state.loads.values()) == PLACEHOLDER_LOAD_MW
+    assert sum(fake.fake_state.gens.values()) == PLACEHOLDER_GEN_MW
+
+
+def test_scale_to_target_detects_an_ignored_scaling(tmp_path):
+    fake, path = _registered(tmp_path, fake=_ScaleIgnoredFake())
+    rows = _by_check(probe.run_probe(fake, path, mapping=_mapping(), write_check=True))
+    row = rows["scale_to_target"]
+    assert row.status == "FAIL"
+    assert "differs from the target" in row.detail
+    assert rows["scale_load"].status == "PASS"
+    assert probe.probe_ok(list(rows.values())) is False
+    assert _calls(fake, "save") == []
+
+
+def test_scale_to_target_detects_a_reload_that_keeps_the_scaling(tmp_path):
+    fake, path = _registered(tmp_path, fake=_ReloadKeepsStateFake())
+    rows = _by_check(probe.run_probe(fake, path, mapping=_mapping(), write_check=True))
+    row = rows["scale_to_target"]
+    assert row.status == "FAIL"
+    assert row.detail == "reloading the case did not restore the totals"
+    assert _calls(fake, "save") == []
+
+
+def test_scale_to_target_skips_a_case_without_generation(tmp_path):
+    case = fake_module.placeholder_case()
+    case.gens = {}
+    fake, path = _registered(tmp_path, case=case)
+    rows = _by_check(probe.run_probe(fake, path, mapping=_mapping(), write_check=True))
+    row = rows["scale_to_target"]
+    assert row.status == "SKIP"
+    assert row.detail == "the case has no load or no generation to scale"
+    assert _whole_case_scale_calls(fake) == []
+    assert probe.probe_ok(list(rows.values())) is True
+
+
+def test_scale_to_target_prints_no_figure(tmp_path):
+    fake, path = _registered(tmp_path)
+    passing = probe.format_report(probe.run_probe(fake, path, mapping=_mapping(), write_check=True))
+    assert "scale_to_target" in passing
+    for figure in FIGURES:
+        assert figure not in passing
+    # a failing row and the identifier-revealing report hold no figure either
+    ignoring, ignoring_path = _registered(tmp_path, fake=_ScaleIgnoredFake())
+    for show in (False, True):
+        failing = probe.format_report(probe.run_probe(
+            ignoring, ignoring_path, mapping=_mapping(), write_check=True, show_identifiers=show))
+        assert "FAIL  scale_to_target" in failing
+        for figure in FIGURES:
+            assert figure not in failing

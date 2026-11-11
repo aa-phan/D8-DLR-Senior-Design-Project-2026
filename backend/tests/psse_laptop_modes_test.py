@@ -401,11 +401,14 @@ def test_probe_mode_write_check_and_exit_codes(tmp_path, monkeypatch):
     assert "in memory" in first and "never saved" in first and "copy" in first
     names = [call[0] for call in fake.fake_calls]
     assert "branch_chng_3" in names and "scal_2" in names
-    assert names.count("case") >= 3  # the load and the two reloads that undo the write checks
+    assert names.count("case") >= 4  # the load and the three reloads that undo the write checks
     assert "save" not in names and fake.fake_saved_paths == []
     assert run_record.file_sha256(case_path) == before
     rows = _rows_of(out)
     assert rows["rating_write"][0] == "PASS" and rows["scale_load"][0] == "PASS"
+    assert rows["scale_to_target"][0] == "PASS"
+    assert [call for call in fake.fake_calls
+            if call[0] == "scal_2" and call[2].get("all") == 1 and call[2].get("apiopt") == 0]
 
     # a write that is not stored is a FAIL row and exit 6
     class WriteIgnored(psse_fake_launch.FakeLaunchPsspy):

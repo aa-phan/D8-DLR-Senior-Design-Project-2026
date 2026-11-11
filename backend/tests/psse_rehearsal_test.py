@@ -346,7 +346,10 @@ def test_tracer_rehearsal_runs_the_runbook_commands_against_fakes_and_local_post
                         assert needed in checks, (name, needed)
                     if name == "probe_write_check":
                         assert "rating_write" in checks and "scale_load" in checks
+                        assert "scale_to_target" in checks
                         assert "in memory only" in out[0]
+                    else:
+                        assert "scale_to_target" not in checks
                     text = "\n".join(out)
                     assert FIVE_DIGITS.search(text) is None  # the default report holds no bus number
                     assert "EXAMPLE_COPY" not in text and "private_case_directory" not in text

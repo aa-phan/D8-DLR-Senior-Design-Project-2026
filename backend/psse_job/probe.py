@@ -15,9 +15,12 @@ run_probe returns ProbeRow(check, status, detail) rows, status "PASS", "FAIL" or
     Pitfall 8), circuit_id_padding (Pitfall 7), option_strings (A2), load_flow and, when a
     mapping is given, mapping;
   - with write_check True also rating_write (RATEA moved by one MVA on one circuit, read back,
-    then undone by loading the case from disk again) and scale_load (the sink subsystem and
-    scal_2 called with 1 MW, then the case loaded again). The probe never saves a case, so
-    Power Systems' file is never written; the adapter's CaseProtected guard also applies.
+    then undone by loading the case from disk again), scale_load (the sink subsystem and
+    scal_2 called with 1 MW, then the case loaded again) and scale_to_target (the whole case
+    scaled to 90 percent of its own load and generation with the scal_2 call the job uses per
+    city, read back, then the case loaded again and its totals compared). The probe never saves
+    a case, so Power Systems' file is never written; the adapter's CaseProtected guard also
+    applies.
 
 A probe failure is a FAIL row, never an exception. By default the report carries no bus number,
 circuit id, path or exception text, so it can be pasted into the public repository; a failing
@@ -41,6 +44,7 @@ SKIP = "SKIP"
 _ALIGNED_LINES = 3
 _RATING_TOLERANCE = 1e-6
 _PROBE_SUBSYSTEM = 9
+_PROBE_SCALE_FRACTION = 0.9
 _SIGNATURE_UNREADABLE = (
     "signature not inspectable (assumption A6); the read-only pass exercises the call")
 
@@ -279,6 +283,38 @@ class _Probe(object):
             self.api.load_case(self.case_path)
         return PASS, "the subsystem was defined and 1 MW of load added; the case was reloaded"
 
+    def scale_to_target(self):
+        """Scale the whole case to 90 percent of its own totals, read back, reload, compare.
+
+        This is the call the job makes once per city (psse_api.scale_case), aimed at targets
+        taken from the case itself, so no city's figure is needed. The detail names no total.
+        """
+        before = self.api.read_totals()
+        if not (before.load_mw > 0 and before.gen_mw > 0):
+            return SKIP, "the case has no load or no generation to scale"
+        load_target = before.load_mw * _PROBE_SCALE_FRACTION
+        gen_target = before.gen_mw * _PROBE_SCALE_FRACTION
+        problems = []
+        try:
+            self.api.scale_case(load_target, gen_target)
+            after = self.api.read_totals()
+            for name, read, target in (("load", after.load_mw, load_target),
+                                       ("generation", after.gen_mw, gen_target)):
+                if not abs(read - target) <= study.SCALE_TOLERANCE * target:
+                    problems.append("the %s total read back differs from the target by more "
+                                    "than the tolerance" % name)
+        finally:
+            self.api.load_case(self.case_path)
+        restored = self.api.read_totals()
+        for read, original in ((restored.load_mw, before.load_mw),
+                               (restored.gen_mw, before.gen_mw)):
+            if not abs(read - original) <= _RATING_TOLERANCE * max(1.0, abs(original)):
+                return FAIL, "reloading the case did not restore the totals"
+        if problems:
+            return FAIL, "; ".join(problems)
+        return PASS, ("the whole case was scaled to 90 percent of its own load and generation, "
+                      "read back at the targets and restored by reloading the case")
+
 
 def run_probe(psspy_module, case_path, mapping=None, write_check=False, show_identifiers=False):
     """The signature rows followed by the checks on the case, as a list of ProbeRow.
@@ -302,6 +338,7 @@ def run_probe(psspy_module, case_path, mapping=None, write_check=False, show_ide
     if write_check:
         probe.run("rating_write", probe.rating_write)
         probe.run("scale_load", probe.scale_load)
+        probe.run("scale_to_target", probe.scale_to_target)
     return probe.rows
 
 
