@@ -14,11 +14,13 @@ asserts, no test classes, no network; subprocess only for git).
 """
 
 import copy
+import datetime
 import hashlib
 import json
 import os
 import subprocess
 import sys
+import tempfile
 
 import pytest
 
@@ -28,9 +30,23 @@ _ROOT = os.path.abspath(os.path.join(_BACKEND, ".."))
 if _BACKEND not in sys.path:
     sys.path.insert(0, _BACKEND)
 
-from psse_job import constants, mapping, run_record, settings  # noqa: E402
+import psse_fake_psspy as fake_module  # noqa: E402
+import psse_fakes  # noqa: E402
+from psse_job import (  # noqa: E402
+    constants, mapping, ratings, run_record, settings, study,
+)
 
 EXAMPLE = os.path.join(_ROOT, "docs", "data-science", "schema", "psse_mapping_example.json")
+NOW = datetime.datetime(2026, 10, 28, 12, 20, 0, tzinfo=datetime.timezone.utc)
+
+# The synthetic scaling targets of the committed placeholder (Phase 4 plan 04-01): quarter-MW
+# fractions chosen against the fake network, never a real city figure.
+SYNTHETIC_TARGETS = {
+    "AUSTIN": (2430.5, 2467.25, "average"),
+    "CORPUS_CHRISTI": (2455.75, 2492.5, "average"),
+    "MIDLAND": (2504.25, 2541.75, "average"),
+    "EL_PASO": (2529.5, 2566.25, "average"),
+}
 
 
 def _git(*args):
@@ -41,7 +57,7 @@ def _git(*args):
 
 def test_tracer_example_mapping_loads_with_defaults():
     loaded = mapping.load_mapping(EXAMPLE, allow_placeholder=True)
-    assert loaded.schema_version == 1
+    assert loaded.schema_version == 2
     assert loaded.placeholder is True
     assert list(loaded.cities) == list(constants.CITIES)
     austin = loaded.cities["AUSTIN"]
@@ -80,6 +96,47 @@ def test_private_placeholder_refused_unless_allowed():
         mapping.load_mapping(EXAMPLE)
     assert "placeholder" in str(caught.value)
     assert mapping.load_mapping(EXAMPLE, allow_placeholder=True).placeholder is True
+
+
+def _registered_case(tmp_path):
+    """(fake, case path): the placeholder case registered under a path whose file holds a marker."""
+    fake = fake_module.FakePsspy()
+    path = str(tmp_path / "PLACEHOLDER_CASE.sav")
+    with open(path, "wb") as handle:
+        handle.write(b"MARKER - Power Systems' case")
+    fake.fake_register_case(path, fake_module.placeholder_case())
+    return fake, path
+
+
+def _selection():
+    rows = psse_fakes.latest_rows(NOW, provisional=True)
+    return ratings.select_ratings(psse_fakes.fake_fetch(rows), NOW)
+
+
+def test_tracer_v2_scaling_block_reaches_the_study(tmp_path, monkeypatch):
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(scratch))
+
+    loaded = mapping.load_mapping(EXAMPLE, allow_placeholder=True)
+    assert loaded.schema_version == 2
+    assert loaded.placeholder is True
+    assert mapping.CityMapping._fields[-1] == "scaling"
+    assert mapping.SCALING_BASES == ("average", "peak")
+    for city, (load_mw, gen_mw, basis) in SYNTHETIC_TARGETS.items():
+        assert loaded.cities[city].scaling == mapping.Scaling(load_mw, gen_mw, basis)
+
+    fake, path = _registered_case(tmp_path)
+    prepared = study.prepare_run(fake, path, EXAMPLE, allow_placeholder=True)
+    assert prepared.mapping_sha256 == run_record.file_sha256(EXAMPLE)
+    assert prepared.mapping_error is None
+    assert fake.fake_calls == []
+    selection = _selection()
+    results = prepared.study(selection, None)
+    run_record.validate_results(results, selection)
+    assert len(results.dispatch) == 4
+    assert len(results.margins) == 4
+    assert os.listdir(str(scratch)) == []
 
 
 # ---------------------------------------------------------------------------------------
@@ -156,14 +213,18 @@ _BAD_INPUT = [
     (
         "duplicate_key",
         _edit(lambda data: None).replace(
-            b'"schema_version": 1', b'"schema_version": 1, "schema_version": 1'
+            b'"schema_version": 2', b'"schema_version": 2, "schema_version": 2'
         ),
         "duplicate key",
     ),
     ("unknown_top_key", _edit(lambda data: data.update(extra=1)), "unknown key"),
     ("schema_missing", _edit(lambda data: data.pop("schema_version")), "schema_version: missing"),
-    ("schema_two", _edit(lambda data: data.update(schema_version=2)), "schema_version: must be"),
-    ("schema_text", _edit(lambda data: data.update(schema_version="1")), "schema_version: must be"),
+    (
+        "schema_one",
+        _edit(lambda data: data.update(schema_version=1)),
+        "schema_version: must be the integer 2 (version 2 adds the per-city scaling block)",
+    ),
+    ("schema_text", _edit(lambda data: data.update(schema_version="2")), "schema_version: must be"),
     ("schema_bool", _edit(lambda data: data.update(schema_version=True)), "schema_version: must be"),
     ("placeholder_text", _edit(lambda data: data.update(placeholder="yes")), "placeholder: must be"),
     ("note_too_long", _edit(lambda data: data.update(note="x" * 201)), "note: must be"),
@@ -247,7 +308,7 @@ def test_rule_rejects_bad_input(data, fragment):
 
 def test_rule_reports_every_problem_at_once():
     def three(data):
-        data["schema_version"] = 2
+        data["schema_version"] = 1
         data["note"] = "x" * 201
         _austin(data)["branches"][0]["ckt"] = ""
 
@@ -590,7 +651,7 @@ def test_settings_errors_surface_in_mapping():
 
     def both(data):
         data["study"] = {"max_runtime_seconds": 0}
-        data["schema_version"] = 2
+        data["schema_version"] = 1
 
     with pytest.raises(mapping.MappingError) as caught:
         mapping.parse_mapping(_edit(both), allow_placeholder=True)

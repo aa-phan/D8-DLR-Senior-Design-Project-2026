@@ -10,6 +10,13 @@ numbers and circuit ids are grid identifiers and the repository is public (OD-6,
 the marked placeholder example is committed. The file is parsed with json only, never
 executed.
 
+Schema version 2 (Phase 4, plan 04-01, SCL-01) adds a required `scaling` block to every city:
+the target net load in MW (`load_mw`), the target generation in MW (`gen_mw`) and a `basis`
+label (`average` or `peak`). The block holds two numbers and one label and nothing else: a key
+that names a file or a script is an unknown key like any other, and there is no reactive
+target because each city keeps the base case's load power factor. The parser checks shape and
+range only; the real targets live in the private file on the laptop, never in the repository.
+
 Standard library only, Python 3.7 syntax (D-05).
 """
 
@@ -20,25 +27,28 @@ import math
 
 from psse_job import constants, run_record, settings
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 MAX_MAPPING_BYTES = 65536
 MAX_BRANCHES_PER_CITY = 20
 MAX_SINK_BUSES = 20
 NOTE_MAX_CHARS = 200
 MAX_PROBLEMS = 20
+SCALING_BASES = ("average", "peak")
 
 BranchRef = settings.BranchRef
 
+Scaling = collections.namedtuple("Scaling", ["load_mw", "gen_mw", "basis"])
 CityMapping = collections.namedtuple(
-    "CityMapping", ["city", "branches", "sink_buses", "transfer_max_mw"]
+    "CityMapping", ["city", "branches", "sink_buses", "transfer_max_mw", "scaling"]
 )
 Mapping = collections.namedtuple(
     "Mapping", ["schema_version", "placeholder", "note", "cities", "settings", "sha256"]
 )
 
 _TOP_KEYS = ("schema_version", "placeholder", "note", "cities", "study")
-_CITY_KEYS = ("branches", "sink_buses", "transfer_max_mw")
+_CITY_KEYS = ("branches", "sink_buses", "transfer_max_mw", "scaling")
 _BRANCH_KEYS = ("from_bus", "to_bus", "ckt")
+_SCALING_KEYS = ("load_mw", "gen_mw", "basis")
 
 
 class MappingError(ValueError):
@@ -98,6 +108,47 @@ def _parse_branch(raw, where, problems):
     if len(problems) > count:
         return None
     return BranchRef(from_bus, to_bus, ckt)
+
+
+def _positive_finite(value):
+    """True for a real number (not a bool) that is finite and above 0; never raises."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value) and value > 0
+    except OverflowError:
+        return False
+
+
+def _parse_scaling(raw, where, problems):
+    """
+    The Scaling parsed from a city's `scaling` object, or None with every problem appended.
+    A message names the field, never the submitted value (a target is not for logs).
+    """
+    if not isinstance(raw, dict):
+        problems.append("%s: must be an object" % where)
+        return None
+    count = len(problems)
+    for key in sorted(raw):
+        if key not in _SCALING_KEYS:
+            problems.append("%s.%s: unknown key" % (where, _short(key)[1:-1]))
+    for key in _SCALING_KEYS:
+        if key not in raw:
+            problems.append("%s.%s: missing" % (where, key))
+    targets = {}
+    for key in ("load_mw", "gen_mw"):
+        if key not in raw:
+            continue
+        if _positive_finite(raw[key]):
+            targets[key] = float(raw[key])
+        else:
+            problems.append("%s.%s: must be a finite number greater than 0" % (where, key))
+    basis = raw.get("basis")
+    if "basis" in raw and (not isinstance(basis, str) or basis not in SCALING_BASES):
+        problems.append("%s.basis: must be one of %s" % (where, ", ".join(SCALING_BASES)))
+    if len(problems) > count:
+        return None
+    return Scaling(targets["load_mw"], targets["gen_mw"], basis)
 
 
 def _parse_city(city, raw, seen, problems):
@@ -166,13 +217,21 @@ def _parse_city(city, raw, seen, problems):
         else:
             transfer_max_mw = float(value)
 
+    scaling = None
+    if "scaling" not in raw:
+        problems.append("%s.scaling: missing" % where)
+    else:
+        scaling = _parse_scaling(raw["scaling"], "%s.scaling" % where, problems)
+
+    if scaling is None:
+        return None
     if not branches or len(branches) != len(raw_branches or []):
         return None
     if sink_buses is None and "sink_buses" not in raw:
         sink_buses = (branches[0].to_bus,)
     if sink_buses is None:
         return None
-    return CityMapping(city, tuple(branches), sink_buses, transfer_max_mw)
+    return CityMapping(city, tuple(branches), sink_buses, transfer_max_mw, scaling)
 
 
 def _fail(problems):
@@ -209,7 +268,10 @@ def parse_mapping(data, allow_placeholder=False):
     if "schema_version" not in parsed:
         problems.append("schema_version: missing")
     elif isinstance(version, bool) or version != SCHEMA_VERSION or not isinstance(version, int):
-        problems.append("schema_version: must be the integer %d" % SCHEMA_VERSION)
+        problems.append(
+            "schema_version: must be the integer %d (version 2 adds the per-city scaling block)"
+            % SCHEMA_VERSION
+        )
 
     placeholder = parsed.get("placeholder", False)
     if not isinstance(placeholder, bool):
