@@ -33,7 +33,7 @@ if _BACKEND not in sys.path:
 import psse_fake_psspy as fake_module  # noqa: E402
 import psse_fakes  # noqa: E402
 from psse_job import (  # noqa: E402
-    constants, mapping, ratings, run_record, settings, study,
+    constants, contract, mapping, ratings, run_record, settings, study,
 )
 
 EXAMPLE = os.path.join(_ROOT, "docs", "data-science", "schema", "psse_mapping_example.json")
@@ -286,12 +286,80 @@ _BAD_INPUT = [
     ("transfer_max_zero", _edit(_set(["transfer_max_mw"], 0)), "cities.AUSTIN.transfer_max_mw"),
     ("transfer_max_bool", _edit(_set(["transfer_max_mw"], True)), "cities.AUSTIN.transfer_max_mw"),
     ("not_utf8", b"\xff\xfe{}", "not UTF-8"),
+    # the per-city scaling block (schema version 2, Phase 4 plan 04-01)
+    ("scaling_missing", _edit(_drop(["scaling"])), "cities.AUSTIN.scaling: missing"),
+    ("scaling_list", _edit(_set(["scaling"], [])), "cities.AUSTIN.scaling: must be an object"),
+    (
+        "scaling_load_missing",
+        _edit(_drop(["scaling", "load_mw"])),
+        "cities.AUSTIN.scaling.load_mw: missing",
+    ),
+    (
+        "scaling_basis_missing",
+        _edit(_drop(["scaling", "basis"])),
+        "cities.AUSTIN.scaling.basis: missing",
+    ),
+    (
+        "scaling_key_load_mvar",
+        _edit(_set(["scaling", "load_mvar"], 100)),
+        "cities.AUSTIN.scaling.load_mvar: unknown key",
+    ),
+    (
+        "scaling_key_script",
+        _edit(_set(["scaling", "script"], "x")),
+        "cities.AUSTIN.scaling.script: unknown key",
+    ),
+    (
+        "scaling_load_zero",
+        _edit(_set(["scaling", "load_mw"], 0)),
+        "cities.AUSTIN.scaling.load_mw: must be a finite number greater than 0",
+    ),
+    (
+        "scaling_load_negative",
+        _edit(_set(["scaling", "load_mw"], -1)),
+        "cities.AUSTIN.scaling.load_mw: must be a finite number greater than 0",
+    ),
+    (
+        "scaling_load_text",
+        _edit(_set(["scaling", "load_mw"], "2430.5")),
+        "cities.AUSTIN.scaling.load_mw: must be a finite number greater than 0",
+    ),
+    (
+        "scaling_load_bool",
+        _edit(_set(["scaling", "load_mw"], True)),
+        "cities.AUSTIN.scaling.load_mw: must be a finite number greater than 0",
+    ),
+    (
+        "scaling_gen_zero",
+        _edit(_set(["scaling", "gen_mw"], 0)),
+        "cities.AUSTIN.scaling.gen_mw: must be a finite number greater than 0",
+    ),
+    (
+        "scaling_gen_null",
+        _edit(_set(["scaling", "gen_mw"], None)),
+        "cities.AUSTIN.scaling.gen_mw: must be a finite number greater than 0",
+    ),
+    (
+        "scaling_basis_unknown",
+        _edit(_set(["scaling", "basis"], "mean")),
+        "cities.AUSTIN.scaling.basis: must be one of average, peak",
+    ),
+    (
+        "scaling_basis_empty",
+        _edit(_set(["scaling", "basis"], "")),
+        "cities.AUSTIN.scaling.basis: must be one of average, peak",
+    ),
+    (
+        "scaling_basis_number",
+        _edit(_set(["scaling", "basis"], 3)),
+        "cities.AUSTIN.scaling.basis: must be one of average, peak",
+    ),
 ]
 
 
-def test_rule_case_count_is_42():
-    assert len(_BAD_INPUT) == 42
-    assert len(set(item[0] for item in _BAD_INPUT)) == 42
+def test_rule_case_count_is_57():
+    assert len(_BAD_INPUT) == 57
+    assert len(set(item[0] for item in _BAD_INPUT)) == 57
 
 
 @pytest.mark.parametrize(
@@ -319,6 +387,70 @@ def test_rule_reports_every_problem_at_once():
     assert any("schema_version" in p for p in problems)
     assert any("note" in p for p in problems)
     assert any("cities.AUSTIN.branches[0].ckt" in p for p in problems)
+
+
+def test_scaling_infinity_is_refused():
+    # `_set` would write Infinity, which the parser already refuses as a constant; 1e999 is a
+    # plain number that parses to infinity, so only the finiteness check can catch it.
+    data = _edit(_set(["scaling", "load_mw"], _SENTINEL)).replace(b"1234567", b"1e999")
+    assert b"1e999" in data
+    with pytest.raises(mapping.MappingError) as caught:
+        mapping.parse_mapping(data, allow_placeholder=True)
+    assert caught.value.problems == [
+        "cities.AUSTIN.scaling.load_mw: must be a finite number greater than 0"
+    ]
+
+
+def test_scaling_huge_integer_is_refused_not_a_crash():
+    data = _edit(_set(["scaling", "gen_mw"], _SENTINEL)).replace(b"1234567", b"9" * 400)
+    with pytest.raises(mapping.MappingError) as caught:
+        mapping.parse_mapping(data, allow_placeholder=True)
+    assert caught.value.problems == [
+        "cities.AUSTIN.scaling.gen_mw: must be a finite number greater than 0"
+    ]
+
+
+def test_scaling_problems_reported_together():
+    def two_cities(data):
+        data["cities"]["AUSTIN"]["scaling"]["load_mw"] = 0
+        data["cities"]["MIDLAND"]["scaling"]["basis"] = "mean"
+
+    with pytest.raises(mapping.MappingError) as caught:
+        mapping.parse_mapping(_edit(two_cities), allow_placeholder=True)
+    problems = caught.value.problems
+    assert len(problems) == 2
+    assert problems[0].startswith("cities.AUSTIN.scaling.load_mw: ")
+    assert problems[1].startswith("cities.MIDLAND.scaling.basis: ")
+
+
+def test_scaling_refusal_never_echoes_a_value():
+    def bad_values(data):
+        data["cities"]["AUSTIN"]["scaling"]["load_mw"] = -2430.5
+        data["cities"]["AUSTIN"]["scaling"]["gen_mw"] = "2467.25"
+        data["cities"]["AUSTIN"]["scaling"]["basis"] = "secret-basis"
+
+    with pytest.raises(mapping.MappingError) as caught:
+        mapping.parse_mapping(_edit(bad_values), allow_placeholder=True)
+    text = str(caught.value)
+    assert len(caught.value.problems) == 3
+    assert "2430.5" not in text
+    assert "2467.25" not in text
+    assert "secret-basis" not in text
+
+
+def test_scaling_block_refused_before_any_psspy_call(tmp_path):
+    fake, case_path = _registered_case(tmp_path)
+    copy_path = str(tmp_path / "no_austin_scaling.json")
+    with open(copy_path, "wb") as handle:
+        handle.write(_edit(_drop(["scaling"])))
+    prepared = study.prepare_run(fake, case_path, copy_path, allow_placeholder=True)
+    assert prepared.mapping_sha256 is None
+    assert "cities.AUSTIN.scaling: missing" in prepared.mapping_error
+    with pytest.raises(contract.StudyFailed) as caught:
+        prepared.study(_selection(), None)
+    assert caught.value.stage == "mapping"
+    assert "cities.AUSTIN.scaling: missing" in caught.value.message
+    assert fake.fake_calls == []
 
 
 def test_rule_keeps_at_most_20_problems():
