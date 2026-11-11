@@ -23,7 +23,7 @@ _ROOT = os.path.abspath(os.path.join(_BACKEND, ".."))
 if _BACKEND not in sys.path:
     sys.path.insert(0, _BACKEND)
 
-from psse_job import constants, settings, units  # noqa: E402
+from psse_job import constants, mapping, settings, study, units  # noqa: E402
 
 DOC_PATH = os.path.join(
     _ROOT, "docs", "data-science", "decisions", "psse_study_definitions.md")
@@ -36,6 +36,7 @@ REQUIRED_HEADINGS = (
     "## N-1 screening (STU-02)",
     "## Voltage-stability margin (STU-03)",
     "## Dispatched capacity (STU-04)",
+    "## Per-city scaling (SCL-01 to SCL-06)",
     "## Failure stages",
     "## Configuration",
     "## Private inputs",
@@ -142,3 +143,42 @@ def test_doc_states_honest_scope():
     assert "never a limit" in margin
     n1 = _section(text, "## N-1 screening (STU-02)")
     assert "full N-1" in n1
+
+
+def test_doc_scaling_section_matches_study_constants():
+    """The per-city scaling section quotes the code's own numbers and method text, so none can drift."""
+    text = _read()
+    section = _section(text, "## Per-city scaling (SCL-01 to SCL-06)")
+    low, high = study.SCALE_FACTOR_BOUNDS
+    for expected in (
+            study.SCALING_METHOD,
+            "%g percent" % (study.SCALE_TOLERANCE * 100.0),
+            "%g" % low,
+            "%g" % high,
+            "version %d" % mapping.SCHEMA_VERSION,
+            "`<CITY>:<branch key>`",
+            "SCALE_LAYOUT",
+            "UNVERIFIED",
+            ".idv",
+            "never",
+            "power factor",
+            "of %d cities failed" % len(constants.CITIES)):
+        assert expected in section, expected
+    for basis in mapping.SCALING_BASES:
+        assert "`%s`" % basis in section, basis
+    # the rest of the note follows the section: the failure stages, the assumptions, the fake's limits
+    stages = _section(text, "## Failure stages")
+    assert "`scaling:`" in stages and "scaled copy" in stages
+    assert "once" in stages and "every city" in stages
+    assumptions = _section(text, "## Assumptions")
+    rows = [line for line in assumptions.splitlines() if line.startswith("| A1")
+            or line.startswith("| A2")]
+    ids = [line.split("|")[1].strip() for line in rows]
+    for needed in ("A13", "A19", "A20", "A21", "A22"):
+        assert needed in ids, needed
+    a13 = [line for line in rows if line.startswith("| A13 ")][0]
+    assert "increment form only" in a13
+    scope = _section(text, "## What the fake proves and what it does not")
+    assert "SCALE_LAYOUT" in scope and "UNVERIFIED" in scope and "runbook step 4" in scope
+    representability = _section(text, "## Representability notes (no DDL change)")
+    assert "every city is still attempted" in representability

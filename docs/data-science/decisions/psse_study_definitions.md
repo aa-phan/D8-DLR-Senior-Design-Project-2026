@@ -124,6 +124,38 @@ Per city, per circuit:
 
 A margin that stopped on the rating (`dlr_rating`) cannot hold a voltage limit below the applied rating. The code refuses that combination rather than report an understated figure.
 
+## Per-city scaling (SCL-01 to SCL-06)
+
+The case is one network, not four. Each city's result has to describe that city's own demand and generation, so the job studies the four cities one after another, each on its own scaled copy of the case. This section states how a copy is scaled, guarded, stored and failed, and what is still to confirm. The numbers and the method text below are pinned to `study.py` by the same test file as the rest of the note.
+
+**One fresh copy per city (CD-1).** The case file is loaded once to index it, then loaded afresh for each city. Each copy is scaled to that city's targets, rated on that city's own mapped lines only, solved, saved to a private temporary file named for the city, and then screened, margined and dispatched. Four independent load flows follow, so no city's scaling or rating reaches another city's solve. The case file itself is never saved over, and the temporary files are removed on every path.
+
+**The scaling block (version 2 of the mapping file).** The mapping file is `schema_version` 2, and version 2 is required: a city with no `scaling` block, or a block that is not valid, fails the run at stage `mapping`. Each city's block has `load_mw`, `gen_mw` and `basis`. `basis` is one of `average` or `peak` and is recorded next to every city's result (CD-4). The real values live only in the private mapping file, never in this repository (the committed example holds invented numbers). For El Paso the plan is its average load from the EIA-861 sales table (CD-5); that choice is still to be confirmed by the user and Power Systems.
+
+**The call.** The job applies the targets with its own `scal_2` call: one call over all buses in new-total mode, with the layout kept in one table, `SCALE_LAYOUT` in `psse_api.py`. The job never runs a recorded `.idv` file (the script PSS/E records from its dialogs) or any other script or response file, and no configuration setting can name one (CD-2). A recorded script holds real figures and is executable, so the job never reads one.
+
+**Power factor kept (CD-9).** The call scales the real and reactive load of every load together, so each city keeps the base case's load power factor. There is no separate Mvar target.
+
+**The guards.** Both come before any load flow, because a solve moves the swing machine and any voltage-dependent load.
+
+- A target outside 0.05 to 20 times the case's own total fails the city. A kilowatt typed for a megawatt, or the wrong city's target, is far outside that band.
+- After the call the job reads the load and generation totals back. A total more than 0.1 percent (relative) from its target fails the city.
+- A case with no load or no generation cannot be scaled and fails the city.
+
+The factor bounds and the tolerance are starting values (A21), not decisions of Power Systems.
+
+**What is stored.** Contingency ids have the form `<CITY>:<branch key>`, so the same mapped line in two cities' copies gives two rows that can be told apart, and `psse_run.n_contingencies` is the sum of the four screens. Every dispatch and margin row's `details.scaling` holds the basis and the method text only. The method text is `scal_2 whole case to the city's target load and generation, load power factor kept, one fresh case copy per city`. No target and no realised total is stored anywhere (CD-10); the mapping file's hash, stored with the run, proves which targets were used.
+
+**One failed run, every city named (CD-8).** Every city is attempted. If any city fails, the run is one failed record with no result rows, never a partial result. Its error reads `<n> of 4 cities failed`, then one clause per city in the fixed city order: `ok`, `failed at <stage>: <short text>`, or `not attempted` when the run-time budget, which the four cities share, was used up first. The stage on the run is the first failed city's stage (`load_case` when a city was only not attempted). A scaling that errors, misses its target or is out of bounds is stage `apply_ratings`, with a text starting `scaling:`; a scaled copy that does not converge is stage `load_flow`. The error text names no figure.
+
+**What the fake proves here, and what it does not.** The fake psspy is built from the same `SCALE_LAYOUT` table the adapter sends, so the tests prove the order of calls, the isolation between copies, the guards and the failure handling. The layout was read from the API documentation installed with PSS/E 36.4 on 2026-11-10 and matches on every position it lists (the status positions for new totals and constant P and Q, the load and generation positions of the target array, the totals positions, and the two option values). It stays UNVERIFIED until the laptop shows it working: runbook step 4 runs the probe's `scale_to_target` row (the whole case scaled to 90 percent of its own totals, read back, restored by reloading the case), and runbook step 5 times a four-city dry run. Two details are open until then: whether a totals read on its own leaves the scaling call usable, and whether a read with every argument left at its default is accepted.
+
+Open with Power Systems:
+
+- Is the same set of mapped lines right in every city's copy of the case (CD-6)? The job maps each city's lines in its own copy, so the same line can appear in more than one city.
+- Is El Paso's average load, taken from the EIA-861 sales table, the right basis for its target (CD-5)?
+- Is keeping the base case's load power factor in every city what they intend, or do they want a separate reactive target (CD-9)?
+
 ## Failure stages
 
 Every failure of the study is one failed run record with no result rows. The stages the study uses:
@@ -131,12 +163,14 @@ Every failure of the study is one failed run record with no result rows. The sta
 | Stage | Condition |
 |---|---|
 | `load_case` | The case cannot be loaded, or its branch and bus tables cannot be read. The message holds the case file's base name only. |
-| `mapping` | The mapping file cannot be read or is invalid, or is marked placeholder and refused. A mapped branch is missing, a transformer, out of service, or has ends or a city with different base kV. A sink bus is missing or isolated. An extra outage is not a line. Checked before anything is written to the case. |
-| `apply_ratings` | The rating cannot be converted, a write call fails, or the read-back differs by more than 1e-6 relative |
-| `load_flow` | The base load flow did not converge, or the mismatch is too large, or a bus collapsed, or the solved base cannot be read |
+| `mapping` | The mapping file cannot be read or is invalid, or is marked placeholder and refused. A city has no valid `scaling` block (the file must be version 2). A mapped branch is missing, a transformer, out of service, or has ends or a city with different base kV. A sink bus is missing or isolated. An extra outage is not a line. Checked before anything is written to the case. |
+| `apply_ratings` | The rating cannot be converted, a write call fails, or the read-back differs by more than 1e-6 relative. A city's whole-case scaling errors, misses its target by more than the tolerance or is outside the factor bounds (the message starts `scaling:`). |
+| `load_flow` | The base load flow did not converge, or the mismatch is too large, or a bus collapsed, or the solved base cannot be read. This includes a city's scaled copy that does not converge. |
 | `contingency` | No outage was selected, too many outages or rows, a call failed during an outage, the run-time budget was exhausted in the screen, or the solved base cannot be saved to the temporary file or reloaded |
 | `voltage_margin` | No bound found within the cap plus the extra steps, a flat transfer, no flow at the limit, a call failure (for example `scal_2`), no monitored bus in service, or the run-time budget exhausted in the search |
 | `dispatch` | The dispatch row cannot be built (for example a voltage limit that is not above 0) |
+
+One city's failure fails the run once. Every city is still attempted, and the one failed record names every city's outcome (the stage on the run is the first failed city's); no city's result is stored when any city failed. See "Per-city scaling".
 
 Three more stages belong to Phase 1 and are not raised by the study: `validate_results`, `write` and `internal`. The study saves the solved base to a private temporary file after the base solve and before the screen; a failure of that save is reported at stage `contingency`. The temporary files are removed on every path, and the case file is never saved over.
 
@@ -198,6 +232,7 @@ The tests run the whole study against a fake `psspy`. The fake copies the call s
 **What the fake does not prove:**
 
 - that real PSS/E accepts these calls. `branch_chng_3` (its parameter list) and the combined `scal_2` form are UNVERIFIED in the `SURFACE` table; the other rows come from a manual, a reference and examples, not from this laptop;
+- that real PSS/E scales the whole case as the `SCALE_LAYOUT` table says. The fake is built from the same table, so it cannot disagree with it. The layout is UNVERIFIED until runbook step 4 shows the probe's `scale_to_target` row passing on the laptop, and the open details are listed in "Per-city scaling";
 - that units, margins and N-1 scope make engineering sense on Power Systems' network;
 - run time on a real case.
 
@@ -225,7 +260,7 @@ On the licensed laptop, in this order:
 
 ## Assumptions
 
-These come from the research log (A1 to A17, condensed) and A18. Each is configuration or is checked in Phase 3. None is Power Systems' decision.
+These come from the research log (A1 to A17, condensed), A18 and, from Phase 4, A19 to A22. Each is configuration or is checked in Phase 3. None is Power Systems' decision.
 
 | # | Assumption |
 |---|---|
@@ -241,19 +276,23 @@ These come from the research log (A1 to A17, condensed) and A18. Each is configu
 | A10 | A constant power factor of 0.95 for `dispatched_mw` |
 | A11 | Defaults: `thermal.limit_pct` 100, `transfer.step_mw` 25, `transfer.tolerance_mw` 1, `transfer.max_mw` 1000 as a starting cap, `transfer.extra_steps` 80, `contingency.max` 200, `contingency.hops` 2, `solve.max_mismatch_mva` 1.0, `max_runtime_seconds` 1500 |
 | A12 | `psspy` holds process-global state, so the study runs once per process |
-| A13 | `scal_2` with the combined form adds only to the subsystem's load at constant P and Q and leaves generation unchanged; the flat-transfer guard catches a no-op |
+| A13 | `scal_2` with the combined form adds only to the subsystem's load at constant P and Q and leaves generation unchanged; the flat-transfer guard catches a no-op. This is the increment form only (proven on PSS/E 36.4); the whole-case form is A19 |
 | A14 | Bulk columns from separate calls with identical selectors are aligned; the probe compares them with single-branch reads |
 | A15 | The PV and QV engines need a licensed module and distribution-factor inputs |
 | A16 | PSS/E's sample case is installed on the laptop, for a plumbing smoke run |
 | A17 | A real N-1 over the neighbourhood (tens of outages) fits an hourly budget |
 | A18 | A city's transfer is the summed absolute from-end P of its mapped branches |
+| A19 | The `SCALE_LAYOUT` reading of `scal_2`'s whole-case form is right on PSS/E 36.4: status position 2 set to 1 for new totals and position 4 set to 1 for constant P and Q, target positions 1 and 2 for load and generation in MW, totals positions 2 and 3 for the totals read, and APIOPT 0 to scale and 1 to read the totals only. The installed API documentation, read on 2026-11-10, matches on every position (it marks `scal_2` obsolete, implemented by `scal_4`; the job still calls `scal_2`). Not yet proven: that a totals read with APIOPT 1 on its own leaves scaling usable, and that a read with every argument at its default is accepted (runbook step 4) |
+| A20 | Loading the case file again undoes a whole-case scaling, so every city's copy starts from the file (runbook step 4) |
+| A21 | The relative read-back tolerance (0.1 percent) and the factor bounds (0.05 to 20 times the case's own total) are starting values that catch a unit slip, not decisions of Power Systems |
+| A22 | The same mapped lines can serve in every city's copy of the case (CD-6; to confirm with Power Systems) |
 
 ## Representability notes (no DDL change)
 
 The result tables are pinned and handed to Phase 6. Three things do not fit them exactly. Nothing was changed.
 
 - There is no column for base-case violations. A violation that exists before any outage is written to the N-1 table with `in_base_case` in `details`.
-- There is no "not computed" value for a city's margin or dispatch. One city's failed margin therefore fails the whole run. An additive Phase 6 migration could relax this if the project wants it.
+- There is no "not computed" value for a city's margin or dispatch. One city's failed margin therefore fails the whole run; every city is still attempted and the one failed record names each city's outcome. An additive Phase 6 migration could relax this if the project wants it.
 - `psse_run.rate_set` is one text value. Several rate sets are joined with "+", for example `RATEA+RATEB`.
 
 ## Questions for the user / Power Systems
