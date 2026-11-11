@@ -273,8 +273,9 @@ def test_independent_each_solve_sees_only_its_own_city(tmp_path):
 
 def test_readback_miss_fails_city_at_apply_ratings(tmp_path):
     fake, _, failure = _study_failure(tmp_path, "apply_ratings", fake=_ScaleIgnored())
-    assert failure.message.startswith("scaling: AUSTIN")
-    assert "load" in failure.message
+    assert failure.message.startswith("4 of 4 cities failed; AUSTIN: failed at apply_ratings: scaling:")
+    assert failure.message.count("failed at apply_ratings: scaling:") == 4
+    assert "the load total read back" in failure.message
     assert not [call for call in fake.fake_calls if call[0] == "fnsl"]
     assert os.listdir(tempfile.gettempdir()) == []
     _assert_no_figure(failure.message)
@@ -282,7 +283,8 @@ def test_readback_miss_fails_city_at_apply_ratings(tmp_path):
 
 def test_scale_error_fails_city_at_apply_ratings(tmp_path):
     fake, _, failure = _study_failure(tmp_path, "apply_ratings", fake=_ScaleRefused())
-    assert failure.message.startswith("scaling: AUSTIN")
+    assert failure.message.startswith("4 of 4 cities failed; AUSTIN: failed at apply_ratings: scaling:")
+    assert failure.message.count("failed at apply_ratings: scaling:") == 4
     assert "scal_2" in failure.message
     assert not [call for call in fake.fake_calls if call[0] == "fnsl"]
     assert os.listdir(tempfile.gettempdir()) == []
@@ -293,9 +295,10 @@ def test_factor_bound_catches_a_kilowatt_typo(tmp_path):
     typo = mapping.Scaling(2430500.0, TARGETS["AUSTIN"][1], "average")
     fake, _, failure = _study_failure(
         tmp_path, "apply_ratings", mapping_=_mapping(cities={"AUSTIN": {"scaling": typo}}))
-    assert failure.message.startswith("scaling: AUSTIN")
-    assert "outside" in failure.message
-    assert not _scale_calls(fake, 0)
+    assert failure.message.startswith(
+        "1 of 4 cities failed; AUSTIN: failed at apply_ratings: scaling: the load target is outside")
+    assert "CORPUS_CHRISTI: ok; MIDLAND: ok; EL_PASO: ok" in failure.message
+    assert len(_scale_calls(fake, 0)) == 3
     assert "2430500" not in failure.message
     _assert_no_figure(failure.message)
 
@@ -305,7 +308,8 @@ def test_case_without_generation_is_refused(tmp_path):
     case.gens = {}
     fake, _, failure = _study_failure(tmp_path, "apply_ratings", case=case)
     assert "no generation to scale" in failure.message
-    assert failure.message.startswith("scaling: AUSTIN")
+    assert failure.message.startswith(
+        "4 of 4 cities failed; AUSTIN: failed at apply_ratings: scaling: the case has no generation")
     assert not _scale_calls(fake, 0)
     _assert_no_figure(failure.message)
 
@@ -318,7 +322,10 @@ def test_scaled_case_not_converging_is_load_flow(tmp_path):
 
     fake, _, failure = _study_failure(tmp_path, "load_flow", solver=solver)
     saved = [os.path.basename(path) for path in fake.fake_saved_paths]
-    assert saved == ["AUSTIN.sav", "CORPUS_CHRISTI.sav"]
+    assert saved == ["AUSTIN.sav", "CORPUS_CHRISTI.sav", "EL_PASO.sav"]
+    assert failure.message.startswith("1 of 4 cities failed; AUSTIN: ok; CORPUS_CHRISTI: ok; "
+                                      "MIDLAND: failed at load_flow: ")
+    assert failure.message.endswith("; EL_PASO: ok")
     assert os.listdir(tempfile.gettempdir()) == []
     _assert_no_figure(failure.message)
 

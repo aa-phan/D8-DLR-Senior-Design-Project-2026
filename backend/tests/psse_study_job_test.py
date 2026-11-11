@@ -23,6 +23,7 @@ import copy
 import datetime
 import functools
 import json
+import logging
 import math
 import os
 import sys
@@ -138,6 +139,73 @@ def _run(admin_url, prepared, rows=None, fetch=None):
         clock=_clock(datetime.timedelta(0), datetime.timedelta(minutes=4)),
         env={"PSSE_JOB_VERSION": "test-version"},
     )
+
+
+# The eight synthetic scaling targets of the committed example mapping (plan 04-01); none is a
+# Power Systems figure. Every text form of each, so a leak into a stored error or a log shows.
+_SYNTHETIC_TARGETS = (2430.5, 2467.25, 2455.75, 2492.5, 2504.25, 2541.75, 2529.5, 2566.25)
+
+
+def _synthetic_target_texts():
+    texts = set()
+    for value in _SYNTHETIC_TARGETS:
+        texts.update((repr(value), "%g" % value, "%.1f" % value))
+    return sorted(texts)
+
+
+class _RefusesOneCityScale(fake_module.FakePsspy):
+    """A psspy whose whole-case scaling call returns an error code, changing nothing, but only for
+    the call whose load slot is `refused_load` (one city's target)."""
+
+    def __init__(self, refused_load, **kwargs):
+        super().__init__(**kwargs)
+        self._refused_load = refused_load
+
+    def scal_2(self, sid, all, apiopt, status, scalval):  # noqa: A002 - the manual's name
+        if all == 1 and apiopt == 0 and scalval[0] == self._refused_load:
+            self.fake_calls.append(("scal_2", (), dict(
+                sid=sid, all=all, apiopt=apiopt, status=status, scalval=scalval)))
+            return (6, [], [])
+        # keyword form, as the adapter calls it, so the recorded call keeps its keyword names
+        return super().scal_2(sid=sid, all=all, apiopt=apiopt, status=status, scalval=scalval)
+
+
+def test_tracer_one_city_fails_all_attempted_one_failed_record(clean_pg, tmp_path, caplog):
+    """One city's scaling is refused: all four cities are still attempted, then one failed run is
+    stored naming every city's outcome, with no result row (CD-8, WB-02, SCL-04)."""
+    caplog.set_level(logging.INFO)
+    fake = _RefusesOneCityScale(2455.75)
+    fake, path = _registered(tmp_path, fake=fake)
+    case_hash = run_record.file_sha256(path)
+    outcome = _run(clean_pg, _prepare(fake, path))
+
+    assert outcome.outcome == "failed"
+    assert outcome.failed_stage == "apply_ratings"
+    assert outcome.status == "failure_recorded"
+    assert outcome.exit_code == 1
+    assert _counts(clean_pg, outcome.run_id) == [1, 0, 0, 0]
+    stored = _run_row(clean_pg, outcome.run_id)
+    assert stored["failed_stage"] == "apply_ratings"
+    error = stored["error"]
+    assert error.startswith("1 of 4 cities failed; AUSTIN: ok; "), error
+    for fragment in ("CORPUS_CHRISTI: failed at apply_ratings: scaling:", "MIDLAND: ok",
+                     "EL_PASO: ok", "AUSTIN: ok"):
+        assert fragment in error, error
+    assert [row for row in _checks(clean_pg) if not row["ok"]] == []
+    assert run_record.file_sha256(path) == case_hash
+
+    loads = [call for call in fake.fake_calls if call[0] == "case"
+             and os.path.normcase(os.path.abspath(call[1][0])) == os.path.normcase(
+                 os.path.abspath(path))]
+    assert len(loads) == 5
+    whole_case = [call for call in fake.fake_calls
+                  if call[0] == "scal_2" and call[2].get("all") == 1 and call[2].get("apiopt") == 0]
+    assert len(whole_case) == 4
+    assert os.listdir(tempfile.gettempdir()) == []
+
+    for text in _synthetic_target_texts():
+        assert text not in error, text
+        assert text not in caplog.text, text
 
 
 def test_tracer_prepare_run_fake_psspy_to_postgres(clean_pg, tmp_path):

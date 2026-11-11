@@ -708,7 +708,11 @@ def test_full_study_dispatch_failure_is_stage_dispatch(tmp_path, monkeypatch):
     with pytest.raises(contract.StudyFailed) as caught:
         _run_study(fake, path)
     assert caught.value.stage == "dispatch"
-    assert caught.value.message == "AUSTIN: inconsistent search"
+    assert caught.value.message == (
+        "4 of 4 cities failed; AUSTIN: failed at dispatch: inconsistent search; "
+        "CORPUS_CHRISTI: failed at dispatch: inconsistent search; "
+        "MIDLAND: failed at dispatch: inconsistent search; "
+        "EL_PASO: failed at dispatch: inconsistent search")
     assert os.listdir(tempfile.gettempdir()) == []
 
 

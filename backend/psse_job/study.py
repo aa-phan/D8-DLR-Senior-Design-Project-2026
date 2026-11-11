@@ -24,6 +24,12 @@ saved copy before every outage and every transfer step and nothing is ever saved
 file. A scaling that does not take, errors or is absurd fails that city at stage apply_ratings
 with a message that names the city and the quantity but no figure.
 
+Phase 4 (plan 04-04: SCL-04, CD-8) attempts every city: a city whose study fails with a
+StudyFailed is remembered and the next city is studied, then the run fails once with a message
+that names each city's outcome (combined_failure), so job.run_once stores one failed run with no
+result row for any city (WB-02) and the other cities' problems are not hidden behind the first.
+The run-time budget is shared; a city that cannot start for lack of it is "not attempted".
+
 prepare_base (the four cities in one unscaled case) is kept for the component tests of the
 screen and the margin.
 
@@ -70,6 +76,16 @@ SCALE_TOLERANCE = 1e-3
 SCALE_FACTOR_BOUNDS = (0.05, 20.0)
 SCALING_METHOD = ("scal_2 whole case to the city's target load and generation, load power "
                   "factor kept, one fresh case copy per city")
+
+# What one city's study ends in (combined_failure): CITY_OK, ("failed", stage, message) or
+# ("not_attempted",).
+CITY_OK = "ok"
+_FAILED = "failed"
+_NOT_ATTEMPTED = ("not_attempted",)
+# Each city's text in the combined failure is cut to this many characters, so the whole message
+# stays within constants.ERROR_MAX_CHARS after redaction and never loses a city: a header of 20
+# characters plus four clauses of at most 43 + 180 characters and their separators is under 950.
+_CLAUSE_TEXT_CHARS = 180
 
 
 class Budget(object):
@@ -481,6 +497,75 @@ def _with_safe_details(row):
     return row
 
 
+def _clause_text(city, message):
+    """A city's failure message without its own name in front, cut to _CLAUSE_TEXT_CHARS.
+
+    Dropped from the front: "scaling: <CITY>: " (leaving "scaling: "), else "<CITY>: " or
+    "<CITY> ". The cut only trims text; it never adds any.
+    """
+    text = "" if message is None else str(message)
+    scaling_prefix = "scaling: %s: " % city
+    if text.startswith(scaling_prefix):
+        text = "scaling: " + text[len(scaling_prefix):]
+    elif text.startswith(city + ": "):
+        text = text[len(city) + 2:]
+    elif text.startswith(city + " "):
+        text = text[len(city) + 1:]
+    return text[:_CLAUSE_TEXT_CHARS]
+
+
+def combined_failure(outcomes, max_seconds):
+    """The one StudyFailed of a run in which at least one city did not finish (CD-8).
+
+    `outcomes` holds one item per city in constants.CITIES order: CITY_OK,
+    ("failed", stage, message) or ("not_attempted",). The message is "<n> of 4 cities failed"
+    (failed and not attempted together), then one clause per city in that order: "<CITY>: ok",
+    "<CITY>: failed at <stage>: <text>" or "<CITY>: not attempted: run-time budget of <s> s
+    exceeded". The stage is the first failed city's; load_case when no city failed but one was
+    not attempted. No message holds a figure: the clauses only trim text the earlier stages
+    already wrote without one.
+    """
+    clauses = []
+    count = 0
+    stage = None
+    for city, outcome in zip(constants.CITIES, outcomes):
+        if outcome == CITY_OK:
+            clauses.append("%s: ok" % city)
+        elif outcome[0] == _FAILED:
+            count += 1
+            if stage is None:
+                stage = outcome[1]
+            clauses.append("%s: failed at %s: %s" % (city, outcome[1],
+                                                      _clause_text(city, outcome[2])))
+        else:
+            count += 1
+            clauses.append("%s: not attempted: run-time budget of %g s exceeded" % (
+                city, max_seconds))
+    header = "%d of %d cities failed" % (count, len(constants.CITIES))
+    return StudyFailed("load_case" if stage is None else stage, "; ".join([header] + clauses))
+
+
+def _study_city(index, mapping, selection, city, budget, temp_dir):
+    """(dispatch row, margin row, contingency rows, n_contingencies) of one city on its own
+    scaled copy of the case; a StudyFailed passes through to make_study's collecting loop."""
+    base = prepare_city_base(index, mapping, selection, city, budget, temp_dir)
+    screened = contingency.screen(base, id_prefix=city + ":")
+    result = margin.city_margin(base, city)
+    city_base = base.cities[city]
+    record = scaling_record(base.scaling)
+    details = dispatch.dispatch_details(city_base, base.settings.rate_sets, result.bounded_by)
+    details["scaling"] = dict(record)
+    try:
+        dispatch_row = dispatch.build_dispatch_row(
+            selection.choices[city], city_base.line_voltage_kv, result.voltage_limit_mva,
+            details=details, bounded_by=result.bounded_by)
+    except ValueError as error:
+        raise StudyFailed("dispatch", "%s: %s" % (city, error))
+    margin_row = dict(result.row)
+    margin_row["details"] = dict(result.row["details"], scaling=dict(record))
+    return dispatch_row, margin_row, screened.rows, screened.n_contingencies
+
+
 def make_study(psspy_module, case_path, mapping, clock=None):
     """study(selection, context) for run_once: for each city, on its own freshly loaded and
     scaled copy of the case, the base load flow, the N-1 screen, a margin and a dispatch row, as
@@ -488,38 +573,39 @@ def make_study(psspy_module, case_path, mapping, clock=None):
 
     Every call builds a new PsseApi, indexes the case once and loads the case file afresh for
     every city (one study per process, never an adapter reused across runs), and removes its
-    temporary files on every path. The first failing city stops the run.
+    temporary files on every path. Every city is attempted (CD-8): a city that fails with a
+    StudyFailed is remembered and the next one is studied; when any city failed the run fails
+    once, naming each city's outcome (combined_failure), so there is never a partial result set
+    (WB-02). The run-time budget is shared by the four cities, and a city that cannot start
+    because it is spent is reported as not attempted. A case that cannot be indexed or a mapping
+    that does not match it still fails at once, before any city, and an exception that is not a
+    StudyFailed is a programming error and surfaces as itself.
     """
     def study(selection, context):
         budget = Budget(clock, mapping.settings.max_runtime_seconds)
         index = index_case(psspy_module, case_path, mapping)
         temp_dir = tempfile.mkdtemp(prefix=_TEMP_PREFIX)
         try:
-            dispatch_rows = []
-            margin_rows = []
-            contingency_rows = []
-            n_contingencies = 0
+            outcomes = []
+            pieces = []
             for city in constants.CITIES:
-                base = prepare_city_base(index, mapping, selection, city, budget, temp_dir)
-                screened = contingency.screen(base, id_prefix=city + ":")
-                result = margin.city_margin(base, city)
-                city_base = base.cities[city]
-                record = scaling_record(base.scaling)
-                details = dispatch.dispatch_details(
-                    city_base, base.settings.rate_sets, result.bounded_by)
-                details["scaling"] = dict(record)
+                if budget.elapsed() > budget.max_seconds:
+                    outcomes.append(_NOT_ATTEMPTED)
+                    continue
                 try:
-                    dispatch_rows.append(dispatch.build_dispatch_row(
-                        selection.choices[city], city_base.line_voltage_kv,
-                        result.voltage_limit_mva, details=details,
-                        bounded_by=result.bounded_by))
-                except ValueError as error:
-                    raise StudyFailed("dispatch", "%s: %s" % (city, error))
-                margin_row = dict(result.row)
-                margin_row["details"] = dict(result.row["details"], scaling=dict(record))
-                margin_rows.append(margin_row)
-                contingency_rows.extend(screened.rows)
-                n_contingencies += screened.n_contingencies
+                    pieces.append(_study_city(index, mapping, selection, city, budget, temp_dir))
+                except StudyFailed as failure:
+                    outcomes.append((_FAILED, failure.stage, failure.message))
+                else:
+                    outcomes.append(CITY_OK)
+            if any(outcome != CITY_OK for outcome in outcomes):
+                raise combined_failure(outcomes, budget.max_seconds)
+            dispatch_rows = [piece[0] for piece in pieces]
+            margin_rows = [piece[1] for piece in pieces]
+            contingency_rows = []
+            for piece in pieces:
+                contingency_rows.extend(piece[2])
+            n_contingencies = sum(piece[3] for piece in pieces)
             cap = run_record.MAX_CONTINGENCY_ROWS
             if len(contingency_rows) > cap:
                 raise StudyFailed(
