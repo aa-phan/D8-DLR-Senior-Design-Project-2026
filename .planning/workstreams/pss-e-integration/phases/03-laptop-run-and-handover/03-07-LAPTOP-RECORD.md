@@ -45,7 +45,7 @@ The wheelhouse held exactly these three files, nothing else.
 | Step 5 | session B: pass, exit 0, `validation: ok`, 28 of 28 contingencies screened, rows planned 1 run, 4 dispatched capacity, 4 voltage margin, 225 contingency result. Without the Supabase read settings: outcome `fallback`, `city_rating=0 static=4`. With `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` set: outcome `ok`, `city_rating=4 static=0` (live ratings read). Nothing written to the database either time |
 | Step 6 | session B, in progress: render pass (exit 0); first registration refused with `The task XML is malformed ... unable to switch the encoding` (HRESULT 0x8004131a), see "Finding from step 6"; with the declaration rewritten to UTF-16 in the string, registration passed, task state Ready, `LastTaskResult 267011` (not yet run), `NextRunTime` 15 seconds past the :15 mark, `NumberOfMissedRuns 0`. Three-hour run check, overlap test and removal pending |
 | Step 8 | session B: pass. psycopg 3.3.6 imports from the site folder on Python 3.14; `credcheck` 16 PASS 0 FAIL 0 SKIP, exit 0 (the writer login connects through the session pooler, the REST read works). `credcheck --write-proof` 18 PASS 0 FAIL 0 SKIP, exit 0 (one synthetic run inserted inside a transaction and rolled back; nothing kept) |
-| Step 9 | deferred by the user's decision 1 of plan 03-08 (2026-11-09): rolled-back proof only. No real run was written to the live tables. The real proof write waits for the real mapping and case |
+| Step 9 | done 2026-11-11 under the user's decision to write exactly one run (changed from the 2026-11-09 deferral). One real run was written with the placeholder-free per-city mapping (schema version 2, the real city targets, kept private on the laptop) on the public 39-bus example case: exit 0, outcome `ok`. Read back as the writer role: 1 run row, 4 dispatched capacity, 4 voltage margin and 205 contingency result rows, with 32 outages screened and 32 having results. The write delay (created_at minus finished_at) was under one second. The run id is not recorded in the repository |
 
 ## Finding from step 2 (gap-closure item, C-4: no code edited on the laptop)
 
@@ -83,6 +83,15 @@ First scheduled run: the task started at :15:15 (15:15:15 local), `LastTaskResul
 
 The Windows Time service is not running (`w32tm /resync` fails with 0x80070426, as `w32tm /query /status` did on 2026-11-09), so nothing is keeping the clock synced and the offset can only grow. Not yet fixed: the remedy is `Set-Service w32time -StartupType Automatic`, `Start-Service w32time`, then `w32tm /resync` from an elevated prompt. Open: whether to start the service, and whether the first live write (step 9) should check `created_at` against `finished_at` on the database side, as planned.
 
+## Finding from the first live write (2026-11-11)
+
+The write went through on the first try once the configuration was clean. Two things on the way are worth keeping:
+
+1. **The launcher refuses a configuration key it does not know.** A stray line holding another database role's connection string (not the PSS/E writer's, and named as the production pipeline's key) was in the configuration; the launcher stopped at once with a configuration error before any database or PSS/E call. The line was removed from the configuration and from the backup copies. Only the PSS/E writer's connection string belongs on the laptop. If that other string was ever pasted somewhere shared, the owner should decide whether to rotate it.
+2. **A placeholder mapping needs `--allow-placeholder` on the probe and the dry run, and a real run refuses it.** The real run used a mapping with `placeholder` false.
+
+The database-side clock check was done: the write delay was under one second, so the laptop clock is close enough that runs land in the right hour. With the laptop clock source reported earlier as 0.6 s behind and the Windows Time service still not running, a fresh offset measurement is worth repeating before the hourly task is registered.
+
 ## Claims cleared
 
 Cleared on the real PSS/E 36.4, Python 3.14.0, free Xplore edition:
@@ -103,7 +112,7 @@ Cleared on the real PSS/E 36.4, Python 3.14.0, free Xplore edition:
 
 - U07 (`os.add_dll_directory` of the program folder needed or enough) and U08 (importing `psspy` needs no registry write for a standard user): not isolated. `PSSE_BIN_DIR` was set throughout, and the session ran on an account with administrator rights, so neither is separated out. The planned selftest without `PSSE_BIN_DIR` has not been run.
 - U12 (PSS/E's own tools list in-service branches with their base kV): not tested. The four lines for the throwaway mapping were read from the public case's text listing, not from PSS/E's branch spreadsheet.
-- Step 6 (Task Scheduler with the dry-run task) and everything in plan 03-08 (credential proof, proof write, the real task) are pending. The writes need the `psse_*` tables and the `dlr_psse_writer` login, which do not exist in production yet.
+- Step 10 of plan 03-08 (registering the real hourly task) is pending the user's decision. Steps 6, 8 and 9 are done (see "Step results"); the `psse_*` tables and the `dlr_psse_writer` login exist and the first real run is in them.
 
 ## Open questions
 
