@@ -77,6 +77,12 @@ The runbook's registration command, `Register-ScheduledTask -Xml` with the file 
 
 First scheduled run: the task started at :15:15 (15:15:15 local), `LastTaskResult 0`, no missed run, so the exit code reaches the scheduler (U18, first of three runs). The log file did not change: a successful dry run logs nothing (the launcher's file handler is attached for every mode, but the only log calls on the run path are a run's own record and warnings), so the runbook now names `LastRunTime` and `LastTaskResult` as the evidence for the dry-run task.
 
+## Finding from the clock check (2026-11-10)
+
+`w32tm /stripchart` against the laptop's configured time source, five samples: the laptop clock is 0.57 to 0.60 seconds behind the source, steady across the samples (reported by the user from the laptop session; not re-measured here). Harmless for the scheduled runs, which start at :15:15, nowhere near an hour boundary.
+
+The Windows Time service is not running (`w32tm /resync` fails with 0x80070426, as `w32tm /query /status` did on 2026-11-09), so nothing is keeping the clock synced and the offset can only grow. Not yet fixed: the remedy is `Set-Service w32time -StartupType Automatic`, `Start-Service w32time`, then `w32tm /resync` from an elevated prompt. Open: whether to start the service, and whether the first live write (step 9) should check `created_at` against `finished_at` on the database side, as planned.
+
 ## Claims cleared
 
 Cleared on the real PSS/E 36.4, Python 3.14.0, free Xplore edition:
