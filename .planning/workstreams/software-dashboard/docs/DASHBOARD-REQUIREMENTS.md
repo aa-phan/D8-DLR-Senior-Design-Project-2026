@@ -399,7 +399,7 @@ The team may be starting with only the GSD workflow installed. The tools below g
 | Tool | Kind | Use it for | How to get it |
 | --- | --- | --- | --- |
 | `frontend-design` | Claude Code plugin (Anthropic's official marketplace) | Choosing a deliberate visual direction and avoiding a templated look | `/plugin install frontend-design@claude-plugins-official` |
-| `impeccable` | Claude Code skill (version 4.1.3, Apache 2.0) | Designing, critiquing, auditing and polishing the interface: hierarchy, typography, colour, states, accessibility | Ask the Data Science owner for a copy of the skill folder, or install your own copy **[source wanted: public download location of the impeccable skill]** |
+| `impeccable` | Claude Code skill (version 4.1.3, Apache 2.0) | Designing, critiquing, auditing and polishing the interface: hierarchy, typography, colour, states, accessibility | Install from [github.com/pbakaus/impeccable](https://github.com/pbakaus/impeccable), following its README |
 | `craft` | Claude Code skill | Applying concrete visual-craft rules to CSS and components (spacing, states, elevation, no gratuitous effects) | Ask the Data Science owner for a copy |
 | `accessibility` | Claude Code skill | A WCAG 2.1 review of screens and flows (checks UI-16) | Ask the Data Science owner for a copy |
 | `ux-heuristics-review` | Claude Code skill | A critique against the 10 usability heuristics | Ask the Data Science owner for a copy |
