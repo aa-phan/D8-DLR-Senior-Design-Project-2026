@@ -1,0 +1,12 @@
+{
+  "contract": "1.0.0",
+  "flavor": "core",
+  "milestone": null,
+  "phases": [],
+  "next": {
+    "command": "/gsd-discuss-phase",
+    "label": "Discuss the first phase",
+    "reason": "Requirements written by Data Science; the Software team plans the phases"
+  },
+  "updated_at": "2026-11-11T00:00:00.000Z"
+}
