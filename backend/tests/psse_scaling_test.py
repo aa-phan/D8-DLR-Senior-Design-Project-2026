@@ -13,7 +13,10 @@ Only synthetic targets appear here (plan 04-01's table, the same ones as the com
 mapping); no real city figure belongs in a public repository.
 """
 
+import collections
+import copy
 import datetime
+import itertools
 import os
 import sys
 import tempfile
@@ -29,7 +32,7 @@ if _BACKEND not in sys.path:
 import psse_fake_psspy as fake_module  # noqa: E402
 import psse_fakes  # noqa: E402
 from psse_job import (  # noqa: E402
-    constants, mapping, ratings, run_record, study,
+    constants, contingency, contract, mapping, ratings, run_record, study, violations,
 )
 
 EXAMPLE = os.path.join(_ROOT, "docs", "data-science", "schema", "psse_mapping_example.json")
@@ -182,3 +185,202 @@ def test_tracer_four_cities_each_on_its_own_scaled_copy(tmp_path):
     expected = {"basis": "average", "method": study.SCALING_METHOD}
     for row in results.dispatch + results.margins:
         assert row["details"]["scaling"] == expected
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Isolation between the four copies, and a scaling that fails stops that city
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+class _ScaleIgnored(fake_module.FakePsspy):
+    """A psspy whose whole-case scaling call reports success and changes nothing."""
+
+    def scal_2(self, sid, all, apiopt, status, scalval):  # noqa: A002 - the manual's name
+        if all == 1 and apiopt == 0:
+            before = copy.deepcopy(self.fake_state)
+            result = super().scal_2(sid, all, apiopt, status, scalval)
+            self.fake_state = before
+            return result
+        return super().scal_2(sid, all, apiopt, status, scalval)
+
+
+class _ScaleRefused(fake_module.FakePsspy):
+    """A psspy whose whole-case scaling call returns an error code and changes nothing."""
+
+    def scal_2(self, sid, all, apiopt, status, scalval):  # noqa: A002 - the manual's name
+        if all == 1 and apiopt == 0:
+            self.fake_calls.append(("scal_2", (), dict(
+                sid=sid, all=all, apiopt=apiopt, status=status, scalval=scalval)))
+            return (6, [], [])
+        return super().scal_2(sid, all, apiopt, status, scalval)
+
+
+def _figure_texts():
+    """Every text form of the eight synthetic targets (repr, %g and %.1f)."""
+    texts = set()
+    for pair in TARGETS.values():
+        for value in pair:
+            texts.update((repr(value), "%g" % value, "%.1f" % value))
+    return sorted(texts)
+
+
+def _assert_no_figure(message):
+    for text in _figure_texts():
+        assert text not in message, text
+
+
+def _study_failure(tmp_path, stage, case=None, solver=None, fake=None, mapping_=None):
+    """Run the whole study expecting StudyFailed at `stage`; returns (fake, case path, failure)."""
+    fake, path = _registered(tmp_path, case=case, solver=solver, fake=fake)
+    callable_ = study.make_study(fake, path, _mapping() if mapping_ is None else mapping_)
+    with pytest.raises(contract.StudyFailed) as caught:
+        callable_(_selection(), None)
+    assert caught.value.stage == stage
+    return fake, path, caught.value
+
+
+def _scale_calls(fake, apiopt):
+    return [call for call in fake.fake_calls
+            if call[0] == "scal_2" and call[2].get("all") == 1 and call[2].get("apiopt") == apiopt]
+
+
+def test_independent_each_solve_sees_only_its_own_city(tmp_path):
+    placeholder = fake_module.placeholder_case()
+    own_rate = dict((line, placeholder.branch(*line)["rates"][0]) for line in MAPPED_LINE.values())
+    records = []
+
+    def watching(case):
+        rerated = frozenset(
+            "%d-%d-%s" % line for line in MAPPED_LINE.values()
+            if case.branch(*line)["rates"][0] != own_rate[line])
+        records.append((sum(case.gens.values()), rerated))
+        return fake_module.radial_solver(case)
+
+    fake, path = _registered(tmp_path, solver=watching)
+    sha_before = run_record.file_sha256(path)
+    study.make_study(fake, path, _mapping())(_selection(), None)
+
+    blocks = [(key, len(list(group))) for key, group in itertools.groupby(records)]
+    assert len(blocks) == len(constants.CITIES)
+    for city, ((gen_total, rerated), _) in zip(constants.CITIES, blocks):
+        assert gen_total == pytest.approx(TARGETS[city][1], rel=1e-9), city
+        assert rerated == frozenset(["%d-%d-%s" % MAPPED_LINE[city]]), city
+    assert len(_case_loads(fake, path)) == 5
+    assert not any(_same_file(saved, path) for saved in fake.fake_saved_paths)
+    assert run_record.file_sha256(path) == sha_before
+
+
+def test_readback_miss_fails_city_at_apply_ratings(tmp_path):
+    fake, _, failure = _study_failure(tmp_path, "apply_ratings", fake=_ScaleIgnored())
+    assert failure.message.startswith("scaling: AUSTIN")
+    assert "load" in failure.message
+    assert not [call for call in fake.fake_calls if call[0] == "fnsl"]
+    assert os.listdir(tempfile.gettempdir()) == []
+    _assert_no_figure(failure.message)
+
+
+def test_scale_error_fails_city_at_apply_ratings(tmp_path):
+    fake, _, failure = _study_failure(tmp_path, "apply_ratings", fake=_ScaleRefused())
+    assert failure.message.startswith("scaling: AUSTIN")
+    assert "scal_2" in failure.message
+    assert not [call for call in fake.fake_calls if call[0] == "fnsl"]
+    assert os.listdir(tempfile.gettempdir()) == []
+    _assert_no_figure(failure.message)
+
+
+def test_factor_bound_catches_a_kilowatt_typo(tmp_path):
+    typo = mapping.Scaling(2430500.0, TARGETS["AUSTIN"][1], "average")
+    fake, _, failure = _study_failure(
+        tmp_path, "apply_ratings", mapping_=_mapping(cities={"AUSTIN": {"scaling": typo}}))
+    assert failure.message.startswith("scaling: AUSTIN")
+    assert "outside" in failure.message
+    assert not _scale_calls(fake, 0)
+    assert "2430500" not in failure.message
+    _assert_no_figure(failure.message)
+
+
+def test_case_without_generation_is_refused(tmp_path):
+    case = fake_module.placeholder_case()
+    case.gens = {}
+    fake, _, failure = _study_failure(tmp_path, "apply_ratings", case=case)
+    assert "no generation to scale" in failure.message
+    assert failure.message.startswith("scaling: AUSTIN")
+    assert not _scale_calls(fake, 0)
+    _assert_no_figure(failure.message)
+
+
+def test_scaled_case_not_converging_is_load_flow(tmp_path):
+    def solver(case):
+        if sum(case.gens.values()) == pytest.approx(TARGETS["MIDLAND"][1], rel=1e-9):
+            return fake_module.SolveOutcome(ierr=3, solved=None, iterations=0, mismatch=0.0)
+        return fake_module.radial_solver(case)
+
+    fake, _, failure = _study_failure(tmp_path, "load_flow", solver=solver)
+    saved = [os.path.basename(path) for path in fake.fake_saved_paths]
+    assert saved == ["AUSTIN.sav", "CORPUS_CHRISTI.sav"]
+    assert os.listdir(tempfile.gettempdir()) == []
+    _assert_no_figure(failure.message)
+
+
+def test_basis_label_reaches_details(tmp_path):
+    peak = mapping.Scaling(TARGETS["MIDLAND"][0], TARGETS["MIDLAND"][1], "peak")
+    fake, path = _registered(tmp_path)
+    results = study.make_study(fake, path, _mapping(cities={"MIDLAND": {"scaling": peak}}))(
+        _selection(), None)
+    for rows in (results.dispatch, results.margins):
+        for city, row in zip(constants.CITIES, rows):
+            assert row["city"] == city
+            expected = "peak" if city == "MIDLAND" else "average"
+            assert row["details"]["scaling"] == {"basis": expected, "method": study.SCALING_METHOD}
+
+
+def test_run_wide_row_cap(tmp_path, monkeypatch):
+    fake, path = _registered(tmp_path)
+    first = study.make_study(fake, path, _mapping())(_selection(), None)
+    counts = collections.Counter(
+        row["contingency_id"].partition(":")[0] for row in first.contingencies)
+    cap = max(counts.values())
+    assert cap < sum(counts.values())
+    monkeypatch.setattr(run_record, "MAX_CONTINGENCY_ROWS", cap)
+    _, _, failure = _study_failure(tmp_path, "contingency")
+    assert "across the four cities" in failure.message
+    assert os.listdir(tempfile.gettempdir()) == []
+
+
+def test_screen_prefixes_the_id_but_skips_the_outaged_line_by_its_raw_key(tmp_path, monkeypatch):
+    seen = []
+    real = violations.thermal_violations
+
+    def spy(flows, monitored_keys, settings_, contingency_id, city_of_branch, base_flows_by_key,
+            skip_key=None):
+        seen.append((contingency_id, skip_key))
+        return real(flows, monitored_keys, settings_, contingency_id, city_of_branch,
+                    base_flows_by_key, skip_key=skip_key)
+
+    monkeypatch.setattr(violations, "thermal_violations", spy)
+    fake, path = _registered(tmp_path)
+    base = study.prepare_base(fake, path, _mapping(), _selection())
+    try:
+        screened = contingency.screen(base, id_prefix="AUSTIN:")
+    finally:
+        study.cleanup_base(base)
+    assert seen
+    for contingency_id, skip_key in seen:
+        assert contingency_id == "AUSTIN:" + skip_key
+    assert all(row["contingency_id"].startswith("AUSTIN:") for row in screened.rows)
+
+
+def test_apply_ratings_one_city_view(tmp_path):
+    fake, path = _registered(tmp_path)
+    mapping_ = _mapping()
+    index = study.index_case(fake, path, mapping_)
+    before = len(fake.fake_calls)
+    applied = study.apply_ratings(
+        index.api, {"MIDLAND": index.resolved["MIDLAND"]}, mapping_, _selection(),
+        cities=("MIDLAND",))
+    assert isinstance(applied, collections.OrderedDict)
+    assert list(applied) == ["MIDLAND"]
+    changes = [call for call in fake.fake_calls[before:] if call[0] == "branch_chng_3"]
+    assert changes
+    assert all((call[2]["ibus"], call[2]["jbus"], call[2]["ckt"]) == MAPPED_LINE["MIDLAND"]
+               for call in changes)
