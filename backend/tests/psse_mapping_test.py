@@ -507,28 +507,71 @@ def test_rule_sink_default_and_ckt_strip():
     assert loaded.cities["MIDLAND"].sink_buses == (90022,)
 
 
-def test_rule_duplicate_branch_any_orientation():
-    def reversed_same_city(data):
-        _austin(data)["branches"].append({"from_bus": 90002, "to_bus": 90001, "ckt": "1"})
+def test_same_branch_allowed_in_several_cities():
+    # Each city is solved on its own copy of the case (CD-6, Power Systems to confirm), so the
+    # same line may serve several cities, in either orientation.
+    def shared(data):
+        for city in ("CORPUS_CHRISTI", "MIDLAND"):
+            data["cities"][city]["branches"] = [{"from_bus": 90001, "to_bus": 90002, "ckt": "1"}]
+            data["cities"][city]["sink_buses"] = [90002]
 
-    def other_city(data):
-        data["cities"]["MIDLAND"]["branches"].append({"from_bus": 90001, "to_bus": 90002, "ckt": "1"})
+    loaded = mapping.parse_mapping(_edit(shared), allow_placeholder=True)
+    for city in ("AUSTIN", "CORPUS_CHRISTI", "MIDLAND"):
+        assert loaded.cities[city].branches == (mapping.BranchRef(90001, 90002, "1"),)
+        assert loaded.cities[city].sink_buses == (90002,)
 
-    def other_city_reversed(data):
+    def opposite(data):
         data["cities"]["MIDLAND"]["branches"].append({"from_bus": 90002, "to_bus": 90001, "ckt": "1"})
 
+    reversed_loaded = mapping.parse_mapping(_edit(opposite), allow_placeholder=True)
+    assert mapping.BranchRef(90002, 90001, "1") in reversed_loaded.cities["MIDLAND"].branches
+    assert mapping.BranchRef(90001, 90002, "1") in reversed_loaded.cities["AUSTIN"].branches
+
+
+def test_same_branch_twice_in_one_city_refused():
     def same_twice(data):
         _austin(data)["branches"].append({"from_bus": 90001, "to_bus": 90002, "ckt": "1"})
+
+    def reversed_twice(data):
+        _austin(data)["branches"].append({"from_bus": 90002, "to_bus": 90001, "ckt": "1"})
+
+    for change, key in ((same_twice, "90001-90002-1"), (reversed_twice, "90002-90001-1")):
+        with pytest.raises(mapping.MappingError) as caught:
+            mapping.parse_mapping(_edit(change), allow_placeholder=True)
+        assert caught.value.problems == [
+            "cities.AUSTIN.branches[1]: branch %s is listed twice in this city" % key
+        ]
 
     def parallel(data):
         _austin(data)["branches"].append({"from_bus": 90001, "to_bus": 90002, "ckt": "2"})
 
-    for change in (reversed_same_city, other_city, other_city_reversed, same_twice):
-        with pytest.raises(mapping.MappingError) as caught:
-            mapping.parse_mapping(_edit(change), allow_placeholder=True)
-        assert "already listed" in str(caught.value)
     loaded = mapping.parse_mapping(_edit(parallel), allow_placeholder=True)
     assert [b.ckt for b in loaded.cities["AUSTIN"].branches] == ["1", "2"]
+
+
+def test_sha256_follows_every_target():
+    with open(EXAMPLE, "rb") as handle:
+        raw = handle.read()
+    base = mapping.parse_mapping(raw, allow_placeholder=True)
+    hashes = set([base.sha256])
+    for city, (load_mw, gen_mw, basis) in SYNTHETIC_TARGETS.items():
+        for number in (load_mw, gen_mw):
+            text = repr(number).encode("ascii")
+            assert raw.count(text) == 1, text
+            changed = mapping.parse_mapping(raw.replace(text, text + b"1"), allow_placeholder=True)
+            hashes.add(changed.sha256)
+            assert changed.sha256 != base.sha256
+    assert len(hashes) == 9
+
+    moved = mapping.parse_mapping(raw.replace(b"2430.5,", b"2430.75,"), allow_placeholder=True)
+    assert moved.sha256 != base.sha256
+    assert moved.cities["AUSTIN"].scaling == mapping.Scaling(2430.75, 2467.25, "average")
+    restored = moved.cities["AUSTIN"]._replace(scaling=base.cities["AUSTIN"].scaling)
+    assert restored == base.cities["AUSTIN"]
+    for city in ("CORPUS_CHRISTI", "MIDLAND", "EL_PASO"):
+        assert moved.cities[city] == base.cities[city]
+    assert moved.settings == base.settings
+    assert moved._replace(sha256=base.sha256, cities=base.cities) == base
 
 
 def test_rule_unreadable_file_names_base_name_only(tmp_path):

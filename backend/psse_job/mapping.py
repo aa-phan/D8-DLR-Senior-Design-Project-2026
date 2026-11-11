@@ -17,6 +17,10 @@ that names a file or a script is an unknown key like any other, and there is no 
 target because each city keeps the base case's load power factor. The parser checks shape and
 range only; the real targets live in the private file on the laptop, never in the repository.
 
+The same line may be listed under more than one city, because each city is solved on its own
+copy of the case (CD-6, Power Systems to confirm); a line listed twice within one city, in
+either orientation, is still refused.
+
 Standard library only, Python 3.7 syntax (D-05).
 """
 
@@ -151,11 +155,14 @@ def _parse_scaling(raw, where, problems):
     return Scaling(targets["load_mw"], targets["gen_mw"], basis)
 
 
-def _parse_city(city, raw, seen, problems):
+def _parse_city(city, raw, problems):
     where = "cities.%s" % city
     if not isinstance(raw, dict):
         problems.append("%s: must be an object" % where)
         return None
+    # The same line may be listed under several cities, because each city is solved on its own
+    # copy of the case (CD-6); only a repeat within this one city is refused.
+    seen = {}
     for key in sorted(raw):
         if key not in _CITY_KEYS:
             problems.append("%s.%s: unknown key" % (where, _short(key)[1:-1]))
@@ -177,11 +184,11 @@ def _parse_city(city, raw, seen, problems):
             normal = branch.normalised()
             if normal in seen:
                 problems.append(
-                    "%s.branches[%d]: branch %s is already listed under %s"
-                    % (where, index, branch.key, seen[normal])
+                    "%s.branches[%d]: branch %s is listed twice in this city"
+                    % (where, index, branch.key)
                 )
                 continue
-            seen[normal] = city
+            seen[normal] = index
             branches.append(branch)
 
     sink_buses = None
@@ -299,10 +306,9 @@ def parse_mapping(data, allow_placeholder=False):
                     "cities.%s: unknown city (expected %s)"
                     % (_short(city)[1:-1], ", ".join(constants.CITIES))
                 )
-        seen = {}
         for city in constants.CITIES:
             if city in raw_cities:
-                parsed_city = _parse_city(city, raw_cities[city], seen, problems)
+                parsed_city = _parse_city(city, raw_cities[city], problems)
                 if parsed_city is not None:
                     cities[city] = parsed_city
 
