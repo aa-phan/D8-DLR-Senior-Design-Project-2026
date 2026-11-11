@@ -159,14 +159,14 @@ It prints `Python <version>, 64-bit`, `PSS/E started`, four notes (`<function>: 
 <PYTHON> -X utf8 "<REPO>\backend\psse_run_hourly.py" probe --config "<CONFIG>"
 ```
 
-3. `probe --write-check` changes a rating and a load in memory and reloads the case; it never saves. Use a copy. The combined `scal_2` form is `[UNVERIFIED until step 4]` (U11).
+3. `probe --write-check` changes a rating, a load and then the whole case's totals in memory and reloads the case after each; it never saves. Use a copy. The combined `scal_2` form is `[UNVERIFIED until step 4]` (U11). The last row, `scale_to_target`, scales the whole case to 90 percent of its own load and generation with the call the job uses for each city, reads the totals back and reloads the case; it needs no city's figure and prints none. Read the call's layout against the installed API documentation first (runbook step 4); that the layout works is `[UNVERIFIED until step 4]` (U35).
 
 <!-- cmd: probe_write_check -->
 ```
 <PYTHON> -X utf8 "<REPO>\backend\psse_run_hourly.py" probe --config "<CONFIG>" --write-check
 ```
 
-4. A dry run on a throwaway mapping (a copy of the placeholder example with four lines you chose from PSS/E's own listing of the example case, which is `[UNVERIFIED until step 5]` (U12)). `--allow-placeholder` is accepted only together with `--dry-run`: a real run always refuses a placeholder mapping. The dry run writes nothing and prints counts only.
+4. A dry run on a throwaway mapping (a copy of the placeholder example with four lines you chose from PSS/E's own listing of the example case, which is `[UNVERIFIED until step 5]` (U12)). The mapping is version 2: each city also has a `scaling` block of placeholder targets, round fractions of the example case's own totals and never a city's figure, and the study runs four times, once per city. That a four-city dry run completes within the 1500 second budget is `[UNVERIFIED until step 5]` (U38); record its `study_seconds`. `--allow-placeholder` is accepted only together with `--dry-run`: a real run always refuses a placeholder mapping. The dry run writes nothing and prints counts only.
 
 <!-- cmd: dry_run_smoke -->
 ```
@@ -327,7 +327,8 @@ limit 5;
 | A repeated `stale` fallback | runs start after :30, so the previous rating row is older than 90 minutes | check the start minute and any late start after wake |
 | A gap after sleep | the laptop was asleep or the lid was closed at :15; `WakeToRun` may not wake it `[UNVERIFIED until step 6]` (U16) | expected; the gap check shows it; keep the laptop on and plugged in |
 | A probe FAIL on a signature | the real `psspy` differs from the adapter's call surface | stop; open a gap-closure plan for the adapter; do not edit on the laptop |
-| A mapping failure | the mapping file is a placeholder on a real run, a city has mixed base kV, or the file cannot be read | run `probe` locally with `--show-identifiers` to see why (never paste that output); fix the mapping file |
+| A mapping failure | the mapping file is a placeholder on a real run, a city has mixed base kV, a city has no valid scaling block (the file must be version 2, with `load_mw`, `gen_mw` and `basis` for each city), or the file cannot be read | run `probe` locally with `--show-identifiers` to see why (never paste that output); fix the mapping file |
+| A failure at `apply_ratings` whose city clause starts `scaling:` | the scaling call did not take, returned an error, or a city's target is far from the case's own totals (outside 0.05 to 20 times) | check the units of `load_mw` and `gen_mw` (MW, not kW) and that each belongs to its city; if every city fails the same way, the call's layout may differ from the adapter's, so run step 4's `scale_to_target` row `[UNVERIFIED until step 4]` (U35) and open a gap-closure plan; do not edit on the laptop |
 | Task registration is refused | a standard user may not register a task `[UNVERIFIED until step 6]` (U15) | ask the teammate to register it from their own session |
 
 ## Credential hygiene

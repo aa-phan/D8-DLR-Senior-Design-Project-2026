@@ -1,7 +1,7 @@
 # PSS/E laptop runbook
 
 **Date:** 2026-10-29
-**From:** pss-e-integration Phase 3 (plan 03-06: TST-02, SCH-01, SCH-02, DBX-02)
+**From:** pss-e-integration Phase 3 (plan 03-06: TST-02, SCH-01, SCH-02, DBX-02); Phase 4 plan 04-05 (SCL-06) for steps 4 and 5
 **To:** the person at the licensed laptop, and the owner of the live database for steps 8 to 10
 **Status:** rehearsed on the Mac against a fake psspy and a local database; nothing in it has been run on the laptop, so every statement about real PSS/E, the licence, Windows or Task Scheduler is tagged `[UNVERIFIED until step N]`
 
@@ -36,8 +36,8 @@ Steps 0 to 6 need only the laptop and one of PSS/E's own example cases. Steps 7 
 | 1 | Install: repository copy, wheelhouse, configuration file with its ACL | a Python that matches `psspy` | none | the wheelhouse pins equal `requirements.txt`; the configuration reader and its refusals | pending: pip, the import and `icacls` on the laptop |
 | 2 | `selftest`: start PSS/E, print the version and the launch functions | the licence | none | run on a stub and a fake psspy; exit codes and the six rows | pending: real `psseinit`, the output redirect, the environment helper and the DLL folder |
 | 3 | `probe`, read only, on a copy of an example case | step 2 green | none | run on the fake psspy; default report holds no identifier | pending: the real signatures and bulk reads |
-| 4 | `probe --write-check` on the same copy | step 3 green | none | run on the fake psspy; the case file is never saved | pending: the real rating write and `scal_2` |
-| 5 | Dry run on a throwaway mapping, marked placeholder | step 4 green | none | dry run equals a real run up to the connect; counts only | pending: a study on a real case |
+| 4 | Read the scaling call's layout, then `probe --write-check` on the same copy | step 3 green | none (SCL-06 in part) | run on the fake psspy; the case file is never saved; `scale_to_target` passes on the fake by construction | pending: the real rating write, `scal_2` and the whole-case `scale_to_target` row |
+| 5 | Dry run on a throwaway version 2 mapping, marked placeholder, with `study_seconds` of the four-city run | step 4 green | none (SCL-06 in part) | dry run equals a real run up to the connect; counts only; four scaled copies on the fake | pending: a four-city study on a real case and its time |
 | 6 | Task Scheduler with the dry-run task: three hourly starts, a held-lock overlap, unregister | steps 0 to 5 | SCH-01 | the XML is rendered, parsed and its arguments accepted; the lock refuses a second process (exit 4) | pending: the real scheduler |
 | 7 | The real case: probe and dry run with the real mapping, the engineer's review, one hand-check | Power Systems' case and mapping | none | the same commands on the fake psspy | pending: units and values on the real network |
 | 8 | The credential proof: `credcheck` (role and REST legs; write proof only if the owner agrees) | Phase 6 applied, the role's password | DBX-02 | run on local Postgres and a loopback stand-in; every planted fault is caught | pending: the live pooler, grants and key |
@@ -164,16 +164,18 @@ The row to watch is `signature:branch_chng_3`: its parameter list is unconfirmed
 
 ### Step 4: probe with the write check
 
-**Needs:** step 3 green, on the same copy. The write check changes a rating and a load in memory and reloads the case from disk; it never saves. Use a copy, never Power Systems' own file.
+**Needs:** step 3 green, on the same copy. The write check changes a rating, a load and then the whole case's totals in memory and reloads the case from disk after each; it never saves. Use a copy, never Power Systems' own file.
+
+**Read the scaling call's layout first.** The job scales each city's copy with one `scal_2` call over all buses in new-total mode. The positions it fills in are one table, `SCALE_LAYOUT` in `psse_api.py`: status position 2 set to 1 (new totals), status position 4 set to 1 (constant P and Q), target positions 1 and 2 for the load and generation in MW, totals positions 2 and 3 for the totals read, APIOPT 0 to scale and APIOPT 1 to read the totals only. Check it against the installed PSS/E API documentation: open the entry for SCAL_2, and for SCAL_4 if it is listed, and note what each position of STATUS, SCALVAL and TOTALS means and what APIOPT 0, 1 and 2 do. If the documentation cannot be opened, record the Scale dialog as a Python script on the example copy only, with obvious placeholder numbers (1111, 2222 and 3333), and note the recorded call line; never open, run or paste a recorded city script, because Power Systems' own recordings hold real figures and are executable, and the job never runs one. The first laptop session read the documentation for PSS/E 36.4 on 2026-11-10 and found every position above as listed; it also found that `scal_2` is marked obsolete there and implemented by `scal_4`, which exists (the job still calls `scal_2`). That the layout works on the engine is `[UNVERIFIED until step 4]` (U35): two details stay open until `scale_to_target` passes, namely whether a totals read on its own (APIOPT 1) leaves scaling usable, and whether a read with every argument at its default is accepted. That the constant P and Q setting keeps each load's power factor is `[UNVERIFIED until step 4]` (U37). Paste any such note as positions and meanings only (see "Pasting results safely").
 
 <!-- cmd: probe_write_check -->
 ```
 <PYTHON> -X utf8 "<REPO>\backend\psse_run_hourly.py" probe --config "<CONFIG>" --write-check
 ```
 
-**Should show:** exit 0. The first line is the notice that the write check changes the case in memory only and that the file is never saved. `rating_write` is `PASS` (RATEA changed by one MVA, read back and restored by reloading the case). `scale_load` is `PASS` (a subsystem defined and 1 MW of load added; the case reloaded). The combined `scal_2` call form is what `scale_load` exercises `[UNVERIFIED until step 4]` (U11).
+**Should show:** exit 0. The first line is the notice that the write check changes the case in memory only and that the file is never saved. `rating_write` is `PASS` (RATEA changed by one MVA, read back and restored by reloading the case). `scale_load` is `PASS` (a subsystem defined and 1 MW of load added; the case reloaded). The combined `scal_2` call form is what `scale_load` exercises `[UNVERIFIED until step 4]` (U11). `scale_to_target` is `PASS` (the whole case was scaled to 90 percent of its own load and generation, read back at the targets and restored by reloading the case); it uses the case's own totals as targets, so it needs no city's figure and prints none. That the call scales the whole case as `SCALE_LAYOUT` says is `[UNVERIFIED until step 4]` (U35), and that loading the case again undoes the scaling, so that every city's copy starts from the file, is `[UNVERIFIED until step 4]` (U36). A `SKIP` on that row means the case has no load or no generation; use a case with both.
 
-**Stop if:** `rating_write` or `scale_load` is FAIL. The case file must be unchanged; check its size and date if in doubt.
+**Stop if:** `rating_write`, `scale_load` or `scale_to_target` is FAIL. The case file must be unchanged; check its size and date if in doubt. A `scale_to_target` detail saying a total "differs from the target" means the call did not scale as the layout says: compare the layout with the documentation again and open a gap-closure plan to correct `SCALE_LAYOUT` (one table, edited on the Mac). A detail saying "reloading the case did not restore the totals" means loading the case does not undo a scaling, so a city's copy could start from another city's scaling: stop and open a gap-closure plan for the study's per-city load.
 
 ### Step 5: dry run on a throwaway mapping
 
@@ -181,16 +183,16 @@ The row to watch is `signature:branch_chng_3`: its parameter list is unconfirmed
 
 The probe prints counts only, by design, so the installer picks the four lines from PSS/E's own tools. Open the example case in PSS/E's branch spreadsheet or branch data report. Note four in-service lines whose two end buses share a base kV and, for each of the four cities, one end bus as the sink. That PSS/E's own tools list the in-service branches with their base kV is `[UNVERIFIED until step 5]` (U12). The bus numbers stay on the laptop.
 
-Copy the placeholder example, [psse_mapping_example.json](../schema/psse_mapping_example.json), to your private folder, keep `"placeholder": true`, replace the four lines (from bus, to bus, circuit id, sink bus) with the ones you noted, and add the line `PSSE_MAPPING_PATH=<path of that file>` to `<CONFIG>`. This is documentation, not a new launcher listing mode: the probe is frozen, the example case is PSS/E's own sample, and a listing flag would add code and a route for identifiers into logs.
+Copy the placeholder example, [psse_mapping_example.json](../schema/psse_mapping_example.json), to your private folder, keep `"placeholder": true`, replace the four lines (from bus, to bus, circuit id, sink bus) with the ones you noted, and add the line `PSSE_MAPPING_PATH=<path of that file>` to `<CONFIG>`. The throwaway mapping is version 2 (`schema_version` 2, which the example already is): every city carries a `scaling` block of `load_mw`, `gen_mw` and `basis`. Set each city's `scaling` to placeholder targets that are round fractions (for example 0.90, 0.95, 1.00 and 1.05, one per city) of the example case's own load and generation totals as PSS/E's totals report shows them, and `basis` to `average`. They are placeholders for a plumbing run, never a city's figure; keep them inside 0.05 to 20 times the case's own totals, which fractions of the totals always are. This is documentation, not a new launcher listing mode: the probe is frozen, the example case is PSS/E's own sample, and a listing flag would add code and a route for identifiers into logs.
 
 <!-- cmd: dry_run_smoke -->
 ```
 <PYTHON> -X utf8 "<REPO>\backend\psse_run_hourly.py" run --config "<CONFIG>" --dry-run --allow-placeholder
 ```
 
-**Should show:** exit 0 and, in order: `dry run: nothing was written to the database`; a `rows:` line with `psse_run=1`, `psse_dispatched_capacity=4`, `psse_voltage_margin=4` and a contingency count that depends on the case; a `contingencies:` line; a `ratings:` line (all four cities on the static rating, because no ratings service is configured or every row is provisional); `outcome: fallback`; `rate_set`, `psse_version` and `study_seconds:` lines; and `validation: ok`. Record `study_seconds` on this example case: it is only the example's time. Nothing is written to the database.
+**Should show:** exit 0 and, in order: `dry run: nothing was written to the database`; a `rows:` line with `psse_run=1`, `psse_dispatched_capacity=4`, `psse_voltage_margin=4` and a contingency count that depends on the case; a `contingencies:` line; a `ratings:` line (all four cities on the static rating, because no ratings service is configured or every row is provisional); `outcome: fallback`; `rate_set`, `psse_version` and `study_seconds:` lines; and `validation: ok`. The study ran four times, once on each city's own scaled copy of the case; the four dispatch rows are the evidence. Record `study_seconds` for this four-city run on the example case: it is only the example's time, and it must stay under the 1500 second budget, which is `[UNVERIFIED until step 5]` (U38). Nothing is written to the database.
 
-**Stop if:** exit 1 with `study failed at stage mapping` (pick other lines and try again), or any other stage (gap-closure plan). If PSS/E's own tools cannot give the list of lines, step 5 stops here and a flag-gated listing mode becomes a gap-closure item.
+**Stop if:** exit 1 with `study failed at stage mapping` (pick other lines and try again; a missing or invalid `scaling` block is also a mapping failure), or any other stage (gap-closure plan). A failure at `apply_ratings` with a clause starting `scaling:` is a stop: the scaling did not take or errored, which points back to step 4's `scale_to_target` and the layout. If PSS/E's own tools cannot give the list of lines, step 5 stops here and a flag-gated listing mode becomes a gap-closure item.
 
 ### Step 6: Task Scheduler with the dry-run task
 
@@ -386,6 +388,7 @@ Results go back into the repository record as words and counts, never as output 
 
 - Paste only the default report of `probe` and `selftest`, the `PASS`, `FAIL` and `SKIP` rows, count lines, exit codes and the gap check's times and kinds. Never paste output from `probe --show-identifiers`.
 - Never paste a path, a host name, a user name, a licence number, a connection string, a key, a case or mapping file name, a bus number or a circuit id. Say "the private folder" and "the real mapping".
+- A note on the scaling call's layout is pasted as positions and meanings only (which position of each array means what, and what each APIOPT value does), never a number from a city's script or from a recorded call on any copy but the example's.
 - Write results as a pass, a fail or a stop, with the date and who ran it by role. Do not write numeric study results (ratings, dispatched values, margins); they belong to Power Systems' review.
 - If a log or a screenshot shows an identifier, do not attach it. If a secret was pasted anywhere, ask the owner to reset the role's password and rotate the keys.
 - A configuration file, a case file and a mapping file are never committed. A configuration file with secrets stays only on the laptop.
@@ -430,6 +433,10 @@ Each row is one claim that only the laptop (or the live database) can show. The 
 | U32 An interactive-token task runs only while its user is signed in | 6 | no run starting while the user is signed out, observed or stated by the teammate |
 | U33 With `PSSE_ENV_MODULE` set to the PSS/E environment helper (`psse3604` for 36.4), the launcher's own import of the helper and then `psspy` succeeds and `selftest` starts PSS/E (importing the helper and then `psspy` by hand worked in the first laptop session) | 2 | `selftest` printing `PSS/E started` and six `PASS` rows with the key set, where it stopped with `psspy could not be imported (ImportError)` without it |
 | U34 A PSS/E install other than 36.4 ships an environment helper module of the same kind, named after its version (35.x is assumed to; its name is not known here) | 0 | the helper's name read from that install's `psspy` folder, or a note that the only install in use is 36.4 |
+| U35 The whole-case scaling layout of `SCALE_LAYOUT` is right on PSS/E 36.4 (read from the installed documentation on 2026-11-10 and matching on every position; the two open details are a bare totals read and an all-default read) | 4 | the scaling call's documentation or a recorded call line with placeholder numbers matching `SCALE_LAYOUT`, and `scale_to_target` PASS |
+| U36 Reloading the case undoes a whole-case scaling, so every city's copy starts from the file | 4 | `scale_to_target` PASS |
+| U37 The scaling mode keeps each load's power factor | 4 | the documentation of the load-type status slot, or one load's P and Q read before and after a recorded scaling of the example copy |
+| U38 A four-city dry run on the example case with a version 2 throwaway mapping completes within the 1500 s budget | 5 | the dry run exit 0 with four dispatch rows, `validation: ok` and `study_seconds` recorded |
 
 ## Stop rules
 

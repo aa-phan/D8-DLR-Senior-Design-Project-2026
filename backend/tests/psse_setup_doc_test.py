@@ -494,6 +494,31 @@ def test_env_module_claims_are_registered_and_the_stale_36x_claim_is_gone():
     assert "PSSE_ENV_MODULE" in _runbook_step_text(runbook, 1)
 
 
+def test_scaling_claims_are_registered_and_cited():
+    """Phase 4 plan 04-05: U35 to U38 are registered at steps 4 and 5, the steps say how to check them, the guide follows."""
+    guide, runbook = _read(GUIDE), _read(RUNBOOK)
+    register = _register_rows(runbook)
+    assert [register[claim][0] for claim in ("U35", "U36", "U37")] == [4, 4, 4]
+    assert register["U38"][0] == 5
+    step4 = _runbook_step_text(runbook, 4)
+    for needle in ("scale_to_target", "(U35)", "(U36)", "(U37)", "API documentation", "never open"):
+        assert needle in step4, needle
+    step5 = _runbook_step_text(runbook, 5)
+    for needle in ("scaling", "schema_version", "basis", "study_seconds", "(U38)", "never a city's figure"):
+        assert needle in step5, needle
+    # no instruction leads anyone to a recorded city script: the only recorded call is on the example copy
+    assert "never open, run or paste a recorded city script" in step4
+    assert "example copy" in step4
+    first_checks = _section(guide, "## First checks, in order")
+    assert "`scale_to_target`" in first_checks
+    assert "version 2" in first_checks
+    assert "(U35)" in first_checks and "(U38)" in first_checks
+    pasting = _section(runbook, "## Pasting results safely")
+    assert "positions and meanings only" in pasting
+    troubleshooting = _section(guide, "## Troubleshooting")
+    assert "`scaling:`" in troubleshooting and "scaling block" in troubleshooting
+
+
 # --------------------------------------------------------------------------- the command and SQL blocks
 
 
