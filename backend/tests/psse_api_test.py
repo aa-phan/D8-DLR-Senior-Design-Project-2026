@@ -383,6 +383,135 @@ def test_scale_layout_matches_the_fake(tmp_path):
     assert len(totals) == fake_module.FAKE_TOTALS_LENGTH
 
 
+_GOOD_TOTALS = [0.0, 2480.0, 2520.0] + [0.0] * 6
+_BAD_TARGETS = (float("nan"), float("inf"), 0.0, -1.0, True, "2430.5", 10 ** 400)
+
+
+def test_scale_case_refuses_bad_targets_before_any_call(tmp_path):
+    fake, api, _ = _loaded(tmp_path)
+    fake_before = len(fake.fake_calls)
+    api_before = list(api.calls)
+    for bad in _BAD_TARGETS:
+        for args in ((bad, 2467.25), (2430.5, bad)):
+            with pytest.raises(ValueError) as excinfo:
+                api.scale_case(*args)
+            assert "2430.5" not in str(excinfo.value)
+            assert "2467.25" not in str(excinfo.value)
+    assert len(fake.fake_calls) == fake_before
+    assert api.calls == api_before
+
+
+def test_scale_case_maps_ierr_without_figures(tmp_path):
+    fake, api, _ = _loaded(tmp_path)
+    fake.scal_2 = lambda sid, all, apiopt, status, scalval: (6, [], [])
+    with pytest.raises(psse_api.PsseCallError) as excinfo:
+        api.scale_case(2430.5, 2467.25)
+    assert (excinfo.value.function, excinfo.value.ierr) == ("scal_2", 6)
+    assert "2430.5" not in str(excinfo.value) and "2467.25" not in str(excinfo.value)
+    with pytest.raises(psse_api.PsseCallError) as excinfo:
+        api.read_totals()
+    assert (excinfo.value.function, excinfo.value.ierr) == ("scal_2", 6)
+    assert "2480" not in str(excinfo.value) and "2520" not in str(excinfo.value)
+    fake.scal_2 = lambda sid, all, apiopt, status, scalval: (None, [], [])
+    with pytest.raises(psse_api.PsseCallError) as excinfo:
+        api.scale_case(2430.5, 2467.25)
+    assert excinfo.value.function == "scal_2" and excinfo.value.ierr is None
+    assert "shape" in excinfo.value.meaning
+    for odd in (None, (), 5, "ok"):
+        fake.scal_2 = lambda sid, all, apiopt, status, scalval, odd=odd: odd
+        with pytest.raises(psse_api.PsseCallError) as excinfo:
+            api.scale_case(2430.5, 2467.25)
+        assert "shape" in excinfo.value.meaning
+    fake.scal_2 = lambda sid, all, apiopt, status, scalval: (_ for _ in ()).throw(RuntimeError("x"))
+    with pytest.raises(psse_api.PsseCallError) as excinfo:
+        api.scale_case(2430.5, 2467.25)
+    assert excinfo.value.function == "scal_2" and excinfo.value.meaning == "RuntimeError"
+
+
+@pytest.mark.parametrize("returned", [
+    None,
+    (),
+    (0,),
+    (0, [1.0, 2.0], []),
+    (0, [0.0, float("nan"), 2520.0] + [0.0] * 6, []),
+    (0, [0.0, 2480.0, float("inf")] + [0.0] * 6, []),
+    (0, [0.0, True, 2520.0] + [0.0] * 6, []),
+    (0, [0.0, "2480.0", 2520.0] + [0.0] * 6, []),
+    (0, [0.0, 10 ** 400, 2520.0] + [0.0] * 6, []),
+    (0, 2480.0, []),
+    (True, _GOOD_TOTALS, []),
+    (None, _GOOD_TOTALS, []),
+    (0.0, _GOOD_TOTALS, []),
+])
+def test_read_totals_rejects_bad_returns(tmp_path, returned):
+    fake, api, _ = _loaded(tmp_path)
+    fake.scal_2 = lambda sid, all, apiopt, status, scalval: returned
+    with pytest.raises(psse_api.PsseCallError) as excinfo:
+        api.read_totals()
+    assert excinfo.value.function == "scal_2"
+    assert "shape" in excinfo.value.meaning
+    assert "2480" not in str(excinfo.value) and "2520" not in str(excinfo.value)
+
+
+def test_read_totals_accepts_integer_totals(tmp_path):
+    fake, api, _ = _loaded(tmp_path)
+    fake.scal_2 = lambda sid, all, apiopt, status, scalval: (0, [0, 7, 9] + [0] * 6, [])
+    totals = api.read_totals()
+    assert totals == psse_api.CaseTotals(7.0, 9.0)
+    assert isinstance(totals.load_mw, float) and isinstance(totals.gen_mw, float)
+
+
+def test_fake_scal_2_pins_the_whole_case_arrays(tmp_path):
+    fake, api, _ = _loaded(tmp_path)
+    int_s, real_s = fake_module.INT_SENTINEL, fake_module.REAL_SENTINEL
+    good_status = [int_s, 1, 0, 1, 0]
+    good_scalval = [2430.5, 2467.25] + [real_s] * 5
+
+    def call(apiopt=0, status=None, scalval=None, all=1):
+        return fake.scal_2(sid=0, all=all, apiopt=apiopt,
+                           status=good_status if status is None else status,
+                           scalval=good_scalval if scalval is None else scalval)[0]
+
+    before = (dict(fake.fake_state.loads), dict(fake.fake_state.gens))
+    for slot in range(2, 7):
+        odd = list(good_scalval)
+        odd[slot] = 0.0
+        assert call(scalval=odd) == 4
+    assert call(status=[int_s, 3, 0, 1, 0]) == 4
+    assert call(status=[int_s, 1, 0, 0, 0]) == 4
+    assert call(status=good_status[:4]) == 4
+    assert call(scalval=good_scalval[:6]) == 4
+    assert call(scalval=[float("nan"), 2467.25] + [real_s] * 5) == 4
+    assert call(apiopt=2) == 2
+    assert call(apiopt=1, status=good_status) == 4
+    assert call(apiopt=1, status=[int_s] * 5, scalval=good_scalval) == 4
+    assert (dict(fake.fake_state.loads), dict(fake.fake_state.gens)) == before
+    fake.fake_state.gens = {}
+    assert call() == 6
+    fake.fake_state.gens = dict(before[1])
+    fake.fake_state.loads = {}
+    assert call() == 6
+    fake.fake_state.loads = dict(before[0])
+    assert call() == 0
+    assert fake_module.FakePsspy().scal_2(
+        sid=0, all=1, apiopt=1, status=[int_s] * 5, scalval=[real_s] * 7)[0] == 1
+
+
+def test_surface_cannot_run_a_script(tmp_path):
+    assert not [name for name in psse_api.SURFACE_NAMES if name.startswith("run")]
+    for runner in ("runrspnsfile", "runiplanfile"):
+        assert runner not in psse_api.SURFACE_NAMES
+    assert psse_api.SURFACE_BY_NAME["scal_2"].confidence == "HIGH"
+    fake, api, _ = _loaded(tmp_path)
+    fake_before = len(fake.fake_calls)
+    for runner in ("runrspnsfile", "runiplanfile"):
+        with pytest.raises(ValueError):
+            api._call(runner, "scale.idv")
+        with pytest.raises(AttributeError):
+            getattr(fake, runner)
+    assert len(fake.fake_calls) == fake_before
+
+
 def test_io_version_text(tmp_path):
     fake, api, _ = _loaded(tmp_path)
     assert api.version() == "35.6.0"
