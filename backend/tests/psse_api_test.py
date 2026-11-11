@@ -341,6 +341,48 @@ def test_io_subsystem_and_scale_load(tmp_path):
     assert len(fake.fake_calls) == calls_before
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Whole-case scaling to new load and generation totals (Phase 4, plan 04-02; CD-2, CD-3, CD-9)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _assert_totals(totals, load_mw, gen_mw):
+    assert isinstance(totals, psse_api.CaseTotals)
+    assert totals.load_mw == pytest.approx(load_mw, rel=1e-9)
+    assert totals.gen_mw == pytest.approx(gen_mw, rel=1e-9)
+
+
+def test_tracer_scale_case_sets_and_reads_back_whole_case_totals(tmp_path):
+    fake, api, path = _loaded(tmp_path)
+    _assert_totals(api.read_totals(), 2480.0, 2520.0)
+    read_call = _last_call(fake, "scal_2")[2]
+    assert read_call["sid"] == 0 and read_call["all"] == 1 and read_call["apiopt"] == 1
+    assert read_call["status"] == [fake_module.INT_SENTINEL] * 5
+    assert read_call["scalval"] == [fake_module.REAL_SENTINEL] * 7
+    ratios = {bus: q / p for bus, (p, q) in fake.fake_state.loads.items()}
+    api.scale_case(2430.5, 2467.25)
+    scale_call = _last_call(fake, "scal_2")[2]
+    assert scale_call["sid"] == 0 and scale_call["all"] == 1 and scale_call["apiopt"] == 0
+    assert scale_call["status"] == [fake_module.INT_SENTINEL, 1, 0, 1, 0]
+    assert scale_call["scalval"] == [2430.5, 2467.25] + [fake_module.REAL_SENTINEL] * 5
+    _assert_totals(api.read_totals(), 2430.5, 2467.25)
+    for bus, (p_mw, q_mvar) in fake.fake_state.loads.items():
+        assert q_mvar / p_mw == pytest.approx(ratios[bus])
+    api.load_case(path)
+    _assert_totals(api.read_totals(), 2480.0, 2520.0)
+
+
+def test_scale_layout_matches_the_fake(tmp_path):
+    layout = psse_api.SCALE_LAYOUT
+    assert layout.confidence == "UNVERIFIED"
+    assert "laptop check" in layout.evidence
+    assert fake_module.FAKE_TOTALS_LOAD == layout.totals_load
+    assert fake_module.FAKE_TOTALS_GEN == layout.totals_gen
+    fake, api, _ = _loaded(tmp_path)
+    totals = fake.scal_2(sid=0, all=1, apiopt=1, status=[fake_module.INT_SENTINEL] * 5,
+                         scalval=[fake_module.REAL_SENTINEL] * 7)[1]
+    assert len(totals) == fake_module.FAKE_TOTALS_LENGTH
+
+
 def test_io_version_text(tmp_path):
     fake, api, _ = _loaded(tmp_path)
     assert api.version() == "35.6.0"
@@ -534,6 +576,8 @@ def test_surface_recorded_calls_stay_inside_table(tmp_path):
     api.set_status(AUSTIN_LINE, False)
     api.define_subsystem(9, [90002])
     api.scale_load(9, 25.0)
+    api.read_totals()
+    api.scale_case(2430.5, 2467.25)
     api.save_case(str(tmp_path / "base.sav"))
     api.version()
     seen = set()

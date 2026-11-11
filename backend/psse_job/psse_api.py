@@ -11,7 +11,9 @@ Every function the adapter calls is one row of SURFACE, with the parameter names
 PSS/E API manual and the evidence for that signature. A call outside the table, or with a
 keyword the table does not list, is refused before it reaches psspy. The Phase 3 probe
 compares this table with the real psspy on the laptop; branch_chng_3 is the one row whose
-signature is an assumption (research A1) and is marked UNVERIFIED.
+signature is an assumption (research A1) and is marked UNVERIFIED. The whole-case form of
+scal_2 (read_totals, scale_case) is the second unverified item: its argument layout is the
+one table SCALE_LAYOUT, UNVERIFIED until the laptop check of Phase 4 plan 04-06.
 
 A load flow counts as converged only when fnsl returned ierr 0 and solved() then returned 0
 (classify_solve). The adapter never writes a rating that is not a finite number above 0 and
@@ -83,6 +85,29 @@ SURFACE = (
 )
 SURFACE_NAMES = frozenset(row.name for row in SURFACE)
 SURFACE_BY_NAME = {row.name: row for row in SURFACE}
+
+# The whole-case form of scal_2 (Phase 4, plan 04-02): set the total load and total generation
+# of every bus to new totals. Only the increment form is proven on PSS/E 36.4 (U11); this
+# layout comes from community forum posts, so it lives in this one table. Plan 04-06's laptop
+# check confirms or corrects it, and a correction is one edit here (and the same slots in
+# backend/tests/psse_fake_psspy.py, which test_scale_layout_matches_the_fake ties together).
+# In `status`, None stands for the int no-input sentinel: slot 2 (index 1) value 1 is
+# new-total mode, slot 4 (index 3) value 1 is the constant P/Q setting the proven increment
+# form already uses, read as keeping each load's power factor (CD-9).
+ScaleLayout = collections.namedtuple(
+    "ScaleLayout",
+    ["sid", "all_flag", "apiopt_scale", "apiopt_totals", "status", "scalval_load", "scalval_gen",
+     "scalval_slots", "totals_load", "totals_gen", "evidence", "confidence"],
+)
+SCALE_LAYOUT = ScaleLayout(
+    sid=0, all_flag=1, apiopt_scale=0, apiopt_totals=1, status=(None, 1, 0, 1, 0),
+    scalval_load=0, scalval_gen=1, scalval_slots=7, totals_load=1, totals_gen=2,
+    evidence="FORUM questions 1720, 2551, 4673 and 6830 (community, not the manual); the "
+             "increment form is proven on PSS/E 36.4 (U11); laptop check pending (runbook step 4)",
+    confidence="UNVERIFIED",
+)
+
+CaseTotals = collections.namedtuple("CaseTotals", ["load_mw", "gen_mw"])
 
 # solved() codes, verbatim meaning from the manual (M33 7.142). Only 0 is success.
 SOLVED_MEANING = {
@@ -488,6 +513,82 @@ class PsseApi(object):
         result = self._call(
             "scal_2", sid=sid, all=0, apiopt=0, status=[self._int_sentinel, 3, 0, 1, 0],
             scalval=[increment, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        if not isinstance(result, (tuple, list)) or not result:
+            raise PsseCallError("scal_2", None, _SHAPE)
+        ierr = self._plain_ierr("scal_2", result[0])
+        if ierr != 0:
+            raise PsseCallError("scal_2", ierr, _NOT_LISTED)
+
+    def _scale_status(self):
+        """SCALE_LAYOUT.status as a list, the int no-input sentinel in place of None."""
+        return [self._int_sentinel if item is None else item for item in SCALE_LAYOUT.status]
+
+    def read_totals(self):
+        """The whole case's total load and total generation in MW, as CaseTotals.
+
+        One scal_2 call over all buses that only reads the totals array (SCALE_LAYOUT; the
+        layout is UNVERIFIED until the laptop check, plan 04-06, runbook step 4).
+        """
+        layout = SCALE_LAYOUT
+        result = self._call(
+            "scal_2", sid=layout.sid, all=layout.all_flag, apiopt=layout.apiopt_totals,
+            status=[self._int_sentinel] * len(layout.status),
+            scalval=[self._real_sentinel] * layout.scalval_slots)
+        if not isinstance(result, (tuple, list)) or not result:
+            raise PsseCallError("scal_2", None, _SHAPE)
+        ierr = self._plain_ierr("scal_2", result[0])
+        if ierr != 0:
+            raise PsseCallError("scal_2", ierr, _NOT_LISTED)
+        if len(result) < 2:
+            raise PsseCallError("scal_2", None, _SHAPE)
+        totals = result[1]
+        if not isinstance(totals, (tuple, list)) or len(totals) <= max(
+                layout.totals_load, layout.totals_gen):
+            raise PsseCallError("scal_2", None, _SHAPE)
+        values = []
+        for slot in (layout.totals_load, layout.totals_gen):
+            value = totals[slot]
+            if not _is_number(value):
+                raise PsseCallError("scal_2", None, _SHAPE)
+            try:
+                number = float(value)
+            except OverflowError:
+                raise PsseCallError("scal_2", None, _SHAPE) from None
+            if not math.isfinite(number):
+                raise PsseCallError("scal_2", None, _SHAPE)
+            values.append(number)
+        return CaseTotals(values[0], values[1])
+
+    @staticmethod
+    def _positive_target(value, name):
+        """`value` as a float that is finite and above 0; ValueError names `name`, never the value."""
+        try:
+            number = float(value) if _is_number(value) else float("nan")
+        except OverflowError:
+            number = float("nan")
+        if not (math.isfinite(number) and number > 0):
+            raise ValueError("%s must be a finite number above 0" % name)
+        return number
+
+    def scale_case(self, load_mw, gen_mw):
+        """Set the whole case's total load to `load_mw` and total generation to `gen_mw`.
+
+        One scal_2 call on all buses in new-total mode (SCALE_LAYOUT): every other scaled
+        quantity stays at the no-input sentinel and each load keeps its P/Q ratio, so the
+        city keeps the base case's load power factor (CD-9). The job applies targets only
+        through this call and never runs a script or response file (CD-2). The layout is
+        UNVERIFIED until the laptop check (plan 04-06, runbook step 4). Both targets must be
+        finite numbers above 0; anything else is a ValueError before psspy is called.
+        """
+        load = self._positive_target(load_mw, "load_mw")
+        gen = self._positive_target(gen_mw, "gen_mw")
+        layout = SCALE_LAYOUT
+        scalval = [self._real_sentinel] * layout.scalval_slots
+        scalval[layout.scalval_load] = load
+        scalval[layout.scalval_gen] = gen
+        result = self._call(
+            "scal_2", sid=layout.sid, all=layout.all_flag, apiopt=layout.apiopt_scale,
+            status=self._scale_status(), scalval=scalval)
         if not isinstance(result, (tuple, list)) or not result:
             raise PsseCallError("scal_2", None, _SHAPE)
         ierr = self._plain_ierr("scal_2", result[0])

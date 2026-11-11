@@ -18,6 +18,12 @@ Radial solver (placeholder case): per city one source bus behind two ties from t
 and one sink bus behind two parallel city lines. With S = hypot(sink P, sink Q) the sink
 voltage is 1.0 - drop x S x 2 / n_line, every in-service city line carries S / n_line, and a
 city with no in-service tie or no in-service city line is islanded (fnsl ierr 3).
+
+Whole-case scaling (Phase 4, plan 04-02): `scal_2` with all=1 models scaling every load's P
+and Q by one factor and every generator's output by one factor to new totals, and reading the
+totals array back. It models only load and generation, and it implements the slots the
+adapter's psse_api.SCALE_LAYOUT names; with the same caveat as the rest of this file, it
+proves nothing about how real PSS/E reads those slots (the laptop check does).
 """
 
 import collections
@@ -44,6 +50,14 @@ _DROP_PER_MVA = {"AUSTIN": 1e-4, "CORPUS_CHRISTI": 1e-4, "MIDLAND": 1e-4, "EL_PA
 _COLLAPSE_PU = 0.6
 _RATE_SLOTS = 12
 
+# Whole-case scal_2: the totals array has FAKE_TOTALS_LENGTH items, load at index
+# FAKE_TOTALS_LOAD and generation at FAKE_TOTALS_GEN. This file does not import psse_job, so
+# psse_api_test.test_scale_layout_matches_the_fake ties these to psse_api.SCALE_LAYOUT.
+FAKE_TOTALS_LENGTH = 9
+FAKE_TOTALS_LOAD = 1
+FAKE_TOTALS_GEN = 2
+_GEN_MW_PER_SOURCE = 630.0
+
 SolveOutcome = collections.namedtuple(
     "SolveOutcome", ["ierr", "solved", "voltages", "flows", "iterations", "mismatch"]
 )
@@ -67,6 +81,7 @@ class FakeCase(object):
         self.buses = {}
         self.branches = {}
         self.loads = {}
+        self.gens = {}
         self.drop_per_mva = {}
 
     def add_bus(self, number, type_code=1, base_kv=345.0, pu=1.0, nvlmlo=0.95, nvlmhi=1.05,
@@ -141,6 +156,7 @@ def placeholder_case():
         case.add_branch(source, sink, "1", rates=(1500.0, 1650.0, 1800.0))
         case.add_branch(source, sink, "2", rates=(500.0, 550.0, 600.0))
         case.loads[sink] = [_SINK_LOAD_MW, _SINK_LOAD_MW * math.tan(math.acos(_LOAD_POWER_FACTOR))]
+        case.gens[source] = _GEN_MW_PER_SOURCE
         case.drop_per_mva[sink] = _DROP_PER_MVA[city]
     apply_outcome(case, radial_solver(case))
     return case
@@ -440,6 +456,8 @@ class FakePsspy(object):
 
     @_recorded
     def scal_2(self, sid, all, apiopt, status, scalval):  # noqa: A002 - the manual's name
+        if all == 1:
+            return self._scal_2_whole_case(apiopt, status, scalval)
         if sid not in self.fake_subsystems or self.fake_state is None:
             return (1, [], [])
         if all != 0 or apiopt != 0:
@@ -457,3 +475,54 @@ class FakePsspy(object):
                 loads[bus] = [loads[bus][0] * factor, loads[bus][1] * factor]
         return (0, [sum(loads[bus][0] for bus in loaded), sum(loads[bus][1] for bus in loaded)],
                 [0.0])
+
+    def _whole_case_totals(self):
+        totals = [0.0] * FAKE_TOTALS_LENGTH
+        totals[FAKE_TOTALS_LOAD] = sum(p_mw for p_mw, _ in self.fake_state.loads.values())
+        totals[FAKE_TOTALS_GEN] = sum(self.fake_state.gens.values())
+        return totals
+
+    def _scal_2_whole_case(self, apiopt, status, scalval):
+        """scal_2 with all=1: apiopt 1 reads the totals, apiopt 0 sets new load/generation totals.
+
+        Load P and Q share one factor (target over total P) and so do the generators; slots
+        3 to 7 of scalval must be the real sentinel because the fake models only load and
+        generation. Returns (ierr, totals, moto) like the increment form.
+        """
+        if self.fake_state is None:
+            return (1, [], [])
+        if apiopt not in (0, 1):
+            return (2, [], [])
+        if (not isinstance(status, list) or len(status) != 5
+                or not isinstance(scalval, list) or len(scalval) != 7):
+            return (4, [], [])
+        if any(value != REAL_SENTINEL for value in scalval[2:]):
+            return (4, [], [])
+        if apiopt == 1:
+            if any(value != INT_SENTINEL for value in status) or any(
+                    value != REAL_SENTINEL for value in scalval):
+                return (4, [], [])
+            return (0, self._whole_case_totals(), [0.0, 0.0])
+        if status[1] != 1 or status[3] != 1:
+            return (4, [], [])
+        for target in scalval[:2]:
+            if target != REAL_SENTINEL and (
+                    isinstance(target, bool) or not isinstance(target, (int, float))
+                    or not math.isfinite(target)):
+                return (4, [], [])
+        state = self.fake_state
+        load_target, gen_target = scalval[0], scalval[1]
+        load_total = sum(p_mw for p_mw, _ in state.loads.values())
+        gen_total = sum(state.gens.values())
+        if (load_target != REAL_SENTINEL and not load_total > 0) or (
+                gen_target != REAL_SENTINEL and not gen_total > 0):
+            return (6, [], [])
+        if load_target != REAL_SENTINEL:
+            factor = load_target / load_total
+            for bus in state.loads:
+                state.loads[bus] = [state.loads[bus][0] * factor, state.loads[bus][1] * factor]
+        if gen_target != REAL_SENTINEL:
+            factor = gen_target / gen_total
+            for bus in state.gens:
+                state.gens[bus] = state.gens[bus] * factor
+        return (0, self._whole_case_totals(), [0.0, 0.0])
