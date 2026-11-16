@@ -42,6 +42,7 @@ Progress: [░░░░░░░░░░] 0%
 - 2026-11-11: Card headline is the percentage against the normal rating, with amps beneath; MW
   only in Technical details (Data Science owner).
 - 2026-11-11: Grid-study (PSS/E) results are a deferred requirement, DEF-01 (Data Science owner).
+- 2026-11-16: DEF-01 unblocked. The Data Science owner exposed the view `latest_grid_study` to the dashboard's key (the result tables stay private) and 19 real PSS/E runs exist. Still deferred from the first release; values are preliminary.
 - 2026-11-11: Primary screen is a desk monitor; phone layout not required (Data Science owner).
 
 ### Blockers/Concerns

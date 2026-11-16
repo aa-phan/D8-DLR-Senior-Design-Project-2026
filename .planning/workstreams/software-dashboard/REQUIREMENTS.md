@@ -98,8 +98,8 @@ theirs to choose (open questions Q5 and Q6 in the requirements document).
 ## Deferred
 
 - **DEF-01**: Grid-study results (usable share of the rating and its limiting factor) per city.
-  Blocked on the Data Science owner opening read access to the PSS/E result tables and on a
-  first real PSS/E run (ch. 10).
+  Unblocked 2026-11-16: read `latest_grid_study` with the dashboard's key; preliminary values,
+  stale while the PSS/E job is paused (ch. 10).
 
 ## Out of Scope
 
