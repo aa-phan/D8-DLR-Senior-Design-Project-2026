@@ -26,6 +26,7 @@
 | `GET /rest/v1/day_ahead_upcoming` | The day-ahead forecast values whose target is still in the future, ordered by `city` then `valid_time`, with `lead_minutes` added (26 columns). Labelled `day-ahead-24h; engineering-selection; not-validated`. See "Day-ahead forecast". Readable once the owner applies the expose migration `20261108120100_expose_day_ahead_forecast.sql`. |
 | `GET /rest/v1/day_ahead_status` | Exactly four rows, one per city: when the next target is, how many future values exist, when the newest was issued, which targets due within the next 12 hours have no value, and `is_late` (7 columns). |
 | `GET /rest/v1/day_ahead_forecast` | The full day-ahead history (OD-6: public), 25 columns, including targets that have passed. Always give an explicit `order` and page it like `city_rating`. |
+| `GET /rest/v1/latest_grid_study` | **Preliminary** grid-study results: up to four rows, one per city, from the newest complete grid-study run: the rating the study applied, the voltage-stability limit, the capacity the grid can use and which limit binds, with `age_minutes` and `is_stale` (20 columns). No rows until a complete run exists. See "Grid-study results (preliminary)". Readable once the owner applies `20261116200000_expose_latest_grid_study.sql`. |
 | `GET /rest/v1/rpc/assert_fresh?max_age_minutes=90` | A freshness check across all four cities: HTTP 200 with a small JSON document when every city is fresh, HTTP 503 (code `PT503`) naming the missing or stale cities when not, HTTP 400 (code `22023`) for a bad parameter. |
 
 Details that matter:
@@ -133,6 +134,7 @@ The identity columns are how a change shows up (D-01). If `config_fingerprint`, 
 
 - The publishable key reads; it cannot write. Every insert, update and delete on the rating tables and the view is refused by privilege (OD-6), not merely filtered by row-level security. The DS owner checks this against the live project (E2E-03) before the interface is announced to the teams.
 - The run log (`pipeline_run`) and the freshness log (`ops.freshness_log`) are not readable with this key.
+- The four grid-study result tables (`psse_run`, `psse_dispatched_capacity`, `psse_voltage_margin`, `psse_contingency_result`) are not readable with this key. `latest_grid_study` is the only way in: it runs with its owner's rights and publishes a fixed column list, so the tables stay private.
 - The full history is public by owner decision (OD-6). No credential is stored, and each `alerts` entry is redacted and cut to 300 characters before it is stored. An entry for a detector failure (`G6 ... detector error`) can still carry a short error message, so treat `alerts` as diagnostic text.
 
 ## Limits and polling
@@ -236,3 +238,44 @@ The view always has four rows, one per city, and seven columns in this order. Ch
 | `newest_issued_at` | timestamptz | UTC instant | The newest `issued_at` of the city, past or future; NULL when the city has no value. |
 | `missing_targets` | timestamptz[] | UTC instants | Every target due within the next 12 hours (after `checked_at`, up to 12 hours later) that has no stored value; an empty array when none. |
 | `is_late` | boolean | none (flag) | True when `missing_targets` is not empty and the table holds at least one row (armed by the first value); false otherwise. |
+
+## Grid-study results (preliminary)
+
+**Label:** preliminary. Show "Preliminary grid study (IEEE 39-bus test case; not reviewed by Power Systems)" wherever you show a value from this view.
+
+A grid study applies each city's rating to a power-flow model, runs the load flow and the single-line outages, and finds how much of the rating the grid can actually use before voltage limits are reached. `latest_grid_study` returns the result of the newest complete run, one row per city.
+
+- **Where the numbers come from.** Siemens PSS/E (`solver` = `psse`), on the public IEEE 39-bus test case scaled to each city's load and generation, not on a utility network. Power Systems has not reviewed the results. Use them to demonstrate the pipeline, not as an operating limit.
+- **How often.** Hourly while a licensed PSS/E machine runs the job. The job is currently paused, so the newest result is from the November 2026 trial and every row shows `is_stale` true. Show the study time (`slot_time`) and a "Study not current" state when `is_stale` is true, as for ratings.
+- **The headline.** `usable_pct` is the share of the applied rating the grid can use: 100 when the rating itself is the limit (`limiting_factor` = `dlr_rating`), less when voltage limits bind first (`voltage_stability`). For example: "Grid can use 92% of this rating; voltage is the limit."
+- **Units.** `*_amps_per_conductor` is per wire, the same unit as `latest_rating.rating_amps`. The MVA and MW columns are per circuit and are not comparable with `city_rating.rating_mw` (per conductor).
+- **The rating it used.** `rating_source` says whether the study used the city's live rating (`city_rating`, with `city_rating_valid_time` naming the rating hour) or its static rating (`static_fallback`, with `fallback_reason`). The study's rating can be older than the current `latest_rating`.
+- **Solvers.** Every row today is `psse`. A later release adds an open-source solver (pandapower) that runs every hour; the view will then return one row per city per solver, and `solver` tells them apart. Filter on `solver` rather than assuming one row per city.
+- **Empty is a state.** When no complete run exists the view returns no rows; show "No grid study available".
+
+## `latest_grid_study` columns
+
+The view has 20 columns, in this order. New columns are only ever appended after the last one.
+
+| Column | Type | Unit | Meaning |
+|---|---|---|---|
+| `solver` | text | none (identifier) | The power-flow program: `psse` today; `pandapower` in a later release. |
+| `city` | text | none (identifier) | City key: `AUSTIN`, `CORPUS_CHRISTI`, `MIDLAND` or `EL_PASO`. |
+| `slot_time` | timestamptz | UTC instant | The hour the study belongs to (the UTC hour its run started in). |
+| `study_finished_at` | timestamptz | UTC instant | When the study run finished. |
+| `run_outcome` | text | none (label) | `ok` when every city used its live rating, `fallback` when at least one used its static rating. |
+| `rating_source` | text | none (label) | `city_rating` (live rating) or `static_fallback` (normal rating). |
+| `fallback_reason` | text | none (label) | Why the static rating was used: `missing`, `invalid`, `stale`, `provisional` or `read_failed`; null for a live rating. |
+| `city_rating_valid_time` | timestamptz | UTC instant | The `valid_time` of the rating row the study used; null for a static rating. |
+| `applied_amps_per_conductor` | double precision | A per conductor | The rating the study applied. |
+| `dispatched_amps_per_conductor` | double precision | A per conductor | The capacity the grid can use: the lower of the applied rating and the voltage-stability limit. |
+| `subconductors_per_phase` | integer | count | Conductors per phase; multiply a per-conductor value by this for the circuit. |
+| `line_voltage_kv` | double precision | kV (line to line) | The voltage class used to convert amperes to MVA. |
+| `applied_mva` | double precision | MVA per circuit | The applied rating: sqrt(3) x kV x circuit amperes / 1000. |
+| `voltage_limit_mva` | double precision | MVA per circuit | The most the city's transfer can carry before voltage limits are reached. |
+| `dispatched_mva` | double precision | MVA per circuit | The lower of `applied_mva` and `voltage_limit_mva`. |
+| `dispatched_mw` | double precision | MW per circuit | `dispatched_mva` times the study power factor. |
+| `usable_pct` | double precision | percent | `dispatched_mva / applied_mva x 100`. |
+| `limiting_factor` | text | none (label) | `dlr_rating` or `voltage_stability`. |
+| `age_minutes` | integer | minutes (whole, rounded up) | From `slot_time` to the request; stale when greater than 90. |
+| `is_stale` | boolean | none (flag) | True when `slot_time` is more than 90 minutes old; exactly 90 is fresh. |
