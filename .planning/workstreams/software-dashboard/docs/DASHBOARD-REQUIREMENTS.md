@@ -438,7 +438,9 @@ Power Systems' study job applies our ratings to their grid model and writes four
 
 - **DEF-01** A later release shows, per city, the usable share of the rating and its limiting factor in plain words. An example is "Grid can use 92% of this rating; voltage is the limit". It also shows the study's time, and an explicit "No grid study available" state.
 
-This requirement is blocked on two things outside the Software team. First, the result tables are private, so the Data Science owner must decide to open read access to the dashboard. Second, the study job has not yet run on real PSS/E: it waits for Power Systems' case file and city-to-branch mapping (`docs/data-science/decisions/psse_message_to_aaron.md` on the `feature/pss-e-integration` branch). Nothing is built for it in the first release, and the layout does not reserve space for it.
+**Unblocked on 2026-11-16.** Both blockers are cleared. First, the Data Science owner opened read access: the view `latest_grid_study` (migration `20261116200000_expose_latest_grid_study.sql`) is readable with the dashboard's key, while the four result tables stay private. Second, the study job has run on real PSS/E: 19 runs were written on 2026-11-11 and 2026-11-12, on the public IEEE 39-bus test case scaled per city.
+
+What to read: `GET /rest/v1/latest_grid_study`, up to one row per city per solver from the newest complete run, with `usable_pct`, `limiting_factor`, `dispatched_amps_per_conductor`, `applied_amps_per_conductor`, `slot_time`, `age_minutes` and `is_stale` among its 20 columns. The column table and the display rules are in the "Grid-study results (preliminary)" section of [`rest-api.md`](../../../../docs/integration/rest-api.md). Three things to design for: every value is preliminary (show the label the contract gives), the PSS/E job is paused so every row is stale today (show the study time and a "Study not current" state), and an open-source solver (pandapower) will add hourly rows later, told apart by the `solver` column. Nothing is built for it in the first release, and the layout does not reserve space for it; the Software team decides when to take it up.
 
 ## 11. Open questions
 
