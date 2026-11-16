@@ -78,11 +78,40 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
+| PSE-01 | Phase 1 | Pending |
+| PSE-02 | Phase 1 | Pending |
+| PSE-03 | Phase 1 | Pending |
+| PSE-04 | Phase 1 | Pending |
+| NET-01 | Phase 1 | Pending |
+| NET-02 | Phase 1 | Pending |
+| NET-03 | Phase 1 | Pending |
+| ENG-01 | Phase 2 | Pending |
+| ENG-02 | Phase 2 | Pending |
+| ENG-03 | Phase 2 | Pending |
+| ENG-04 | Phase 2 | Pending |
+| ENG-05 | Phase 2 | Pending |
+| ENG-06 | Phase 2 | Pending |
+| DB-01 | Phase 3 | Pending |
+| DB-02 | Phase 3 | Pending |
+| DB-03 | Phase 3 | Pending |
+| AGR-01 | Phase 4 | Pending |
+| AGR-02 | Phase 4 | Pending |
+| AGR-03 | Phase 4 | Pending |
+| AGR-04 | Phase 4 | Pending |
+| OPS-01 | Phase 5 | Pending |
+| OPS-02 | Phase 5 | Pending |
+| OPS-03 | Phase 5 | Pending |
+| OPS-04 | Phase 5 | Pending |
+| OPS-05 | Phase 5 | Pending |
+| VIEW-01 | Phase 6 | Pending |
+| VIEW-02 | Phase 6 | Pending |
+| VIEW-03 | Phase 6 | Pending |
 
 **Coverage:**
 - v1 requirements: 28 total
-- Mapped to phases: 0 (filled by the roadmap)
+- Mapped to phases: 28 (Phase 1: 7, Phase 2: 6, Phase 3: 3, Phase 4: 4, Phase 5: 5, Phase 6: 3)
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-11-16*
-*Last updated: 2026-11-16 after initial definition*
+*Last updated: 2026-11-16 after roadmap creation (traceability filled)*
