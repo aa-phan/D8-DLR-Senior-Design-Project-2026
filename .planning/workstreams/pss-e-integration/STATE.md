@@ -4,17 +4,17 @@ milestone: v1.6
 milestone_name: PSS/E Integration
 current_phase: 3
 current_phase_name: Laptop Run and Handover
-status: executing
-stopped_at: Phase 4 complete, ready to execute Phase 3
-last_updated: "2026-11-11T07:16:26.024Z"
-last_activity: 2026-11-11
-last_activity_desc: Phase 4 complete, transitioned to Phase 3
+status: complete
+stopped_at: Phase 3 complete (03-08 handover recorded); job paused until an always-on licensed host
+last_updated: "2026-11-16T20:00:00.000Z"
+last_activity: 2026-11-16
+last_activity_desc: 03-08 handover recorded, laptop cleaned, writer password changed
 state_head: 074a766680cd9a2283df84339162bae4c0d329f3
 progress:
   total_phases: 4
-  completed_phases: 2
+  completed_phases: 4
   total_plans: 27
-  completed_plans: 25
+  completed_plans: 27
 ---
 
 # Project State
@@ -26,16 +26,16 @@ See: .planning/PROJECT.md (shared; PSS/E integration moves in scope at milestone
 **Core value:** Each city's rating reaches PSS/E and PSS/E's results come back to the database,
 every hour the host is on, and a rating that can't be trusted never reaches a study as anything
 higher than the static rating.
-**Current focus:** Phase 04 — Per-city scaling of the 39-bus case
+**Current focus:** Milestone complete; the job is paused until an always-on licensed Windows host runs it
 
 ## Current Position
 
 Phase: 3 — Laptop Run and Handover
-Plan: 8
-Status: Ready to execute
-Last activity: 2026-11-11 — Phase 4 complete, transitioned to Phase 3
+Plan: 8 of 8
+Status: Complete
+Last activity: 2026-11-16 — 03-08 handover recorded (1 proof write, 18 scheduled runs, all ok)
 
-Progress: [█████████░] 95%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -110,8 +110,8 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-11-09
-Stopped at: Phase 4 complete, ready to execute Phase 3
+Last session: 2026-11-16
+Stopped at: Phase 3 complete; see the session note of 2026-11-16
 Resume file: None
 
 ## Session note 2026-11-08 (end of day)
@@ -134,3 +134,8 @@ Evening update: runbook step 8 passed on the laptop (`credcheck` 16 PASS, with `
 
 Done today: step 6 complete on the laptop (three hourly dry-run starts at :15:15 each with result 0 and no missed run, overlap test result 4, task removed); step 8 credential proof passed (16 PASS, write proof 18 PASS); Phase 4 (per-city scaling) added, researched, context decisions locked (all-or-nothing on a city failure, no separate Mvar target, realised totals not stored, El Paso on average load), requirements SCL-01 to SCL-06 added, validation file created, pattern map requested.
 Open for tomorrow: (1) re-check the laptop clock alignment (the Windows Time service was not running, so `w32tm /query /status` failed; the web-header comparison has not been read); (2) resume `/gsd-plan-phase 4 --ws pss-e-integration` at the planner step, then the plan checker; (3) close plan 03-07 in the laptop record once the clock item is done; (4) in person with Power Systems: real mapping, unconverted case within 50 buses, same lines for every city copy.
+
+## Session note 2026-11-16 (handover)
+
+Step 10 done and recorded in `phases/03-laptop-run-and-handover/03-08-HANDOVER-RECORD.md`: the real hourly task ran from 2026-11-11 3:15 PM to 2026-11-12 9:15 AM Central and was disabled by the one-time stop task; 19 runs in the tables (1 proof write, 18 scheduled), all outcome `ok` with live ratings, no overlap. Two morning gaps were Modern Standby (`WakeToRun` did not wake the laptop). The teammate ran the new status and cleanup scripts (`docs/data-science/ops/`): both tasks removed, secrets blanked, mapping copied privately. The owner's side changed the `dlr_psse_writer` password (new string in the owner's local `.env` only).
+Next: pick an always-on licensed Windows host that never sleeps and set it up with the guide (steps 1 to 6 and 10, new password delivered privately, mapping copied back). Open: Power Systems' review of the results; whether to change the main pipeline writer login. An open-source solver (pandapower) for continuous runs is planned as a separate workstream.

@@ -3,15 +3,15 @@
 **Date:** 2026-10-29
 **From:** pss-e-integration Phase 3 (plan 03-06, DOC-01)
 **To:** whoever installs the hourly PSS/E job on the licensed laptop
-**Status:** Mac-rehearsed. The commands and tables below were checked against the code, a fake psspy and a local database; nobody has followed this guide on the laptop yet. Every claim about real PSS/E, the licence, Windows or Task Scheduler is tagged `[UNVERIFIED until step N]` with a short id such as `(U05)`; the step is a step of [the runbook](psse_laptop_runbook.md), whose register lists each id with the evidence that clears it.
+**Status:** Mac-rehearsed. The commands and tables below were checked against the code, a fake psspy and a local database; since then the teammate followed it on the licensed laptop through step 10 (2026-11-05 to 2026-11-12; plans 03-07 and 03-08), and the hand-over record at the end says what each step showed. Every claim about real PSS/E, the licence, Windows or Task Scheduler is tagged `[UNVERIFIED until step N]` with a short id such as `(U05)`; the step is a step of [the runbook](psse_laptop_runbook.md), whose register lists each id with the evidence that clears it.
 
 ## Purpose and scope
 
 The job runs one PSS/E study every hour on the licensed laptop and writes the result into the project's private result tables. Each run writes one record in `psse_run` and, when the study completes, four rows in `psse_dispatched_capacity`, four in `psse_voltage_margin` and the rows of `psse_contingency_result`. The tables, their columns and the reading rules are in [the schema specification](../schema/psse_results_v1.md); what the study computes is in [the study-definitions note](psse_study_definitions.md).
 
-The position of this guide is that the job runs only while the laptop is on, awake and signed in. A missed hour is a gap, not a failure: the gap check lists every hour with no complete result set, so a gap is visible. There is no always-on guarantee; that is out of scope for this milestone.
+The job runs only while the laptop is on, awake and signed in (or, on an always-on host, while that machine is). A missed hour is a gap, not a failure: the gap check lists every hour with no complete result set, so a gap is visible. The deployment target is an always-on licensed Windows machine that never sleeps; the laptop session of 2026-11-11 to 2026-11-12 was the trial of that deployment, and the job is paused until such a machine is set up with this guide.
 
-Also out of scope: running the job as a Windows service or as another account, public results, a full N-1 study (the screen covers line outages near the mapped branches only), and any change to the production pipeline. Until production-pipeline Phase 7 gives its go, every rating the job reads is provisional, so every run uses the static ratings and its outcome is `fallback`. Do not present a result as a dispatch the grid operator should rely on until Power Systems has reviewed the definitions and answered the questions in the study-definitions note.
+Also out of scope: running the job as a Windows service or as another account, public results, a full N-1 study (the screen covers line outages near the mapped branches only), and any change to the production pipeline. A provisional, stale or missing rating makes that city use its static rating and the run's outcome `fallback`. In the laptop trial every run read all four cities' live ratings from `city_rating` and its outcome was `ok`. The result sets in the tables are 19 runs on the public IEEE 39-bus case scaled per city (one proof write and 18 scheduled runs), not a full N-1 study; read them as a demonstration of the pipeline, not as numbers Power Systems has reviewed. Do not present a result as a dispatch the grid operator should rely on until Power Systems has reviewed the definitions and answered the questions in the study-definitions note.
 
 How to read the tags: `[UNVERIFIED until step N]` means the Mac cannot show the statement, and step N of the runbook is where the laptop (or the live database) will. The tag stays until someone records evidence and updates the register. The guide's questions section lists the open decisions; none is answered here.
 
@@ -351,27 +351,27 @@ The job's only database credential is the `dlr_psse_writer` role, which can inse
 
 ## Hand-over record
 
-Fill each row when it is known. All rows are pending; no identifier goes in this table.
+Filled from the 03-07 laptop record and the 03-08 handover record. No identifier goes in this table.
 
 | Item | Value | Date | Status |
 |---|---|---|---|
-| PSS/E version and edition | pending | pending | pending |
-| Licence type | pending | pending | pending |
-| Python version and bitness | pending | pending | pending |
-| psycopg pin used | pending | pending | pending |
-| Wheel sha256 values (kept in the laptop record, not here) | pending | pending | pending |
-| Runbook step 0 passed | pending | pending | pending |
-| Runbook step 1 passed | pending | pending | pending |
-| Runbook step 2 passed | pending | pending | pending |
-| Runbook step 3 passed | pending | pending | pending |
-| Runbook step 4 passed | pending | pending | pending |
-| Runbook step 5 passed | pending | pending | pending |
-| Runbook step 6 passed | pending | pending | pending |
-| Runbook step 7 passed | pending | pending | pending |
-| Runbook step 8 passed | pending | pending | pending |
-| Runbook step 9 passed | pending | pending | pending |
-| Runbook step 10 passed | pending | pending | pending |
-| Someone other than the author followed this guide through step 10 | pending | pending | pending |
+| PSS/E version and edition | 36.4, free Xplore edition (50-bus limit) | 2026-11-09 | recorded |
+| Licence type | open (not asked) | - | open |
+| Python version and bitness | 3.14.0, 64-bit | 2026-11-05 | recorded |
+| psycopg pin used | 3.3.6 with psycopg-binary 3.3.6 and tzdata | 2026-11-05 | recorded |
+| Wheel sha256 values (kept in the laptop record, not here) | in the 03-07 laptop record; all matched | 2026-11-05 | recorded |
+| Runbook step 0 passed | versions and sleep states read; licence type open | 2026-11-05 | passed in part |
+| Runbook step 1 passed | wheel hashes matched, import works, config file limited to the user | 2026-11-05 | passed |
+| Runbook step 2 passed | 6 PASS with the environment helper set | 2026-11-09 | passed |
+| Runbook step 3 passed | 27 PASS on an unconverted case | 2026-11-09 | passed |
+| Runbook step 4 passed | 29 PASS with the write check | 2026-11-09 | passed |
+| Runbook step 5 passed | dry run exit 0, live ratings read | 2026-11-09 | passed |
+| Runbook step 6 passed | registered after the encoding rewrite; three starts returned 0; overlap test returned 4; task removed | 2026-11-09 | passed |
+| Runbook step 7 passed | public 39-bus case scaled per city in place of Power Systems' case; engineer review open | 2026-11-11 | deferred |
+| Runbook step 8 passed | credcheck 16 PASS, write proof 18 PASS | 2026-11-09 | passed |
+| Runbook step 9 passed | one proof write, outcome ok, read back clean | 2026-11-11 | passed |
+| Runbook step 10 passed | 18 scheduled runs, all ok, no overlap; standby gaps explained; tasks removed | 2026-11-12 | passed |
+| Someone other than the author followed this guide through step 10 | yes, the teammate on the laptop | 2026-11-12 | passed |
 
 ## Questions for the user, the teammate and the owner
 

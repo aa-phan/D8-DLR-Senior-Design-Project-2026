@@ -382,6 +382,10 @@ Unregister-ScheduledTask -TaskName "DLR-PSSE-Hourly" -Confirm:$false
 
 **Stop if:** exit 1 or exit 3 for several hours in a row (disable the task at once and tell the owner), an unexplained pattern of gaps (record it as an open question, not a pass), or two runs that overlapped.
 
+**Seen in the laptop trial (2026-11-11 to 2026-11-12, the 03-08 handover record):** 18 scheduled runs, all outcome `ok`, no overlap. The laptop went into connected standby twice in the morning and `WakeToRun` did not wake it, so those starts were held until it resumed and two hours show as gaps. A host meant to run continuously must be set never to sleep while plugged in (`powercfg /change standby-timeout-ac 0`, or the same choice in Windows' power settings), keep its lid open, stay signed in, and stay on the network.
+
+**Reading the task remotely and cleaning up a borrowed laptop:** `docs/data-science/ops/psse_laptop_status.ps1` reads the task state, the sleep and wake events, the job log lines and the clock and writes one masked report to the Desktop; it changes nothing. `docs/data-science/ops/psse_laptop_cleanup.ps1` previews, and with `-Apply` removes both tasks, blanks the secret values in the configuration file and its backups, and drops history lines that hold a secret; it never touches the mapping. Copy the mapping somewhere private before the laptop is returned, and change the writer password afterwards.
+
 ## Pasting results safely
 
 Results go back into the repository record as words and counts, never as output copied from a run made with identifiers shown.
@@ -411,26 +415,26 @@ Each row is one claim that only the laptop (or the live database) can show. The 
 | U10 The `branch_chng_3` signature (a Phase 2 unverified item) | 3 | `signature:branch_chng_3` PASS in the probe |
 | U11 The combined `scal_2` form (Phase 2 assumption A13) | 4 | `scale_load` PASS in the probe with the write check |
 | U12 PSS/E's own tools list the example case's in-service branches with their base kV | 5 | the installer choosing four lines from that listing and the dry run completing |
-| U13 The Windows byte lock behaves as on the development machine | 6 | a task started while `hold-lock` runs ending with `LastTaskResult` 4, and the lock free again after the holder exits |
+| U13 The Windows byte lock behaves as on the development machine | 6 | a task started while `hold-lock` runs ending with `LastTaskResult` 4, and the lock free again after the holder exits. Seen on 2026-11-09 in step 6 (result 4 under a held lock; 03-07 session). |
 | U14 Task Scheduler accepts the XML | 6 | `Register-ScheduledTask -Xml` succeeding with the rendered file |
 | U15 A standard user can register an interactive-only task for their own account (A8) | 6 | the registration succeeding without administrator rights, or the recorded fallback of the teammate registering it |
-| U16 `WakeToRun` wakes a Modern Standby laptop (A9) | 6 | a scheduled start made while the laptop slept, or a note that none was woken (then the hour is a gap) |
+| U16 `WakeToRun` wakes a Modern Standby laptop (A9) | 6 | a scheduled start made while the laptop slept, or a note that none was woken (then the hour is a gap) Seen on 2026-11-12 (03-08 handover record): not woken. The laptop sat in connected standby for two periods, the starts were held until it resumed, and the missed hours are gaps. |
 | U17 A quoted Command with spaces and a UTF-8 string import work | 6 | the registered task starting and `LastTaskResult` showing the launcher's own exit code |
 | U18 The launcher's exit code reaches `LastTaskResult` | 6 | `LastTaskResult` 0 after a dry run and 4 after a start under a held lock |
-| U19 The laptop clock agrees with the database | 6 | `w32tm /query /status` synchronised, then a write delay of seconds in the step 9 clock statement |
-| U20 `IgnoreNew` drops a start made while an instance runs | 6 | Task Scheduler's history showing a start refused as already running; until then the run lock is the only observed guarantee |
+| U19 The laptop clock agrees with the database | 6 | `w32tm /query /status` synchronised, then a write delay of seconds in the step 9 clock statement Seen on 2026-11-11 to 2026-11-15 (03-08 handover record): write delays about 1 second and the clock 1 second from a web clock, with the Windows Time service not running. |
+| U20 `IgnoreNew` drops a start made while an instance runs | 6 | Task Scheduler's history showing a start refused as already running; until then the run lock is the only observed guarantee Not seen in step 10 (03-08 handover record): no start came while an instance ran, and the scheduler's history log was not enabled. |
 | U21 Units and percent-of-rating values on the real network | 7 | the engineer's review and the hand-check of one rating and one percent-of-rating value |
 | U22 A study time under the 1500 second budget on the real case | 7 | `study_seconds` in the real dry run under 1500 |
 | U23 The session pooler accepts the role in the form `ROLE.PROJECT-REF` | 8 | `credcheck` connecting and the role-leg rows PASS |
 | U24 Phase 6's live grants are as the reference DDL says | 8 | the 13 role-leg rows PASS on the live database |
 | U25 The live key reads the ratings view and is refused at 401 or 403 on a write | 8 | the three REST rows PASS |
 | U26 psycopg 3.1.20 and 3.2.13 run `writer.py` on Python 3.7 to 3.9 (A12) | 8 | the first `writer.connect` and `credcheck` completing on the laptop's interpreter |
-| U27 A repetition with an Interval and no Duration repeats indefinitely (A7) | 10 | a day-long observation of hourly starts with `NextRunTime` still set |
-| U28 A hard kill at the time limit may leave a licence seat held (A17) | 10 | a run killed at 45 minutes, if one happens, and whether the next start finds a seat |
-| U29 Daylight-saving changes cost at most one doubled or missed slot (A18) | 10 | the gap check across a changeover, if one is observed |
+| U27 A repetition with an Interval and no Duration repeats indefinitely (A7) | 10 | a day-long observation of hourly starts with `NextRunTime` still set Seen in part on 2026-11-11 to 2026-11-12 (03-08 handover record): about 18 hours of hourly starts with `NextRunTime` still set when the task was disabled; a full day was not observed. |
+| U28 A hard kill at the time limit may leave a licence seat held (A17) | 10 | a run killed at 45 minutes, if one happens, and whether the next start finds a seat Not seen in step 10 (03-08 handover record): the longest run took seconds. |
+| U29 Daylight-saving changes cost at most one doubled or missed slot (A18) | 10 | the gap check across a changeover, if one is observed Not seen in step 10 (03-08 handover record): no changeover fell in the window. |
 | U30 A licence is not available to a signed-out or non-interactive session | 0 | the teammate's answer; the default assumption is that it is not |
 | U31 The job's code runs on the laptop's older Python (never run below 3.12 here) | 2 | `selftest` and the dry run completing on that interpreter |
-| U32 An interactive-token task runs only while its user is signed in | 6 | no run starting while the user is signed out, observed or stated by the teammate |
+| U32 An interactive-token task runs only while its user is signed in | 6 | no run starting while the user is signed out, observed or stated by the teammate Not seen in step 10 (03-08 handover record): the user stayed signed in. |
 | U33 With `PSSE_ENV_MODULE` set to the PSS/E environment helper (`psse3604` for 36.4), the launcher's own import of the helper and then `psspy` succeeds and `selftest` starts PSS/E (importing the helper and then `psspy` by hand worked in the first laptop session) | 2 | `selftest` printing `PSS/E started` and six `PASS` rows with the key set, where it stopped with `psspy could not be imported (ImportError)` without it |
 | U34 A PSS/E install other than 36.4 ships an environment helper module of the same kind, named after its version (35.x is assumed to; its name is not known here) | 0 | the helper's name read from that install's `psspy` folder, or a note that the only install in use is 36.4 |
 | U35 The whole-case scaling layout of `SCALE_LAYOUT` is right on PSS/E 36.4 (read from the installed documentation on 2026-11-10 and matching on every position; the laptop probe of 2026-11-11 found that every totals read must be closed with an APIOPT 2 call, the fix then passed there the same day) | 4 | the scaling call's documentation or a recorded call line with placeholder numbers matching `SCALE_LAYOUT`, and `scale_to_target` PASS. Seen on PSS/E 36.4 on 2026-11-11 (Phase 4 laptop record). |

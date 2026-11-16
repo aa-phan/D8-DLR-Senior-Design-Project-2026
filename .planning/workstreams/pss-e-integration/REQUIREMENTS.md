@@ -24,7 +24,7 @@ requirements state what must be true, not how; `psspy` API choices are theirs.
   row links to its run and to the `city_rating` rows it used, is handed to production-pipeline
   Phase 6 so the tables and a PSS/E write grant ship in Phase 6's migration. No standalone
   migration in this workstream.
-- [ ] **DBX-02**: The job reads ratings only through Phase 6's access and writes only to the
+- [x] **DBX-02**: The job reads ratings only through Phase 6's access and writes only to the
   PSS/E result tables; its credential cannot change `city_rating`.
 
 ### Inputs
@@ -60,18 +60,19 @@ requirements state what must be true, not how; `psspy` API choices are theirs.
 
 ### Scheduling
 
-- [ ] **SCH-01**: Windows Task Scheduler runs the job hourly on the teammate's licensed laptop,
+- [x] **SCH-01**: Windows Task Scheduler runs the job hourly on the teammate's licensed laptop,
   with no overlapping runs.
-- [ ] **SCH-02**: An hour with no run (laptop off or asleep) is visible as a gap in the run
+- [x] **SCH-02**: An hour with no run (laptop off or asleep) is visible as a gap in the run
   records, through a stated query or check.
 
 ### Verification
 
 - [x] **TST-01**: Tests on the Mac against a fake `psspy` cover static fallback, the mapping
   check, a non-converging load flow, and write-back (including a failed run).
-- [ ] **TST-02**: One real end-to-end run on the laptop against Power Systems' case writes a
-  run record and results that can be read back from the database.
-- [ ] **DOC-01**: A setup guide for the laptop (PSS/E and Python versions, credentials, Task
+- [x] **TST-02**: One real end-to-end run on the laptop against Power Systems' case writes a
+  run record and results that can be read back from the database. (Met on the public 39-bus case
+  scaled per city, per the Phase 4 decision; Power Systems' review of the numbers is open.)
+- [x] **DOC-01**: A setup guide for the laptop (PSS/E and Python versions, credentials, Task
   Scheduler entry) lets someone else install and start the hourly job.
 
 ### Per-city scaling (Phase 4)
@@ -113,11 +114,11 @@ requirements state what must be true, not how; `psspy` API choices are theirs.
 | STU-03 | Phase 2 | Complete |
 | STU-04 | Phase 2 | Complete |
 | TST-01 | Phase 2 | Complete |
-| DBX-02 | Phase 3 | Pending |
-| TST-02 | Phase 3 | Pending |
-| SCH-01 | Phase 3 | Pending |
-| SCH-02 | Phase 3 | Pending |
-| DOC-01 | Phase 3 | Pending |
+| DBX-02 | Phase 3 | Complete |
+| TST-02 | Phase 3 | Complete |
+| SCH-01 | Phase 3 | Complete |
+| SCH-02 | Phase 3 | Complete |
+| DOC-01 | Phase 3 | Complete |
 | SCL-01 | Phase 4 | Complete |
 | SCL-02 | Phase 4 | Complete |
 | SCL-03 | Phase 4 | Complete |

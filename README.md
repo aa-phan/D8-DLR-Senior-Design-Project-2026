@@ -148,6 +148,28 @@ points. The rating points are the four cities above; the project does not rate c
 
 ---
 
+## PSS/E Integration (ratings → PSS/E → results back to Supabase)
+
+An hourly job takes each city's latest rating from Supabase, studies it in PSS/E, and writes PSS/E's results back to Supabase.
+
+**What it reads.** The `city_rating` view in Supabase, through the read-only publishable key. A rating that is older than 90 minutes, provisional or missing is replaced by that city's static rating, and the run records why.
+
+**What it does.** For each of the four cities it loads a fresh copy of the public IEEE 39-bus case, scales it to that city's load and generation targets (kept in a private mapping file, never in git), applies the rating to the mapped lines, and runs in PSS/E: a base load flow, an N-1 line-outage screen, a voltage-stability margin search and the dispatched capacity (the lower of the rating and the voltage limit). Definitions: [`docs/data-science/decisions/psse_study_definitions.md`](docs/data-science/decisions/psse_study_definitions.md).
+
+**What it writes.** One record in `psse_run` per hourly start, plus the rows of `psse_dispatched_capacity`, `psse_voltage_margin` and `psse_contingency_result`, all in one transaction. It writes as the `dlr_psse_writer` role, which can insert and read those four tables and nothing else, so rows are permanent and `city_rating` cannot be changed. Schema and reading rules: [`docs/data-science/schema/psse_results_v1.md`](docs/data-science/schema/psse_results_v1.md).
+
+**Where it runs.** A licensed Windows machine with PSS/E, through Windows Task Scheduler at :15 each hour. The deployment target is an always-on machine that never sleeps; the job ran on a teammate's laptop for the trial and is paused until such a host is set up.
+
+**How to run it.**
+- Install and set up: [`docs/data-science/decisions/psse_laptop_setup.md`](docs/data-science/decisions/psse_laptop_setup.md) (the guide) and [`docs/data-science/decisions/psse_laptop_runbook.md`](docs/data-science/decisions/psse_laptop_runbook.md) (steps 0 to 10 with expected output).
+- Entry point: `backend/psse_run_hourly.py` (`run`, `--dry-run`, `selftest`, `probe`, `credcheck`, `gaps`). The task file comes from `backend/psse_render_task.py`.
+- Check for missed hours from any machine with the writer login (it only reads): `python backend/psse_run_hourly.py gaps --config <config file>`.
+- Tests on a Mac or Linux machine use a fake `psspy`: `python -m pytest backend/tests -k psse` (the database tests also need `DLR_TEST_PG_AUTOSTART=1` and a local Postgres; without them they are skipped).
+
+**Evidence of runs.** On 2026-11-11 to 2026-11-12 the job wrote 19 runs to the live tables: one proof write and 18 scheduled hourly runs. Every run read live ratings for all four cities, finished with outcome `ok` and had results for all its outages. No two runs overlapped. The two missed hours were the laptop in standby, and the gap check lists them. Record: [`03-08-HANDOVER-RECORD.md`](.planning/workstreams/pss-e-integration/phases/03-laptop-run-and-handover/03-08-HANDOVER-RECORD.md). The results come from a public test case and have not been reviewed by Power Systems, so they demonstrate the pipeline; they are not grid-operating numbers.
+
+---
+
 ## Next Steps
 
 1. **Spatial interpolation**: Kriging or IDW between stations (not planned while each city is a single independent point)

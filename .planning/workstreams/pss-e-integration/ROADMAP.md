@@ -2,7 +2,7 @@
 
 ## Milestones
 
-- 🚧 **v1.6 PSS/E Integration** - Phases 1-3 (in progress)
+- ✅ **v1.6 PSS/E Integration** - Phases 1-4 (complete 2026-11-16; paused until an always-on licensed host runs the job)
 
 ## Overview
 
@@ -29,7 +29,7 @@ the third needs Phase 6 live, Power Systems' case file and the laptop.
 
 - [x] **Phase 1: Result-Table Spec and Rating I/O** - Spec to Phase 6; rating selection with static fallback; run record and all-or-nothing write
 - [x] **Phase 2: Study on Power Systems' Case** - Branch mapping, unit conversion, load flow, N-1, voltage margin, dispatched capacity, proven on the Mac with a fake `psspy`
-- [ ] **Phase 3: Laptop Run and Handover** - Real run on the laptop, scoped credential, hourly schedule with visible gaps, setup guide
+- [x] **Phase 3: Laptop Run and Handover** - Real run on the laptop, scoped credential, hourly schedule with visible gaps, setup guide
 
 ## Phase Details
 
@@ -89,8 +89,8 @@ the third needs Phase 6 live, Power Systems' case file and the laptop.
 - [x] 03-04-PLAN.md — Entry script that alone imports `psspy`, selftest, probe, hold-lock, and the gaps and credcheck commands
 - [x] 03-05-PLAN.md — Task Scheduler XML template (no overlap, 45-minute limit, no secrets) with a safe renderer and structure tests
 - [x] 03-06-PLAN.md — Setup guide and laptop runbook with drift gates; every runbook command rehearsed on fakes and local Postgres
-- [ ] 03-07-PLAN.md — Laptop session A (human): versions, psycopg wheelhouse after a legitimacy check, selftest, probe, dry-run on an example case, three hourly dry-runs
-- [ ] 03-08-PLAN.md — Live session (human): credential proof, real-case review, one proof write with read-back behind a decision, the real hourly task behind a second decision, gap check, final guide edit
+- [x] 03-07-PLAN.md — Laptop session A (human): versions, psycopg wheelhouse after a legitimacy check, selftest, probe, dry-run on an example case, three hourly dry-runs
+- [x] 03-08-PLAN.md — Live session (human): credential proof, real-case review, one proof write with read-back behind a decision, the real hourly task behind a second decision, gap check, final guide edit
 
 ## Progress
 
@@ -99,9 +99,9 @@ Phases execute in numeric order: 1 → 2 → 3
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Result-Table Spec and Rating I/O | 5/5 | In Progress | - |
-| 2. Study on Power Systems' Case | 7/7 | In Progress | - |
-| 3. Laptop Run and Handover | 6/8 | In Progress | - |
+| 1. Result-Table Spec and Rating I/O | 5/5 | Complete | - |
+| 2. Study on Power Systems' Case | 7/7 | Complete | - |
+| 3. Laptop Run and Handover | 8/8 | Complete | 2026-11-16 |
 
 ### Phase 4: Per-city scaling of the 39-bus case
 
