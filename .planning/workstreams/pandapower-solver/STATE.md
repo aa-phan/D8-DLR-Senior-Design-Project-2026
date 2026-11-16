@@ -32,7 +32,9 @@ See: .planning/PROJECT.md (shared). Builds on the pss-e-integration workstream (
 - Writes as the existing `dlr_psse_writer` role; its password and the private per-city mapping become GitHub secrets.
 - Agreement is checked by replaying the recorded PSS/E runs (their stored ratings) through pandapower: same overload and voltage-violation set per outage, bus voltages within 0.01 pu, flows and capacities within 2%.
 - Done: results land every hour for a full day and the agreement check passes.
+- Dashboard read access: the four tables stay private; one read-only view (newest result per city: dispatched capacity, limiting factor, solver, study time) becomes readable with the dashboard's key, and the dashboard doc's DEF-01 (software-dashboard workstream, DASHBOARD-REQUIREMENTS.md ch. 10) is updated to say it is unblocked.
 - Out of scope: building the dashboard (Software team).
+- Research for this milestone lives in `.planning/workstreams/pandapower-solver/research/` (not the shared `.planning/research/`).
 
 ### Blockers/Concerns
 
