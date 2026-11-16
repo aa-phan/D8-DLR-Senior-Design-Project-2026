@@ -16,9 +16,9 @@
 --   no_write_policy_for_anon_or_authenticated  no rule lets the public roles insert, change or delete rows
 --   anon_authenticated_grants_are_select_on_published_objects_only
 --                                           the database's own permission list gives the public roles
---                                           read access to exactly the five published objects (the ratings
---                                           table and view, the day-ahead table and its two views), 10 of 10
---                                           grants, nothing else
+--                                           read access to exactly the six published objects (the ratings
+--                                           table and view, the day-ahead table and its two views, the
+--                                           grid-study view), 12 of 12 grants, nothing else
 --   anon_authenticated_hold_no_write_or_column_privilege_in_public
 --                                           asks the database's privilege functions directly, so column-level
 --                                           grants and privileges inherited through role membership show up too
@@ -47,11 +47,21 @@
 --   day_ahead_status_has_the_four_cities    the status view always lists all four cities
 --   day_ahead_view_columns_all_commented    every column of both day-ahead views has its unit-first description
 --   assert_fresh_has_one_signature          the alarm function exists once, so the alarm URL cannot meet an overload
+-- The grid-study view (20261116200000_expose_latest_grid_study.sql):
+--   latest_grid_study_runs_with_owner_rights  the view runs with its owner's rights, on purpose, so the
+--                                           result tables can stay private (lint 0010 accepted for it)
+--   anon_can_select_latest_grid_study       the public key can read the newest grid-study result per city
+--   psse_tables_not_readable_by_public_roles  the four psse_* result tables stay private
+--   latest_grid_study_matches_the_contract  the view has its 20 columns, ending with age_minutes, is_stale
+--   latest_grid_study_columns_all_commented every published column has its unit-first description
+--   latest_grid_study_one_row_per_city_per_solver  never two rows for the same city and solver
+--   latest_grid_study_is_stale_matches_age_minutes  the stale flag never contradicts the minutes shown
 
 with
--- The five objects the public roles may read: Phase 6 (two) and Phase 8 (three).
+-- The six objects the public roles may read: Phase 6 (two), Phase 8 (three) and the grid-study view.
 published(relation) as (
-    values ('city_rating'), ('latest_rating'), ('day_ahead_forecast'), ('day_ahead_upcoming'), ('day_ahead_status')
+    values ('city_rating'), ('latest_rating'), ('day_ahead_forecast'), ('day_ahead_upcoming'), ('day_ahead_status'),
+           ('latest_grid_study')
 ),
 -- Every privilege a role other than the table owner holds on a public relation, for anon,
 -- authenticated and PUBLIC (a PUBLIC grant reaches anon as well).
@@ -76,7 +86,7 @@ select_grants as (
        and grantee in ('anon', 'authenticated')
 ),
 -- Relations in public where anon or authenticated hold a write, trigger or column-level privilege
--- (reading is allowed only on the five published objects).
+-- (reading is allowed only on the six published objects).
 public_role_privileges as (
     select c.relname::text as relation, r.rolname
       from pg_class c
@@ -114,6 +124,26 @@ day_ahead_view_columns as (
        and a.attnum > 0
        and not a.attisdropped
 )
+-- BEGIN grid_study_ctes (a checker run on a database without the grid-study view strips this region)
+-- The columns of the grid-study view (the leading comma belongs to this region).
+, grid_view_columns as (
+    select a.attnum, a.attname::text as column_name, col_description(a.attrelid, a.attnum) as column_comment
+      from pg_attribute a
+     where a.attrelid = to_regclass('public.latest_grid_study')
+       and a.attnum > 0
+       and not a.attisdropped
+),
+psse_tables(relation) as (
+    values ('psse_run'), ('psse_dispatched_capacity'), ('psse_voltage_margin'), ('psse_contingency_result')
+),
+psse_readable as (
+    select t.relation, r.rolname
+      from psse_tables t
+     cross join (values ('anon'), ('authenticated')) as r(rolname)
+     where to_regclass('public.' || t.relation) is not null
+       and has_table_privilege(r.rolname, to_regclass('public.' || t.relation), 'select')
+)
+-- END grid_study_ctes
 select check_name, ok, detail
   from (
     select 'latest_rating_is_security_invoker'::text as check_name,
@@ -149,11 +179,11 @@ select check_name, ok, detail
                             and roles::text[] && array['anon', 'authenticated', 'public']), 'none')
     union all
     select 'anon_authenticated_grants_are_select_on_published_objects_only',
-           (select count(*) from extra_grants) = 0 and (select count(*) from select_grants) = 10,
+           (select count(*) from extra_grants) = 0 and (select count(*) from select_grants) = 12,
            'extra grants: ' || coalesce((select string_agg(grantee || ' ' || privilege || ' on ' || relation, ', '
                                                            order by relation, grantee, privilege)
                                            from extra_grants), 'none') ||
-               '; select grants on the five published objects: ' || (select count(*) from select_grants)::text || ' of 10'
+               '; select grants on the six published objects: ' || (select count(*) from select_grants)::text || ' of 12'
     union all
     -- The grants CTE above reads only pg_class.relacl, which never lists column-level grants
     -- (pg_attribute.attacl) or privileges inherited through role membership. The has_*_privilege
@@ -292,5 +322,45 @@ select check_name, ok, detail
            'functions named assert_fresh in public: ' ||
                (select count(*) from pg_proc p
                  where p.pronamespace = 'public'::regnamespace and p.proname = 'assert_fresh')::text
+    -- BEGIN grid_study_checks (stripped together with grid_study_ctes)
+    union all
+    select 'latest_grid_study_runs_with_owner_rights',
+           coalesce((select c.relkind = 'v' and not (coalesce(c.reloptions, '{}') @> array['security_invoker=true'])
+                       from pg_class c where c.oid = to_regclass('public.latest_grid_study')), false),
+           'reloptions=' || coalesce((select coalesce(c.reloptions::text, '{}')
+                                        from pg_class c where c.oid = to_regclass('public.latest_grid_study')), 'view missing')
+    union all
+    select 'anon_can_select_latest_grid_study',
+           coalesce(has_table_privilege('anon', to_regclass('public.latest_grid_study'), 'select'), false),
+           'has_table_privilege(anon, latest_grid_study, select)'
+    union all
+    select 'psse_tables_not_readable_by_public_roles',
+           not exists (select 1 from psse_readable),
+           'readable: ' || coalesce((select string_agg(relation || ' ' || rolname, ', ' order by relation, rolname)
+                                       from psse_readable), 'none')
+    union all
+    select 'latest_grid_study_matches_the_contract',
+           (select count(*) from grid_view_columns) = 20
+               and coalesce((select array_agg(column_name order by attnum) from grid_view_columns where attnum between 19 and 20)
+                            = array['age_minutes', 'is_stale'], false),
+           'columns=' || (select count(*) from grid_view_columns)::text ||
+               ', columns 19-20: ' || coalesce((select string_agg(column_name, ', ' order by attnum)
+                                                  from grid_view_columns where attnum between 19 and 20), 'none')
+    union all
+    select 'latest_grid_study_columns_all_commented',
+           (select count(*) from grid_view_columns) > 0
+               and (select count(*) from grid_view_columns where column_comment is null or btrim(column_comment) = '') = 0,
+           'columns without a comment: ' || coalesce((select string_agg(column_name, ', ' order by attnum)
+                                                       from grid_view_columns
+                                                      where column_comment is null or btrim(column_comment) = ''), 'none')
+    union all
+    select 'latest_grid_study_one_row_per_city_per_solver',
+           coalesce((select count(*) = count(distinct (solver, city)) from public.latest_grid_study), false),
+           'rows=' || coalesce((select count(*) from public.latest_grid_study)::text, 'view missing')
+    union all
+    select 'latest_grid_study_is_stale_matches_age_minutes',
+           coalesce((select coalesce(bool_and(is_stale = (age_minutes > 90)), true) from public.latest_grid_study), false),
+           'rows checked=' || coalesce((select count(*) from public.latest_grid_study)::text, 'view missing')
+    -- END grid_study_checks
   ) as checks
  order by check_name;

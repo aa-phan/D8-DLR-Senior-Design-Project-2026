@@ -29,6 +29,11 @@ _MIGRATIONS_DIR = local_pg.MIGRATIONS_DIR
 _OPS_DIR = os.path.join(local_pg.REPO_ROOT, "supabase", "ops")
 _VERIFY_PSSE = os.path.join(_OPS_DIR, "verify_psse_results.sql")
 _VERIFY_EXPOSURE = os.path.join(_OPS_DIR, "verify_exposure.sql")
+# The grid-study expose migration reads the psse tables, so it is the one migration allowed to sort
+# after the psse migration.
+_GRID_STUDY_EXPOSE_MIGRATION = "20261116200000_expose_latest_grid_study.sql"
+_EXPOSURE_CHECKS_WITHOUT_GRID_STUDY = 29
+_EXPOSURE_CHECKS = 36
 _EXPOSE_MIGRATION = "20261108120100_expose_day_ahead_forecast.sql"
 
 _BEGIN = "-- BEGIN psse_results_v1"
@@ -81,14 +86,14 @@ def test_psse_migration_is_unchanged_after_apply():
             assert hashlib.sha256(handle.read()).hexdigest() == expected, name
 
 
-def test_text_there_is_one_psse_migration_named_by_utc_timestamp_and_it_sorts_last():
+def test_text_there_is_one_psse_migration_named_by_utc_timestamp_and_only_the_grid_study_view_sorts_after_it():
     paths = _psse_paths()
     assert len(paths) == 1, paths
     name = os.path.basename(paths[0])
     assert re.fullmatch(r"[0-9]{14}_psse_results\.sql", name), name
-    names = sorted(os.listdir(_MIGRATIONS_DIR))
+    names = sorted(n for n in os.listdir(_MIGRATIONS_DIR) if n.endswith(".sql"))
     assert name > _EXPOSE_MIGRATION
-    assert names[-1] == name
+    assert names[names.index(name) + 1:] == [_GRID_STUDY_EXPOSE_MIGRATION]
 
 
 def test_text_the_marked_region_is_the_reference_ddl_byte_for_byte():
@@ -219,10 +224,30 @@ def test_the_checker_returns_the_seven_pinned_checks_in_order_all_ok(pg_url):
     assert all(isinstance(row["detail"], str) and row["detail"] for row in rows)
 
 
-def test_the_exposure_checker_still_returns_29_checks_all_ok(pg_url):
+def _exposure_checker_without_grid_study(tmp_dir):
+    """verify_exposure.sql with its marked grid-study regions removed, for a database that has the
+    psse tables but not yet the grid-study view."""
+    text = open(_VERIFY_EXPOSURE, encoding="utf-8").read()
+    for region in ("grid_study_ctes", "grid_study_checks"):
+        text, count = re.subn(r"(?ms)^[ \t]*-- BEGIN %s\b.*?^[ \t]*-- END %s[^\n]*\n" % (region, region), "", text)
+        assert count == 1, region
+    # Without the view the published objects are the five of Phase 6 and Phase 8: 10 select grants.
+    for old, new in ((",\n           ('latest_grid_study')\n", "\n"),
+                     ("(select count(*) from select_grants) = 12,", "(select count(*) from select_grants) = 10,"),
+                     ("' of 12'", "' of 10'"),
+                     ("the six published objects: ", "the five published objects: ")):
+        assert text.count(old) == 1, old
+        text = text.replace(old, new)
+    path = os.path.join(str(tmp_dir), "verify_exposure_without_grid_study.sql")
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(text)
+    return path
+
+
+def test_the_exposure_checker_returns_every_check_all_ok(pg_url):
     with _session(pg_url) as conn:
         rows = local_pg.run_select_file(conn, _VERIFY_EXPOSURE)
-    assert len(rows) == 29
+    assert len(rows) == _EXPOSURE_CHECKS
     assert _failed(rows) == [], rows
 
 
@@ -230,16 +255,17 @@ def test_the_psse_migration_leaves_every_exposure_check_and_detail_unchanged(tmp
     local_pg.require_local_pg()
     paths = local_pg.migration_files()
     psse = _psse_path()
-    before_paths = [p for p in paths if p != psse]
+    before_paths = [p for p in paths if os.path.basename(p) < os.path.basename(psse)]
+    checker = _exposure_checker_without_grid_study(tmp_path_factory.mktemp("checker"))
     with local_pg.cluster(tmp_path_factory) as url:
         local_pg.apply_migrations(url, paths=before_paths)
         _seed_ratings(url)
         with _session(url) as conn:
-            before = local_pg.run_select_file(conn, _VERIFY_EXPOSURE)
+            before = local_pg.run_select_file(conn, checker)
         local_pg.apply_migrations(url, paths=[psse])
         with _session(url) as conn:
-            after = local_pg.run_select_file(conn, _VERIFY_EXPOSURE)
-    assert len(before) == 29 and _failed(before) == []
+            after = local_pg.run_select_file(conn, checker)
+    assert len(before) == _EXPOSURE_CHECKS_WITHOUT_GRID_STUDY and _failed(before) == []
     assert after == before
 
 

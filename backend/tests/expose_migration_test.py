@@ -305,7 +305,8 @@ _OLD_LIVE_BASIS = (
 _MANIFEST = os.path.join(local_pg.REPO_ROOT, "docs", "data-science", "decisions", "real_data_validation",
                          "manifest.json")
 
-# Phase 6 checks (18, one renamed in Phase 8) plus the eleven Phase 8 day-ahead checks: 29 in all.
+# Phase 6 checks (18, one renamed in Phase 8), the eleven Phase 8 day-ahead checks and the seven
+# grid-study view checks: 36 in all, in name order.
 _VERIFY_CHECKS = (
     "anon_authenticated_grants_are_select_on_published_objects_only",
     "anon_authenticated_hold_no_write_or_column_privilege_in_public",
@@ -313,6 +314,7 @@ _VERIFY_CHECKS = (
     "anon_can_select_day_ahead_forecast",
     "anon_can_select_day_ahead_status",
     "anon_can_select_day_ahead_upcoming",
+    "anon_can_select_latest_grid_study",
     "anon_can_select_latest_rating",
     "anon_executable_public_functions_are_assert_fresh_only",
     "assert_fresh_has_one_signature",
@@ -326,6 +328,11 @@ _VERIFY_CHECKS = (
     "index_city_rating_city_valid_desc_present",
     "is_provisional_matches_the_labels",
     "is_stale_matches_age_minutes",
+    "latest_grid_study_columns_all_commented",
+    "latest_grid_study_is_stale_matches_age_minutes",
+    "latest_grid_study_matches_the_contract",
+    "latest_grid_study_one_row_per_city_per_solver",
+    "latest_grid_study_runs_with_owner_rights",
     "latest_rating_columns_all_commented",
     "latest_rating_ends_with_the_computed_columns",
     "latest_rating_has_34_columns",
@@ -334,6 +341,7 @@ _VERIFY_CHECKS = (
     "latest_rating_one_row_per_city",
     "no_write_policy_for_anon_or_authenticated",
     "pipeline_run_not_readable_by_anon",
+    "psse_tables_not_readable_by_public_roles",
     "read_policy_city_rating_public_read",
     "read_policy_day_ahead_forecast_public_read",
 )
@@ -640,11 +648,12 @@ def test_expose_migration_reapplies_cleanly(pg_url):
         after = _exposure_snapshot(conn)
     assert after == before
     grants, policies, _, _, _ = after
-    # anon and authenticated hold SELECT on exactly the five published objects, nothing else.
-    published = ("city_rating", "latest_rating", "day_ahead_forecast", "day_ahead_upcoming", "day_ahead_status")
+    # anon and authenticated hold SELECT on exactly the six published objects, nothing else.
+    published = ("city_rating", "latest_rating", "day_ahead_forecast", "day_ahead_upcoming", "day_ahead_status",
+                 "latest_grid_study")
     assert sorted({(r[0], r[2], r[3]) for r in grants}) == sorted(
         (relation, role, "SELECT") for relation in published for role in ("anon", "authenticated"))
-    assert len({(r[0], r[2], r[3]) for r in grants}) == 10
+    assert len({(r[0], r[2], r[3]) for r in grants}) == 12
     assert [p for p in policies if p[0] == "city_rating_public_read"] == [
         ("city_rating_public_read", "SELECT", "{anon,authenticated}")]
     assert [p for p in policies if p[0] == "day_ahead_forecast_public_read"] == [
