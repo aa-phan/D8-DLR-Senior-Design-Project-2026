@@ -83,6 +83,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 ## Phase Details
 
 ### Phase 1: PSS/E Reference Session and Network Parity
+
 **Goal**: A teammate-run, read-only session on the licensed machine produces the private network data, the load-flow settings and a reference solution, and a pandapower network built from that data matches the reference, with nothing from the session in the public repository.
 **Depends on**: Nothing (first phase). PSE-01 to PSE-03 need a person at a licensed PSS/E machine; the session scripts, ignore rules and scan, parser, builder and comparison code can be built and tested on placeholder data before the session.
 **Requirements**: PSE-01, PSE-02, PSE-03, PSE-04, NET-01, NET-02, NET-03
@@ -92,9 +93,37 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. The builder produces a pandapower network from the export keeping PSS/E bus numbers as bus indices and `from-to-circuit` names for branches, and stops with a clear failure on any record type it does not understand.
   4. The parity report compares the built network with the export element by element (counts, line versus transformer classification, ratings, limits, setpoints), lists every difference, and shows none.
   5. The base-case load flow of each city's scaled copy matches the PSS/E reference: every bus voltage within 0.01 pu and every branch flow within 2% (with an absolute floor for lightly loaded branches).
-**Plans**: TBD
+
+**Plans**: 11 plans
+
+Plans:
+**Wave 1**
+- [ ] 01-01-PLAN.md — Leak guard first: ignore rules and a three-layer scanner (path, shape, private needles), working tree and staged (wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+- [ ] 01-02-PLAN.md — Laptop session spine: call gate, RAW export, verified zip, masked summary, entry script (wave 2)
+- [ ] 01-05-PLAN.md — pandapower pin behind a blocking legitimacy checkpoint, hash-checked install (wave 2)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+- [ ] 01-03-PLAN.md — Session reference answers: base, every screened outage and margin point per city (wave 3)
+- [ ] 01-04-PLAN.md — Session settings and scaling experiments, the PowerShell wrapper and the plain-English guide (wave 3)
+- [ ] 01-06-PLAN.md — Fail-closed RAW parser and pandapower builder, proven against case39 (wave 3)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+- [ ] 01-07-PLAN.md — Parity report (NET-02), converted network copy and D-06 evidence (wave 4)
+- [ ] 01-08-PLAN.md — Minimal scaling, copied solve settings, D-13 comparator and scaling-detail analyser (wave 4)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+- [ ] 01-09-PLAN.md — Owner commands ingest and check, safe unzip, private-only outputs, laptop-to-Mac seam (wave 5)
+
+**Wave 6** *(blocked on Wave 5 completion)*
+- [ ] 01-10-PLAN.md — The PSS/E session with the teammate, then parity and NET-03 on the real data (wave 6, checkpoints)
+
+**Wave 7** *(blocked on Wave 6 completion)*
+- [ ] 01-11-PLAN.md — The owner's D-06 decision on the converted network, recorded and carried out (wave 7, checkpoint)
 
 ### Phase 2: PandapowerApi and Study Engine
+
 **Goal**: The existing study code (`study`, `contingency`, `margin`, `violations`, `dispatch`) runs a full four-city study on pandapower, chosen through one factory argument, with the island, stale-result and rating-basis traps handled and no access to live data.
 **Depends on**: Phase 1 (the network builder and the recorded solve settings). Work can start once the builder runs on the placeholder case; the final solve settings (ENG-05) are filled in when PSE-02 is recorded. Runs in parallel with Phase 3.
 **Requirements**: ENG-01, ENG-02, ENG-03, ENG-04, ENG-05, ENG-06
@@ -104,9 +133,11 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. A solve counts as converged only if it raises no error, leaves no in-service bus without a voltage and leaves no bus below the collapse limit; an outage that islands part of the grid appears as a `non_convergence` row, as PSS/E records it.
   4. Each city, each outage and each margin step solves a fresh copy of its base network: a test shows that running outages in a different order, or after a failed solve, gives identical results, and that no result is read after a failed solve.
   5. The solve settings (reactive limits, iteration limit, tolerance) come from the values recorded in PSE-02 and are stored with each run, and a full four-city study runs end to end on a throwaway local database with the placeholder mapping and no access to live data.
+
 **Plans**: TBD
 
 ### Phase 3: Solver Tag, Migration and Per-Solver Gaps
+
 **Goal**: The four result tables can hold PSS/E and pandapower runs side by side, every run carries the solver that produced it, and the gap check shows which solver missed which hour.
 **Depends on**: Nothing in this milestone for the migration and the `psse_job` changes (runs in parallel with Phase 2); only the closing tagged-write rehearsal with the pandapower engine needs Phase 2.
 **Requirements**: DB-01, DB-02, DB-03
@@ -115,9 +146,11 @@ Decimal phases appear between their surrounding integers in numeric order.
   2. The pandapower job writes through the existing all-or-nothing writer as `dlr_psse_writer` and stamps every run with its solver; a test shows a pandapower run cannot be stored as `psse`, and the unchanged PSS/E job's existing tests still pass.
   3. With a PSS/E run in an hour and no pandapower run in that hour, the gap check reports that hour as missing for pandapower; PSS/E gaps while its machine is offline are listed separately and do not hide, or get hidden by, pandapower gaps.
   4. After the owner applies the migration to the live project, a read-only check shows the existing runs tagged `psse` and nothing else changed.
+
 **Plans**: TBD
 
 ### Phase 4: Replay and Agreement Check
+
 **Goal**: A read-only replay of the recorded PSS/E runs through pandapower shows whether the two solvers agree, in a report that states how much it checked, shows the largest deviation even on a pass, and is proven able to fail.
 **Depends on**: Phase 2 (the engine, on the Phase 1 network). Does not need Phase 3. This phase is the go-live gate for Phase 5.
 **Requirements**: AGR-01, AGR-02, AGR-03, AGR-04
@@ -127,9 +160,11 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. The agreement report states how many runs and how many non-empty comparisons it checked, the largest deviation even on a pass, and which runs were excluded and why.
   4. A deliberate mismatch test makes the replay fail, proving the check can fail.
   5. Detailed output stays on the owner's machine; the output printed in CI mode contains counts and pass or fail only, and a test scanning it finds no identifier or study value.
+
 **Plans**: TBD
 
 ### Phase 5: Hourly Workflow, Dry Run and Live Soak
+
 **Goal**: The pandapower job runs every hour in GitHub Actions with no laptop involved, first as a dry run that writes nothing, then, once the gate has passed, writing live results for 24 consecutive hours without anything private reaching the public log.
 **Depends on**: Phase 2 (engine), Phase 3 (migration and tagged writer), Phase 4 (agreement). The first live write also requires NET-03 (Phase 1) and AGR-02 (Phase 4) to have passed.
 **Requirements**: OPS-01, OPS-02, OPS-03, OPS-04, OPS-05
@@ -139,9 +174,11 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. The workflow first runs as a dry run that writes nothing (the four result tables are unchanged afterward), and live writing is switched on only after NET-03 and AGR-02 have passed, as a recorded owner decision.
   4. A written retention decision for the permanent result rows (about 24 row sets a day) exists before the first live write.
   5. The per-solver gap check shows a pandapower result for 24 consecutive hourly slots.
+
 **Plans**: TBD
 
 ### Phase 6: Dashboard Read Access and DEF-01
+
 **Goal**: The dashboard's key can read the newest complete result for each city and solver through one read-only view and nothing else, and the dashboard requirements say the blockers are cleared.
 **Depends on**: Phase 3 (the solver column) and Phase 5 (verified, live results). Last on purpose: until agreement and the soak pass, no unverified figure should be readable by the dashboard.
 **Requirements**: VIEW-01, VIEW-02, VIEW-03
@@ -151,6 +188,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. The view exposes no run ids, hashes, bus numbers or detail fields: a test compares its column list to a whitelist.
   4. With the same key, reading any of the four result tables is refused, and the exposure checks (`verify_exposure.sql` and its test) are updated and pass.
   5. The DEF-01 section of the software-dashboard workstream's requirements says the blockers are cleared and names the view and its columns.
+
 **Plans**: TBD
 
 ## Progress
@@ -160,7 +198,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6. Phases 2 and 3
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. PSS/E Reference Session and Network Parity | 0/TBD | Not started | - |
+| 1. PSS/E Reference Session and Network Parity | 0/11 | Planned | - |
 | 2. PandapowerApi and Study Engine | 0/TBD | Not started | - |
 | 3. Solver Tag, Migration and Per-Solver Gaps | 0/TBD | Not started | - |
 | 4. Replay and Agreement Check | 0/TBD | Not started | - |
