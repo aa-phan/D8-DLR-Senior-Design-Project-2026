@@ -31,11 +31,22 @@ the pass or fail word only, so it can be printed or committed.
 
 import collections
 import math
+import numbers
+
+from psse_job import constants
 
 VOLTAGE_TOLERANCE_PU = 0.01
 FLOW_RELATIVE_TOLERANCE = 0.02
 FLOW_FLOOR_MVA = 2.0
 COMPARISON_EPSILON = 1e-12
+
+RUN_ALGORITHM = "algorithm"
+RUN_INJECTED = "injected"
+QUANTITIES = ("voltage", "p_from", "q_from", "max_mva", "in_service")
+# Assembled from pieces: the registry file carries this key, and the shape layer of the private
+# data guard looks for it in tracked text.
+REGISTRY_MARKER = "pandapower_job_" + "registry"
+REGISTRY_VERSION = 1
 
 Difference = collections.namedtuple("Difference", ["element", "quantity", "size"])
 RegistryEntry = collections.namedtuple("RegistryEntry", ["cause", "measured_size"])
@@ -303,3 +314,91 @@ def compare_city(city, run, net_solved, reference, registry=None, deviations=())
         tally.buses_failed, tally.flows_compared, tally.flows_failed, status,
         tally.worst_voltage, tally.worst_excess, explained, unexplained, missing,
         tuple(deviations))
+
+
+# -- the explained-differences registry ----------------------------------------------------------
+
+
+class RegistryRefused(ValueError):
+    """The registry data is not usable. `reason` is one word; the message holds no element key."""
+
+    def __init__(self, reason):
+        self.reason = reason
+        ValueError.__init__(self, "registry refused: %s" % reason)
+
+
+def _text(value):
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _entry(item):
+    if not isinstance(item, dict):
+        raise RegistryRefused("bad_entry")
+    element, quantity = item.get("element"), item.get("quantity")
+    if not _text(element) or not _text(quantity):
+        raise RegistryRefused("bad_entry")
+    if quantity not in QUANTITIES:
+        raise RegistryRefused("unknown_quantity")
+    if not _text(item.get("cause")):
+        raise RegistryRefused("empty_cause")
+    size = item.get("measured_size")
+    if (not isinstance(size, numbers.Real) or isinstance(size, bool)
+            or not math.isfinite(size) or size < 0):
+        raise RegistryRefused("bad_size")
+    return (element, quantity), RegistryEntry(item["cause"].strip(), float(size))
+
+
+def load_registry(data):
+    """
+    The registry as {(element, quantity): RegistryEntry} from its parsed JSON: an object holding
+    `REGISTRY_MARKER` (value REGISTRY_VERSION) and `entries`, a list of objects with `element` (a
+    bus number or a from-to-circuit key, as text), `quantity` (one of QUANTITIES), a non-empty
+    `cause` and a finite non-negative `measured_size` in the unit of the quantity (pu or MVA).
+    Anything else, and a pair listed twice, is a RegistryRefused. Passing the result to
+    `compare_city` explains exactly those pairs, up to exactly that size, and nothing else.
+    """
+    if not isinstance(data, dict):
+        raise RegistryRefused("not_an_object")
+    if data.get(REGISTRY_MARKER) != REGISTRY_VERSION:
+        raise RegistryRefused("missing_marker")
+    entries = data.get("entries")
+    if not isinstance(entries, list):
+        raise RegistryRefused("bad_entries")
+    registry = {}
+    for item in entries:
+        key, entry = _entry(item)
+        if key in registry:
+            raise RegistryRefused("duplicate_entry")
+        registry[key] = entry
+    return registry
+
+
+# -- the NET-03 verdict --------------------------------------------------------------------------
+
+Net03Verdict = collections.namedtuple(
+    "Net03Verdict", ["passed", "cities", "cities_passed", "cities_complete", "verdicts"])
+
+
+def _is_algorithm_run(run):
+    return run == RUN_ALGORITHM or str(run).startswith(RUN_ALGORITHM + ":")
+
+
+def net03_verdict(verdicts):
+    """
+    NET-03 over every city of `psse_job.constants.CITIES`. It passes only when each city has at
+    least one algorithm-run verdict and every algorithm-run verdict of that city is complete and
+    passing. A run label is "algorithm", or "algorithm:<label>" when the var-limit classification
+    is inconclusive and both settings were solved (both must pass). The injected-snapshot run
+    ("injected") is a diagnostic and never counts, for or against.
+    """
+    verdicts = tuple(verdicts)
+    by_city = {}
+    for verdict in verdicts:
+        if _is_algorithm_run(verdict.run):
+            by_city.setdefault(verdict.city, []).append(verdict)
+    cities = tuple(constants.CITIES)
+    complete = sum(1 for city in cities
+                   if by_city.get(city) and all(item.complete for item in by_city[city]))
+    passed = sum(1 for city in cities
+                 if by_city.get(city) and all(item.passed for item in by_city[city]))
+    return Net03Verdict(passed == len(cities), cities, passed, complete, verdicts)

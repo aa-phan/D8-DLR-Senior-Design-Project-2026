@@ -25,9 +25,18 @@ None)`: the message is never kept, because pandapower messages can name buses.
 """
 
 import collections
+import collections.abc
+import inspect
 import math
+import numbers
 
 import pandapower as pp
+
+# Two bus voltages agree when they differ by at most this (per unit). It is far above solver noise
+# and far below the 0.01 pu a reactive-limit effect has to show to be seen at all.
+FINGERPRINT_TOLERANCE_PU = 1e-6
+# Binary rounding slack so a gap written in decimal exactly at the tolerance counts as agreeing.
+_AGREE_SLACK = 1e-12
 
 # `enforce_q_lims` is True, False or None; None means "inconclusive: the caller solves both ways".
 # `sources` maps each setting to where its value came from and `deviations` lists every departure
@@ -74,3 +83,145 @@ def run_load_flow(net, settings, enforce_q_lims):
     if any(not float(value) >= settings.collapse_voltage_pu for value in voltages):
         return SolveOutcome(False, "voltage_collapse", iterations)
     return SolveOutcome(True, None, iterations)
+
+
+# -- settings copied from the session ------------------------------------------------------------
+
+_DEFAULT_VARIANT = "default"
+_IMMEDIATE_VARIANT = "var_limits_immediate"
+_IGNORE_VARIANT = "var_limits_ignore"
+
+
+def _voltages(payload):
+    """{bus number: pu} of a fingerprint payload, or None when it holds no usable solve."""
+    solve = payload.get("solve")
+    if isinstance(solve, dict) and solve.get("converged") is False:
+        return None
+    rows = payload.get("buses")
+    if not rows:
+        return None
+    table = {}
+    for row in rows:
+        value = row.get("pu")
+        if isinstance(value, numbers.Real) and not isinstance(value, bool) and math.isfinite(value):
+            table[int(row["number"])] = float(value)
+    return table or None
+
+
+def _agree(first, second):
+    """True when two voltage tables agree on every common bus; None when they share no bus."""
+    common = first.keys() & second.keys()
+    if not common:
+        return None
+    return max(abs(first[number] - second[number]) for number in common) <= (
+        FINGERPRINT_TOLERANCE_PU + _AGREE_SLACK)
+
+
+def _classify_point(variants):
+    """"on", "off" or "inconclusive" for one (city, point) that holds fingerprints by variant."""
+    wanted = (_DEFAULT_VARIANT, _IMMEDIATE_VARIANT, _IGNORE_VARIANT)
+    if any(name not in variants for name in wanted):
+        return "inconclusive"
+    with_immediate = _agree(variants[_DEFAULT_VARIANT], variants[_IMMEDIATE_VARIANT])
+    with_ignore = _agree(variants[_DEFAULT_VARIANT], variants[_IGNORE_VARIANT])
+    if with_immediate is None or with_ignore is None:
+        return "inconclusive"
+    if with_immediate and not with_ignore:
+        return "on"
+    if with_ignore and not with_immediate:
+        return "off"
+    return "inconclusive"
+
+
+def classify_var_limits(fingerprints):
+    """
+    Whether PSS/E's default solve applies generator var limits: "on", "off" or "inconclusive".
+
+    `fingerprints` are the session's fingerprint payloads (`city`, `point`, `variant`, `solve`,
+    `buses`). At each (city, point) the three variants default, var_limits_immediate and
+    var_limits_ignore are compared by bus voltage, joined by bus number: the default solve
+    behaves like the "on" variant when it agrees with the immediate one (within
+    FINGERPRINT_TOLERANCE_PU, inclusive) and differs from the ignore one, like the "off" variant
+    for the reverse, and the point says nothing when all agree or the default matches neither.
+    A fingerprint that did not converge is skipped. Points that decide opposite ways raise
+    ValueError naming the conflict: that is a human decision (D-14), not a guess.
+    """
+    points = {}
+    for payload in fingerprints:
+        voltages = _voltages(payload)
+        if voltages is None:
+            continue
+        key = (payload.get("city"), payload.get("point"))
+        points.setdefault(key, {})[payload.get("variant")] = voltages
+    verdicts = [_classify_point(variants) for variants in points.values()]
+    on, off = verdicts.count("on"), verdicts.count("off")
+    if on and off:
+        raise ValueError("var limit fingerprints conflict: %d point(s) say on and %d say off"
+                         % (on, off))
+    if on:
+        return "on"
+    if off:
+        return "off"
+    return "inconclusive"
+
+
+def _runpp_default(name):
+    return inspect.signature(pp.runpp).parameters[name].default
+
+
+def _valid_tolerance(value):
+    return (isinstance(value, numbers.Real) and not isinstance(value, bool)
+            and math.isfinite(value) and value > 0.0)
+
+
+def _valid_iterations(value):
+    return isinstance(value, numbers.Integral) and not isinstance(value, bool) and value >= 1
+
+
+def _copied(name, setting, valid, sources, deviations):
+    """The value of the setting `name` read by the session, or pandapower's default and a
+    recorded D-14 deviation."""
+    if isinstance(setting, dict) and setting.get("status") == "read":
+        value = setting.get("value")
+        if valid(value):
+            sources[name] = "read: %s" % setting.get("source")
+            return value
+        reason = "invalid value"
+    else:
+        reason = "unavailable"
+    sources[name] = "pandapower default"
+    deviations.append("D-14 deviation: %s not copied (%s); pandapower default used" % (name, reason))
+    return _runpp_default(name)
+
+
+def _payloads(settings_json, fingerprint_payloads):
+    if isinstance(fingerprint_payloads, collections.abc.Mapping):
+        listed = settings_json.get("fingerprints")
+        if isinstance(listed, list):
+            return [fingerprint_payloads[item["member"]] for item in listed
+                    if isinstance(item, dict) and item.get("member") in fingerprint_payloads]
+        return list(fingerprint_payloads.values())
+    return list(fingerprint_payloads)
+
+
+def settings_from_session(settings_json, fingerprint_payloads, collapse_voltage_pu):
+    """
+    The SolveSettings copied from the session (D-14). `settings_json` is `settings/settings.json`
+    and `fingerprint_payloads` the fingerprint members, either a mapping of member name to payload
+    or a list of payloads. `enforce_q_lims` comes from `classify_var_limits` (None when
+    inconclusive: the caller runs both and both must pass); `tolerance_mva` and `max_iteration`
+    are the values the session read. A value that could not be read, or is not a usable number,
+    is pandapower's own default and one entry of `deviations` naming D-14; `sources` says where
+    each value came from. A conflict between decisive fingerprints raises ValueError.
+    """
+    settings = settings_json.get("settings") or {}
+    verdict = classify_var_limits(_payloads(settings_json, fingerprint_payloads))
+    sources = {"enforce_q_lims": "fingerprint: %s" % verdict}
+    deviations = []
+    tolerance = _copied("tolerance_mva", settings.get("mismatch_tolerance_mva"), _valid_tolerance,
+                        sources, deviations)
+    iterations = _copied("max_iteration", settings.get("iteration_limit"), _valid_iterations,
+                         sources, deviations)
+    enforce = {"on": True, "off": False, "inconclusive": None}[verdict]
+    return SolveSettings(enforce, tolerance, iterations, collapse_voltage_pu, sources,
+                         tuple(deviations))
