@@ -27,7 +27,7 @@ from psse_job import constants, contingency, psse_api, ratings, study  # noqa: E
 from psse_job import mapping as mapping_module  # noqa: E402
 from psse_session import bundle, reference, session  # noqa: E402
 from psse_session_test import (  # noqa: E402
-    EXAMPLE_MAPPING, FIXED_NOW, World, _read_zip, _run, _summary_lines_match)
+    EXAMPLE_MAPPING, FIXED_NOW, STAMP, World, _read_zip, _run, _summary_lines_match)
 
 
 def _narrow(monkeypatch, cities):
@@ -169,3 +169,388 @@ def test_islanded_outage_is_recorded_not_dropped(tmp_path, monkeypatch):
     assert section["counts"]["outages"] == outages["count"]
     assert section["counts"]["not_converged"] == 1
     assert section["counts"]["converged"] == outages["count"] - 1
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# All four cities, the edges, isolation, refusals, cleanup and the counts
+# ──────────────────────────────────────────────────────────────────────────────
+
+FAKE_LEAK_BRANCH = "90021-90022-9"
+CITY_MEMBERS = ("presolve.raw", "solved.raw", "base.json", "outages.json", "margin.json",
+                "margin_last_good.raw")
+
+
+def _capture_results(monkeypatch):
+    """A list that receives ctx.results["reference"] when the reference section returns."""
+    captured = []
+    original = session.SECTION_FUNCTIONS["reference"]
+
+    def wrapper(ctx):
+        result = original(ctx)
+        captured.append(ctx.results["reference"])
+        return result
+
+    monkeypatch.setitem(session.SECTION_FUNCTIONS, "reference", wrapper)
+    return captured
+
+
+def _all_bytes(manifest, members, out, err):
+    manifest_bytes = json.dumps(manifest).encode("ascii")
+    return b"".join(list(members.values()) + [manifest_bytes, out.encode("ascii"),
+                                              err.encode("ascii")])
+
+
+class RefusesTheAllBranchRead(psse_session_fake.FakeSessionPsspy):
+    """The fake, except that the all-branch P, Q and MAXMVA read (abrn flag 4) is refused with ierr 1."""
+
+    def abrnreal(self, sid, owner, ties, flag, entry, string):
+        if flag == 4 and "Q" in string:
+            self.fake_calls.append(("abrnreal", (), {"flag": flag, "string": list(string)}))
+            return (1, [])
+        return psse_session_fake.FakeSessionPsspy.abrnreal(
+            self, sid, owner, ties, flag, entry, string)
+
+
+def test_four_cities_in_order_with_integer_summary_counts(tmp_path, monkeypatch):
+    """PSE-03: members for all four cities, cities in CITIES order, counts are integers only."""
+    order = []
+    original = reference._run_city
+
+    def recorder(ctx, reader, tally, tmp_root, city):
+        order.append(city)
+        return original(ctx, reader, tally, tmp_root, city)
+
+    monkeypatch.setattr(reference, "_run_city", recorder)
+    captured = _capture_results(monkeypatch)
+    world, code, out, err, manifest, members = _reference_run(
+        tmp_path, monkeypatch, cities=constants.CITIES)
+    assert code == 0, out + err
+    assert order == list(constants.CITIES)
+    assert list(captured[0]) == list(constants.CITIES)
+    expected_outages = expected_converged = expected_margin_points = 0
+    for city in constants.CITIES:
+        prefix = "reference/%s/" % city.lower()
+        for name in CITY_MEMBERS:
+            assert prefix + name in members, prefix + name
+        outages = _json(members, prefix + "outages.json")
+        expected_outages += outages["count"]
+        expected_converged += sum(1 for record in outages["outages"] if record["converged"])
+        margin_json = _json(members, prefix + "margin.json")
+        points = [margin_json[name] for name in ("last_good", "first_bad") if margin_json[name]]
+        expected_margin_points += len(points)
+        assert captured[0][city]["status"] == "ok"
+        assert captured[0][city]["sink_buses"] == margin_json["details"]["sink_buses"]
+        assert captured[0][city]["margin_increments"] == (
+            margin_json["details"]["increment_mw"], margin_json["details"]["first_bad_mw"])
+    # EL_PASO of the placeholder case is bounded by the rating, so it has no first bad point
+    assert _json(members, "reference/el_paso/margin.json")["first_bad"] is None
+    assert not os.path.exists(str(world.out / "tmp_sav"))
+    section = _section(manifest, "reference")
+    assert section["status"] == "ok" and section["detail"] == []
+    assert section["counts"] == {
+        "cities": 4, "cities_ok": 4, "outages": expected_outages,
+        "converged": expected_converged, "not_converged": expected_outages - expected_converged,
+        "margin_points": expected_margin_points, "extended_reads_unavailable": 0}
+    assert all(type(value) is int for value in section["counts"].values())
+    line = [text for text in out.splitlines() if text.startswith("section reference counts:")]
+    assert line == ["section reference counts: cities 4 cities_ok 4 converged %d "
+                    "extended_reads_unavailable 0 margin_points %d not_converged %d outages %d" % (
+                        expected_converged, expected_margin_points,
+                        expected_outages - expected_converged, expected_outages)]
+    _summary_lines_match(out)
+
+
+def test_parallel_circuits_are_separate_records(tmp_path, monkeypatch):
+    """Edge PSE-03 adjacency: both circuits between one pair of buses are two records, no key repeats."""
+    world, code, out, err, manifest, members = _reference_run(
+        tmp_path, monkeypatch, cities=constants.CITIES)
+    assert code == 0, out + err
+    pairs = {"austin": "90001-90002", "corpus_christi": "90011-90012", "midland": "90021-90022",
+             "el_paso": "90031-90032"}
+    for city in constants.CITIES:
+        outages = _json(members, "reference/%s/outages.json" % city.lower())
+        keys = [record["key"] for record in outages["outages"]]
+        assert len(set(keys)) == len(keys), city
+        pair = pairs[city.lower()]
+        parallel = [key for key in keys if key.startswith(pair + "-")]
+        assert parallel == [pair + "-1", pair + "-2"], city
+        by_key = dict((record["key"], record) for record in outages["outages"])
+        first, second = by_key[pair + "-1"], by_key[pair + "-2"]
+        assert (first["from_bus"], first["to_bus"]) == (second["from_bus"], second["to_bus"])
+        assert (first["ckt"], second["ckt"]) == ("1", "2")
+        assert first["position"] != second["position"]
+
+
+def test_none_selected_is_written_as_an_empty_list(tmp_path, monkeypatch):
+    """Edge PSE-03 empty: select_outages refusing for nothing selected gives an empty list, the base stays."""
+    original = contingency.select_outages
+
+    def select(base):
+        if "MIDLAND" in base.cities:
+            raise study.StudyFailed("contingency", "no branch outage was selected; a screen that "
+                                                   "screens nothing is not a result")
+        return original(base)
+
+    monkeypatch.setattr(contingency, "select_outages", select)
+    world, code, out, err, manifest, members = _reference_run(
+        tmp_path, monkeypatch, cities=constants.CITIES)
+    assert code == 0, out + err
+    empty = _json(members, "reference/midland/outages.json")
+    assert (empty["status"], empty["count"], empty["outages"]) == ("none_selected", 0, [])
+    base = _json(members, "reference/midland/base.json")
+    assert base["status"] == "ok" and base["solve"]["converged"] is True
+    assert "reference/midland/solved.raw" in members
+    for city in ("austin", "corpus_christi", "el_paso"):
+        other = _json(members, "reference/%s/outages.json" % city)
+        assert other["status"] == "ok" and other["count"] > 0
+    section = _section(manifest, "reference")
+    assert section["status"] == "ok" and section["detail"] == ["none selected"]
+    assert section["counts"]["cities_ok"] == 4
+    assert "section reference detail: none selected" in out
+    _summary_lines_match(out)
+
+    # more outages than contingency.max is a failure of the city, not an empty list
+    def too_many(base):
+        if "MIDLAND" in base.cities:
+            raise study.StudyFailed("contingency", "11 branch outages exceed contingency.max 10")
+        return original(base)
+
+    monkeypatch.setattr(contingency, "select_outages", too_many)
+    other_folder = tmp_path / "second"
+    other_folder.mkdir()
+    world, code, out, err, manifest, members = _reference_run(
+        other_folder, monkeypatch, cities=constants.CITIES)
+    assert code == 1
+    assert _json(members, "reference/midland/outages.json")["status"] == "failed"
+    assert "reference/midland/margin.json" not in members
+    section = _section(manifest, "reference")
+    assert section["status"] == "failed" and section["detail"] == ["contingency"]
+
+
+def test_members_are_sorted_inside(tmp_path, monkeypatch):
+    """Edge PSE-03 ordering: buses by number, flows by key, outages in list order, in every member."""
+    world, code, out, err, manifest, members = _reference_run(
+        tmp_path, monkeypatch, cities=constants.CITIES)
+    assert code == 0, out + err
+
+    def check(state, label):
+        numbers = [row["number"] for row in state["buses"]]
+        assert numbers == sorted(numbers) and len(set(numbers)) == len(numbers), label
+        keys = [row["key"] for row in state["line_flows"]]
+        assert keys == sorted(keys) and len(set(keys)) == len(keys), label
+        keys = [row["key"] for row in state["branch_flows"]["rows"]]
+        assert keys == sorted(keys) and len(set(keys)) == len(keys), label
+        machines = [(row["bus"], row["id"]) for row in state["machine_outputs"]["rows"]]
+        assert machines == sorted(machines), label
+
+    for city in constants.CITIES:
+        prefix = "reference/%s/" % city.lower()
+        check(_json(members, prefix + "base.json"), prefix + "base")
+        outages = _json(members, prefix + "outages.json")
+        assert [record["position"] for record in outages["outages"]] == list(range(outages["count"]))
+        keys = [record["key"] for record in outages["outages"]]
+        assert keys == sorted(keys)
+        for record in outages["outages"]:
+            if record["converged"]:
+                check(record, prefix + record["key"])
+        margin_json = _json(members, prefix + "margin.json")
+        for name in ("last_good", "first_bad"):
+            if margin_json[name] is not None and margin_json[name]["buses"] is not None:
+                check(margin_json[name], prefix + name)
+    # the extended branch read covers lines and transformers alike and marks transformers by key
+    base = _json(members, "reference/austin/base.json")
+    assert len(base["branch_flows"]["rows"]) == len(base["line_flows"])
+    assert not any(row["is_transformer"] for row in base["branch_flows"]["rows"])
+
+
+def test_a_failing_city_is_isolated_and_named_by_stage_only(tmp_path, monkeypatch):
+    """T-01-13: a failed preparation is recorded by stage only, the other cities still run, exit 1."""
+    original = study.prepare_city_base
+
+    def prepare(index, mapping, selection, city, budget, temp_dir):
+        if city == "MIDLAND":
+            raise study.StudyFailed("apply_ratings", "branch %s could not be rated" % FAKE_LEAK_BRANCH)
+        return original(index, mapping, selection, city, budget, temp_dir)
+
+    monkeypatch.setattr(study, "prepare_city_base", prepare)
+    captured = _capture_results(monkeypatch)
+    world, code, out, err, manifest, members = _reference_run(
+        tmp_path, monkeypatch, cities=constants.CITIES)
+    assert code == 1, out + err
+    results = captured[0]
+    assert results["MIDLAND"]["status"] == "failed" and results["MIDLAND"]["detail"] == ("apply_ratings",)
+    assert [city for city in constants.CITIES if results[city]["status"] == "ok"] == [
+        "AUSTIN", "CORPUS_CHRISTI", "EL_PASO"]
+    failed_base = _json(members, "reference/midland/base.json")
+    assert failed_base["status"] == "failed" and failed_base["failed_stage"] == "apply_ratings"
+    assert "solve" not in failed_base
+    assert "reference/midland/outages.json" not in members
+    for city in ("austin", "corpus_christi", "el_paso"):
+        for name in CITY_MEMBERS:
+            assert "reference/%s/%s" % (city, name) in members
+    section = _section(manifest, "reference")
+    assert section["status"] == "failed" and section["detail"] == ["apply_ratings"]
+    assert section["counts"]["cities"] == 4 and section["counts"]["cities_ok"] == 3
+    assert "section reference: failed" in out and "section reference detail: apply_ratings" in out
+    _summary_lines_match(out)
+    assert FAKE_LEAK_BRANCH.encode("ascii") not in _all_bytes(manifest, members, out, err)
+
+    # a failure that is not a StudyFailed is named by its class
+    def explode(index, mapping, selection, city, budget, temp_dir):
+        raise KeyError(FAKE_LEAK_BRANCH)
+
+    monkeypatch.setattr(study, "prepare_city_base", explode)
+    other_folder = tmp_path / "second"
+    other_folder.mkdir()
+    captured[:] = []
+    world, code, out, err, manifest, members = _reference_run(
+        other_folder, monkeypatch, cities=("AUSTIN",))
+    assert code == 1
+    assert captured[0]["AUSTIN"]["detail"] == ("KeyError",)
+    assert _section(manifest, "reference")["detail"] == ["KeyError"]
+    assert FAKE_LEAK_BRANCH.encode("ascii") not in _all_bytes(manifest, members, out, err)
+
+
+def _solved_states(members, prefix):
+    """Every solved state of one city: the base, the converged outages and the margin points."""
+    states = [_json(members, prefix + "base.json")]
+    states += [record for record in _json(members, prefix + "outages.json")["outages"]
+               if record["converged"]]
+    margin_json = _json(members, prefix + "margin.json")
+    states += [margin_json[name] for name in ("last_good", "first_bad")
+               if margin_json[name] and margin_json[name]["buses"] is not None]
+    return states
+
+
+def test_extended_read_refusals_are_recorded_as_unavailable(tmp_path, monkeypatch):
+    """An extended read the engine refuses is status unavailable with function and class, never missing."""
+    world, code, out, err, manifest, members = _reference_run(
+        tmp_path, monkeypatch, fail={"amachreal": "raise"})
+    assert code == 0, out + err
+    prefix = "reference/austin/"
+    states = _solved_states(members, prefix)
+    assert len(states) > 3
+    for state in states:
+        machines = state["machine_outputs"]
+        assert machines["status"] == "unavailable" and machines["rows"] == []
+        assert "amachreal" in machines["reason"] and "RuntimeError" in machines["reason"]
+        assert state["branch_flows"]["status"] == "ok" and state["buses"] and state["line_flows"]
+    section = _section(manifest, "reference")
+    assert section["status"] == "ok"
+    assert section["counts"]["extended_reads_unavailable"] == len(states)
+    assert b"fakeuser" not in _all_bytes(manifest, members, out, err)
+    # the all-branch read refused by ierr, the job's own branch_loading still works
+    folder = tmp_path / "branch"
+    folder.mkdir()
+    refusing = World(folder)
+    fake = RefusesTheAllBranchRead()
+    fake.fake_register_case(str(refusing.case), placeholder_case())
+    refusing.fake = fake
+    refusing, code, out, err, manifest, members = _reference_run(
+        folder, monkeypatch, world=refusing)
+    assert code == 0, out + err
+    base = _json(members, prefix + "base.json")
+    assert base["branch_flows"]["status"] == "unavailable"
+    assert base["branch_flows"]["reason"] == "abrnreal: ierr 1" and base["branch_flows"]["rows"] == []
+    assert base["line_flows"] and base["buses"]
+    assert base["machine_outputs"]["status"] == "ok"
+    section = _section(manifest, "reference")
+    assert section["status"] == "ok" and section["counts"]["extended_reads_unavailable"] > 0
+    assert section["counts"]["converged"] == section["counts"]["outages"]
+    _summary_lines_match(out)
+
+
+def test_machine_flag_falls_back_and_is_recorded(tmp_path, monkeypatch):
+    """The machine selection flag is unverified on real PSS/E: the one that works is on record."""
+    world, code, out, err, manifest, members = _reference_run(tmp_path, monkeypatch)
+    assert code == 0, out + err
+    base = _json(members, "reference/austin/base.json")
+    assert base["machine_outputs"]["flag"] in reference.MACHINE_FLAGS
+    assert base["machine_outputs"]["flag"] == 2 and base["branch_flows"]["flag"] == 4
+    rows = base["machine_outputs"]["rows"]
+    assert [row["bus"] for row in rows] == sorted(row["bus"] for row in rows)
+    assert all(row["in_service"] for row in rows)
+
+
+def test_without_a_raw_export_the_json_members_are_still_written(tmp_path, monkeypatch):
+    """No RAW export form worked: every JSON member is written and every snapshot field is null."""
+    world, code, out, err, manifest, members = _reference_run(
+        tmp_path, monkeypatch, cities=("AUSTIN",), raw_forms=())
+    assert code == 1
+    assert _section(manifest, "network")["status"] == "failed"
+    assert _section(manifest, "reference")["status"] == "ok"
+    prefix = "reference/austin/"
+    assert not [name for name in members if name.startswith("reference/") and name.endswith(".raw")]
+    base = _json(members, prefix + "base.json")
+    outages = _json(members, prefix + "outages.json")
+    margin_json = _json(members, prefix + "margin.json")
+    assert base["snapshot"] is None and base["buses"]
+    assert outages["count"] > 0
+    assert all(record["snapshot"] is None and record["buses"] for record in outages["outages"])
+    assert margin_json["last_good"]["snapshot"] is None and margin_json["last_good"]["buses"]
+
+
+def test_a_missing_case_index_is_a_failure_not_a_skip(tmp_path, monkeypatch):
+    """The reference answer could not be produced when the case could not be indexed: failed, no members."""
+    world, code, out, err, manifest, members = _reference_run(
+        tmp_path, monkeypatch, fail={"case": "raise"})
+    assert code == 1
+    section = _section(manifest, "reference")
+    assert section["status"] == "failed" and section["detail"] == ["no case index", "load_case"]
+    assert not [name for name in members if name.startswith("reference/")]
+    _summary_lines_match(out)
+
+
+def test_no_saved_case_copy_is_left_or_zipped(tmp_path, monkeypatch):
+    """T-01-11: no .sav copy is left (even with the work folder kept), none is a member, failed cities included."""
+    monkeypatch.setattr(bundle.WorkFolder, "remove", lambda self: 0)
+    original = study.prepare_city_base
+    saved = []
+
+    def prepare(index, mapping, selection, city, budget, temp_dir):
+        base = original(index, mapping, selection, city, budget, temp_dir)
+        if city == "MIDLAND":
+            saved.append(os.path.isfile(base.saved_path))
+            raise study.StudyFailed("contingency", "failed after the saved copy was written")
+        return base
+
+    monkeypatch.setattr(study, "prepare_city_base", prepare)
+    world, code, out, err, manifest, members = _reference_run(
+        tmp_path, monkeypatch, cities=constants.CITIES)
+    assert code == 1
+    assert saved == [True]
+    found = []
+    for root, _dirs, files in os.walk(str(tmp_path)):
+        found.extend(os.path.join(root, name) for name in files if name.endswith(".sav"))
+    assert found == [str(world.case)]
+    assert not (world.out / (bundle.SESSION_PREFIX + STAMP) / "tmp_sav").exists()
+    assert not [name for name in members if name.endswith(".sav")]
+    assert not [name for name in manifest["members"] if name.endswith(".sav")]
+
+
+def test_budget_exhaustion_keeps_the_records_so_far(tmp_path, monkeypatch):
+    """The run-time budget running out mid-screen fails the city at stage contingency and keeps the outages done."""
+    real_budget = study.Budget
+    ticks = {"count": 0}
+
+    def clock():
+        ticks["count"] += 1
+        return 0.0 if ticks["count"] <= 3 else 1.0e9
+
+    monkeypatch.setattr(study, "Budget",
+                        lambda max_seconds: real_budget(clock=clock, max_seconds=max_seconds))
+    captured = _capture_results(monkeypatch)
+    world, code, out, err, manifest, members = _reference_run(tmp_path, monkeypatch)
+    assert code == 1, out + err
+    prefix = "reference/austin/"
+    outages = _json(members, prefix + "outages.json")
+    assert outages["status"] == "failed" and outages["count"] == 2 == len(outages["outages"])
+    assert [record["position"] for record in outages["outages"]] == [0, 1]
+    assert captured[0]["AUSTIN"]["status"] == "failed"
+    assert captured[0]["AUSTIN"]["detail"] == ("contingency",)
+    assert prefix + "base.json" in members and prefix + "margin.json" not in members
+    assert _json(members, prefix + "base.json")["status"] == "ok"
+    section = _section(manifest, "reference")
+    assert section["status"] == "failed" and section["detail"] == ["contingency"]
+    assert section["counts"]["outages"] == 2
+    _summary_lines_match(out)
