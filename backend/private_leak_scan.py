@@ -16,19 +16,23 @@ guard that runs before that can happen. It is standard library only and has thre
           from-to-ckt keys (both orientations), scaling targets in the forms they would be typed,
           each private file's sha256 and decimals with at least five fractional digits. Proves a
           typed or pasted private value is caught. Skipped, never failed, when data/private/ is
-          absent (CI, other machines).
+          absent (CI, other machines). A needle matches a whole token by set membership, so a
+          token that merely contains a needle is not a finding.
 
 Output is `relative/path:line:layer:pattern`, one per finding, and never the matched text, so a
 terminal, a CI log or a test failure cannot leak what was found. Exit status: 0 clean, 1 findings,
 2 usage error, unreadable allow-list or not a git checkout. A count of files that could not be
-scanned (binary, over 2 MiB) is written to stderr.
+scanned (binary, over 2 MiB) is written to stderr. In staged mode a text file over 2 MiB is itself
+a finding (layer size), because a commit must fail closed on content it cannot read.
 
 Scope. The working-tree mode scans tracked files plus untracked files that are not ignored, because
 that is what the next broad `git add` would take; a scan of tracked files alone fires after the
 commit, which is too late. Tool output folders (graph builders, note tools) that are untracked and
 not ignored are therefore inside the scan. Whether those tools honour .gitignore and skip
 data/private/ is unverified (research assumption A13); the working-tree scan is the backstop, not a
-proof that they do.
+proof that they do. The needle layer can only see values that exist under data/private/ on the
+machine that runs it, and a decimal that is common in public text can raise a finding that the
+owner then resolves by looking at the reported location.
 
 Local pre-commit step. Staged mode scans the content in the git index, not the working tree, so a
 file staged and then edited or deleted is still judged on what would be committed. To run it before
@@ -51,6 +55,7 @@ import argparse
 import collections
 import hashlib
 import json
+import math
 import os
 import re
 import subprocess
@@ -59,12 +64,15 @@ import sys
 Finding = collections.namedtuple("Finding", ["path", "line", "layer", "pattern"])
 
 MAX_BYTES = 2 * 1024 * 1024
+MAX_PRIVATE_BYTES = 64 * 1024 * 1024
 NUL_WINDOW = 8192
 MIN_NEEDLE_CHARS = 5
+DECIMAL_DIGITS = 5
 SKIP_SUFFIXES = (".joblib", ".npz", ".png", ".jpg", ".jpeg", ".gif", ".ico", ".pdf", ".xlsx",
                  ".zip", ".gz", ".pyc", ".woff", ".woff2")
 PRIVATE_DIR = "data/private"
 SESSION_PREFIX = "psse_pp_session"
+ALLOW_LIST_PATH = "backend/private_leak_allow.json"
 
 # The shape layer. Every pattern is assembled from pieces so this source never matches itself.
 _END_OF = "END" + " OF "
@@ -88,6 +96,7 @@ _TOKEN = re.compile(r"[A-Za-z0-9._+\-]+")
 _COMMA_NUMBER = re.compile(r"[0-9][0-9,]*[0-9](?:\.[0-9]+)?")
 _EXPONENT = re.compile(r"^(.*[0-9])[eE][+-]?[0-9]+$")
 _DECIMAL = re.compile(r"[0-9]+\.[0-9]+")
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 class GitError(RuntimeError):
@@ -110,6 +119,10 @@ class NeedleSet(set):
             self.add(text)
             self.kinds[text] = kind
 
+    def __repr__(self):
+        # Counts only: a failing assertion that prints this set must not print the values.
+        return "NeedleSet(<%d needles>)" % len(self)
+
 
 # ---------------------------------------------------------------------------
 # Git and file listing
@@ -128,11 +141,7 @@ def _git(root, *args):
 def repo_root():
     """The repository folder: two levels above this file, confirmed with git rev-parse."""
     candidate = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    try:
-        top = _git(candidate, "rev-parse", "--show-toplevel").decode("utf-8", "replace").strip()
-    except GitError:
-        return candidate
-    return top or candidate
+    return _toplevel(candidate) or candidate
 
 
 def _toplevel(folder):
@@ -157,6 +166,17 @@ def working_tree_files(root):
     return sorted(os.path.join(root, name) for name in names)
 
 
+def staged_blobs(root):
+    """(relative path, bytes) of every added, copied, modified or renamed file in the git index."""
+    listed = _git(root, "diff", "--cached", "--name-only", "-z", "--diff-filter=ACMR")
+    blobs = []
+    for raw in listed.split(b"\0"):
+        if raw:
+            name = raw.decode("utf-8", "surrogateescape")
+            blobs.append((name, _git(root, "show", ":0:" + name)))
+    return blobs
+
+
 # ---------------------------------------------------------------------------
 # Reading
 # ---------------------------------------------------------------------------
@@ -165,8 +185,19 @@ def _known_binary(name):
     return name.lower().endswith(SKIP_SUFFIXES)
 
 
+def _classify(name, data):
+    """(status, text) for file content: ok, binary or oversize. Text is decoded latin-1."""
+    if _known_binary(name):
+        return "binary", ""
+    if len(data) > MAX_BYTES:
+        return "oversize", ""
+    if b"\x00" in data[:NUL_WINDOW]:
+        return "binary", ""
+    return "ok", data.decode("latin-1")
+
+
 def _read_text(path):
-    """(status, text): status is ok, missing, binary or oversize. Text is decoded latin-1."""
+    """(status, text): status is ok, missing, binary or oversize."""
     if not os.path.isfile(path):
         return "missing", ""
     if _known_binary(path):
@@ -178,14 +209,80 @@ def _read_text(path):
             data = handle.read()
     except OSError:
         return "missing", ""
-    if b"\x00" in data[:NUL_WINDOW]:
-        return "binary", ""
-    return "ok", data.decode("latin-1")
+    return _classify(path, data)
+
+
+# ---------------------------------------------------------------------------
+# Allow-list
+# ---------------------------------------------------------------------------
+
+def _normal_path(text):
+    text = text.replace("\\", "/")
+    while text.startswith("./"):
+        text = text[2:]
+    return text
+
+
+def load_allow_list(root, path=None):
+    """
+    {relative path: {sha256, ...}} from the allow-list file (default backend/private_leak_allow.json
+    under `root`). A missing file allows nothing; a malformed file raises AllowListError. The error
+    message never holds file content.
+    """
+    path = path or os.path.join(root, *ALLOW_LIST_PATH.split("/"))
+    try:
+        with open(path, "r", encoding="utf-8-sig") as handle:
+            parsed = json.load(handle)
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError):
+        raise AllowListError("the allow-list file is not readable JSON")
+    if not isinstance(parsed, list):
+        raise AllowListError("the allow-list must be a JSON list")
+    allow = {}
+    for index, entry in enumerate(parsed):
+        if (not isinstance(entry, dict) or not isinstance(entry.get("path"), str)
+                or not isinstance(entry.get("sha256"), str) or not _SHA256.match(entry["sha256"])):
+            raise AllowListError("allow-list entry %d needs a path and a 64-digit lowercase sha256" % index)
+        allow.setdefault(_normal_path(entry["path"]), set()).add(entry["sha256"])
+    return allow
+
+
+def _is_allowed(allow, display, data):
+    """True when the path and the sha256 of `data` both match an allow-list entry."""
+    if not allow:
+        return False
+    digests = allow.get(_normal_path(display))
+    return bool(digests) and hashlib.sha256(data).hexdigest() in digests
 
 
 # ---------------------------------------------------------------------------
 # Needles
 # ---------------------------------------------------------------------------
+
+def _group_thousands(text):
+    """'2430.5' -> '2,430.5'; text that is not a plain decimal number is returned unchanged."""
+    whole, dot, rest = text.partition(".")
+    sign = whole[:1] if whole[:1] in "+-" else ""
+    digits = whole[len(sign):]
+    if not digits.isdigit():
+        return text
+    return sign + "{:,}".format(int(digits)) + dot + rest
+
+
+def _number_forms(value):
+    """The forms a scaling target would be typed in: plain, two decimals, with a thousands comma."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return set()
+    if isinstance(value, float) and not math.isfinite(value):
+        return set()
+    forms = {str(value), repr(float(value)), "%.2f" % value}
+    if float(value) == int(value):
+        forms.add("%d" % int(value))
+    if abs(value) >= 1000:
+        forms.update(_group_thousands(form) for form in list(forms))
+    return forms
+
 
 def _branch_key(from_bus, to_bus, ckt):
     try:
@@ -196,19 +293,21 @@ def _branch_key(from_bus, to_bus, ckt):
         return None
 
 
-def _add_branch_keys(node, needles):
-    key = _branch_key(node["from_bus"], node["to_bus"], node["ckt"])
-    reverse = _branch_key(node["to_bus"], node["from_bus"], node["ckt"])
-    for text in (key, reverse):
-        if text:
-            needles.add_needle(text, "mapping_key")
-
-
 def _walk_json(node, needles):
-    """Mapping keys from every object that names from_bus, to_bus and ckt, at any depth."""
+    """
+    Needles from any object, at any depth, that names from_bus, to_bus and ckt (a mapping branch or
+    an extra outage; both orientations) or the scaling targets load_mw and gen_mw.
+    """
     if isinstance(node, dict):
         if "from_bus" in node and "to_bus" in node and "ckt" in node:
-            _add_branch_keys(node, needles)
+            for text in (_branch_key(node["from_bus"], node["to_bus"], node["ckt"]),
+                         _branch_key(node["to_bus"], node["from_bus"], node["ckt"])):
+                if text:
+                    needles.add_needle(text, "mapping_key")
+        for name in ("load_mw", "gen_mw"):
+            if name in node:
+                for text in _number_forms(node[name]):
+                    needles.add_needle(text, "scaling_target")
         for value in node.values():
             _walk_json(value, needles)
     elif isinstance(node, list):
@@ -216,27 +315,57 @@ def _walk_json(node, needles):
             _walk_json(value, needles)
 
 
-def derive_needles(private_root):
+def _add_decimals(text, needles):
+    """Decimals with at least DECIMAL_DIGITS fractional digits once trailing zeros are stripped."""
+    for match in _DECIMAL.finditer(text):
+        whole, _, fraction = match.group().partition(".")
+        stripped = fraction.rstrip("0")
+        if len(stripped) < DECIMAL_DIGITS:
+            continue
+        needles.add_needle(match.group(), "decimal")
+        needles.add_needle(whole + "." + stripped, "decimal")
+        if whole == "0":
+            needles.add_needle("." + stripped, "decimal")
+
+
+def derive_needles(private_root, allow=None):
     """
-    The needles derived from the files under `private_root`, as a NeedleSet. This task: mapping
-    from-to-ckt keys in both orientations. Parsed with json only, never executed. An absent folder
-    gives an empty set (the layer is skipped, never failed).
+    The needles derived from the files under `private_root`, as a NeedleSet: mapping from-to-ckt
+    keys in both orientations, scaling targets in the forms they would be typed, the sha256 of every
+    private file (except a sha256 listed in `allow`: a pinned copy may be published) and decimals
+    with at least five fractional digits. JSON is parsed with json only and nothing is executed.
+    An absent folder gives an empty set (the layer is skipped, never failed).
     """
     needles = NeedleSet()
     private_root = os.fspath(private_root)
     if not os.path.isdir(private_root):
         return needles
+    pinned = set()
+    for digests in (allow or {}).values():
+        pinned.update(digests)
     for folder, names, files in os.walk(private_root):
         names.sort()
         for name in sorted(files):
-            if not name.lower().endswith(".json"):
+            path = os.path.join(folder, name)
+            if not os.path.isfile(path):
                 continue
             try:
-                with open(os.path.join(folder, name), "r", encoding="utf-8-sig") as handle:
-                    parsed = json.load(handle)
-                _walk_json(parsed, needles)
-            except (OSError, ValueError, RecursionError):
+                with open(path, "rb") as handle:
+                    data = handle.read()
+            except OSError:
                 continue
+            digest = hashlib.sha256(data).hexdigest()
+            if digest not in pinned:
+                needles.add_needle(digest, "file_hash")
+                needles.add_needle(digest.upper(), "file_hash")
+            if len(data) > MAX_PRIVATE_BYTES or b"\x00" in data[:NUL_WINDOW]:
+                continue
+            if name.lower().endswith(".json"):
+                try:
+                    _walk_json(json.loads(data.decode("utf-8-sig")), needles)
+                except (ValueError, RecursionError):
+                    pass
+            _add_decimals(data.decode("latin-1"), needles)
     return needles
 
 
@@ -307,30 +436,59 @@ def _path_findings(path, relative):
     return found
 
 
-def _scan_paths(paths, needles, root):
+def _judge(finding_path, display, status, text, needles, allow, fail_closed):
+    """(findings, unscanned) for one file whose content has been classified."""
+    found = _path_findings(finding_path, display)
+    if status == "ok":
+        if not _is_allowed(allow, display, text.encode("latin-1")):
+            found.extend(Finding(finding_path, number, layer, pattern)
+                         for number, layer, pattern in _scan_text(text, needles))
+        return found, 0
+    if status == "oversize" and fail_closed:
+        found.append(Finding(finding_path, 0, "size", "oversize_unscanned"))
+    return found, 1 if status in ("binary", "oversize") else 0
+
+
+def _sorted(findings):
+    return sorted(findings, key=lambda item: (item.path, item.line, item.layer, item.pattern))
+
+
+def _scan_paths(paths, needles, root, allow):
     findings = []
     unscanned = 0
     for path in paths:
-        relative = os.path.relpath(path, root)
-        findings.extend(_path_findings(path, relative))
         status, text = _read_text(path)
-        if status in ("binary", "oversize"):
-            unscanned += 1
-        if status != "ok":
-            continue
-        for number, layer, pattern in _scan_text(text, needles):
-            findings.append(Finding(path, number, layer, pattern))
-    findings.sort(key=lambda item: (item.path, item.line, item.layer, item.pattern))
-    return findings, unscanned
+        found, skipped = _judge(path, os.path.relpath(path, root), status, text, needles, allow, False)
+        findings.extend(found)
+        unscanned += skipped
+    return _sorted(findings), unscanned
+
+
+def _scan_blobs(blobs, needles, allow):
+    findings = []
+    unscanned = 0
+    for name, data in blobs:
+        status, text = _classify(name, data)
+        found, skipped = _judge(name, name, status, text, needles, allow, True)
+        findings.extend(found)
+        unscanned += skipped
+    return _sorted(findings), unscanned
 
 
 def scan_paths(paths, needles=None, allow=None, root=None):
     """
     Findings for the given absolute file paths, sorted by path then line. `needles` is a set (a
-    NeedleSet from derive_needles reports its kind names); `root` is the repository folder used to
-    judge the path layer (default: repo_root()). Never carries the matched text.
+    NeedleSet from derive_needles reports its kind names); `allow` is the dict from load_allow_list;
+    `root` is the repository folder the path layer and the allow-list are judged against (default
+    repo_root()). Never carries the matched text.
     """
-    findings, _ = _scan_paths(paths, needles or (), root or repo_root())
+    findings, _ = _scan_paths(paths, needles or (), root or repo_root(), allow)
+    return findings
+
+
+def scan_blobs(blobs, needles=None, allow=None):
+    """Findings for (relative path, bytes) pairs, as scan_paths; adds the size layer (fail closed)."""
+    findings, _ = _scan_blobs(blobs, needles or (), allow)
     return findings
 
 
@@ -354,8 +512,10 @@ def _display(path, root):
 def main(argv=None):
     parser = argparse.ArgumentParser(
         prog="private_leak_scan.py",
-        description="Scan the working tree for private PSS/E session data. Prints "
-                    "path:line:layer:pattern per finding, never the matched text.")
+        description="Scan for private PSS/E session data. Prints path:line:layer:pattern per finding, "
+                    "never the matched text. Exit 0 clean, 1 findings, 2 usage error.")
+    parser.add_argument("--staged", action="store_true",
+                        help="scan the content in the git index instead of the working tree")
     parser.add_argument("--private-root", default=None,
                         help="folder the needles are derived from (default: <repo>/data/private)")
     try:
@@ -369,13 +529,21 @@ def main(argv=None):
         return 2
     private_root = args.private_root or os.path.join(root, "data", "private")
     try:
-        needles = derive_needles(private_root)
+        allow = load_allow_list(root)
+        needles = derive_needles(private_root, allow=allow)
         findings = _check_ignore_rule(root)
-        scanned, unscanned = _scan_paths(working_tree_files(root), needles, root)
+        if args.staged:
+            scanned, unscanned = _scan_blobs(staged_blobs(root), needles, allow)
+        else:
+            scanned, unscanned = _scan_paths(working_tree_files(root), needles, root, allow)
+    except AllowListError as error:
+        sys.stderr.write("private_leak_scan: allow-list: %s\n" % error)
+        return 2
     except GitError as error:
         sys.stderr.write("private_leak_scan: %s\n" % error)
         return 2
     findings.extend(scanned)
+    findings.sort(key=lambda item: (_display(item.path, root), item.line, item.layer, item.pattern))
     for item in findings:
         sys.stdout.write("%s:%d:%s:%s\n" % (_display(item.path, root), item.line, item.layer, item.pattern))
     sys.stderr.write("private_leak_scan: %d file(s) not scanned (binary or over 2 MiB)\n" % unscanned)
