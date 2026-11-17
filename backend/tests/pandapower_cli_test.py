@@ -23,6 +23,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import types
@@ -350,3 +351,256 @@ def test_entry_script_without_arguments_is_a_usage_error():
         timeout=120)
     assert completed.returncode == 2
     assert b"Traceback" not in completed.stderr
+
+
+# -- Task 3: the seam with the real session code, a mismatch, incompleteness, counts-only ---------
+
+
+def _read_report(world, stamp=CHECK_STAMP):
+    path = os.path.join(world.session, "check_" + stamp, "report.json")
+    with open(path, "rb") as handle:
+        return json.loads(handle.read().decode("ascii"))
+
+
+def fake_session_world(tmp_path, machine_buses_typed_two):
+    """
+    A throwaway repository whose incoming folder holds a zip written by the REAL session code
+    (`psse_session.session.main`, all four sections) against FakeSessionPsspy, plus a second,
+    byte-identical copy of the example mapping the session ran with (the session deletes its own).
+    The fake's placeholder network puts its machines at buses typed as load buses, which the
+    builder refuses by design; `machine_buses_typed_two` retypes those buses (a change to the case
+    object this test registers, not to the fake or the session) so the chain can run through.
+    """
+    import psse_session_fake
+    from psse_fake_psspy import placeholder_case
+    from psse_session import session
+
+    repo = make_repo(tmp_path / "repo")
+    private_dir = os.path.join(repo, "data", "private", "pandapower")
+    incoming = os.path.join(private_dir, "incoming")
+    os.makedirs(incoming)
+    mapping_path = os.path.join(private_dir, "mapping.json")
+    shutil.copy(EXAMPLE_MAPPING, mapping_path)
+
+    scratch = tmp_path / "laptop"
+    for name in ("psspy dir", "case dir", "map dir"):
+        (scratch / name).mkdir(parents=True)
+    case_file = scratch / "case dir" / "zz_case_file.sav"
+    case_file.write_bytes(b"fake case bytes")
+    placeholder = placeholder_case()
+    if machine_buses_typed_two:
+        for number, bus in placeholder.buses.items():
+            if number in placeholder.gens:
+                bus["type_code"] = 2
+    fake = psse_session_fake.FakeSessionPsspy()
+    fake.fake_register_case(str(case_file), placeholder)
+    config = scratch / "session.env"
+    config.write_text("PSSE_PSSPY_DIR=%s\nPSSE_CASE_PATH=%s\nPSSE_LOG_DIR=%s\n" % (
+        scratch / "psspy dir", case_file, scratch / "console logs"), encoding="utf-8")
+    session_mapping = scratch / "map dir" / "zz_mapping_file.json"
+    shutil.copy(EXAMPLE_MAPPING, str(session_mapping))
+
+    out, err = io.StringIO(), io.StringIO()
+    saved_path = list(sys.path)
+    try:
+        code = session.main(
+            ["run", "--config", str(config), "--mapping", str(session_mapping), "--out-dir",
+             incoming, "--allow-placeholder"], lambda cfg: fake, out=out, err=err,
+            clock=lambda: FIXED_NOW)
+    finally:
+        sys.path[:] = saved_path
+    assert code == 0, "the fake session run did not complete"
+    stem = bundle.SESSION_PREFIX + STAMP
+    return types.SimpleNamespace(
+        repo=repo, zip=os.path.join(incoming, stem + ".zip"), mapping=mapping_path, stem=stem,
+        sessions=os.path.join(private_dir, "sessions"),
+        session=os.path.join(private_dir, "sessions", stem))
+
+
+def test_seam_fake_session_zip_flows_through_ingest_and_check(tmp_path):
+    world = fake_session_world(tmp_path, machine_buses_typed_two=True)
+    before = _outside_private(world.repo)
+    out, err = ingest_session(world)
+    assert [line for line in out.splitlines() if line.startswith("section ")] == [
+        "section network: ok", "section reference: ok", "section settings: ok",
+        "section scaling: ok"]
+
+    code, out, err = check_session(world, "--allow-placeholder")
+    lines = out.splitlines()
+    assert_counts_only(out, err)
+    # the fake's numbers are not physics, so the verdict is a fail (or incomplete), never a pass
+    assert code == 1
+    assert "parity: pass" in lines
+    for city in constants.CITIES:
+        assert any(line.startswith("net03 %s algorithm: " % city) for line in lines)
+        assert "net03 %s algorithm: pass" % city not in lines
+    assert any(re.match(r"net03: (fail|incomplete) \(\d of 4 cities\)\Z", line) for line in lines)
+    assert "check: fail" in lines
+
+    # the session's own members were read: the report holds the settings and scaling it found
+    report = _read_report(world)
+    assert report["network"] == {"refused": None}
+    assert report["parity"]["passed"] is True
+    assert report["settings"]["tolerance_mva"] > 0
+    assert report["scaling"]["snapshots_read"] >= 1
+    # each city's base.json and presolve.raw were read and compared: the injected run (the one
+    # that needs no scaling rule) is complete, compared all nine buses and ended in a fail
+    injected = [item for item in report["net03"]["verdicts"] if item["run"] == "injected"]
+    assert [item["city"] for item in injected] == list(constants.CITIES)
+    for item in injected:
+        assert item["complete"] is True and item["passed"] is False
+        assert item["buses_compared"] == 9 and item["flows_compared"] > 0
+    assert sorted(os.listdir(os.path.join(world.session, "check_" + CHECK_STAMP))) == sorted(
+        OUTPUT_NAMES)
+    assert _outside_private(world.repo) == before
+
+
+def test_seam_fake_network_is_refused_by_the_builder_by_reason_only(tmp_path):
+    world = fake_session_world(tmp_path, machine_buses_typed_two=False)
+    ingest_session(world)
+    code, out, err = check_session(world, "--allow-placeholder")
+    assert code == 1
+    assert "network: refused (machine_at_load_bus)" in out.splitlines()
+    assert_counts_only(out, err)
+    report = _read_report(world)
+    assert report["network"]["refused"] == "machine_at_load_bus"
+    assert report["network"]["count"] == len(report["network"]["elements"]) > 0
+    assert "net03: " not in out
+
+
+def test_deliberate_mismatch_fails_check(tmp_path):
+    planted = {}
+
+    def move_one_voltage(base):
+        base["buses"][5]["pu"] = base["buses"][5]["pu"] + 0.011
+        planted["bus"] = base["buses"][5]["number"]
+
+    world = synthetic_session(tmp_path, reference_edit={"MIDLAND": move_one_voltage})
+    ingest_session(world)
+    code, out, err = check_session(world)
+    lines = out.splitlines()
+    assert code == 1, out
+    assert "net03 MIDLAND algorithm: fail" in lines
+    assert "net03: fail (3 of 4 cities)" in lines
+    for city in ("AUSTIN", "CORPUS_CHRISTI", "EL_PASO"):
+        assert "net03 %s algorithm: pass" % city in lines
+    assert "parity: pass" in lines and "check: fail" in lines
+    assert_counts_only(out, err)
+    # the failing element is named in the private report only
+    report = _read_report(world)
+    failed = [item for item in report["net03"]["verdicts"]
+              if item["city"] == "MIDLAND" and item["run"] == "algorithm"][0]
+    assert failed["complete"] is True and failed["passed"] is False
+    assert [(item["element"], item["quantity"]) for item in failed["unexplained"]] == [
+        (str(planted["bus"]), "voltage")]
+    assert str(planted["bus"]) not in out
+
+    # the same session with a registry that explains exactly that element passes
+    registry = {compare.REGISTRY_MARKER: compare.REGISTRY_VERSION, "entries": [{
+        "element": str(planted["bus"]), "quantity": "voltage", "cause": "synthetic test cause",
+        "measured_size": 0.0110001}]}
+    with open(os.path.join(world.session, ingest.REGISTRY_FILE_NAME), "w") as handle:
+        json.dump(registry, handle)
+    later = datetime.datetime(2026, 11, 16, 17, 0, 0, tzinfo=datetime.timezone.utc)
+    code, out, err = run_cli(["check", "--session", world.session, "--mapping", world.mapping],
+                             world.repo, now=later)
+    assert code == 0, out
+    assert "registry: 1 entries" in out.splitlines()
+    assert "net03: pass (4 of 4 cities)" in out.splitlines()
+
+
+def test_missing_or_partial_reference_is_incomplete(tmp_path):
+    world = synthetic_session(tmp_path / "missing", reference_edit={"EL_PASO": None})
+    ingest_session(world)
+    code, out, err = check_session(world)
+    lines = out.splitlines()
+    assert code == 1
+    assert "net03 EL_PASO algorithm: incomplete" in lines
+    assert "net03: incomplete (3 of 4 cities)" in lines
+    for city in ("AUSTIN", "CORPUS_CHRISTI", "MIDLAND"):
+        assert "net03 %s algorithm: pass" % city in lines
+    assert_counts_only(out, err)
+
+    def without_transformer_flows(base):
+        base["branch_flows"] = {"status": "unavailable", "reason": "synthetic", "flag": 4,
+                                "rows": []}
+
+    world = synthetic_session(tmp_path / "partial",
+                              reference_edit={"CORPUS_CHRISTI": without_transformer_flows})
+    ingest_session(world)
+    code, out, err = check_session(world)
+    lines = out.splitlines()
+    assert code == 1
+    assert "net03 CORPUS_CHRISTI algorithm: incomplete" in lines
+    assert "net03: incomplete (3 of 4 cities)" in lines
+    assert_counts_only(out, err)
+
+
+def test_check_output_is_counts_only(tmp_path):
+    planted = {}
+
+    def move_one_voltage(base):
+        base["buses"][2]["pu"] = base["buses"][2]["pu"] + 0.0345678
+        planted["number"] = str(base["buses"][2]["number"])
+        planted["pu"] = repr(base["buses"][2]["pu"])
+
+    scenarios = [
+        synthetic_session(tmp_path / "pass"),
+        synthetic_session(tmp_path / "fail", reference_edit={"AUSTIN": move_one_voltage}),
+        fake_session_world(tmp_path / "seam", machine_buses_typed_two=True)]
+    for index, world in enumerate(scenarios):
+        ingest_out, ingest_err = ingest_session(world)
+        extra = ["--allow-placeholder"] if index == 2 else []
+        code, out, err = check_session(world, *extra)
+        text = ingest_out + ingest_err + out + err
+        assert_counts_only(ingest_out, ingest_err, out, err)
+        assert str(tmp_path) not in text and world.repo not in text
+        assert not re.search(r"[0-9]+\.[0-9]{5,}", text)
+        printed = "\n".join(line for line in text.splitlines()
+                            if not line.startswith("converted copy"))
+        assert not re.search(r"\b9[0-9]{4}\b", printed)
+    assert planted["number"] not in text and planted["pu"] not in text
+
+    # the vocabulary renderer refuses a line that would carry a value
+    printer = cli._Printer(io.StringIO(), io.StringIO())
+    for bad in ("net03 AUSTIN note: 90001", "parity category loads: compared 3 differing 0.123456",
+                "network: refused (bus 90001)", "settings enforce_q_lims: 0.5"):
+        with pytest.raises(ValueError):
+            printer.say(bad)
+    printer.say("net03: pass (4 of 4 cities)")
+
+
+def test_private_outputs_are_ignored_and_flagged_by_the_leak_guard(tmp_path):
+    import private_leak_scan
+
+    world = synthetic_session(tmp_path)
+    ingest_session(world)
+    code, out, err = check_session(world)
+    assert code == 0, out
+    check_dir = os.path.join(world.session, "check_" + CHECK_STAMP)
+    for name in OUTPUT_NAMES:
+        path = os.path.join(check_dir, name)
+        relative = os.path.relpath(os.path.realpath(path), os.path.realpath(world.repo))
+        ignored = subprocess.run(["git", "-C", world.repo, "check-ignore", "-q", "--", relative])
+        assert ignored.returncode == 0, "an output is not git-ignored"
+        findings = private_leak_scan.scan_paths([os.path.realpath(path)], root=world.repo)
+        assert any(item.layer == "shape" and item.pattern == "pandapower_marker"
+                   for item in findings), "an output carries no leak-guard marker"
+        assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+    # a second check in the same second is refused, not merged into the first folder
+    code, out, err = check_session(world)
+    assert code == 2 and err.splitlines() == ["private path: refused (exists)"]
+
+
+def test_network_refusal_is_reported_by_reason_only(tmp_path):
+    records = fixture.mutate(_roomy_records(), "transformer", 0, "K", 5)
+    world = synthetic_session(tmp_path, network_records=records)
+    ingest_session(world)
+    code, out, err = check_session(world)
+    assert code == 1
+    assert out.splitlines()[-2:] == ["network: refused (three_winding)", "report: written"]
+    assert_counts_only(out, err)
+    report = _read_report(world)
+    assert report["network"]["refused"] == "three_winding"
+    assert isinstance(report["network"]["line"], int)
+    assert os.listdir(os.path.join(world.session, "check_" + CHECK_STAMP)) == ["report.json"]
