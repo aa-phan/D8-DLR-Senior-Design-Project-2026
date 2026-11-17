@@ -94,7 +94,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   4. The parity report compares the built network with the export element by element (counts, line versus transformer classification, ratings, limits, setpoints), lists every difference, and shows none.
   5. The base-case load flow of each city's scaled copy matches the PSS/E reference: every bus voltage within 0.01 pu and every branch flow within 2% (with an absolute floor for lightly loaded branches).
 
-**Plans**: 6/11 plans executed
+**Plans**: 8/11 plans executed
 
 Plans:
 **Wave 1**
@@ -110,8 +110,8 @@ Plans:
 - [x] 01-06-PLAN.md — Fail-closed RAW parser and pandapower builder, proven against case39 (wave 3)
 
 **Wave 4** *(blocked on Wave 3 completion)*
-- [ ] 01-07-PLAN.md — Parity report (NET-02), converted network copy and D-06 evidence (wave 4)
-- [ ] 01-08-PLAN.md — Minimal scaling, copied solve settings, D-13 comparator and scaling-detail analyser (wave 4)
+- [x] 01-07-PLAN.md — Parity report (NET-02), converted network copy and D-06 evidence (wave 4)
+- [x] 01-08-PLAN.md — Minimal scaling, copied solve settings, D-13 comparator and scaling-detail analyser (wave 4)
 
 **Wave 5** *(blocked on Wave 4 completion)*
 - [ ] 01-09-PLAN.md — Owner commands ingest and check, safe unzip, private-only outputs, laptop-to-Mac seam (wave 5)
@@ -198,7 +198,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6. Phases 2 and 3
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. PSS/E Reference Session and Network Parity | 6/11 | In Progress | - |
+| 1. PSS/E Reference Session and Network Parity | 8/11 | In Progress | - |
 | 2. PandapowerApi and Study Engine | 0/TBD | Not started | - |
 | 3. Solver Tag, Migration and Per-Solver Gaps | 0/TBD | Not started | - |
 | 4. Replay and Agreement Check | 0/TBD | Not started | - |
