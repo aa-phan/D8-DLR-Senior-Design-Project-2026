@@ -12,8 +12,10 @@ real bus number, path or name. Scenario solvers and fake subclasses live in this
 asserts, no classes of tests, no network.
 """
 
+import argparse
 import json
 import os
+import re
 import sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -422,3 +424,85 @@ def test_scaling_section_never_solves_or_saves(tmp_path, monkeypatch):
     assert names.count("scal_2") > 0 and names.count("bsys") == 1
     assert world.fake.fake_saved_paths == []
     assert _sav_files(tmp_path) == [str(world.case)]
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# The teammate's wrapper and the guide (static checks; PowerShell is not run here)
+# ──────────────────────────────────────────────────────────────────────────────
+
+_ROOT = os.path.abspath(os.path.join(_BACKEND, ".."))
+WRAPPER = os.path.join(_ROOT, "docs", "data-science", "ops", "psse_pandapower_session.ps1")
+GUIDE = os.path.join(_ROOT, "docs", "data-science", "decisions", "psse_pandapower_session_guide.md")
+SESSION_SCRIPT_NAME = "psse_pandapower_session.py"
+GUIDE_PLACEHOLDERS = ("<PYTHON>", "<REPO>", "<CONFIG>", "<MAPPING COPY>", "<ZIP>", "<SESSION>")
+_FLAG_RE = re.compile(r"--[a-z][a-z-]*")
+_DRIVE_PATH_RE = re.compile(r"\b[A-Za-z]:[\\/]")
+
+
+def _read_text(path):
+    with open(path, encoding="utf-8") as handle:
+        return handle.read()
+
+
+def _mode_parsers():
+    parser = session.build_parser()
+    choices = [action for action in parser._actions if isinstance(action, argparse._SubParsersAction)][0]
+    return choices.choices["run"], choices.choices["check"]
+
+
+def _accepted(flags, mode_parser):
+    return set(flags) <= set(mode_parser._option_string_actions)
+
+
+def test_wrapper_is_thin_and_offline():
+    """T-01-15: one Python call, no web or file-writing cmdlet, removal only of a new folder, and
+    every flag it passes is one the session's parser accepts."""
+    text = _read_text(WRAPPER)
+    text.encode("ascii")
+    assert text.count(SESSION_SCRIPT_NAME) == 1
+    call = [line for line in text.splitlines() if SESSION_SCRIPT_NAME in line][0]
+    assert " -I " in call and call.index(" -I ") < call.index(SESSION_SCRIPT_NAME)
+    assert "-I -X utf8 -B" in call
+    for word in ("Invoke-WebRequest", "Invoke-RestMethod", "Net.WebClient", "Start-BitsTransfer",
+                 "Out-File", "Set-Content", "Add-Content"):
+        assert word not in text, word
+    removals = [line for line in text.splitlines() if "Remove-Item" in line]
+    assert removals and all("$Folder" in line for line in removals)
+    assert "-Directory" in text and "psse_pp_session_" in text
+    for parameter in ("[string]$Python", "[string]$Config", "[string]$Mapping", "[switch]$Check",
+                      "[string]$Only"):
+        assert parameter in text, parameter
+    assert text.count("Mandatory = $true") == 3
+    assert "exit $code" in text and "Exit code: $code" in text
+    assert "GetFolderPath('Desktop')" in text and "$PSScriptRoot" in text
+    # the flags it passes are the session parser's: --only belongs to run, the others to both modes
+    flags = set(_FLAG_RE.findall(text))
+    assert flags == {"--config", "--mapping", "--out-dir", "--only"}
+    run_parser, check_parser = _mode_parsers()
+    assert _accepted(flags, run_parser)
+    assert _accepted(flags - {"--only"}, check_parser)
+    parser = session.build_parser()
+    for mode, extra in (("run", ["--only", "network"]), ("check", [])):
+        args = parser.parse_args(
+            [mode, "--config", "c", "--mapping", "m", "--out-dir", "o"] + extra)
+        assert args.mode == mode and args.out_dir == "o"
+    assert not _DRIVE_PATH_RE.search(text) and "/Users/" not in text
+
+
+def test_guide_uses_placeholders_only():
+    """T-01-16: the guide holds each placeholder, no real-looking path, and only flags the session accepts."""
+    text = _read_text(GUIDE)
+    for placeholder in GUIDE_PLACEHOLDERS:
+        assert placeholder in text, placeholder
+    assert not _DRIVE_PATH_RE.search(text), "a drive-letter path"
+    assert "/Users/" not in text
+    session_lines = [line for line in text.splitlines() if SESSION_SCRIPT_NAME in line]
+    assert session_lines
+    run_parser, check_parser = _mode_parsers()
+    for line in session_lines:
+        flags = _FLAG_RE.findall(line)
+        assert flags and _accepted(flags, run_parser), line
+        if " check " in line:
+            assert _accepted(flags, check_parser), line
+    for word in ("-Check", "-Only", "Exit code", "UNVERIFIED"):
+        assert word in text, word
