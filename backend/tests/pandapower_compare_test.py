@@ -763,3 +763,508 @@ def test_tolerances_are_defined_once():
              and isinstance(node.value, (int, float)) and node.value in wanted
              and id(node) not in allowed]
     assert len(stray) == 0
+
+
+# -- Task 3: the scaling-detail analyser and the injected-snapshot run ----------------------------
+
+SWING_BUS = OFFSET + 31
+STEP = 1e-6
+
+
+def _gen_index(records, bus):
+    return [i for i, rec in enumerate(records["generator"]) if rec["I"] == bus][0]
+
+
+def _with_swing_pg(records, pg):
+    return fixture.mutate(records, "generator", _gen_index(records, SWING_BUS), "PG", pg)
+
+
+def _snapshot(records):
+    return _parse(records)
+
+
+def _pg_sum(records, include_swing):
+    return sum(rec["PG"] for rec in records["generator"]
+               if rec["STAT"] == 1 and (include_swing or rec["I"] != SWING_BUS))
+
+
+def _record(name, before=None, after=None, status="ok", **fields):
+    record = {"name": name, "status": status, "detail": [] if status == "ok" else ["PsseCallError"],
+              "totals_before": None, "totals_after": None, "targets": None, "sink_buses": None,
+              "increment_mw": None,
+              "before": "scaling/%s_before.raw" % name if before is not None else None,
+              "after": "scaling/%s_after.raw" % name if after is not None else None}
+    record.update(fields)
+    return record
+
+
+def _snapshots(*named):
+    """{member: ParsedCase} for (name, before records, after records) triples."""
+    found = {}
+    for name, before, after in named:
+        if before is not None:
+            found["scaling/%s_before.raw" % name] = _snapshot(before)
+        if after is not None:
+            found["scaling/%s_after.raw" % name] = _snapshot(after)
+    return found
+
+
+def _swing_details(records, gen_total):
+    experiment = _record("swing_in_total", before=records,
+                         totals_before={"load_mw": 1.0, "gen_mw": gen_total})
+    return scaling.analyse_scaling_details(
+        [experiment], _snapshots(("swing_in_total", records, None))).swing_in_total
+
+
+def test_swing_in_total_classification():
+    records = _with_swing_pg(_roomy_records(), 300.0)
+    with_swing, without = _pg_sum(records, True), _pg_sum(records, False)
+    assert abs(with_swing - without - 300.0) < 1e-6
+
+    assert _swing_details(records, with_swing) == "yes"
+    assert _swing_details(records, without) == "no"
+    assert _swing_details(records, with_swing + 5.0) == "inconclusive"
+    # A swing machine that produces nothing cannot tell the two apart.
+    zero = _with_swing_pg(_roomy_records(), 0.0)
+    assert _swing_details(zero, _pg_sum(zero, True)) == "inconclusive"
+    # Machines out of service are in neither sum.
+    off = fixture.mutate(records, "generator", 0, "STAT", 0)
+    assert _swing_details(off, _pg_sum(off, True)) == "yes"
+    assert _swing_details(off, _pg_sum(off, False)) == "no"
+
+    # Boundary: a gap of exactly MW_TOLERANCE is equal; one step inside and outside.
+    tolerance = scaling.MW_TOLERANCE
+    for target, gap_total in (("yes", with_swing), ("no", without)):
+        assert _swing_details(records, gap_total + tolerance) == target
+        assert _swing_details(records, gap_total - tolerance) == target
+        assert _swing_details(records, gap_total + tolerance - 0.001) == target
+        assert _swing_details(records, gap_total + tolerance + 0.001) == "inconclusive"
+        assert _swing_details(records, gap_total - tolerance - 0.001) == "inconclusive"
+
+    # The experiments document as written by the session is accepted as well as its list.
+    experiment = _record("swing_in_total", before=records,
+                         totals_before={"load_mw": 1.0, "gen_mw": with_swing})
+    document = {"experiments": [experiment], "no_raw_export": False}
+    details = scaling.analyse_scaling_details(
+        document, _snapshots(("swing_in_total", records, None)))
+    assert details.swing_in_total == "yes"
+    assert details.clamped_at_limits == "inconclusive" and details.q_scales_with_p == "inconclusive"
+    assert set(scaling.DETAIL_VALUES) >= {details.swing_in_total, details.clamped_at_limits}
+
+
+def _clamp_records(passing_limit=None):
+    """Records where every machine has room, except `passing_limit` = (index, factor): that
+    machine's P maximum sits at P times the factor, so a larger scaling factor passes it."""
+    records = _with_swing_pg(_roomy_records(), 0.0)
+    if passing_limit is not None:
+        index, factor = passing_limit
+        records = fixture.mutate(records, "generator", index, "PT",
+                                 records["generator"][index]["PG"] * factor)
+    return records
+
+
+def _clamp_details(records, after_records, factor=1.5, name="clamp_at_limits_x1_5", others=()):
+    own = _pg_sum(records, False)
+    experiment = _record(
+        name, before=records, after=after_records,
+        totals_before={"load_mw": 1.0, "gen_mw": own},
+        targets={"load_mw": 1.0, "gen_mw": own * factor})
+    snapshots = _snapshots((name, records, after_records))
+    experiments = [experiment]
+    for other_name, other_before, other_after, other_factor in others:
+        other_own = _pg_sum(other_before, False)
+        experiments.append(_record(
+            other_name, before=other_before, after=other_after,
+            totals_before={"load_mw": 1.0, "gen_mw": other_own},
+            targets={"load_mw": 1.0, "gen_mw": other_own * other_factor}))
+        snapshots.update(_snapshots((other_name, other_before, other_after)))
+    return scaling.analyse_scaling_details(experiments, snapshots)
+
+
+def _after_with(records, index, pg):
+    return fixture.mutate(records, "generator", index, "PG", pg)
+
+
+def test_clamping_classification():
+    index = _gen_index(_roomy_records(), OFFSET + 32)     # 650 MW
+    records = _clamp_records((index, 1.2))                # PT = 780, factor 1.5 passes it
+    limit = records["generator"][index]["PT"]
+    tolerance = scaling.MW_TOLERANCE
+
+    # Held at the limit: yes. Inside the tolerance of the limit, still yes (boundary, inclusive).
+    assert _clamp_details(records, _after_with(records, index, limit)).clamped_at_limits == "yes"
+    assert _clamp_details(records, _after_with(
+        records, index, limit + tolerance)).clamped_at_limits == "yes"
+    assert _clamp_details(records, _after_with(
+        records, index, limit - tolerance)).clamped_at_limits == "yes"
+    assert _clamp_details(records, _after_with(
+        records, index, limit + tolerance - 0.001)).clamped_at_limits == "yes"
+    # Above the limit by more than the tolerance: no. One step beyond the boundary.
+    assert _clamp_details(records, _after_with(
+        records, index, limit + tolerance + 0.001)).clamped_at_limits == "no"
+    assert _clamp_details(records, _after_with(
+        records, index, records["generator"][index]["PG"] * 1.5)).clamped_at_limits == "no"
+    # Short of the limit by more than the tolerance (neither held nor above): no conclusion.
+    assert _clamp_details(records, _after_with(
+        records, index, limit - tolerance - 0.001)).clamped_at_limits == "inconclusive"
+    # No machine reaches its maximum: no conclusion either way.
+    roomy = _clamp_records()
+    assert _clamp_details(roomy, roomy).clamped_at_limits == "inconclusive"
+
+    # Whether a machine counts as pushed past its maximum has the same boundary: P times the
+    # factor at exactly maximum plus tolerance is not past it, one step more is.
+    index2 = _gen_index(_roomy_records(), OFFSET + 35)
+    base = _clamp_records()
+    pg = base["generator"][index2]["PG"]
+    edge = fixture.mutate(base, "generator", index2, "PT", pg * 1.5 - tolerance)
+    assert _clamp_details(edge, _after_with(edge, index2, pg * 1.5)).clamped_at_limits == (
+        "inconclusive")
+    past = fixture.mutate(base, "generator", index2, "PT", pg * 1.5 - tolerance - 0.001)
+    assert _clamp_details(past, _after_with(past, index2, pg * 1.5)).clamped_at_limits == "no"
+
+    # Mixed machines (one held, one above): not a rule PSS/E applies to all, so inconclusive.
+    two = _clamp_records((index, 1.2))
+    other = _gen_index(two, OFFSET + 36)
+    two = fixture.mutate(two, "generator", other, "PT", two["generator"][other]["PG"] * 1.2)
+    after = _after_with(two, index, two["generator"][index]["PT"])
+    after = _after_with(after, other, two["generator"][other]["PG"] * 1.5)
+    assert _clamp_details(two, after).clamped_at_limits == "inconclusive"
+    # Both machines held: yes. The swing machine is not judged.
+    after = _after_with(after, other, two["generator"][other]["PT"])
+    details = _clamp_details(two, after)
+    assert details.clamped_at_limits == "yes"
+    counts = details.evidence["clamped_at_limits"]["clamp_at_limits_x1_5"]
+    assert counts["candidates"] == 2 and counts["at_limit"] == 2 and counts["above_limit"] == 0
+
+    # Two experiments are combined: agreeing, one without evidence, and a contradiction.
+    held = _after_with(records, index, limit)
+    unheld = _after_with(records, index, records["generator"][index]["PG"] * 3.0)
+    x3_records = _clamp_records((index, 2.0))
+    x3_held = _after_with(x3_records, index, x3_records["generator"][index]["PT"])
+    assert _clamp_details(records, held, others=[
+        ("clamp_at_limits_x3", x3_records, x3_held, 3.0)]).clamped_at_limits == "yes"
+    assert _clamp_details(records, held, others=[
+        ("clamp_at_limits_x3", roomy, roomy, 3.0)]).clamped_at_limits == "yes"
+    clash = _clamp_details(records, held, others=[
+        ("clamp_at_limits_x3", x3_records,
+         _after_with(x3_records, index, x3_records["generator"][index]["PG"] * 3.0), 3.0)])
+    assert clash.clamped_at_limits == "inconclusive"
+    assert clash.evidence["clamped_at_limits"]["clamp_at_limits_x1_5"]["at_limit"] == 1
+    assert clash.evidence["clamped_at_limits"]["clamp_at_limits_x3"]["above_limit"] == 1
+    assert clash.evidence["clamped_at_limits"]["combined"] == "contradiction"
+    assert unheld["generator"][index]["PG"] > limit
+
+
+def _q_records(p_before=100.0, q_before=20.0, count=2):
+    """Records whose first `count` loads are the sink loads, at known P and Q."""
+    records = _roomy_records()
+    for position in range(count):
+        records = fixture.mutate(records, "load", position, "PL", p_before)
+        records = fixture.mutate(records, "load", position, "QL", q_before)
+    return records
+
+
+def _q_details(before, after, count=2):
+    buses = [before["load"][position]["I"] for position in range(count)]
+    experiment = _record("q_with_p", before=before, after=after, sink_buses=buses,
+                         increment_mw=10.0)
+    return scaling.analyse_scaling_details(
+        [experiment], _snapshots(("q_with_p", before, after))).q_scales_with_p
+
+
+def _after_loads(records, ratios, count=2):
+    """Records with the sink loads' P and Q multiplied by (p ratio, q ratio) per load."""
+    result = records
+    for position in range(count):
+        p_ratio, q_ratio = ratios[position] if isinstance(ratios, list) else ratios
+        load = records["load"][position]
+        result = fixture.mutate(result, "load", position, "PL", load["PL"] * p_ratio)
+        result = fixture.mutate(result, "load", position, "QL", load["QL"] * q_ratio)
+    return result
+
+
+def test_q_with_p_classification():
+    before = _q_records()
+    # Q moves with P: yes. Q stays put while P moves: no.
+    assert _q_details(before, _after_loads(before, (1.01, 1.01))) == "yes"
+    assert _q_details(before, _after_loads(before, (1.01, 1.0))) == "no"
+    # Q moves by some other ratio: no conclusion.
+    assert _q_details(before, _after_loads(before, (1.01, 1.02))) == "inconclusive"
+
+    # RATIO_TOLERANCE at, inside and outside (Q ratio against the P ratio).
+    ratio = scaling.RATIO_TOLERANCE
+    assert _q_details(before, _after_loads(before, (1.01, 1.01 + ratio))) == "yes"
+    assert _q_details(before, _after_loads(before, (1.01, 1.01 - ratio))) == "yes"
+    assert _q_details(before, _after_loads(before, (1.01, 1.01 + ratio - STEP))) == "yes"
+    assert _q_details(before, _after_loads(before, (1.01, 1.01 + ratio + STEP))) == "inconclusive"
+    # ... and Q unchanged within the same tolerance.
+    assert _q_details(before, _after_loads(before, (1.01, 1.0 + ratio))) == "no"
+    assert _q_details(before, _after_loads(before, (1.01, 1.0 - ratio + STEP))) == "no"
+    assert _q_details(before, _after_loads(before, (1.01, 1.0 + ratio + STEP))) == "inconclusive"
+
+    # MIN_RELATIVE_CHANGE at, inside and outside (relative change of P).
+    change = scaling.MIN_RELATIVE_CHANGE
+    assert _q_details(before, _after_loads(before, (1.0 + change, 1.0 + change))) == "yes"
+    assert _q_details(before, _after_loads(
+        before, (1.0 + change + STEP, 1.0 + change + STEP))) == "yes"
+    assert _q_details(before, _after_loads(
+        before, (1.0 + change - STEP, 1.0 + change - STEP))) == "inconclusive"
+    assert _q_details(before, _after_loads(before, (1.0 - change, 1.0))) == "no"
+    assert _q_details(before, _after_loads(before, (1.0 - change + STEP, 1.0))) == "inconclusive"
+    assert _q_details(before, before) == "inconclusive"
+
+    # A zero Q (or zero P) gives nothing to compare.
+    zero_q = _q_records(q_before=0.0)
+    assert _q_details(zero_q, _after_loads(zero_q, (1.01, 1.01))) == "inconclusive"
+    zero_p = _q_records(p_before=0.0)
+    assert _q_details(zero_p, _after_loads(zero_p, (1.01, 1.01))) == "inconclusive"
+
+    # Loads that disagree give no conclusion; loads away from the sink buses and out of service
+    # are not looked at.
+    assert _q_details(before, _after_loads(before, [(1.01, 1.01), (1.01, 1.0)])) == (
+        "inconclusive")
+    elsewhere = _after_loads(before, (1.01, 1.01))
+    elsewhere = fixture.mutate(elsewhere, "load", 5, "QL", 1234.5)
+    assert _q_details(before, elsewhere) == "yes"
+    quiet = fixture.mutate(_after_loads(before, [(1.01, 1.01), (1.01, 1.0)]), "load", 1,
+                           "STATUS", 0)
+    quiet_before = fixture.mutate(before, "load", 1, "STATUS", 0)
+    assert _q_details(quiet_before, quiet) == "yes"
+    experiment = _record("q_with_p", before=before, after=before, sink_buses=[],
+                         increment_mw=10.0)
+    assert scaling.analyse_scaling_details(
+        [experiment], _snapshots(("q_with_p", before, before))).q_scales_with_p == "inconclusive"
+
+
+def test_print_rounding_classifies_as_equal():
+    # PSS/E prints P with four decimals in a RAW file; the tolerance is not finer than that.
+    assert scaling.MW_TOLERANCE >= scaling.RAW_PRINT_RESOLUTION_MW
+    assert scaling.RAW_PRINT_RESOLUTION_MW == 1e-4
+    assert scaling.MW_TOLERANCE >= len(_roomy_records()["generator"]) * 0.5 * (
+        scaling.RAW_PRINT_RESOLUTION_MW)
+
+    exact = _with_swing_pg(_roomy_records(), 300.123456)
+    for position, machine in enumerate(exact["generator"]):
+        exact = fixture.mutate(exact, "generator", position, "PG",
+                               machine["PG"] + 0.123456 * (position + 1))
+    printed = copy.deepcopy(exact)
+    for machine in printed["generator"]:
+        machine["PG"] = round(machine["PG"], 4)
+    total = _pg_sum(exact, True)
+    assert total != _pg_sum(printed, True)
+    assert abs(total - _pg_sum(printed, True)) < scaling.MW_TOLERANCE
+    assert _swing_details(printed, total) == "yes"
+    assert _swing_details(printed, _pg_sum(exact, False)) == "no"
+    # A gap of less than the print resolution never changes the answer.
+    assert _swing_details(exact, total + 0.5 * scaling.RAW_PRINT_RESOLUTION_MW) == "yes"
+
+    # A machine held at a limit that prints rounded is still at it.
+    index = _gen_index(_roomy_records(), OFFSET + 32)
+    records = _clamp_records((index, 1.2))
+    records = fixture.mutate(records, "generator", index, "PT", 780.12345)
+    after = _after_with(records, index, round(780.12345, 4))
+    assert _clamp_details(records, after).clamped_at_limits == "yes"
+
+    # Loads that print rounded keep their ratios.
+    before = _q_records(p_before=100.123456, q_before=20.654321)
+    after = _after_loads(before, (1.01, 1.01))
+    for load in after["load"][:2]:
+        load["PL"], load["QL"] = round(load["PL"], 4), round(load["QL"], 4)
+    assert _q_details(before, after) == "yes"
+
+
+def test_failed_experiment_is_inconclusive():
+    records = _with_swing_pg(_roomy_records(), 300.0)
+    total = _pg_sum(records, True)
+
+    def swing(**fields):
+        record = _record("swing_in_total", before=records,
+                         totals_before={"load_mw": 1.0, "gen_mw": total})
+        record.update(fields)
+        return record
+
+    snapshots = _snapshots(("swing_in_total", records, None))
+    ok = scaling.analyse_scaling_details([swing()], snapshots)
+    assert ok.swing_in_total == "yes"
+
+    failed = scaling.analyse_scaling_details([swing(status="failed", detail=["PsseCallError"])], snapshots)
+    assert failed.swing_in_total == "inconclusive"
+    assert failed.evidence["swing_in_total"]["reason"] == "failed"
+    assert failed.evidence["swing_in_total"]["detail"] == ["PsseCallError"]
+    # No experiment at all, no snapshot recorded, a snapshot that was not delivered, no totals.
+    assert scaling.analyse_scaling_details([], snapshots).evidence["swing_in_total"][
+        "reason"] == "missing"
+    for broken, reason in ((swing(before=None), "no_snapshot"),
+                           (swing(before="scaling/elsewhere.raw"), "snapshot_not_delivered"),
+                           (swing(totals_before=None), "no_totals"),
+                           (swing(totals_before={"load_mw": 1.0, "gen_mw": math.nan}), "no_totals")):
+        result = scaling.analyse_scaling_details([broken], snapshots)
+        assert result.swing_in_total == "inconclusive"
+        assert result.evidence["swing_in_total"]["reason"] == reason
+
+    # A failed clamp experiment gives no evidence; the other one still speaks, and both failing
+    # leaves nothing. A failed q_with_p is inconclusive too.
+    index = _gen_index(_roomy_records(), OFFSET + 32)
+    held_records = _clamp_records((index, 1.2))
+    held = _after_with(held_records, index, held_records["generator"][index]["PT"])
+    own = _pg_sum(held_records, False)
+    good = _record("clamp_at_limits_x1_5", before=held_records, after=held,
+                   totals_before={"load_mw": 1.0, "gen_mw": own},
+                   targets={"load_mw": 1.0, "gen_mw": own * 1.5})
+    bad = _record("clamp_at_limits_x3", status="failed")
+    clamp_snapshots = _snapshots(("clamp_at_limits_x1_5", held_records, held))
+    one = scaling.analyse_scaling_details([good, bad], clamp_snapshots)
+    assert one.clamped_at_limits == "yes"
+    assert one.evidence["clamped_at_limits"]["clamp_at_limits_x3"]["reason"] == "failed"
+    both = scaling.analyse_scaling_details(
+        [dict(good, status="failed"), bad], clamp_snapshots)
+    assert both.clamped_at_limits == "inconclusive"
+    q_failed = _record("q_with_p", status="failed")
+    assert scaling.analyse_scaling_details([q_failed], {}).q_scales_with_p == "inconclusive"
+    for detail in scaling.analyse_scaling_details([], {})[:3]:
+        assert detail == "inconclusive"
+
+
+def _scaled_records(records, load_target_factor, gen_target_factor):
+    """The PSS/E side by hand on RAW records: loads times one factor, non-swing machines times
+    the factor that reaches the generation target with the swing machine excluded."""
+    gen_total = _pg_sum(records, False)
+    load_total = sum(rec["PL"] for rec in records["load"] if rec["STATUS"] == 1)
+    scaled = copy.deepcopy(records)
+    for load in scaled["load"]:
+        load["PL"] *= load_target_factor
+        load["QL"] *= load_target_factor
+    for machine in scaled["generator"]:
+        if machine["I"] != SWING_BUS:
+            machine["PG"] *= gen_target_factor
+    return scaled, load_total * load_target_factor, gen_total * gen_target_factor
+
+
+def test_injected_run_localises_a_wrong_scaling_flag():
+    records = _with_swing_pg(_roomy_records(), 1000.0)
+    scaled_records, load_target, gen_target = _scaled_records(records, 1.1, 1.1)
+    base = network.build_network(_case(records))
+
+    # The PSS/E side: solved from its own scaled values.
+    pse_net = network.build_network(_case(scaled_records))
+    assert solve.run_load_flow(pse_net, _settings(), False).converged
+    reference = _reference(pse_net, "AUSTIN")
+    target = scaling_tuple(load_target, gen_target)
+
+    def algorithm(swing_flag):
+        details = scaling.ScalingDetails(swing_flag, "no", "inconclusive", {})
+        net = scaling.scale_city(base, target, details)
+        assert solve.run_load_flow(net, _settings(), False).converged
+        return compare.compare_city("AUSTIN", "algorithm", net, reference)
+
+    right = algorithm("no")
+    wrong = algorithm("yes")
+    assert right.complete and right.passed
+    assert wrong.complete and not wrong.passed and wrong.flows_failed > 0
+
+    # The injected run takes PSS/E's own post-scaling values and passes whichever flag is wrong.
+    injected = scaling.inject_snapshot(base, _snapshot(scaled_records))
+    assert solve.run_load_flow(injected, _settings(), False).converged
+    verdict = compare.compare_city("AUSTIN", compare.RUN_INJECTED, injected, reference)
+    assert verdict.complete and verdict.passed
+    # ... and a net that was not injected is a different net (deep copies both ways).
+    assert float(base.load.p_mw.sum()) != float(injected.load.p_mw.sum())
+    assert float(base.load.p_mw.sum()) == pytest.approx(
+        sum(rec["PL"] for rec in records["load"]))
+    assert float(injected.ext_grid.psse_pg_mw.iloc[0]) == 1000.0
+
+    # Every in-service machine's P and every load's P and Q are copied, by name.
+    for _, row in injected.gen.iterrows():
+        bus, ident = str(row["name"]).split("-", 1)
+        expected = [m["PG"] for m in scaled_records["generator"]
+                    if str(m["I"]) == bus and m["ID"] == ident][0]
+        assert row["p_mw"] == expected
+    for _, row in injected.load.iterrows():
+        bus, ident = str(row["name"]).split("-", 1)
+        expected = [m for m in scaled_records["load"] if str(m["I"]) == bus and m["ID"] == ident][0]
+        assert (row["p_mw"], row["q_mvar"]) == (expected["PL"], expected["QL"])
+
+    # A snapshot missing an element is refused, with no figure in the message.
+    for section, position in (("load", 0), ("generator", 0),
+                              ("generator", _gen_index(records, SWING_BUS))):
+        with pytest.raises(scaling.ScalingRefused) as caught:
+            scaling.inject_snapshot(base, _snapshot(fixture.remove(
+                scaled_records, section, position)))
+        assert caught.value.reason == "snapshot_missing_element"
+        assert not any(char.isdigit() for char in str(caught.value))
+
+
+def test_scale_city_refusals_and_clamping(monkeypatch):
+    base = network.build_network(_case())
+    own_load, own_gen = _totals(base)
+    no = scaling.ScalingDetails("no", "no", "inconclusive", {})
+
+    def target(load_factor, gen_factor):
+        return scaling_tuple(own_load * load_factor, own_gen * gen_factor)
+
+    # Undetermined: the swing flag, and the clamp flag only when a machine would pass a limit.
+    with pytest.raises(scaling.ScalingUndetermined) as caught:
+        scaling.scale_city(base, target(1.0, 1.0), no._replace(swing_in_total="inconclusive"))
+    assert caught.value.reason == "swing_in_total"
+    unsure = no._replace(clamped_at_limits="inconclusive")
+    scaling.scale_city(base, target(1.0, 1.0), unsure)       # no machine passes a limit at 1.0
+    limited = network.build_network(_case(_clamp_records((_gen_index(
+        _roomy_records(), OFFSET + 32), 1.05))))
+    with pytest.raises(scaling.ScalingUndetermined) as caught:
+        scaling.scale_city(limited, target(1.0, 1.1), unsure)
+    assert caught.value.reason == "clamped_at_limits"
+
+    # Targets outside the bounds psse_job.study uses, on either side, load or generation.
+    for load_factor, gen_factor in ((0.0495, 1.0), (20.2, 1.0), (1.0, 0.0495), (1.0, 20.2)):
+        with pytest.raises(scaling.ScalingRefused) as caught:
+            scaling.scale_city(base, target(load_factor, gen_factor), no)
+        assert caught.value.reason.endswith("_bounds")
+        assert not any(char.isdigit() for char in str(caught.value))
+    scaled = scaling.scale_city(base, target(0.0505, 19.9), no)
+    assert abs(float(scaled.load.p_mw.sum()) - own_load * 0.0505) < 1e-6 * own_load
+    # Nothing to scale, and a bad detail value.
+    idle = copy.deepcopy(base)
+    idle.load["in_service"] = False
+    with pytest.raises(scaling.ScalingRefused) as caught:
+        scaling.scale_city(idle, target(1.0, 1.0), no)
+    assert caught.value.reason == "load_none"
+    with pytest.raises(ValueError):
+        scaling.scale_city(base, target(1.0, 1.0), no._replace(swing_in_total="maybe"))
+    # The read-back tolerance is the job's: with an impossible one every scaling is refused.
+    monkeypatch.setattr(scaling.study, "SCALE_TOLERANCE", -1.0)
+    with pytest.raises(scaling.ScalingRefused) as caught:
+        scaling.scale_city(base, target(1.1, 1.1), no)
+    assert caught.value.reason == "load_read_back"
+    monkeypatch.undo()
+    assert scaling.study.SCALE_FACTOR_BOUNDS == (0.05, 20.0)
+
+    # Clamping "yes" holds a machine at its limit and the generation total falls short;
+    # "no" lets it pass; the source net is never changed.
+    snapshot = copy.deepcopy(limited)
+    held = scaling.scale_city(limited, target(1.0, 1.1), no._replace(clamped_at_limits="yes"))
+    index = limited.gen.index[limited.gen.name == "%d-1" % (OFFSET + 32)][0]
+    assert held.gen.at[index, "p_mw"] == limited.gen.at[index, "max_p_mw"]
+    assert float(held.gen.p_mw.sum()) < own_gen * 1.1 - 1.0
+    passed = scaling.scale_city(limited, target(1.0, 1.1), no)
+    assert passed.gen.at[index, "p_mw"] > limited.gen.at[index, "max_p_mw"]
+    assert limited.gen.equals(snapshot.gen) and limited.load.equals(snapshot.load)
+
+    # The swing machine in the total: its stored P is scaled with the rest and the others scale
+    # by less; excluded, it is left alone.
+    swung = network.build_network(_case(_with_swing_pg(_roomy_records(), 500.0)))
+    swing_total = own_gen + 500.0
+    inside = scaling.scale_city(swung, scaling_tuple(own_load, swing_total * 1.1),
+                                no._replace(swing_in_total="yes"))
+    assert float(inside.ext_grid.psse_pg_mw.iloc[0]) == pytest.approx(550.0)
+    assert float(inside.gen.p_mw.sum()) == pytest.approx(own_gen * 1.1)
+    outside = scaling.scale_city(swung, scaling_tuple(own_load, own_gen * 1.1), no)
+    assert float(outside.ext_grid.psse_pg_mw.iloc[0]) == 500.0
+    assert float(outside.gen.p_mw.sum()) == pytest.approx(own_gen * 1.1)
+
+
+def test_threshold_values_are_the_plans():
+    # The boundary tests above are written against the constants; this pins the constants.
+    assert (scaling.MW_TOLERANCE, scaling.RATIO_TOLERANCE, scaling.MIN_RELATIVE_CHANGE) == (
+        0.01, 1e-4, 1e-3)
+    assert solve.FINGERPRINT_TOLERANCE_PU == 1e-6
+    assert scaling.DETAIL_VALUES == ("yes", "no", "inconclusive")
