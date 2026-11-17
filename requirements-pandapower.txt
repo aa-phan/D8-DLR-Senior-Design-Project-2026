@@ -1,0 +1,24 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Mac-side pandapower solver pins (pandapower-solver workstream, Phase 1)
+# ──────────────────────────────────────────────────────────────────────────────
+# Used by the pandapower solver that Phase 1 (network parity) builds and tests
+# on the Mac. Phase 5 installs the same file in GitHub Actions. The PSS/E
+# laptop never installs this file.
+#
+# Package legitimacy: confirmed by the owner at plan 01-05 Task 1 on
+# 2026-11-16 (reply "approved"): PyPI project `pandapower`, source
+# github.com/e2nIEE/pandapower, version 3.5.6, wheel
+# pandapower-3.5.6-py3-none-any.whl, sha256
+# b6d15d0d506136fd0b8d58a18c2e05ad4947fe1c8d5db2b74c9615cbb473c877.
+# The downloaded wheel was hash-checked against that value before install.
+#
+# numpy, pandas and scipy repeat requirements.txt exactly and must move
+# together with it, so the existing jobs' environment is described unchanged.
+# pandapower 3.5.6 declares pandas ~=2.3 and numpy <2.5; both pins sit inside
+# those bounds. Its other declared requirements (networkx, pandera, pydantic,
+# deepdiff, geojson, typeguard, orderly-set, cachebox, colorama, packaging,
+# tqdm) are not pinned here.
+pandapower==3.5.6
+numpy==2.4.3
+pandas==2.3.3
+scipy==1.17.1
