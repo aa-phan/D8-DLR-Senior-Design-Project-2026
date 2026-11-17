@@ -7,7 +7,7 @@ id stripped of PSS/E's padding, loads, fixed shunts and machines are named `bus-
 out-of-service flag is copied. It builds from the parsed values only: pandapower's converter and its
 bundled test networks are never used here (they classify branches differently and lose bus numbers).
 
-Conventions, each verified against `pandapower.networks.case39()` to about 1e-15 pu in the research
+Conventions, each verified against pandapower's bundled 39-bus case to about 1e-15 pu in the research
 for this phase:
 
 - Per-unit R, X and B are on the system base. A line is built with `length_km=1` and ohms at the
@@ -73,6 +73,11 @@ def _machine_key(values):
     return "%d-%s" % (values["I"], values["ID"])
 
 
+def _branch_key(rec):
+    values = rec.values
+    return raw.branch_key(values["I"], values["J"], values["CKT"])
+
+
 def _in_service(flag):
     return flag == 1
 
@@ -83,19 +88,92 @@ def _refuse(reason, found):
         raise BuildRefused(reason, [key for key, _ in found], [line for _, line in found])
 
 
+def _duplicates(items):
+    """(key, line) of every key that occurs more than once in `items` [(key, line)], once each."""
+    seen, repeated = set(), {}
+    for key, line in items:
+        if key in seen and key not in repeated:
+            repeated[key] = line
+        seen.add(key)
+    return sorted(repeated.items())
+
+
 def _check(case, buses):
     """Every fail-closed rule, in the order of BUILD_REFUSAL_REASONS; returns the swing machine."""
+    sections = case.sections
     if not buses:
         raise BuildRefused("no_buses")
     swing_buses = [number for number, rec in buses.items() if rec.values["IDE"] == SWING_IDE]
     if len(swing_buses) != 1:
         raise BuildRefused("no_swing_bus", [str(number) for number in sorted(swing_buses)])
     swing_bus = swing_buses[0]
-    at_swing = [rec for rec in case.sections["generator"]
-                if rec.values["I"] == swing_bus and _in_service(rec.values["STAT"])]
+    machines = sections["generator"]
+    live = [rec for rec in machines if _in_service(rec.values["STAT"])]
+    at_swing = [rec for rec in live if rec.values["I"] == swing_bus]
     if len(at_swing) != 1:
         raise BuildRefused("swing_bus_machines", [_machine_key(rec.values) for rec in at_swing],
                            [rec.line for rec in at_swing])
+
+    def ide(number):
+        return buses[number].values["IDE"] if number in buses else None
+
+    controlled = {rec.values["I"] for rec in live}
+    _refuse("pv_bus_without_machine",
+            [(str(number), rec.line) for number, rec in sorted(buses.items())
+             if rec.values["IDE"] == VOLTAGE_CONTROLLED_IDE and number not in controlled])
+    _refuse("machine_at_load_bus",
+            [(_machine_key(rec.values), rec.line) for rec in live
+             if ide(rec.values["I"]) == LOAD_IDE])
+    by_bus = {}
+    for rec in live:
+        by_bus.setdefault(rec.values["I"], []).append(rec)
+    _refuse("conflicting_setpoints",
+            [(str(number), group[0].line) for number, group in sorted(by_bus.items())
+             if ide(number) == VOLTAGE_CONTROLLED_IDE
+             and len({rec.values["VS"] for rec in group}) > 1])
+    _refuse("load_not_constant_power",
+            [(_machine_key(rec.values), rec.line) for rec in sections["load"]
+             if any(rec.values[name] != 0.0 for name in ("IP", "IQ", "YP", "YQ"))])
+    _refuse("line_shunt_terminals",
+            [(_branch_key(rec), rec.line) for rec in sections["branch"]
+             if any(rec.values[name] != 0.0 for name in ("GI", "BI", "GJ", "BJ"))])
+    _refuse("remote_regulation",
+            [(_machine_key(rec.values), rec.line) for rec in machines
+             if rec.values["IREG"] not in (0, rec.values["I"])])
+    transformers = sections["transformer"]
+    _refuse("transformer_winding_codes",
+            [(_branch_key(rec), rec.line) for rec in transformers
+             if any(rec.values[name] != 1 for name in ("CW", "CZ", "CM"))])
+    _refuse("magnetizing_branch",
+            [(_branch_key(rec), rec.line) for rec in transformers
+             if rec.values["MAG1"] != 0.0 or rec.values["MAG2"] != 0.0])
+    _refuse("controlling_transformer",
+            [(_branch_key(rec), rec.line) for rec in transformers if rec.values["COD1"] != 0])
+    _refuse("phase_shift",
+            [(_branch_key(rec), rec.line) for rec in transformers if rec.values["ANG1"] != 0.0])
+    _refuse("windv2_not_one",
+            [(_branch_key(rec), rec.line) for rec in transformers
+             if rec.values["WINDV2"] != 1.0])
+    _refuse("zero_rating",
+            [(_branch_key(rec), rec.line) for rec in sections["branch"]
+             if rec.values["RATEA"] <= 0.0])
+    unknown = []
+    for name in ("load", "fixed_shunt", "generator"):
+        for rec in sections[name]:
+            if rec.values["I"] not in buses:
+                unknown.append((_machine_key(rec.values), rec.line))
+    for name in ("branch", "transformer"):
+        for rec in sections[name]:
+            if rec.values["I"] not in buses or rec.values["J"] not in buses:
+                unknown.append((_branch_key(rec), rec.line))
+    _refuse("unknown_bus", unknown)
+    names = [(_branch_key(rec), rec.line) for rec in sections["branch"] + transformers]
+    _refuse("duplicate_name", _duplicates(names))
+    for name in ("load", "fixed_shunt", "generator"):
+        _refuse("duplicate_name",
+                _duplicates([(_machine_key(rec.values), rec.line) for rec in sections[name]]))
+    _refuse("duplicate_name",
+            _duplicates([(str(rec.values["I"]), rec.line) for rec in sections["bus"]]))
     return at_swing[0]
 
 

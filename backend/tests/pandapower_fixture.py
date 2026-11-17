@@ -55,6 +55,17 @@ def _case39():
     return networks.case39()
 
 
+# Building case39 takes about half a second and the tests ask for it hundreds of times, so the
+# records and the frequency are computed once per offset and handed out as deep copies.
+_CACHE = {}
+
+
+def _case39_f_hz():
+    if "f_hz" not in _CACHE:
+        _CACHE["f_hz"] = float(_case39().f_hz)
+    return _CACHE["f_hz"]
+
+
 def terminator_line(section):
     """The line that ends `section`, naming the next section the way PSS/E does."""
     position = V33_ORDER.index(section)
@@ -78,6 +89,12 @@ def case39_records(offset=90000):
     the builder's formulas (line R, X and B from the ohm and nF values at the system base;
     transformer R, X and WINDV1 from vk, vkr and the rated voltages).
     """
+    if offset not in _CACHE:
+        _CACHE[offset] = _case39_records(offset)
+    return copy.deepcopy(_CACHE[offset])
+
+
+def _case39_records(offset):
     net = _case39()
     sbase = float(net.sn_mva)
     freq = float(net.f_hz)
@@ -225,7 +242,7 @@ def raw_text(records, revision=33, sbase=100.0, frequency=None):
     written empty. Every record is written with every field of its table.
     """
     if frequency is None:
-        frequency = float(_case39().f_hz)
+        frequency = _case39_f_hz()
     tables = raw.FIELD_TABLES[33]
     lines = ["0, %s, %d, 0, 1, %s / SYNTHETIC TEST CASE" % (repr(float(sbase)), revision,
                                                            repr(float(frequency))),
