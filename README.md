@@ -18,133 +18,133 @@ Regenerated automatically after every `shadow_collect.yml` run — do not hand-e
 
 | City | Decision time | Valid time | NWP model | ml_wind_corrected | ml_cooling_corrected | raw_forecast | persistence_24h | reference_ml_refit_24h | Notes |
 |---|---|---|---|---|---|---|---|---|---|
-| AUSTIN | 2026-11-16 18:00 UTC (12:00 CST) | 2026-11-17 06:00 UTC (00:00 CST) | gfs_seamless | ✓ 1166.9 | ✓ 1337.3 | ✓ 1347.3 | ✓ 1294.1 | ✓ 1316.6 |  |
-| CORPUS_CHRISTI | 2026-11-16 18:01 UTC (12:01 CST) | 2026-11-17 06:00 UTC (00:00 CST) | gfs_seamless | ✓ 1426.6 | ✓ 1406.2 | ✓ 1470.1 | ✓ 1433.9 | ✓ 1435.5 |  |
-| EL_PASO | 2026-11-16 18:03 UTC (12:03 CST) | 2026-11-17 06:00 UTC (00:00 CST) | gfs_seamless | ✓ 1345.8 | ✓ 1380.9 | ✓ 1418.0 | ✓ 1529.1 | ✓ 1277.2 |  |
-| MIDLAND | 2026-11-16 18:02 UTC (12:02 CST) | 2026-11-17 06:00 UTC (00:00 CST) | gfs_seamless | ✓ 1601.0 | ✓ 1616.3 | ✓ 1626.1 | ✓ 1256.4 | ✓ 1510.2 |  |
+| AUSTIN | 2026-11-17 00:00 UTC (2026-11-16 18:00 CST) | 2026-11-17 12:00 UTC (06:00 CST) | gfs_seamless | ✓ 1166.9 | ✓ 1338.5 | ✓ 1335.4 | ✓ 1154.2 | ✓ 1368.6 |  |
+| CORPUS_CHRISTI | 2026-11-17 00:02 UTC (2026-11-16 18:02 CST) | 2026-11-17 12:00 UTC (06:00 CST) | gfs_seamless | ✓ 1341.3 | ✓ 1307.0 | ✓ 1355.3 | ✓ 1547.9 | ✓ 1487.0 |  |
+| EL_PASO | 2026-11-17 00:04 UTC (2026-11-16 18:04 CST) | 2026-11-17 12:00 UTC (06:00 CST) | gfs_seamless | ✓ 1392.8 | ✓ 1278.8 | ✓ 1437.7 | ✓ 1295.8 | ✓ 1256.0 |  |
+| MIDLAND | 2026-11-17 00:03 UTC (2026-11-16 18:03 CST) | 2026-11-17 12:00 UTC (06:00 CST) | gfs_seamless | ✓ 1673.0 | ✓ 1681.5 | ✓ 1643.8 | ✓ 1263.3 | ✓ 1509.3 |  |
 
 ## AUSTIN
 
-153 logged prediction(s), most recent first.
+154 logged prediction(s), most recent first.
 
-All five candidates per cycle (`schema_version: 3`), most recent 5 of 153 shown:
+All five candidates per cycle (`schema_version: 3`), most recent 5 of 154 shown:
 
 | Decision time | Valid time | NWP model | ml_wind_corrected | ml_cooling_corrected | raw_forecast | persistence_24h | reference_ml_refit_24h | Notes |
 |---|---|---|---|---|---|---|---|---|
+| 2026-11-17 00:00 UTC (2026-11-16 18:00 CST) | 2026-11-17 12:00 UTC (06:00 CST) | gfs_seamless | ✓ 1166.9 | ✓ 1338.5 | ✓ 1335.4 | ✓ 1154.2 | ✓ 1368.6 |  |
 | 2026-11-16 18:00 UTC (12:00 CST) | 2026-11-17 06:00 UTC (00:00 CST) | gfs_seamless | ✓ 1166.9 | ✓ 1337.3 | ✓ 1347.3 | ✓ 1294.1 | ✓ 1316.6 |  |
 | 2026-11-16 12:00 UTC (06:00 CST) | 2026-11-17 00:00 UTC (2026-11-16 18:00 CST) | gfs_seamless | ✓ 1224.0 | ✓ 1249.0 | ✓ 1154.2 | ✓ 1426.8 | ✓ 1384.5 |  |
 | 2026-11-16 06:00 UTC (00:00 CST) | 2026-11-16 18:00 UTC (12:00 CST) | gfs_seamless | ✓ 1318.8 | ✓ 1274.1 | ✓ 1294.1 | ✓ 1637.8 | ✓ 1471.0 |  |
 | 2026-11-16 00:00 UTC (2026-11-15 18:00 CST) | 2026-11-16 12:00 UTC (06:00 CST) | gfs_seamless | ✓ 1428.1 | ✓ 1295.1 | ✓ 1426.8 | ✓ 1586.3 | ✓ 1432.0 |  |
-| 2026-11-15 18:00 UTC (12:00 CST) | 2026-11-16 06:00 UTC (00:00 CST) | gfs_seamless | ✓ 1591.2 | ✓ 1524.5 | ✓ 1637.8 | ✓ 1703.5 | ✓ 1393.3 |  |
 
 _Rows in this city's log come from more than one NWP model (ecmwf_ifs, gfs_seamless); rows without a `forecast_model` field are `ecmwf_ifs` (before 2026-10-13). They are different series and must not be pooled when scoring._
 
-_148 older cycle(s) omitted from this render -- still present, unpruned, in the raw `data/shadow/predictions/<CITY>.jsonl` file._
+_149 older cycle(s) omitted from this render -- still present, unpruned, in the raw `data/shadow/predictions/<CITY>.jsonl` file._
 
 > Conductor-based bundle thermal estimate (equal-current-sharing assumption across subconductors) -- NOT a verified equipment-limited circuit rating. Subconductor-per-phase counts are the Power Systems sub-team's provisional, regional assumption, not yet confirmed for any specific line segment.
 
-Bundle-level (subconductors-per-phase) ampacity, same cycles as above, most recent 5 of 153 shown:
+Bundle-level (subconductors-per-phase) ampacity, same cycles as above, most recent 5 of 154 shown:
 
 | Decision time | Valid time | NWP model | ml_wind_corrected | ml_cooling_corrected | raw_forecast | persistence_24h | reference_ml_refit_24h | Notes |
 |---|---|---|---|---|---|---|---|---|
+| 2026-11-17 00:00 UTC (2026-11-16 18:00 CST) | 2026-11-17 12:00 UTC (06:00 CST) | gfs_seamless | ✓ 2333.8 | ✓ 2676.9 | ✓ 2670.9 | ✓ 2308.3 | ✓ 2737.2 |  |
 | 2026-11-16 18:00 UTC (12:00 CST) | 2026-11-17 06:00 UTC (00:00 CST) | gfs_seamless | ✓ 2333.9 | ✓ 2674.6 | ✓ 2694.7 | ✓ 2588.1 | ✓ 2633.1 |  |
 | 2026-11-16 12:00 UTC (06:00 CST) | 2026-11-17 00:00 UTC (2026-11-16 18:00 CST) | gfs_seamless | ✓ 2447.9 | ✓ 2498.0 | ✓ 2308.3 | ✓ 2853.6 | ✓ 2769.1 |  |
 | 2026-11-16 06:00 UTC (00:00 CST) | 2026-11-16 18:00 UTC (12:00 CST) | gfs_seamless | ✓ 2637.6 | ✓ 2548.2 | ✓ 2588.1 | ✓ 3275.6 | ✓ 2942.1 |  |
 | 2026-11-16 00:00 UTC (2026-11-15 18:00 CST) | 2026-11-16 12:00 UTC (06:00 CST) | gfs_seamless | ✓ 2856.3 | ✓ 2590.2 | ✓ 2853.6 | ✓ 3172.6 | ✓ 2864.0 |  |
-| 2026-11-15 18:00 UTC (12:00 CST) | 2026-11-16 06:00 UTC (00:00 CST) | gfs_seamless | ✓ 3182.5 | ✓ 3049.0 | ✓ 3275.6 | ✓ 3406.9 | ✓ 2786.6 |  |
 
 
 ## CORPUS_CHRISTI
 
-153 logged prediction(s), most recent first.
+154 logged prediction(s), most recent first.
 
-All five candidates per cycle (`schema_version: 3`), most recent 5 of 153 shown:
+All five candidates per cycle (`schema_version: 3`), most recent 5 of 154 shown:
 
 | Decision time | Valid time | NWP model | ml_wind_corrected | ml_cooling_corrected | raw_forecast | persistence_24h | reference_ml_refit_24h | Notes |
 |---|---|---|---|---|---|---|---|---|
+| 2026-11-17 00:02 UTC (2026-11-16 18:02 CST) | 2026-11-17 12:00 UTC (06:00 CST) | gfs_seamless | ✓ 1341.3 | ✓ 1307.0 | ✓ 1355.3 | ✓ 1547.9 | ✓ 1487.0 |  |
 | 2026-11-16 18:01 UTC (12:01 CST) | 2026-11-17 06:00 UTC (00:00 CST) | gfs_seamless | ✓ 1426.6 | ✓ 1406.2 | ✓ 1470.1 | ✓ 1433.9 | ✓ 1435.5 |  |
 | 2026-11-16 12:01 UTC (06:01 CST) | 2026-11-17 00:00 UTC (2026-11-16 18:00 CST) | gfs_seamless | ✓ 1461.3 | ✓ 1491.8 | ✓ 1547.9 | ✓ 1716.2 | ✓ 1513.3 |  |
 | 2026-11-16 06:01 UTC (00:01 CST) | 2026-11-16 18:00 UTC (12:00 CST) | gfs_seamless | ✓ 1440.5 | ✓ 1414.7 | ✓ 1433.9 | ✓ 1556.7 | ✓ 1483.1 |  |
 | 2026-11-16 00:01 UTC (2026-11-15 18:01 CST) | 2026-11-16 12:00 UTC (06:00 CST) | gfs_seamless | ✓ 1538.5 | ✓ 1483.6 | ✓ 1716.2 | ✓ 1362.6 | ✓ 1485.2 |  |
-| 2026-11-15 18:01 UTC (12:01 CST) | 2026-11-16 06:00 UTC (00:00 CST) | gfs_seamless | ✓ 1464.8 | ✓ 1468.5 | ✓ 1556.7 | ✓ 1463.4 | ✓ 1404.1 |  |
 
 _Rows in this city's log come from more than one NWP model (ecmwf_ifs, gfs_seamless); rows without a `forecast_model` field are `ecmwf_ifs` (before 2026-10-13). They are different series and must not be pooled when scoring._
 
-_148 older cycle(s) omitted from this render -- still present, unpruned, in the raw `data/shadow/predictions/<CITY>.jsonl` file._
+_149 older cycle(s) omitted from this render -- still present, unpruned, in the raw `data/shadow/predictions/<CITY>.jsonl` file._
 
 > Conductor-based bundle thermal estimate (equal-current-sharing assumption across subconductors) -- NOT a verified equipment-limited circuit rating. Subconductor-per-phase counts are the Power Systems sub-team's provisional, regional assumption, not yet confirmed for any specific line segment.
 
-Bundle-level (subconductors-per-phase) ampacity, same cycles as above, most recent 5 of 153 shown:
+Bundle-level (subconductors-per-phase) ampacity, same cycles as above, most recent 5 of 154 shown:
 
 | Decision time | Valid time | NWP model | ml_wind_corrected | ml_cooling_corrected | raw_forecast | persistence_24h | reference_ml_refit_24h | Notes |
 |---|---|---|---|---|---|---|---|---|
+| 2026-11-17 00:02 UTC (2026-11-16 18:02 CST) | 2026-11-17 12:00 UTC (06:00 CST) | gfs_seamless | ✓ 2682.7 | ✓ 2614.0 | ✓ 2710.7 | ✓ 3095.9 | ✓ 2974.1 |  |
 | 2026-11-16 18:01 UTC (12:01 CST) | 2026-11-17 06:00 UTC (00:00 CST) | gfs_seamless | ✓ 2853.2 | ✓ 2812.3 | ✓ 2940.2 | ✓ 2867.9 | ✓ 2871.0 |  |
 | 2026-11-16 12:01 UTC (06:01 CST) | 2026-11-17 00:00 UTC (2026-11-16 18:00 CST) | gfs_seamless | ✓ 2922.5 | ✓ 2983.7 | ✓ 3095.9 | ✓ 3432.5 | ✓ 3026.5 |  |
 | 2026-11-16 06:01 UTC (00:01 CST) | 2026-11-16 18:00 UTC (12:00 CST) | gfs_seamless | ✓ 2881.0 | ✓ 2829.4 | ✓ 2867.9 | ✓ 3113.5 | ✓ 2966.1 |  |
 | 2026-11-16 00:01 UTC (2026-11-15 18:01 CST) | 2026-11-16 12:00 UTC (06:00 CST) | gfs_seamless | ✓ 3077.1 | ✓ 2967.2 | ✓ 3432.5 | ✓ 2725.2 | ✓ 2970.4 |  |
-| 2026-11-15 18:01 UTC (12:01 CST) | 2026-11-16 06:00 UTC (00:00 CST) | gfs_seamless | ✓ 2929.7 | ✓ 2937.0 | ✓ 3113.5 | ✓ 2926.8 | ✓ 2808.1 |  |
 
 
 ## EL_PASO
 
-153 logged prediction(s), most recent first.
+154 logged prediction(s), most recent first.
 
-All five candidates per cycle (`schema_version: 3`), most recent 5 of 153 shown:
+All five candidates per cycle (`schema_version: 3`), most recent 5 of 154 shown:
 
 | Decision time | Valid time | NWP model | ml_wind_corrected | ml_cooling_corrected | raw_forecast | persistence_24h | reference_ml_refit_24h | Notes |
 |---|---|---|---|---|---|---|---|---|
+| 2026-11-17 00:04 UTC (2026-11-16 18:04 CST) | 2026-11-17 12:00 UTC (06:00 CST) | gfs_seamless | ✓ 1392.8 | ✓ 1278.8 | ✓ 1437.7 | ✓ 1295.8 | ✓ 1256.0 |  |
 | 2026-11-16 18:03 UTC (12:03 CST) | 2026-11-17 06:00 UTC (00:00 CST) | gfs_seamless | ✓ 1345.8 | ✓ 1380.9 | ✓ 1418.0 | ✓ 1529.1 | ✓ 1277.2 |  |
 | 2026-11-16 12:03 UTC (06:03 CST) | 2026-11-17 00:00 UTC (2026-11-16 18:00 CST) | gfs_seamless | ✓ 1207.5 | ✓ 1250.4 | ✓ 1295.8 | ✓ 1393.6 | ✓ 1227.3 |  |
 | 2026-11-16 06:02 UTC (00:02 CST) | 2026-11-16 18:00 UTC (12:00 CST) | gfs_seamless | ✓ 1316.4 | ✓ 1362.8 | ✓ 1529.1 | ✓ 1596.7 | ✓ 1305.5 |  |
 | 2026-11-16 00:03 UTC (2026-11-15 18:03 CST) | 2026-11-16 12:00 UTC (06:00 CST) | gfs_seamless | ✓ 1309.1 | ✓ 1206.1 | ✓ 1393.6 | ✓ 1168.0 | ✓ 1248.7 |  |
-| 2026-11-15 18:01 UTC (12:01 CST) | 2026-11-16 06:00 UTC (00:00 CST) | gfs_seamless | unavailable | unavailable | ✓ 1596.7 | ✓ 1179.1 | unavailable | ml_wind_corrected: anchor unavailable for EL_PASO: fetch_live_anchor_observation: no usable wind observation for 'EL_PASO' at/before decision_time 2026-11-15 18:01:47.266703+00:00 within the 6.0h look… |
 
 _Rows in this city's log come from more than one NWP model (ecmwf_ifs, gfs_seamless); rows without a `forecast_model` field are `ecmwf_ifs` (before 2026-10-13). They are different series and must not be pooled when scoring._
 
-_148 older cycle(s) omitted from this render -- still present, unpruned, in the raw `data/shadow/predictions/<CITY>.jsonl` file._
+_149 older cycle(s) omitted from this render -- still present, unpruned, in the raw `data/shadow/predictions/<CITY>.jsonl` file._
 
 > Conductor-based bundle thermal estimate (equal-current-sharing assumption across subconductors) -- NOT a verified equipment-limited circuit rating. Subconductor-per-phase counts are the Power Systems sub-team's provisional, regional assumption, not yet confirmed for any specific line segment.
 
-Bundle-level (subconductors-per-phase) ampacity, same cycles as above, most recent 5 of 153 shown:
+Bundle-level (subconductors-per-phase) ampacity, same cycles as above, most recent 5 of 154 shown:
 
 | Decision time | Valid time | NWP model | ml_wind_corrected | ml_cooling_corrected | raw_forecast | persistence_24h | reference_ml_refit_24h | Notes |
 |---|---|---|---|---|---|---|---|---|
+| 2026-11-17 00:04 UTC (2026-11-16 18:04 CST) | 2026-11-17 12:00 UTC (06:00 CST) | gfs_seamless | ✓ 1392.8 | ✓ 1278.8 | ✓ 1437.7 | ✓ 1295.8 | ✓ 1256.0 |  |
 | 2026-11-16 18:03 UTC (12:03 CST) | 2026-11-17 06:00 UTC (00:00 CST) | gfs_seamless | ✓ 1345.8 | ✓ 1380.9 | ✓ 1418.0 | ✓ 1529.1 | ✓ 1277.2 |  |
 | 2026-11-16 12:03 UTC (06:03 CST) | 2026-11-17 00:00 UTC (2026-11-16 18:00 CST) | gfs_seamless | ✓ 1207.5 | ✓ 1250.4 | ✓ 1295.8 | ✓ 1393.6 | ✓ 1227.3 |  |
 | 2026-11-16 06:02 UTC (00:02 CST) | 2026-11-16 18:00 UTC (12:00 CST) | gfs_seamless | ✓ 1316.4 | ✓ 1362.8 | ✓ 1529.1 | ✓ 1596.7 | ✓ 1305.5 |  |
 | 2026-11-16 00:03 UTC (2026-11-15 18:03 CST) | 2026-11-16 12:00 UTC (06:00 CST) | gfs_seamless | ✓ 1309.1 | ✓ 1206.1 | ✓ 1393.6 | ✓ 1168.0 | ✓ 1248.7 |  |
-| 2026-11-15 18:01 UTC (12:01 CST) | 2026-11-16 06:00 UTC (00:00 CST) | gfs_seamless | unavailable | unavailable | ✓ 1596.7 | ✓ 1179.1 | unavailable | ml_wind_corrected: anchor unavailable for EL_PASO: fetch_live_anchor_observation: no usable wind observation for 'EL_PASO' at/before decision_time 2026-11-15 18:01:47.266703+00:00 within the 6.0h look… |
 
 
 ## MIDLAND
 
-153 logged prediction(s), most recent first.
+154 logged prediction(s), most recent first.
 
-All five candidates per cycle (`schema_version: 3`), most recent 5 of 153 shown:
+All five candidates per cycle (`schema_version: 3`), most recent 5 of 154 shown:
 
 | Decision time | Valid time | NWP model | ml_wind_corrected | ml_cooling_corrected | raw_forecast | persistence_24h | reference_ml_refit_24h | Notes |
 |---|---|---|---|---|---|---|---|---|
+| 2026-11-17 00:03 UTC (2026-11-16 18:03 CST) | 2026-11-17 12:00 UTC (06:00 CST) | gfs_seamless | ✓ 1673.0 | ✓ 1681.5 | ✓ 1643.8 | ✓ 1263.3 | ✓ 1509.3 |  |
 | 2026-11-16 18:02 UTC (12:02 CST) | 2026-11-17 06:00 UTC (00:00 CST) | gfs_seamless | ✓ 1601.0 | ✓ 1616.3 | ✓ 1626.1 | ✓ 1256.4 | ✓ 1510.2 |  |
 | 2026-11-16 12:02 UTC (06:02 CST) | 2026-11-17 00:00 UTC (2026-11-16 18:00 CST) | gfs_seamless | ✓ 1261.3 | ✓ 1384.6 | ✓ 1263.3 | ✓ 1522.4 | ✓ 1591.7 |  |
 | 2026-11-16 06:01 UTC (00:01 CST) | 2026-11-16 18:00 UTC (12:00 CST) | gfs_seamless | ✓ 1308.6 | ✓ 1306.0 | ✓ 1256.4 | ✓ 1766.4 | ✓ 1592.9 |  |
 | 2026-11-16 00:02 UTC (2026-11-15 18:02 CST) | 2026-11-16 12:00 UTC (06:00 CST) | gfs_seamless | ✓ 1451.0 | ✓ 1502.0 | ✓ 1522.4 | ✓ 1862.6 | ✓ 1568.0 |  |
-| 2026-11-15 18:01 UTC (12:01 CST) | 2026-11-16 06:00 UTC (00:00 CST) | gfs_seamless | ✓ 1750.9 | ✓ 1725.9 | ✓ 1766.4 | ✓ 1808.6 | ✓ 1561.0 |  |
 
 _Rows in this city's log come from more than one NWP model (ecmwf_ifs, gfs_seamless); rows without a `forecast_model` field are `ecmwf_ifs` (before 2026-10-13). They are different series and must not be pooled when scoring._
 
-_148 older cycle(s) omitted from this render -- still present, unpruned, in the raw `data/shadow/predictions/<CITY>.jsonl` file._
+_149 older cycle(s) omitted from this render -- still present, unpruned, in the raw `data/shadow/predictions/<CITY>.jsonl` file._
 
 > Conductor-based bundle thermal estimate (equal-current-sharing assumption across subconductors) -- NOT a verified equipment-limited circuit rating. Subconductor-per-phase counts are the Power Systems sub-team's provisional, regional assumption, not yet confirmed for any specific line segment.
 
-Bundle-level (subconductors-per-phase) ampacity, same cycles as above, most recent 5 of 153 shown:
+Bundle-level (subconductors-per-phase) ampacity, same cycles as above, most recent 5 of 154 shown:
 
 | Decision time | Valid time | NWP model | ml_wind_corrected | ml_cooling_corrected | raw_forecast | persistence_24h | reference_ml_refit_24h | Notes |
 |---|---|---|---|---|---|---|---|---|
+| 2026-11-17 00:03 UTC (2026-11-16 18:03 CST) | 2026-11-17 12:00 UTC (06:00 CST) | gfs_seamless | ✓ 3346.0 | ✓ 3363.1 | ✓ 3287.6 | ✓ 2526.7 | ✓ 3018.7 |  |
 | 2026-11-16 18:02 UTC (12:02 CST) | 2026-11-17 06:00 UTC (00:00 CST) | gfs_seamless | ✓ 3202.0 | ✓ 3232.7 | ✓ 3252.3 | ✓ 2512.7 | ✓ 3020.4 |  |
 | 2026-11-16 12:02 UTC (06:02 CST) | 2026-11-17 00:00 UTC (2026-11-16 18:00 CST) | gfs_seamless | ✓ 2522.5 | ✓ 2769.1 | ✓ 2526.7 | ✓ 3044.8 | ✓ 3183.4 |  |
 | 2026-11-16 06:01 UTC (00:01 CST) | 2026-11-16 18:00 UTC (12:00 CST) | gfs_seamless | ✓ 2617.1 | ✓ 2612.1 | ✓ 2512.7 | ✓ 3532.7 | ✓ 3185.7 |  |
 | 2026-11-16 00:02 UTC (2026-11-15 18:02 CST) | 2026-11-16 12:00 UTC (06:00 CST) | gfs_seamless | ✓ 2902.1 | ✓ 3003.9 | ✓ 3044.8 | ✓ 3725.3 | ✓ 3136.0 |  |
-| 2026-11-15 18:01 UTC (12:01 CST) | 2026-11-16 06:00 UTC (00:00 CST) | gfs_seamless | ✓ 3501.9 | ✓ 3451.9 | ✓ 3532.7 | ✓ 3617.2 | ✓ 3122.0 |  |
 
 
 ## Reconstructed persistence_24h (rows logged before 2026-10-21)
