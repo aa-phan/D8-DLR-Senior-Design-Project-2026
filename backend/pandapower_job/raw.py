@@ -122,6 +122,36 @@ SUPPORTED_SECTIONS = ("bus", "load", "fixed_shunt", "generator", "branch", "tran
 
 _TRANSFORMER_TABLES = ("transformer_1", "transformer_2", "transformer_3", "transformer_4")
 
+_UTF8_BOM = b"\xef\xbb\xbf"
+
+# The words a section terminator comment may use for each section (matched as a prefix of the
+# phrase between the end-of and data words, so "AREA" accepts "AREA INTERCHANGE"). A terminator
+# without a comment is accepted: the position alone says which section it ends.
+_MARKERS = {
+    "bus": ("BUS",), "load": ("LOAD",), "fixed_shunt": ("FIXED SHUNT",),
+    "generator": ("GENERATOR",), "branch": ("BRANCH",), "transformer": ("TRANSFORMER",),
+    "area": ("AREA",), "two_terminal_dc": ("TWO-TERMINAL",),
+    "vsc_dc": ("VOLTAGE SOURCE", "VSC"), "impedance_correction": ("IMPEDANCE",),
+    "multi_terminal_dc": ("MULTI-TERMINAL",), "multi_section_line": ("MULTI-SECTION",),
+    "zone": ("ZONE",), "inter_area_transfer": ("INTER-AREA",), "owner": ("OWNER",),
+    "facts": ("FACTS",), "switched_shunt": ("SWITCHED SHUNT",), "gne": ("GNE",),
+    "induction_machine": ("INDUCTION",)}
+
+# Assembled from pieces: the plan 01-01 shape layer flags the section markers of a RAW file in any
+# tracked source, and these are the words it looks for.
+_END_PHRASE = re.compile(r"\b" + "END" + r"\s+OF\s+(.+?)\s+DATA\b", re.IGNORECASE)
+_BEGIN_PHRASE = re.compile(r"\b" + "BEG" + r"IN\s+(.+?)\s+DATA\b", re.IGNORECASE)
+_COMMENT_WINDOW = 200
+
+# Section -> (reason, namespace, key of a record's values): one element per key in a namespace.
+_UNIQUE = {
+    "bus": ("duplicate_bus", "bus", lambda v: v["I"]),
+    "load": ("duplicate_load", "load", lambda v: (v["I"], v["ID"])),
+    "generator": ("duplicate_machine", "generator", lambda v: (v["I"], v["ID"])),
+    "branch": ("duplicate_branch", "branch", lambda v: branch_key(v["I"], v["J"], v["CKT"])),
+    "transformer": ("duplicate_branch", "branch",
+                    lambda v: branch_key(v["I"], v["J"], v["CKT"]))}
+
 _STRING_FIELDS = frozenset(["NAME", "ID", "CKT", "VECGRP", "ARNAME", "ZONAME", "OWNAME"])
 _INT_FIELDS = frozenset([
     "I", "J", "K", "IDE", "AREA", "ZONE", "OWNER", "STATUS", "STAT", "ST", "MET", "CW", "CZ", "CM",
@@ -208,10 +238,30 @@ def _convert(spec, tokens, line):
 
 
 def _decode(data):
-    """The RAW text of `data` (bytes or str)."""
+    """
+    The RAW text of `data` (bytes or str). The size cap is checked before anything is decoded, a
+    UTF-8 byte order mark is dropped, and bytes that are not UTF-8 are decoded as Latin-1 so no byte
+    is lost (PSS/E writes names in the machine's code page). Empty or blank input is refused.
+    """
     if isinstance(data, str):
-        return data
-    return bytes(data).decode("utf-8")
+        if len(data) > MAX_RAW_BYTES:
+            raise RawRefused("too_large")
+        data = data.encode("utf-8", "replace")
+    elif isinstance(data, (bytes, bytearray, memoryview)):
+        data = bytes(data)
+    else:
+        raise TypeError("RAW input must be bytes or str")
+    if len(data) > MAX_RAW_BYTES:
+        raise RawRefused("too_large")
+    if data.startswith(_UTF8_BOM):
+        data = data[len(_UTF8_BOM):]
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        text = data.decode("latin-1")
+    if not text.strip():
+        raise RawRefused("empty")
+    return text
 
 
 def _header(lines):
@@ -281,6 +331,38 @@ def _read_transformer(walker, tables, tokens, number):
     return Record("transformer", number, values)
 
 
+def _names(section, phrase):
+    """True when the terminator phrase `phrase` names `section`."""
+    return phrase.strip().upper().startswith(_MARKERS[section])
+
+
+def _check_terminator(text, section, following, number):
+    """
+    A terminator comment, when it names a section, must name this one (end-of phrase) and the
+    next one in the file order (begin phrase); anything else is an unknown or misplaced section.
+    """
+    comment = text.partition("/")[2][:_COMMENT_WINDOW]
+    ended = _END_PHRASE.search(comment)
+    if ended is not None and not _names(section, ended.group(1)):
+        raise RawRefused("unknown_section", number)
+    begun = _BEGIN_PHRASE.search(comment)
+    if begun is not None and (following is None or not _names(following, begun.group(1))):
+        raise RawRefused("unknown_section", number)
+
+
+def _claim(seen, record):
+    """Record the key of `record` in `seen`; RawRefused when an earlier record has the same key."""
+    entry = _UNIQUE.get(record.section)
+    if entry is None:
+        return
+    reason, namespace, key_of = entry
+    key = key_of(record.values)
+    taken = seen.setdefault(namespace, set())
+    if key in taken:
+        raise RawRefused(reason, record.line)
+    taken.add(key)
+
+
 def parse_raw(data):
     """
     The `ParsedCase` of a RAW file given as bytes or str; RawRefused for anything the builder
@@ -293,9 +375,12 @@ def parse_raw(data):
     revision, ic, sbase, frequency = _header(lines)
     tables = FIELD_TABLES[revision]
     walker = _Walker(lines, 3)
+    order = SECTION_ORDER[revision]
     sections = {}
-    for section in SECTION_ORDER[revision]:
+    seen = {}
+    for position, section in enumerate(order):
         records = []
+        following = order[position + 1] if position + 1 < len(order) else None
         while True:
             item = walker.next()
             if item is None:
@@ -304,16 +389,24 @@ def parse_raw(data):
             tokens = split_record(line)
             if tokens[0].upper() == "Q":
                 raise RawRefused("unterminated", number)
-            if tokens[0] == "0":
+            if tokens == ["0"]:
+                _check_terminator(line, section, following, number)
                 break
             if section not in SUPPORTED_SECTIONS:
                 raise RawRefused("unsupported_section", number)
             if section == "transformer":
-                records.append(_read_transformer(walker, tables, tokens, number))
+                record = _read_transformer(walker, tables, tokens, number)
             else:
-                records.append(Record(section, number, _convert(tables[section], tokens, number)))
+                record = Record(section, number, _convert(tables[section], tokens, number))
+            _claim(seen, record)
+            records.append(record)
         sections[section] = tuple(records)
     item = walker.next()
-    if item is None or split_record(item[1])[0].upper() != "Q":
-        raise RawRefused("unterminated", walker.end if item is None else item[0])
+    if item is None:
+        raise RawRefused("unterminated", walker.end)
+    if split_record(item[1])[0].upper() != "Q":
+        raise RawRefused("trailing_data", item[0])
+    extra = walker.next()
+    if extra is not None:
+        raise RawRefused("trailing_data", extra[0])
     return ParsedCase(revision, ic, sbase, frequency, sections)
