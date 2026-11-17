@@ -94,7 +94,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   4. The parity report compares the built network with the export element by element (counts, line versus transformer classification, ratings, limits, setpoints), lists every difference, and shows none.
   5. The base-case load flow of each city's scaled copy matches the PSS/E reference: every bus voltage within 0.01 pu and every branch flow within 2% (with an absolute floor for lightly loaded branches).
 
-**Plans**: 8/11 plans executed
+**Plans**: 9/11 plans executed
 
 Plans:
 **Wave 1**
@@ -114,7 +114,7 @@ Plans:
 - [x] 01-08-PLAN.md — Minimal scaling, copied solve settings, D-13 comparator and scaling-detail analyser (wave 4)
 
 **Wave 5** *(blocked on Wave 4 completion)*
-- [ ] 01-09-PLAN.md — Owner commands ingest and check, safe unzip, private-only outputs, laptop-to-Mac seam (wave 5)
+- [x] 01-09-PLAN.md — Owner commands ingest and check, safe unzip, private-only outputs, laptop-to-Mac seam (wave 5)
 
 **Wave 6** *(blocked on Wave 5 completion)*
 - [ ] 01-10-PLAN.md — The PSS/E session with the teammate, then parity and NET-03 on the real data (wave 6, checkpoints)
@@ -198,7 +198,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6. Phases 2 and 3
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. PSS/E Reference Session and Network Parity | 8/11 | In Progress | - |
+| 1. PSS/E Reference Session and Network Parity | 9/11 | In Progress | - |
 | 2. PandapowerApi and Study Engine | 0/TBD | Not started | - |
 | 3. Solver Tag, Migration and Per-Solver Gaps | 0/TBD | Not started | - |
 | 4. Replay and Agreement Check | 0/TBD | Not started | - |
