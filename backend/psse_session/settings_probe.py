@@ -43,8 +43,9 @@ Standard library plus psse_job only, Python 3.7 syntax (D-05).
 """
 
 import math
+import os
 
-from psse_job import constants, psse_api, study
+from psse_job import constants, margin, psse_api, study
 from psse_session import bundle, session
 
 SECTION = "settings"
@@ -72,6 +73,7 @@ FNSL_VARIANTS = (
     ("var_limits_ignore", [1, 0, 0, 1, 1, 0, -1, 0]),
 )
 POINT_BASE = "base"
+POINT_MARGIN = "margin_last_good"
 PRESENT_REASON = "present: the Mac builder refuses it"
 JOB_DEFAULT_FORM = "job_default"
 
@@ -295,6 +297,88 @@ def _base_fingerprints(ctx):
     return entries
 
 
+def _remove_folder(path):
+    """Delete the tree at `path`, best effort."""
+    for root, dirs, files in os.walk(path, topdown=False):
+        for name in files:
+            try:
+                os.remove(os.path.join(root, name))
+            except OSError:
+                pass
+        for name in dirs:
+            try:
+                os.rmdir(os.path.join(root, name))
+            except OSError:
+                pass
+    try:
+        os.rmdir(path)
+    except OSError:
+        pass
+
+
+def _stressed_inputs(ctx, city):
+    """(increment_mw, sink buses) of `city` at the margin last-good point, or None when plan 01-03's
+    reference section recorded none (the city failed, was bounded without a margin, or never ran)."""
+    entry = (ctx.results.get("reference") or {}).get(city)
+    if not isinstance(entry, dict):
+        return None
+    increments = entry.get("margin_increments")
+    sink_buses = entry.get("sink_buses")
+    if not increments or _num(increments[0]) is None or not sink_buses:
+        return None
+    return _num(increments[0]), list(sink_buses)
+
+
+def _stressed_fingerprints(ctx):
+    """Four fingerprints per city that has a recorded last-good transfer: the solved base is
+    prepared and saved in a temporary folder inside the work folder (never a member, always
+    removed), reloaded for each variant, the sink subsystem is defined and the increment added."""
+    entries = []
+    root = os.path.join(ctx.work.path, "tmp_sav_settings")
+    try:
+        for city in constants.CITIES:
+            inputs = _stressed_inputs(ctx, city)
+            if inputs is None:
+                continue
+            increment, sink_buses = inputs
+            folder = os.path.join(root, city.lower())
+            base = None
+            failure = None
+            try:
+                os.makedirs(folder, exist_ok=True)
+                base = study.prepare_city_base(
+                    ctx.index, ctx.mapping, ctx.selection, city, ctx.budget, folder)
+            except (psse_api.PsseCallError, ValueError, study.StudyFailed) as error:
+                failure = _failure_text(error)
+            except Exception as exc:  # noqa: BLE001 - recorded as the class only, never the text
+                failure = bundle.class_word(exc)
+            try:
+                for variant, options in FNSL_VARIANTS:
+                    if base is None:
+                        entries.append({
+                            "city": city, "point": POINT_MARGIN, "variant": variant,
+                            "options": None if options is None else list(options),
+                            "call_form": None, "solve": None, "member": None, "snapshot": None,
+                            "increment_mw": increment, "call_failed": failure})
+                        continue
+
+                    def start(api, base=base, sink_buses=sink_buses, increment=increment):
+                        api.load_case(base.saved_path)
+                        api.define_subsystem(margin.SINK_SID, sink_buses)
+                        if increment > 0:
+                            api.scale_load(margin.SINK_SID, increment)
+
+                    entries.append(_one_fingerprint(
+                        ctx, city, POINT_MARGIN, variant, options, start, increment))
+            finally:
+                if base is not None:
+                    study.cleanup_base(base)
+                _remove_folder(folder)
+    finally:
+        _remove_folder(root)
+    return entries
+
+
 # -- the section ---------------------------------------------------------------------------------
 
 
@@ -312,7 +396,7 @@ def run(ctx):
         ctx.results[SECTION] = {"settings": {}}
         return session.SectionResult("failed", ("no case index", ctx.index_stage or "internal"), {})
     reads = [_read_one(ctx, function, name) for function, name, _key in SETTINGS_READS]
-    fingerprints = _base_fingerprints(ctx)
+    fingerprints = _base_fingerprints(ctx) + _stressed_fingerprints(ctx)
     network = ctx.results.get("network") or {}
     settings = _settings_document(network.get("counts"), reads, fingerprints)
     tally = dict((status, sum(1 for item in settings.values() if item["status"] == status))
