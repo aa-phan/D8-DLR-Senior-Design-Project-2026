@@ -267,6 +267,16 @@ def test_env_file_is_ignored_and_untracked():
     assert tracked.stdout.strip() == ""
 
 
+def test_private_data_folder_is_ignored_and_untracked():
+    ignored = subprocess.run(["git", "check-ignore", "-q", "data/private/pandapower/x.json"], cwd=_REPO_ROOT)
+    if ignored.returncode == 128:
+        pytest.skip("not a git checkout")
+    assert ignored.returncode == 0, "data/private/ must be git-ignored"
+    tracked = subprocess.run(["git", "ls-files", "--", "data/private"], cwd=_REPO_ROOT,
+                             capture_output=True, text=True, check=True)
+    assert tracked.stdout.strip() == ""
+
+
 # ---------------------------------------------------------------------------
 # Owner-local exact-value scan (D-10)
 # ---------------------------------------------------------------------------
