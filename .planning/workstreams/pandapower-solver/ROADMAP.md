@@ -94,15 +94,15 @@ Decimal phases appear between their surrounding integers in numeric order.
   4. The parity report compares the built network with the export element by element (counts, line versus transformer classification, ratings, limits, setpoints), lists every difference, and shows none.
   5. The base-case load flow of each city's scaled copy matches the PSS/E reference: every bus voltage within 0.01 pu and every branch flow within 2% (with an absolute floor for lightly loaded branches).
 
-**Plans**: 11 plans
+**Plans**: 3/11 plans executed
 
 Plans:
 **Wave 1**
-- [ ] 01-01-PLAN.md — Leak guard first: ignore rules and a three-layer scanner (path, shape, private needles), working tree and staged (wave 1)
+- [x] 01-01-PLAN.md — Leak guard first: ignore rules and a three-layer scanner (path, shape, private needles), working tree and staged (wave 1)
 
 **Wave 2** *(blocked on Wave 1 completion)*
-- [ ] 01-02-PLAN.md — Laptop session spine: call gate, RAW export, verified zip, masked summary, entry script (wave 2)
-- [ ] 01-05-PLAN.md — pandapower pin behind a blocking legitimacy checkpoint, hash-checked install (wave 2)
+- [x] 01-02-PLAN.md — Laptop session spine: call gate, RAW export, verified zip, masked summary, entry script (wave 2)
+- [x] 01-05-PLAN.md — pandapower pin behind a blocking legitimacy checkpoint, hash-checked install (wave 2)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 - [ ] 01-03-PLAN.md — Session reference answers: base, every screened outage and margin point per city (wave 3)
@@ -198,7 +198,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6. Phases 2 and 3
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. PSS/E Reference Session and Network Parity | 0/11 | Planned | - |
+| 1. PSS/E Reference Session and Network Parity | 3/11 | In Progress | - |
 | 2. PandapowerApi and Study Engine | 0/TBD | Not started | - |
 | 3. Solver Tag, Migration and Per-Solver Gaps | 0/TBD | Not started | - |
 | 4. Replay and Agreement Check | 0/TBD | Not started | - |
