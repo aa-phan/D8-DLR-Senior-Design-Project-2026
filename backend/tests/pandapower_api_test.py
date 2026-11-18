@@ -7,13 +7,14 @@ adapter runs on the real solver. Failure messages are counts only.
 """
 
 import math
+import re
 
 import pytest
 
 pandapower = pytest.importorskip("pandapower")
 
 import pandapower_study_fixture as study_fixture  # noqa: E402
-from psse_job import psse_api  # noqa: E402
+from psse_job import psse_api, settings, units  # noqa: E402
 from pandapower_job import network, raw  # noqa: E402
 from pandapower_job.api import PandapowerApi  # noqa: E402
 
@@ -282,3 +283,184 @@ def test_bus_type_codes_and_limits(case_path):
         assert row.evlmlo == 0.0 and row.evlmhi == 0.0
         assert type(row.number) is int and type(row.type_code) is int
         assert type(row.base_kv) is float and type(row.pu) is float
+
+
+# -- refusals ---------------------------------------------------------------------------------
+
+_BUS_NUMBER = re.compile(r"\b9[0-9]{4}\b")
+_MISSING = settings.BranchRef(1, 2, "1")
+
+
+def _transformer(api):
+    _, transformers = api.branch_table()
+    return transformers[0]
+
+
+def test_refuse_mva_basis_and_unknown_names(case_path):
+    api = _api(case_path)
+    assert api.solve().converged is True
+    with pytest.raises(ValueError) as caught:
+        api.branch_loading("RATEA", "mva")
+    assert "current" in str(caught.value)
+    with pytest.raises(ValueError):
+        api.branch_loading("RATEZ", "current")
+    with pytest.raises(ValueError):
+        api.branch_loading("RATEA", "volts")
+
+
+def test_refuse_transformer_writes_and_reads(case_path):
+    api = _api(case_path)
+    ref = _transformer(api)
+    for call, args in ((api.set_rate, (ref, "RATEA", 100.0)), (api.set_status, (ref, False))):
+        with pytest.raises(psse_api.PsseCallError) as caught:
+            call(*args)
+        assert caught.value.ierr == 3
+        assert caught.value.meaning == "branch is a two-winding transformer"
+    with pytest.raises(psse_api.PsseCallError) as caught:
+        api.read_rate(ref, "RATEA")
+    assert caught.value.ierr == 2
+    assert caught.value.meaning == "branch not found"
+    assert api._state == "fresh"
+
+
+def test_refuse_unknown_branch(case_path):
+    api = _api(case_path)
+    for call, args in ((api.set_rate, (_MISSING, "RATEA", 100.0)),
+                       (api.set_status, (_MISSING, False))):
+        with pytest.raises(psse_api.PsseCallError) as caught:
+            call(*args)
+        assert caught.value.ierr == 9
+        assert caught.value.meaning == "branch not found"
+    with pytest.raises(psse_api.PsseCallError) as caught:
+        api.read_rate(_MISSING, "RATEA")
+    assert caught.value.ierr == 2
+
+
+def test_refuse_bad_rating_values(case_path):
+    api = _api(case_path)
+    ref = _outage(api)
+    for bad in (0, -1, float("inf"), float("nan")):
+        with pytest.raises(ValueError) as caught:
+            api.set_rate(ref, "RATEA", bad)
+        assert str(caught.value) == "mva must be finite and greater than 0"
+    for bad in (True, "1", None):
+        with pytest.raises(ValueError) as caught:
+            api.set_rate(ref, "RATEA", bad)
+        assert str(caught.value) == "mva must be a number"
+    with pytest.raises(ValueError) as caught:
+        api.set_rate(ref, "RATEA", 10 ** 400)
+    assert str(caught.value) == "mva is out of range"
+    with pytest.raises(ValueError) as caught:
+        api.set_rate(object(), "RATEZ", 1.0)
+    assert str(caught.value) == "rate_set must be one of RATEA, RATEB, RATEC"
+    with pytest.raises(ValueError) as caught:
+        api.set_status(ref, 1)
+    assert str(caught.value) == "in_service must be True or False"
+    assert api._state == "fresh"
+
+
+def test_refuse_solve_options_and_bad_backend(case_path):
+    api = _api(case_path)
+    with pytest.raises(ValueError):
+        api.solve([0] * 8)
+    with pytest.raises(ValueError):
+        PandapowerApi(object())
+    assert api._state == "fresh"
+
+
+def test_rating_is_a_current_limit_per_circuit(case_path):
+    api = _api(case_path)
+    lines, _ = api.branch_table()
+    net = api._net
+    for row in lines:
+        index = api._line_index(net, row.from_bus, row.to_bus, row.ckt)
+        kv = float(net.bus.at[net.line.at[index, "from_bus"], "vn_kv"])
+        for rate_set in ("RATEA", "RATEB", "RATEC"):
+            mva = units.circuit_mva(1825.0, 2, kv)
+            api.set_rate(row, rate_set, mva)
+            assert _relative(float(net.line.at[index, "max_i_ka"]) * 1000.0,
+                             units.circuit_amps(1825.0, 2)) < 1e-9
+            for read_set in ("RATEA", "RATEB", "RATEC"):
+                assert _relative(api.read_rate(row, read_set), mva) < 1e-9
+
+
+def test_line_derating_and_parallel_are_pinned(case_path):
+    api = _api(case_path)
+    assert (api._net.line["df"] == 1).all()
+    assert (api._net.line["parallel"] == 1).all()
+    index = api._net.line.index[0]
+    api._net.line.at[index, "df"] = 0.5
+    assert api.solve().converged is True
+    with pytest.raises(psse_api.PsseCallError):
+        api.branch_loading("RATEA", "current")
+    api.load_case(case_path)
+    api._net.line.at[index, "parallel"] = 2
+    assert api.solve().converged is True
+    with pytest.raises(psse_api.PsseCallError):
+        api.branch_loading("RATEA", "current")
+
+
+def test_messages_are_figure_free(case_path, tmp_path):
+    api = _api(case_path)
+    ref = _outage(api)
+    transformer = _transformer(api)
+    keys = [row.key for row in api.branch_table()[0]]
+    texts = []
+
+    def collect(call, *args, kind=Exception):
+        with pytest.raises(kind) as caught:
+            call(*args)
+        texts.append(str(caught.value))
+        return caught.value
+
+    collect(api.branch_loading, "RATEA", "current")
+    collect(api.set_rate, transformer, "RATEA", 100.0)
+    collect(api.set_status, transformer, False)
+    collect(api.read_rate, transformer, "RATEA")
+    collect(api.set_rate, _MISSING, "RATEA", 100.0)
+    collect(api.read_rate, _MISSING, "RATEA")
+    for bad in (0, float("nan"), True, 10 ** 400):
+        collect(api.set_rate, ref, "RATEA", bad)
+    collect(api.set_rate, ref, "RATEZ", 1.0)
+    collect(api.set_status, ref, "no")
+    collect(api.solve, [0] * 8)
+    collect(PandapowerApi, object())
+    collect(api.load_case, str(tmp_path / "no_such_case.raw"))
+    collect(api.save_case, case_path, kind=psse_api.CaseProtected)
+    api.set_status(ref, False)
+    collect(api.bus_table)
+    api.load_case(case_path)
+    api._net.line.at[api._net.line.index[0], "df"] = 0.5
+    api.solve()
+    error = collect(api.branch_loading, "RATEA", "current")
+    assert str(error).startswith("pandapower.")
+    api.load_case(case_path)
+    api.solve()
+    collect(api.branch_loading, "RATEA", "mva")
+    assert len(texts) >= 18
+    for text in texts:
+        assert _BUS_NUMBER.search(text) is None
+        assert not any(key in text for key in keys)
+        assert str(tmp_path) not in text and case_path not in text
+
+
+def _fresh_rows(api):
+    return {number: row._replace(pu=None) for number, row in api.bus_table().items()}
+
+
+def test_converted_json_equals_raw(case_path, tmp_path):
+    converted = study_fixture.write_converted(tmp_path)
+    from_raw = PandapowerApi(study_fixture.fixture_backend(), protected_path=case_path)
+    from_json = PandapowerApi(study_fixture.fixture_backend(), protected_path=converted)
+    from_raw.load_case(case_path)
+    from_json.load_case(converted)
+    assert from_raw.branch_table() == from_json.branch_table()
+    assert _fresh_rows(from_raw) == _fresh_rows(from_json)
+    first, second = from_raw.solve(), from_json.solve()
+    assert first.converged is True and second.converged is True
+    assert from_raw.branch_loading("RATEA", "current") == from_json.branch_loading("RATEA", "current")
+    assert from_raw.bus_table() == from_json.bus_table()
+
+
+def test_version_is_pandapower(case_path):
+    assert _api(case_path).version() == pandapower.__version__

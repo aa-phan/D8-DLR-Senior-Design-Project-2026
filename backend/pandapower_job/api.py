@@ -338,6 +338,10 @@ class PandapowerApi(object):
         if basis != "current":
             raise ValueError("thermal basis mva cannot be reproduced by pandapower; use current")
         net = self._require_solved("branch_loading")
+        # Either one silently changes the denominator of loading_percent (RESEARCH Pitfall 4).
+        if not (net.line["df"] == 1).all() or not (net.line["parallel"] == 1).all():
+            raise PandapowerCallError("branch_loading", None,
+                                      "line derating or parallel count is not 1")
         flows = {}
         for index in net.line.index:
             from_bus, to_bus = int(net.line.at[index, "from_bus"]), int(net.line.at[index, "to_bus"])

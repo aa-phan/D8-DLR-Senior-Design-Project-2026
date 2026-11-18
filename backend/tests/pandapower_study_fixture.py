@@ -16,7 +16,7 @@ import os
 
 import pandapower_fixture
 from psse_job import settings
-from pandapower_job import api, scaling, solve
+from pandapower_job import api, convert, raw, scaling, solve
 
 OFFSET = pandapower_fixture.OFFSET
 RAISED_PT_MW = 5000.0
@@ -39,6 +39,19 @@ def write_case(tmp_path, name="CASE39_FIXTURE.raw", raise_pt=True):
     """Write the fixture as a RAW file into `tmp_path` and return its path as a string."""
     path = os.path.join(str(tmp_path), name)
     pandapower_fixture.write_raw(path, fixture_records(raise_pt))
+    return path
+
+
+def write_converted(tmp_path, name="CASE39_FIXTURE.json", raise_pt=True):
+    """Write the fixture as the project's converted network document into `tmp_path`.
+
+    The bytes come from `convert.case_to_json` of the parsed fixture RAW text; this file never
+    holds the document's marker key as a literal.
+    """
+    case = raw.parse_raw(pandapower_fixture.raw_text(fixture_records(raise_pt)).encode("utf-8"))
+    path = os.path.join(str(tmp_path), name)
+    with open(path, "wb") as handle:
+        handle.write(convert.case_to_json(case))
     return path
 
 
