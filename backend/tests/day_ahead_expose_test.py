@@ -127,11 +127,14 @@ def test_expose_migration_is_unchanged_after_apply():
 def test_text_the_file_sorts_after_the_write_side_migration_and_is_the_only_expose_file():
     names = sorted(os.path.basename(p) for p in glob.glob(os.path.join(_MIGRATIONS_DIR, "*.sql")))
     assert names.index(_EXPOSE_MIGRATION) == names.index(_STORE_MIGRATION) + 1
-    # Later migrations may follow it: today the PSS/E results migration and the grid-study view that
-    # reads its tables.
+    # Later migrations may follow it: today the PSS/E results migration, the grid-study view that
+    # reads its tables and the solver-tag migration that adds columns to psse_run.
     after = names[names.index(_EXPOSE_MIGRATION) + 1:]
-    assert after == [name for name in after if name.endswith(("_psse_results.sql", "_expose_latest_grid_study.sql"))], after
-    assert len(after) <= 2
+    assert after == [
+        name for name in after
+        if name.endswith(("_psse_results.sql", "_expose_latest_grid_study.sql", "_psse_run_solver_tag.sql"))
+    ], after
+    assert len(after) <= 3
     assert len(glob.glob(os.path.join(_MIGRATIONS_DIR, "*_expose_day_ahead_forecast.sql"))) == 1
 
 
