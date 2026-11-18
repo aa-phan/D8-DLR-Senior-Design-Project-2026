@@ -19,11 +19,14 @@ Follows backend/tests/psse_schema_pg_test.py (module-level imports, plain assert
 
 import os
 import re
-from datetime import datetime, timezone
+import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
+import psse_fakes
 import psse_local_pg as pg_helper
+from psse_job import contract, ratings, run_record, writer
 
 STARTED = datetime(2026, 10, 28, 14, 7, 30, tzinfo=timezone.utc)
 WRITER_ROLE = "dlr_psse_writer"
@@ -64,11 +67,45 @@ def _statements():
 
 
 @pytest.fixture(scope="module")
-def pg_pre(tmp_path_factory):
-    """A database with the reference schema and NO solver migration; the tracer applies it."""
+def _cluster(tmp_path_factory):
+    """URL of an empty throwaway database; `pg` uses it, `pg_pre` makes sibling databases in it."""
     with pg_helper.cluster(tmp_path_factory) as admin_url:
-        pg_helper.apply_schema(admin_url)
         yield admin_url
+
+
+@pytest.fixture(scope="module")
+def pg(_cluster):
+    """Admin URL of a database with the reference schema AND the solver-tag migration applied."""
+    pg_helper.apply_solver_schema(_cluster)
+    return _cluster
+
+
+@pytest.fixture
+def clean_pg(pg):
+    """The same database with the four result tables empty."""
+    pg_helper.reset(pg)
+    return pg
+
+
+@pytest.fixture
+def pg_pre(_cluster):
+    """
+    A fresh database with the reference schema and NO solver migration, one per test: applying the
+    migration cannot be undone, so a shared database would be migrated after its first test.
+    """
+    import psycopg
+    from urllib.parse import urlsplit
+
+    name = "tag_pre_" + uuid.uuid4().hex[:8]
+    with psycopg.connect(_cluster, autocommit=True) as conn:
+        conn.execute('create database "' + name + '"')
+    url = urlsplit(_cluster)._replace(path="/" + name).geturl()
+    try:
+        pg_helper.apply_schema(url)
+        yield url
+    finally:
+        with psycopg.connect(_cluster, autocommit=True) as conn:
+            conn.execute('drop database if exists "' + name + '" with (force)')
 
 
 def _insert_complete(admin_url, rows):
@@ -114,7 +151,6 @@ def test_text_tracer_the_migration_adds_the_tag_and_ties_it_to_the_run_id():
 
 
 def test_db_tracer_tagged_runs_side_by_side(pg_pre):
-    pg_helper.reset(pg_pre)
     before = pg_helper.make_run_id(1, STARTED)
     _insert_complete(pg_pre, pg_helper.valid_run_rows(before, STARTED))
 
@@ -272,3 +308,188 @@ def test_text_both_new_columns_are_commented_unit_first():
         found = [s for s in statements if s.startswith("comment on column public.psse_run." + column + " is ")]
         assert len(found) == 1, column
         assert found[0].split(" is ", 1)[1].startswith("'none (label): "), column
+
+
+# --------------------------------------------------------------------------- database tier
+
+FINISHED = STARTED + timedelta(seconds=90)
+
+
+def _scalar(admin_url, sql, params=None):
+    return pg_helper.admin_rows(admin_url, sql, params)[0]["n"]
+
+
+def _counts(admin_url, run_id):
+    """(psse_run, dispatch, margin, contingency) row counts for one run, read as the superuser."""
+    return [
+        _scalar(admin_url, "select count(*) as n from public." + table + " where run_id = %s", (run_id,))
+        for table in pg_helper.RESULT_TABLES
+    ]
+
+
+def _run_snapshot(admin_url):
+    return pg_helper.admin_rows(
+        admin_url, "select run_id, outcome, slot_time, started_at from public.psse_run order by run_id"
+    )
+
+
+def test_db_existing_runs_read_psse_after_the_migration(pg_pre):
+    ok_id = pg_helper.make_run_id(1, STARTED)
+    fallback_id = pg_helper.make_run_id(2, STARTED)
+    failed_id = pg_helper.make_run_id(3, STARTED)
+    _insert_complete(pg_pre, pg_helper.valid_run_rows(ok_id, STARTED, outcome="ok"))
+    _insert_complete(pg_pre, pg_helper.valid_run_rows(fallback_id, STARTED, outcome="fallback"))
+    failed = {table: [] for table in pg_helper.RESULT_TABLES}
+    failed["psse_run"] = [pg_helper.failed_run_row(failed_id, STARTED)]
+    _insert_complete(pg_pre, failed)
+    assert not pg_helper.admin_rows(
+        pg_pre,
+        "select 1 from information_schema.columns where table_schema = 'public' "
+        "and table_name = 'psse_run' and column_name = 'solver'",
+    )
+    run_ids = (ok_id, fallback_id, failed_id)
+    snapshot = _run_snapshot(pg_pre)
+    counts = [_counts(pg_pre, run_id) for run_id in run_ids]
+    assert len(snapshot) == 3
+
+    pg_helper.apply_solver_tag_migration(pg_pre)
+
+    tags = pg_helper.admin_rows(pg_pre, "select solver, solver_version from public.psse_run order by run_id")
+    assert tags == [{"solver": "psse", "solver_version": None}] * 3
+    assert _run_snapshot(pg_pre) == snapshot
+    assert [_counts(pg_pre, run_id) for run_id in run_ids] == counts
+
+
+def test_db_the_default_applies(clean_pg):
+    run_id = pg_helper.make_run_id(10, STARTED)
+    _insert_complete(clean_pg, pg_helper.valid_run_rows(run_id, STARTED))
+    stored = pg_helper.admin_rows(
+        clean_pg, "select solver, solver_version from public.psse_run where run_id = %s", (run_id,)
+    )
+    assert stored == [{"solver": "psse", "solver_version": None}]
+
+
+def test_db_refusals_name_their_constraint(clean_pg):
+    import psycopg
+
+    url = pg_helper.role_url(clean_pg, WRITER_ROLE)
+    pp_id = pg_helper.make_run_id(20, STARTED, prefix="pp")
+    psse_id = pg_helper.make_run_id(21, STARTED)
+    base_pp = pg_helper.valid_run_rows(pp_id, STARTED)["psse_run"][0]
+    base_psse = pg_helper.valid_run_rows(psse_id, STARTED)["psse_run"][0]
+    assert "solver" not in base_pp
+
+    # A pp- id with the solver given as psse, and with the solver left to its default.
+    _rejected(url, "psse_run", dict(base_pp, solver="psse"), "psse_run_solver_run_id_ck")
+    _rejected(url, "psse_run", dict(base_pp), "psse_run_solver_run_id_ck")
+    # A psse- id with the solver given as pandapower.
+    _rejected(url, "psse_run", dict(base_psse, solver="pandapower"), "psse_run_solver_run_id_ck")
+    # An id outside the widened pattern is refused by the pattern first (alphabetical order).
+    _rejected(
+        url, "psse_run",
+        dict(base_pp, run_id="pandapower-20261028T140730Z-00000001", solver="pandapower"),
+        "psse_run_run_id_ck",
+    )
+    _rejected(url, "psse_run", dict(base_pp, solver="matpower"), "psse_run_solver_ck")
+    _rejected(url, "psse_run", dict(base_pp, solver="pandapower", solver_version=""), "psse_run_solver_version_ck")
+    _rejected(
+        url, "psse_run", dict(base_pp, solver="pandapower", solver_version="v" * 101), "psse_run_solver_version_ck"
+    )
+    assert _scalar(clean_pg, "select count(*) as n from public.psse_run") == 0
+
+    with psycopg.connect(url) as conn:
+        pg_helper.insert_rows(conn, "psse_run", [dict(base_pp, solver="pandapower", solver_version="v" * 100)])
+    assert _scalar(clean_pg, "select count(*) as n from public.psse_run where run_id = %s", (pp_id,)) == 1
+
+
+def test_db_writer_role_inserts_a_tagged_run(clean_pg):
+    import psycopg
+
+    url = pg_helper.role_url(clean_pg, WRITER_ROLE)
+    run_id = pg_helper.make_run_id(30, STARTED, prefix="pp")
+    rows = _tagged_rows(run_id, solver="pandapower", solver_version="3.5.6")
+    with psycopg.connect(url) as conn:
+        for table in pg_helper.RESULT_TABLES:
+            pg_helper.insert_rows(conn, table, rows[table])
+
+    with psycopg.connect(url) as conn:
+        stored = conn.execute(
+            "select solver, solver_version from public.psse_run where run_id = %s", (run_id,)
+        ).fetchall()
+    assert stored == [("pandapower", "3.5.6")]
+    assert _counts(clean_pg, run_id)[:3] == [1, 4, 4]
+    # No grant was added for the new columns: the table-level grant covers them.
+    assert _scalar(
+        clean_pg,
+        "select count(*) as n from pg_attribute where attrelid = 'public.psse_run'::regclass and attacl is not null",
+    ) == 0
+
+
+def _definition_snapshot(admin_url):
+    constraints = pg_helper.admin_rows(
+        admin_url,
+        "select conname, pg_get_constraintdef(oid) as definition from pg_constraint "
+        "where conrelid = 'public.psse_run'::regclass order by conname",
+    )
+    columns = pg_helper.admin_rows(
+        admin_url,
+        "select column_name, column_default, is_nullable from information_schema.columns "
+        "where table_schema = 'public' and table_name = 'psse_run' "
+        "and column_name in ('solver', 'solver_version') order by column_name",
+    )
+    acl = pg_helper.admin_rows(
+        admin_url, "select relacl::text as acl from pg_class where oid = 'public.psse_run'::regclass"
+    )
+    return constraints, columns, acl
+
+
+def test_db_migration_reapplies_cleanly(clean_pg):
+    first = _definition_snapshot(clean_pg)
+    names = {row["conname"] for row in first[0]}
+    assert {"psse_run_solver_ck", "psse_run_solver_version_ck", "psse_run_run_id_ck",
+            "psse_run_solver_run_id_ck"} <= names
+    assert [row["column_name"] for row in first[1]] == ["solver", "solver_version"]
+
+    pg_helper.apply_solver_tag_migration(clean_pg)
+    pg_helper.apply_solver_tag_migration(clean_pg)
+
+    assert _definition_snapshot(clean_pg) == first
+
+
+def _context(n=1):
+    return contract.RunContext(
+        run_id=pg_helper.make_run_id(n, STARTED),
+        started_at=STARTED,
+        case_id="summer_peak_case",
+        case_sha256="ab" * 32,
+        mapping_sha256="cd" * 32,
+        job_version="abc1234",
+    )
+
+
+def _built(n=1):
+    """(record, rows) of one completed PSS/E run, built exactly as the unchanged job builds it."""
+    rows_in = psse_fakes.latest_rows(STARTED, provisional=True, age_minutes=10.0)
+    selection = ratings.select_ratings(psse_fakes.fake_fetch(rows_in), STARTED)
+    results = psse_fakes.fake_results(selection)
+    record = run_record.build_run_record(_context(n), selection, FINISHED, results=results)
+    return record, run_record.result_rows(record, results)
+
+
+def test_db_unchanged_pss_e_writer_path_on_the_migrated_schema(clean_pg):
+    record, rows = _built(40)
+    assert len(record) == 17
+    conn = writer.connect(pg_helper.role_url(clean_pg, WRITER_ROLE))
+    try:
+        assert writer.write_run(conn, record, rows) == "written"
+    finally:
+        conn.close()
+
+    stored = pg_helper.admin_rows(
+        clean_pg,
+        "select solver, solver_version from public.psse_run where run_id = %s",
+        (record["run_id"],),
+    )
+    assert stored == [{"solver": "psse", "solver_version": None}]
+    counts = _counts(clean_pg, record["run_id"])
+    assert counts[0] == 1 and counts[1] == 4 and counts[2] == 4
