@@ -163,7 +163,17 @@ Plans:
   3. With a PSS/E run in an hour and no pandapower run in that hour, the gap check reports that hour as missing for pandapower; PSS/E gaps while its machine is offline are listed separately and do not hide, or get hidden by, pandapower gaps.
   4. After the owner applies the migration to the live project, a read-only check shows the existing runs tagged `psse` and nothing else changed.
 
-**Plans**: TBD
+**Plans**: 0/5 plans executed
+
+Plans:
+**Wave 1**
+- [ ] 03-01-PLAN.md — Solver-tag migration: columns, four constraints, the two ordering-test edits; text tier runs here, database tier runs on the Mac (wave 1)
+- [ ] 03-02-PLAN.md — The tag through psse_job: registry, tagged record and second INSERT, writer refusals, run-loop cross-check (wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+- [ ] 03-03-PLAN.md — Per-solver gap check beside the untouched pooled one, checked against an independent oracle without a database (wave 2)
+- [ ] 03-04-PLAN.md — pandapower runs tagged end to end, Python/migration vocabulary match, tagged database rehearsal (wave 2)
+- [ ] 03-05-PLAN.md — Owner's read-only live check, the D-03 decision checkpoint and the view guard (wave 2, checkpoint)
 
 ### Phase 4: Replay and Agreement Check
 
