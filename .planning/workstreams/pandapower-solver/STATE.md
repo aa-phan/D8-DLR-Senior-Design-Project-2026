@@ -6,16 +6,16 @@ current_phase: 01
 current_phase_name: PSS/E Reference Session and Network Parity
 current_plan: 10
 status: executing
-stopped_at: "Plan 01-10 Task 1 checkpoint: waiting on the licensed-laptop PSS/E session (Phase 2 plans 02-01, 02-02 and 02-03 complete, run in parallel)"
-last_updated: "2026-11-18T18:57:16.942Z"
+stopped_at: "Plan 01-10 Task 1 checkpoint: waiting on the licensed-laptop PSS/E session (Phase 2 plans 02-01, 02-02, 02-03 and 02-04 complete, run in parallel)"
+last_updated: "2026-11-18T19:11:15.599Z"
 last_activity: 2026-11-17
 last_activity_desc: Plans 01-01 to 01-09 complete; 01-10 paused at its laptop checkpoint
-state_head: 5445e5619dfccf940c0dc356f6d2741f55b203b6
+state_head: 351b8fd008bbac8c8ab7be49c6506791b363680c
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 18
-  completed_plans: 12
+  completed_plans: 13
 ---
 
 # Project State
@@ -50,7 +50,7 @@ See: .planning/PROJECT.md (shared). Builds on the pss-e-integration workstream (
 ## Current Position
 
 Phase: 01 (PSS/E Reference Session and Network Parity) — EXECUTING
-Plan: 10 of 11 (9 complete: 01-01 to 01-09); Phase 2 plans 02-01, 02-02 and 02-03 complete (3 of 7)
+Plan: 10 of 11 (9 complete: 01-01 to 01-09); Phase 2 plans 02-01, 02-02, 02-03 and 02-04 complete (4 of 7)
 Status: Paused at plan 01-10 Task 1 (checkpoint:human-action, blocking)
 Last activity: 2026-11-17 — branch pushed; waiting on the laptop session
 
@@ -83,6 +83,7 @@ Known items from execution:
 | Phase 02 P01 | 5min | 2 tasks | 3 files |
 | Phase 02 P02 | 25min | 3 tasks | 3 files |
 | Phase 02 P03 | 30min | 3 tasks | 4 files |
+| Phase 02 P04 | 35min | 3 tasks | 3 files |
 
 ## Decisions
 
@@ -91,3 +92,6 @@ Known items from execution:
 - [Phase 02]: 02-02: adapter accepts RAW or converted JSON by suffix (assumption Q2, owner to confirm, reversible); a snapshot saved failed or stale reloads FRESH; ENG-02 to ENG-04 stay Pending until the study-level plans 02-04 and 02-05
 - [Phase 02]: 02-03: scale_load spreads the increment over the subsystem's in-service loads in proportion to P (assumption A2, settles with PSE-02); Q follows only when q_scales_with_p is yes, inconclusive is refused, a subsystem without load is a no-op
 - [Phase 02]: 02-03: ENG-04 left Pending (scaling half done; study-level outage and failed-solve proof is 02-05); ENG-01 complete for the adapter; one Phase 1 CLI test fails on Windows only (0o600 mode), logged in deferred-items.md
+- [Phase 02]: 02-04: Q1 an undecided enforce_q_lims is refused at stage mapping; Q4 voltage.source case is refused; Q6 solve_settings record in every dispatch row's details; A3 the real mapping uses the defaults (owner to confirm at 02-07, all reversible)
+- [Phase 02]: 02-04: psse_version is None for a pandapower run (version in solve_settings.solver_version until Phase 3 adds solver columns); Phase 5 must refuse a live write when engine.is_placeholder(backend) is True and add the public-log filter (RESEARCH Pitfall 10)
+- [Phase 02]: 02-04: ENG-02 complete (refusal half closed); ENG-05 stays Pending until 02-07, ENG-06 until 02-06; recorded settings must not carry a placeholder source or placeholder evidence

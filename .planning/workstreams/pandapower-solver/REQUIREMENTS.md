@@ -22,7 +22,7 @@
 ### Study engine (ENG)
 
 - [x] **ENG-01**: A `PandapowerApi` provides the same methods the study code uses from `PsseApi`, chosen through one new factory argument in `study.py`, so `study`, `contingency`, `margin`, `violations` and `dispatch` run unchanged; a test pins the method names and signatures to `PsseApi`.
-- [ ] **ENG-02**: A city's rating is applied as a current limit per circuit and line loading is read on the current basis, matching the PSS/E study's default; a mapping that asks for a basis pandapower cannot reproduce is refused.
+- [x] **ENG-02**: A city's rating is applied as a current limit per circuit and line loading is read on the current basis, matching the PSS/E study's default; a mapping that asks for a basis pandapower cannot reproduce is refused.
 - [ ] **ENG-03**: A load flow counts as converged only if it raises no error, leaves no in-service bus without a voltage, and leaves no bus below the collapse limit; an outage that islands part of the grid becomes a `non_convergence` row, as in PSS/E.
 - [ ] **ENG-04**: Each city, each outage and each margin step solves a fresh copy of its base network; no result is ever read after a failed solve.
 - [ ] **ENG-05**: The pandapower solve settings (reactive limits, iteration limit, tolerance) are set from the values recorded in PSE-02 and stored with each run.
@@ -86,7 +86,7 @@
 | NET-02 | Phase 1 | Pending |
 | NET-03 | Phase 1 | Pending |
 | ENG-01 | Phase 2 | Complete |
-| ENG-02 | Phase 2 | Pending |
+| ENG-02 | Phase 2 | Complete |
 | ENG-03 | Phase 2 | Pending |
 | ENG-04 | Phase 2 | Pending |
 | ENG-05 | Phase 2 | Pending |
