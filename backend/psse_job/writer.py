@@ -122,17 +122,32 @@ def _failure_text(exc):
 def _check_tag(record):
     """
     ValueError (fixed text, never a value) unless the record's solver tag and run id agree:
-    no tag keys means a PSS/E run id; both tag keys mean a registered solver whose prefix
-    starts the run id. Raised before any statement is executed.
+    both tag keys or neither; no tag keys means a PSS/E run id; a tag is a registered solver
+    other than PSS/E whose prefix starts the run id; solver_version is None or 1 to 100
+    characters of text. Raised before any statement is executed.
     """
+    has_solver = "solver" in record
+    has_version = "solver_version" in record
+    if has_solver != has_version:
+        raise ValueError("a run record carries both solver tag keys or neither")
     run_id = record.get("run_id")
-    if "solver" not in record and "solver_version" not in record:
-        if not str(run_id).startswith(contract.RUN_ID_PREFIXES[contract.SOLVER_PSSE] + "-"):
+    if not isinstance(run_id, str):
+        raise ValueError("the run id is not text")
+    if not has_solver:
+        if not run_id.startswith(contract.RUN_ID_PREFIXES[contract.SOLVER_PSSE] + "-"):
             raise ValueError("an untagged run record needs a PSS/E run id")
         return
-    prefix = contract.RUN_ID_PREFIXES.get(record.get("solver"))
-    if prefix is None or not str(run_id).startswith(prefix + "-"):
+    solver = record["solver"]
+    if not isinstance(solver, str) or solver not in contract.RUN_ID_PREFIXES:
+        raise ValueError("the solver tag is not a registered solver")
+    if solver == contract.SOLVER_PSSE:
+        raise ValueError("a PSS/E run record is written without the solver tag keys")
+    if not run_id.startswith(contract.RUN_ID_PREFIXES[solver] + "-"):
         raise ValueError("the run id does not match the solver tag")
+    version = record["solver_version"]
+    if version is not None and (not isinstance(version, str)
+                                or not 1 <= len(version) <= run_record.SOLVER_VERSION_MAX_CHARS):
+        raise ValueError("solver_version is not text of 1 to 100 characters")
 
 
 def _run_insert(record):
