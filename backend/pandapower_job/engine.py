@@ -22,10 +22,13 @@ Assumptions awaiting the owner (reversible, confirmed at plan 02-07's checkpoint
 Settings provenance (ENG-05, Q6). Every dispatch row's `details` carries a `solve_settings` record
 (see `settings_record`): the solver, its version, whether the values are placeholders, the solve
 settings, where each came from, the deviations from D-14 and the three scaling details. Q6: "stored
-with each run" means this record in every dispatch row (free JSON, no schema change; Phase 3 owns
-the schema, and a run-level column would be its migration). The pandapower version is a solver
-version, not a PSS/E version, so the study's `psse_version` is None for a pandapower run (RESEARCH
-Pitfall 9).
+with each run" means this record in every dispatch row (free JSON). Since Phase 3 the run row also
+carries it: the `solver` and `solver_version` columns (solver-tag migration) hold the solver and its
+version. The pandapower version is a solver version, not a PSS/E version, so the study's
+`psse_version` is None for a pandapower run (RESEARCH Pitfall 9) and `solver_version` is the bare
+version string the adapter reports. The runner must call `job.run_once(..., solver=engine.SOLVER)`:
+the run loop refuses results whose solver differs from the run's tag, so a run started with the
+default (PSS/E) tag fails at stage validate_results and is never stored as PSS/E results.
 
 Placeholders (D-06). Until PSE-02 is recorded the settings are the named PLACEHOLDER_* constants.
 They are used only when a caller passes them in: the adapter solves with the settings of the
@@ -122,7 +125,8 @@ def preflight(mapping_settings, backend):
 
 def _recording_study(inner, run_backend):
     """The study of a run: `inner`'s results with the settings record added to every dispatch
-    row's details and psse_version None (a StudyFailed passes through unchanged)."""
+    row's details, psse_version None, and this engine's tag stamped on them (solver SOLVER and
+    solver_version the adapter's version; a StudyFailed passes through unchanged)."""
     def recorded(selection, context):
         results = inner(selection, context)
         record = settings_record(run_backend, results.psse_version)
@@ -131,7 +135,8 @@ def _recording_study(inner, run_backend):
             row = dict(row)
             row["details"] = dict(row.get("details") or {}, solve_settings=copy.deepcopy(record))
             dispatch.append(row)
-        return results._replace(dispatch=dispatch, psse_version=None)
+        return results._replace(dispatch=dispatch, psse_version=None, solver=SOLVER,
+                                solver_version=results.psse_version)
     return recorded
 
 

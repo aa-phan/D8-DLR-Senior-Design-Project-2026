@@ -55,9 +55,9 @@ STARTED = datetime.datetime(2026, 10, 28, 14, 7, 30, tzinfo=datetime.timezone.ut
 
 @pytest.fixture(scope="module")
 def pg(tmp_path_factory):
-    """Admin URL of a database that already carries the Phase 4 migrations and the reference DDL."""
+    """Admin URL of a database with the Phase 4 migrations, the reference DDL and the solver-tag migration."""
     with pg_helper.cluster(tmp_path_factory) as admin_url:
-        pg_helper.apply_schema(admin_url)
+        pg_helper.apply_solver_schema(admin_url)
         yield admin_url
 
 
@@ -132,7 +132,7 @@ def _prepared(tmp_path, study=None, backend=None):
                               case_path, mapping_path, allow_placeholder=True)
 
 
-def _run(admin_url, prepared, rows=None, fetch=None):
+def _run(admin_url, prepared, rows=None, fetch=None, solver=engine.SOLVER):
     """run_once through prepared.study; defaults: today's provisional rows, a 4-minute clock."""
     return job.run_once(
         fetch=psse_fakes.fake_fetch(_rows() if rows is None else rows) if fetch is None else fetch,
@@ -143,6 +143,7 @@ def _run(admin_url, prepared, rows=None, fetch=None):
         mapping_sha256=prepared.mapping_sha256,
         clock=_clock(datetime.timedelta(0), datetime.timedelta(minutes=4)),
         env={"PSSE_JOB_VERSION": "test-version"},
+        solver=solver,
     )
 
 

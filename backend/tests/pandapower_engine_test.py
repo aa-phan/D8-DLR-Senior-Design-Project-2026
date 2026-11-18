@@ -92,9 +92,16 @@ def test_tracer_four_cities_in_memory(four_city_run):
     started = datetime.datetime(2026, 10, 28, 12, 20, tzinfo=datetime.timezone.utc)
     finished = started + datetime.timedelta(minutes=1)
     context = contract.RunContext(
-        run_record.new_run_id(started), started, prepared.case_id, prepared.case_sha256,
-        prepared.mapping_sha256, "test-version")
+        run_record.new_run_id(started, engine.SOLVER), started, prepared.case_id,
+        prepared.case_sha256, prepared.mapping_sha256, "test-version", solver=engine.SOLVER)
     record = run_record.build_run_record(context, selection, finished, results)
+    assert results.solver == engine.SOLVER
+    assert results.solver_version == pandapower.__version__
+    assert list(record) == list(contract.TAGGED_RUN_COLUMNS)
+    assert record["solver"] == "pandapower"
+    assert record["solver_version"] == pandapower.__version__
+    assert record["run_id"].startswith("pp-")
+    assert record["psse_version"] is None
     rows = run_record.result_rows(record, results)
     assert len(rows[contract.DISPATCH_TABLE]) == 4
     assert len(rows[contract.MARGIN_TABLE]) == 4

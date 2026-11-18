@@ -55,7 +55,7 @@ import math
 
 import pandapower
 
-from psse_job import psse_api, study
+from psse_job import contract, psse_api, study
 from pandapower_job import convert, network, raw, scaling, solve
 
 PandapowerBackend = collections.namedtuple("PandapowerBackend", ["solve_settings", "scaling_details"])
@@ -465,5 +465,8 @@ def factory(backend, case_path):
 
 
 # Importing this module is what makes the name available to `study` (the D-02 string, resolved
-# through the registry; see plan 02-01). `psse_job` never imports this module.
+# through the registry; see plan 02-01). `psse_job` never imports this module or names this solver.
 study.register_solver(SOLVER_NAME, factory)
+# The same import registers the database tag and its run-id prefix ("pp-"), which the solver-tag
+# migration's checks accept; a parity test holds the two in step.
+contract.register_solver_tag(SOLVER_NAME, "pp")
