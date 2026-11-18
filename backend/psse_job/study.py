@@ -668,7 +668,9 @@ def prepare_run(psspy_module, case_path, mapping_path, allow_placeholder=False, 
     file's sha256 and the mapping's sha256.
 
     A mapping that cannot be read, parsed or validated (a refused placeholder included) gives a
-    study that fails at stage mapping and mapping_sha256 None, "the mapping was not loaded"; a
+    study that fails at stage mapping and mapping_sha256 None, "the mapping was not loaded" (and
+    no adapter is built); `solver` names the adapter factory, and for a solver other than PSS/E
+    `psspy_module` carries that solver's backend object; a
     mapping that loads keeps its hash even when it does not match the case (that failure comes
     from inside the study). The case is hashed from the same path the study loads; the gap
     between the hash and the load is accepted.
