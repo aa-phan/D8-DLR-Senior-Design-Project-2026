@@ -245,3 +245,252 @@ def test_unknown_solver_label():
     assert "Bad Label!" not in gaps.format_solver_report(summaries, result)
     # A value that is not even text, and an over-long tag, are grouped the same way.
     assert set(gaps.summarize([(H, None, "ok"), (H, "a" * 33, "ok")])) == {"unknown"}
+
+
+# --------------------------------------------------------------------------- report, exit codes, failures
+
+
+def _mixed_rows():
+    return [
+        (H - 8 * HOUR, PSSE, "ok"), (H - 6 * HOUR, PSSE, "failed"), (H - 6 * HOUR, PSSE, "failed"),
+        (H - 1 * HOUR, PSSE, "fallback"),
+        (H - 5 * HOUR, PP, "ok"), (H - 2 * HOUR, PP, "ok"),
+        (H - 4 * HOUR, "zeta", "ok"), (H - 1 * HOUR, "zeta", "ok"),
+    ]
+
+
+def test_report_lines_hold_only_times_tags_kinds_and_counts():
+    allowed = [
+        re.compile(r"^gap check per solver \(UTC\): \d+ runs recorded$"),
+        re.compile(r"^solver [a-z][a-z0-9_]*: \d+ runs recorded$"),
+        re.compile(r"^solver [a-z][a-z0-9_]*: no runs recorded$"),
+        re.compile(r"^first run slot: " + ISO + "$"),
+        re.compile(r"^latest run slot: " + ISO + "$"),
+        re.compile(r"^(\d+ gaps|no gaps)( \(window: from (" + ISO + r"|the start), up to (" + ISO + r"|now)\))?$"),
+        re.compile(r"^" + ISO + r"  (no_run|failed_only)\s+runs=\d+ failed=\d+$"),
+        re.compile(r"^no runs recorded$"),
+    ]
+    outputs = []
+    for kwargs in (
+        {},
+        {"since": H - 7 * HOUR, "until": H - 1 * HOUR},
+        {"since": H - 3 * HOUR},
+        {"until": H - 4 * HOUR},
+        {"expected": (PP, "never_seen")},
+    ):
+        _, text, _ = _check(_mixed_rows(), fail_on_gaps=True, **kwargs)
+        outputs.append(text)
+    outputs.append(_check([])[1])
+    outputs.append(_check([], expected=("never_seen",))[1])
+    for text in outputs:
+        assert text.endswith("\n")
+        for line in text.splitlines():
+            assert any(pattern.match(line) for pattern in allowed), line
+            assert not re.search(r"(psse|pp)-\d{8}T", line), line
+    # The unfiltered report really does list gap lines of more than one solver.
+    assert len(_gap_lines(_section(outputs[0], PSSE))) > 0
+    assert len(_gap_lines(_section(outputs[0], PP))) > 0
+    assert "(window: from the start, up to " + _iso(H - 4 * HOUR) + ")" in outputs[3]
+
+
+def test_sections_are_psse_first_then_by_name():
+    rows = [(H - HOUR, "zeta", "ok"), (H - HOUR, PP, "ok"), (H - HOUR, PSSE, "ok")]
+    _, text, _ = _check(rows)
+    headers = [line.split(":")[0] for line in text.splitlines() if line.startswith("solver ")]
+    assert headers == ["solver psse", "solver pandapower", "solver zeta"]
+    # An expected solver with no rows takes its place in the same order.
+    _, text, _ = _check([(H - HOUR, PSSE, "ok")], expected=("zeta", PP))
+    headers = [line.split(":")[0] for line in text.splitlines() if line.startswith("solver ")]
+    assert headers == ["solver psse", "solver pandapower", "solver zeta"]
+    assert gaps.solver_order(["b", PSSE, "a"]) == [PSSE, "a", "b"]
+
+
+def test_window_filters_gap_lines_not_summaries():
+    rows = [(H - 6 * HOUR, PSSE, "ok"), (H - 1 * HOUR, PSSE, "ok")]  # gaps at H-5h .. H-2h
+    _, text, _ = _check(rows, since=H - 4 * HOUR, until=H - 2 * HOUR)
+    section = _section(text, PSSE)
+    assert [line.split()[0] for line in _gap_lines(section)] == [_iso(H - 4 * HOUR), _iso(H - 3 * HOUR)]
+    assert "2 gaps (window: from %s, up to %s)" % (_iso(H - 4 * HOUR), _iso(H - 2 * HOUR)) in section
+    assert "solver psse: 2 runs recorded" in section
+    assert "first run slot: " + _iso(H - 6 * HOUR) in section
+    assert "latest run slot: " + _iso(H - 1 * HOUR) in section
+    assert text.splitlines()[0] == "gap check per solver (UTC): 2 runs recorded"
+    # Since is inclusive and until is exclusive: a one-hour window holds exactly that hour.
+    _, text, _ = _check(rows, since=H - 5 * HOUR, until=H - 4 * HOUR)
+    assert [line.split()[0] for line in _gap_lines(_section(text, PSSE))] == [_iso(H - 5 * HOUR)]
+    _, text, _ = _check(rows, since=H - 1 * HOUR)
+    assert "no gaps (window: from %s, up to now)" % _iso(H - 1 * HOUR) in _section(text, PSSE)
+
+
+def test_exit_codes():
+    code, text, _ = _check([], fail_on_gaps=True)
+    assert (code, text) == (5, "no runs recorded\n")
+    assert _check([])[0] == 0
+
+    psse_gap = [(H - 3 * HOUR, PSSE, "ok"), (H - 1 * HOUR, PSSE, "ok")]
+    pp_gap = [(H - 3 * HOUR, PP, "ok"), (H - 1 * HOUR, PP, "ok")]
+    assert _check(psse_gap, fail_on_gaps=True)[0] == 0           # PSS/E gaps are listed, not failing
+    assert "1 gaps" in _check(psse_gap, fail_on_gaps=True)[1]
+    assert _check(pp_gap, fail_on_gaps=True)[0] == 5
+    assert _check(pp_gap)[0] == 0                                 # without fail_on_gaps nothing fails
+
+    only_psse = [(H - 2 * HOUR, PSSE, "ok"), (H - 1 * HOUR, PSSE, "ok")]
+    code, text, _ = _check(only_psse, fail_on_gaps=True, expected=(PP,))
+    assert code == 5
+    assert "solver pandapower: no runs recorded" in text.splitlines()
+    assert _check(only_psse, fail_on_gaps=True)[0] == 0           # not expected, so not missing
+    assert _check(only_psse, expected=(PP,))[0] == 0
+
+    only_pp = [(H - 2 * HOUR, PP, "ok"), (H - 1 * HOUR, PP, "ok")]
+    assert _check(only_pp, fail_on_gaps=True, expected=(PSSE,))[0] == 0   # PSS/E offline is the known state
+
+    assert _check(psse_gap, fail_on_gaps=True, failing=(PSSE,))[0] == 5
+    assert _check(pp_gap, fail_on_gaps=True, failing=(PSSE,))[0] == 0     # only the named solvers fail
+    assert _check(only_psse, fail_on_gaps=True, expected=(PP,), failing=(PSSE,))[0] == 0
+
+    # A gap outside the window does not fail; since is inclusive and until exclusive.
+    gap_at = H - 2 * HOUR
+    assert _check(pp_gap, fail_on_gaps=True, since=H - 1 * HOUR)[0] == 0
+    assert _check(pp_gap, fail_on_gaps=True, until=gap_at)[0] == 0
+    assert _check(pp_gap, fail_on_gaps=True, since=gap_at)[0] == 5
+    assert _check(pp_gap, fail_on_gaps=True, until=gap_at + HOUR)[0] == 5
+
+
+def test_failure_is_one_redacted_line():
+    password = "pw" + "-" + "Zk93Xr"
+    url = "postgresql://gapuser_zq:" + password + "@127.0.0.1:5999/somedb"
+    env = {"SUPABASE_PSSE_DB_URL": url}
+
+    def refuse():
+        raise RuntimeError("could not connect to " + url + " with " + password)
+
+    buffer = io.StringIO()
+    assert gaps.run_by_solver(env, connect=refuse, out=buffer) == 6
+    text = buffer.getvalue()
+    lines = [line for line in text.splitlines() if line.strip()]
+    assert len(lines) == 1 and lines[0].startswith("gap check could not run: ")
+    for secret in (password, url, "gapuser_zq", "127.0.0.1", "somedb"):
+        assert secret not in text
+
+    conn = _FakeConnection([], H, fail_on=RuntimeError("statement failed for " + url + " " + password))
+    buffer = io.StringIO()
+    assert gaps.run_by_solver(env, connect=lambda: conn, out=buffer, fail_on_gaps=True) == 6
+    text = buffer.getvalue()
+    lines = [line for line in text.splitlines() if line.strip()]
+    assert len(lines) == 1 and lines[0].startswith("gap check could not run: ")
+    for secret in (password, url, "gapuser_zq", "127.0.0.1", "somedb"):
+        assert secret not in text
+    assert ("close",) in conn.events
+
+    # A missing URL is a failed check too, in one line.
+    blank = io.StringIO()
+    assert gaps.run_by_solver({}, out=blank) == 6
+    assert blank.getvalue().startswith("gap check could not run: ")
+    assert len([line for line in blank.getvalue().splitlines() if line.strip()]) == 1
+
+
+def test_read_only_before_any_statement():
+    _, _, conn = _check([(H - HOUR, PSSE, "ok")], fail_on_gaps=True)
+    kinds = [event[0] for event in conn.events]
+    assert kinds[:2] == ["set", "set"]
+    assert conn.events[0] == ("set", "autocommit", False)
+    assert conn.events[1] == ("set", "read_only", True)
+    statements = [event[1] for event in conn.events if event[0] == "execute"]
+    assert statements == [gaps.RUNS_SQL, gaps.CURRENT_HOUR_SQL]
+    assert kinds.index("execute") > 1
+    for sql in statements:
+        assert re.match(r"(?i)^select\b", sql)
+        assert ";" not in sql
+        for word in ("insert", "update", "delete", "alter", "drop", "grant", "truncate", "create"):
+            assert not re.search(r"(?i)\b" + word + r"\b", sql), word
+    # The source holds no hour-series function of its own (the legacy SQL file is the only one).
+    with open(gaps.__file__, encoding="utf-8") as handle:
+        assert "generate_series" not in handle.read()
+
+
+def test_legacy_path_is_unchanged():
+    names = list(inspect.signature(gaps.run).parameters)
+    assert names == ["env", "since", "until", "fail_on_gaps", "out", "connect"]
+    assert gaps.SUMMARY_SQL == "select count(*), min(slot_time), max(slot_time) from public.psse_run"
+    assert gaps.GapRow._fields == ("slot_time", "gap_kind", "runs", "failed_runs")
+    assert gaps.GAP_SQL_PATH.replace("\\", "/").endswith("docs/data-science/schema/psse_run_gaps.sql")
+    assert os.path.isfile(gaps.GAP_SQL_PATH)
+    assert callable(gaps.fetch_gaps) and callable(gaps.format_report) and callable(gaps.fetch_summary)
+    # The pooled legacy report keeps its own header: it is the laptop command's, not the per-solver one.
+    pooled = gaps.format_report((5, H - 3 * HOUR, H - 1 * HOUR), [])
+    assert pooled.splitlines()[0] == "gap check (UTC): 5 runs recorded"
+
+
+# --------------------------------------------------------------------------- database tier (skips here)
+
+
+@pytest.fixture(scope="module")
+def pg(tmp_path_factory):
+    """Admin URL of a database with the Phase 4 migrations, the reference DDL and the solver-tag migration."""
+    with pg_helper.cluster(tmp_path_factory) as admin_url:
+        pg_helper.apply_solver_schema(admin_url)
+        yield admin_url
+
+
+def _db_hour(admin_url):
+    rows = pg_helper.admin_rows(
+        admin_url, "select (date_trunc('hour', now() at time zone 'UTC') at time zone 'UTC') as slot")
+    return rows[0]["slot"].astimezone(UTC)
+
+
+def test_db_run_by_solver_on_the_migrated_schema(pg):
+    import psycopg
+    import psycopg.errors
+
+    writer_url = pg_helper.role_url(pg, "dlr_psse_writer")
+
+    def seed(hour):
+        n = 0
+        with psycopg.connect(pg, autocommit=True) as admin:
+            for solver, prefix, backs in ((PSSE, "psse", (3, 2, 1)), (PP, "pp", (3, 1))):
+                for back in backs:
+                    n += 1
+                    started = hour - back * HOUR + datetime.timedelta(minutes=15)
+                    run_id = pg_helper.make_run_id(n, started, prefix=prefix)
+                    row = pg_helper.valid_run_rows(run_id, started, outcome="ok")["psse_run"][0]
+                    if solver != PSSE:
+                        row = dict(row, solver=solver, solver_version="test-1")
+                    pg_helper.insert_rows(admin, "psse_run", [row])
+
+    # The database's hour must not roll while the check runs: up to three attempts, then fail.
+    for _ in range(3):
+        pg_helper.reset(pg)
+        before = _db_hour(pg)
+        seed(before)
+        buffer = io.StringIO()
+        code = gaps.run_by_solver(
+            {}, connect=lambda: writer.connect(writer_url), out=buffer, fail_on_gaps=True)
+        probe = writer.connect(writer_url)
+        try:
+            probe.autocommit = False
+            probe.read_only = True
+            fetched = gaps.fetch_current_slot(probe)
+            probe.rollback()
+        finally:
+            probe.close()
+        if _db_hour(pg) == before and fetched == before:
+            break
+    else:
+        pytest.fail("the database's hour rolled during all three attempts")
+    text = buffer.getvalue()
+    assert code == 5
+    assert _gap_lines(_section(text, PP)) == ["%s  no_run      runs=0 failed=0" % _iso(before - 2 * HOUR)]
+    assert _gap_lines(_section(text, PSSE)) == []
+    assert fetched == before
+
+    # The session set up exactly as run_by_solver does refuses a write.
+    row = pg_helper.valid_run_rows(pg_helper.make_run_id(99, before, prefix="psse"), before)["psse_run"][0]
+    conn = writer.connect(writer_url)
+    try:
+        conn.autocommit = False
+        conn.read_only = True
+        with pytest.raises(psycopg.errors.ReadOnlySqlTransaction):
+            pg_helper.insert_rows(conn, "psse_run", [row])
+        conn.rollback()
+    finally:
+        conn.close()
