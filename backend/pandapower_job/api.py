@@ -1,9 +1,11 @@
 """
-The pandapower adapter of the study engine (pandapower-solver Phase 2, plan 02-02: ENG-01 to ENG-04).
+The pandapower adapter of the study engine (pandapower-solver Phase 2, plans 02-02 and 02-03:
+ENG-01 to ENG-04).
 
 `PandapowerApi` offers the study code the same methods it uses from `psse_job.psse_api.PsseApi`
 (`load_case`, `branch_table`, `bus_table`, `read_rate`, `set_rate`, `set_status`, `solve`,
-`branch_loading`, `save_case`, `version`), over a pandapower network built by
+`branch_loading`, `save_case`, `version`, and the scaling four: `read_totals`, `scale_case`,
+`define_subsystem`, `scale_load`), over a pandapower network built by
 `network.build_network`. The study code does not know which solver it talks to (D-01). This module
 may import `psse_job`; `psse_job` never imports it.
 
@@ -53,8 +55,8 @@ import math
 
 import pandapower
 
-from psse_job import psse_api
-from pandapower_job import convert, network, raw, solve
+from psse_job import psse_api, study
+from pandapower_job import convert, network, raw, scaling, solve
 
 PandapowerBackend = collections.namedtuple("PandapowerBackend", ["solve_settings", "scaling_details"])
 
@@ -98,6 +100,7 @@ class PandapowerApi(object):
         self._net = None
         self._state = FRESH
         self._last_reason = None
+        self._subsystems = {}
 
     # -- case ----------------------------------------------------------------------------
 
@@ -361,9 +364,106 @@ class PandapowerApi(object):
             flows[row.key] = row
         return [flows[key] for key in sorted(flows)]
 
+    # -- scaling ---------------------------------------------------------------------------
+
+    def read_totals(self):
+        """The whole case's total load and total generation in MW, as CaseTotals.
+
+        One definition for the totals, `scaling.case_totals`, shared with the scaling itself. It
+        reads input data, not results, so it is allowed in every state. A scaling detail that is
+        inconclusive is a ValueError (ScalingUndetermined).
+        """
+        net = self._need_net("read_totals")
+        return psse_api.CaseTotals(*scaling.case_totals(net, self._backend.scaling_details))
+
+    def scale_case(self, load_mw, gen_mw):
+        """Set the whole case's total load to `load_mw` and total generation to `gen_mw`.
+
+        Both targets must be finite numbers above 0 (the texts of PsseApi). The scaling is Phase
+        1's `scaling.scale_city`, which works on a deep copy: the working network is replaced, and
+        the master and every snapshot are never touched. Its refusals pass through unchanged as
+        ValueErrors holding a reason word and nothing else. The state becomes STALE.
+        """
+        load = psse_api.PsseApi._positive_target(load_mw, "load_mw")
+        gen = psse_api.PsseApi._positive_target(gen_mw, "gen_mw")
+        net = self._need_net("scale_case")
+        self._net = scaling.scale_city(net, psse_api.CaseTotals(load, gen),
+                                       self._backend.scaling_details)
+        self._state = STALE
+
+    def define_subsystem(self, sid, buses):
+        """Define subsystem `sid` as exactly these buses; every one must be a bus of the case."""
+        psse_api.PsseApi._subsystem_id(sid)
+        members = list(buses)
+        if not members or not all(psse_api._is_int(bus) and bus > 0 for bus in members):
+            raise ValueError("buses must be a non-empty list of positive bus numbers")
+        net = self._need_net("define_subsystem")
+        known = set(int(index) for index in net.bus.index)
+        if any(bus not in known for bus in members):
+            raise PandapowerCallError("define_subsystem", None, "bus not found")
+        self._subsystems[sid] = tuple(members)
+        self._state = STALE
+
+    def scale_load(self, sid, increment_mw):
+        """Add `increment_mw` to the in-service load on subsystem `sid`, in proportion to each P.
+
+        PSS/E's increment form spreads the increment over the subsystem's loads in proportion to
+        their P (assumption A2 of the research; it settles when PSE-02 records the detail). Q is
+        scaled with P only when `q_scales_with_p` is "yes"; "inconclusive" is refused because the
+        rule is then unknown. A subsystem with no in-service load, or none carrying P, is left
+        unchanged (the margin's own check fires on that, as on PSS/E).
+        """
+        psse_api.PsseApi._subsystem_id(sid)
+        try:
+            increment = (float(increment_mw) if psse_api._is_number(increment_mw)
+                         else float("nan"))
+        except OverflowError:
+            increment = float("nan")
+        if not math.isfinite(increment):
+            raise ValueError("increment_mw must be a finite number")
+        net = self._need_net("scale_load")
+        members = self._subsystems.get(sid)
+        if members is None:
+            raise PandapowerCallError("scale_load", None, "subsystem is not defined")
+        q_rule = self._backend.scaling_details.q_scales_with_p
+        if q_rule not in scaling.DETAIL_VALUES:
+            raise ValueError("a scaling detail is not one of %s" % (scaling.DETAIL_VALUES,))
+        if q_rule == "inconclusive":
+            raise scaling.ScalingUndetermined("q_scales_with_p")
+        loads = net.load.index[net.load.bus.isin(members) & net.load.in_service.astype(bool)]
+        if len(loads) == 0:
+            return
+        own = float(net.load.loc[loads, "p_mw"].sum())
+        if own == 0.0:
+            return
+        if own < 0.0:
+            raise PandapowerCallError("scale_load", None, "the subsystem load is negative")
+        if not own + increment > 0.0:
+            raise PandapowerCallError("scale_load", None, "the increment removes the whole load")
+        factor = (own + increment) / own
+        net.load.loc[loads, "p_mw"] = net.load.loc[loads, "p_mw"] * factor
+        if q_rule == "yes":
+            net.load.loc[loads, "q_mvar"] = net.load.loc[loads, "q_mvar"] * factor
+        self._state = STALE
+
     def version(self):
         """The pandapower version as a string, or 'unknown' on any failure."""
         try:
             return str(pandapower.__version__)
         except Exception:
             return "unknown"
+
+
+# -- the registered name -----------------------------------------------------------------------
+
+SOLVER_NAME = "pandapower"
+
+
+def factory(backend, case_path):
+    """The study's adapter factory: `backend` is a PandapowerBackend; the case file is protected."""
+    return PandapowerApi(backend, protected_path=case_path)
+
+
+# Importing this module is what makes the name available to `study` (the D-02 string, resolved
+# through the registry; see plan 02-01). `psse_job` never imports this module.
+study.register_solver(SOLVER_NAME, factory)

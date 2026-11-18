@@ -93,6 +93,30 @@ def _read_back(read, target, reason):
         raise ScalingRefused(reason + "_read_back")
 
 
+def case_totals(net, details):
+    """
+    (load_mw, gen_mw) of `net` under `details`: the one totals definition, shared by `scale_city`
+    and the adapter's `read_totals`, so the read-back of the study and the factor of the scaling
+    can never disagree about what a total is.
+
+    The load total is the P of every in-service load. The generation total is the P of every
+    in-service machine, plus the P of every in-service external grid (`psse_pg_mw`) when
+    `swing_in_total` is "yes". Raises ValueError for a detail outside DETAIL_VALUES and
+    ScalingUndetermined("swing_in_total") when that detail is inconclusive.
+    """
+    _check_details(details)
+    if details.swing_in_total == "inconclusive":
+        raise ScalingUndetermined("swing_in_total")
+    loads = net.load.index[_in_service(net.load)]
+    load_mw = float(net.load.loc[loads, "p_mw"].sum())
+    gens = net.gen.index[_in_service(net.gen)]
+    gen_mw = float(net.gen.loc[gens, "p_mw"].sum())
+    if details.swing_in_total == "yes":
+        swing = net.ext_grid.index[_in_service(net.ext_grid)]
+        gen_mw += float(net.ext_grid.loc[swing, "psse_pg_mw"].sum())
+    return load_mw, gen_mw
+
+
 def scale_city(net, scaling, details):
     """
     A deep copy of `net` scaled to `scaling.load_mw` and `scaling.gen_mw` under `details` (see the
@@ -104,15 +128,12 @@ def scale_city(net, scaling, details):
     swing_in = details.swing_in_total == "yes"
     scaled = copy.deepcopy(net)
 
+    own_load, own_gen = case_totals(scaled, details)
     loads = scaled.load.index[_in_service(scaled.load)]
-    own_load = float(scaled.load.loc[loads, "p_mw"].sum())
     load_factor = _factor(own_load, scaling.load_mw, "load")
 
     gens = scaled.gen.index[_in_service(scaled.gen)]
     swing = scaled.ext_grid.index[_in_service(scaled.ext_grid)] if swing_in else []
-    own_gen = float(scaled.gen.loc[gens, "p_mw"].sum())
-    if swing_in:
-        own_gen += float(scaled.ext_grid.loc[swing, "psse_pg_mw"].sum())
     gen_factor = _factor(own_gen, scaling.gen_mw, "generation")
 
     new_gen = scaled.gen.loc[gens, "p_mw"] * gen_factor
