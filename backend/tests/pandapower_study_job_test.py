@@ -28,6 +28,8 @@ Follows backend/tests/psse_study_job_test.py (module-level imports, plain assert
 
 import datetime
 import functools
+import json
+import logging
 import os
 import sys
 import tempfile
@@ -195,3 +197,102 @@ def test_tracer_engine_run_written_to_local_postgres(clean_pg, tmp_path):
     assert problems == [], problems
     assert os.listdir(tempfile.gettempdir()) == []
     assert run_record.file_sha256(case_path) == case_hash
+
+
+# --------------------------------------------------------------------------- recorded refusals and an island
+
+
+def _assert_failed(admin_url, outcome, stage):
+    """One failed psse_run row with `stage`, no result rows, exit 1, every completeness check ok."""
+    assert outcome.outcome == "failed"
+    assert outcome.failed_stage == stage
+    assert outcome.status == "failure_recorded"
+    assert outcome.exit_code == 1
+    assert _counts(admin_url, outcome.run_id) == [1, 0, 0, 0]
+    stored = _run_row(admin_url, outcome.run_id)
+    assert stored["outcome"] == "failed"
+    assert stored["failed_stage"] == stage
+    assert [row for row in _checks(admin_url) if not row["ok"]] == []
+    return stored
+
+
+def _target_texts(mapping_path):
+    """Every text form (repr, %g, %.1f) of every scaling target written in the mapping file, sorted,
+    so a leak of a target into a stored error or a log shows."""
+    with open(mapping_path, encoding="utf-8") as handle:
+        document = json.load(handle)
+    texts = set()
+    for city in document["cities"].values():
+        for value in (city["scaling"]["load_mw"], city["scaling"]["gen_mw"]):
+            texts.update((repr(value), "%g" % value, "%.1f" % value))
+    return sorted(texts)
+
+
+def test_recorded_preflight_refusal(clean_pg, tmp_path):
+    """A thermal basis pandapower cannot reproduce: stage mapping, nothing solved, no result rows, and
+    the stored mapping hash is the file's (a refused mapping keeps its hash)."""
+    prepared = _prepared(tmp_path, {"thermal": {"basis": "mva"}})
+    outcome = _run(clean_pg, prepared)
+    stored = _assert_failed(clean_pg, outcome, "mapping")
+    assert stored["error"].startswith("pandapower: "), stored["error"]
+    assert stored["mapping_sha256"] == run_record.file_sha256(str(tmp_path / "mapping.json"))
+    assert stored["case_sha256"] == run_record.file_sha256(str(tmp_path / "CASE39_FIXTURE.raw"))
+
+
+def test_recorded_one_city_scaling_refused(clean_pg, tmp_path, caplog):
+    """CORPUS_CHRISTI's load target is 25 times the case's own load, outside the scaling bounds: all four
+    cities are still attempted, one failed run is stored naming each city's outcome, and no target
+    value appears in the stored error or in any log line."""
+    caplog.set_level(logging.INFO)
+    records = study_fixture.fixture_records()
+    case_path = study_fixture.write_case(tmp_path)
+    mapping_path = study_fixture.write_placeholder_mapping(tmp_path)
+    with open(mapping_path, encoding="utf-8") as handle:
+        document = json.load(handle)
+    load_total, _gen_total = study_fixture.fixture_totals(records)
+    document["cities"]["CORPUS_CHRISTI"]["scaling"]["load_mw"] = 25 * load_total
+    with open(mapping_path, "w", encoding="utf-8") as handle:
+        json.dump(document, handle, indent=2)
+    case_hash = run_record.file_sha256(case_path)
+
+    prepared = engine.prepare_run(engine.PLACEHOLDER_BACKEND, case_path, mapping_path,
+                                  allow_placeholder=True)
+    outcome = _run(clean_pg, prepared)
+    stored = _assert_failed(clean_pg, outcome, "apply_ratings")
+    error = stored["error"]
+    assert error.startswith("1 of 4 cities failed; AUSTIN: ok; "), error
+    for fragment in ("CORPUS_CHRISTI: failed at apply_ratings: scaling:", "MIDLAND: ok",
+                     "EL_PASO: ok"):
+        assert fragment in error, error
+    assert stored["mapping_sha256"] == run_record.file_sha256(mapping_path)
+    assert run_record.file_sha256(case_path) == case_hash
+    assert os.listdir(tempfile.gettempdir()) == []
+
+    texts = _target_texts(mapping_path)
+    assert texts
+    for text in texts:
+        assert text not in error, text
+        assert text not in caplog.text, text
+
+
+def test_written_island_row_is_stored(clean_pg, tmp_path):
+    """An outage that islands buses is one non_convergence row per city (ierr 3), stored in a run that is
+    otherwise written and complete; the screen does not stop at it."""
+    island = study_fixture.ISLANDING_OUTAGE
+    extra = {"from_bus": island.from_bus, "to_bus": island.to_bus, "ckt": island.ckt}
+    prepared = _prepared(tmp_path, {"contingency": {"extra": [extra]}})
+    outcome = _run(clean_pg, prepared)
+    assert (outcome.outcome, outcome.status, outcome.exit_code) == ("fallback", "written", 0)
+    assert _counts(clean_pg, outcome.run_id)[:3] == [1, 4, 4]
+
+    rows = _table_rows(clean_pg, "psse_contingency_result", outcome.run_id)
+    by_id = {}
+    for row in rows:
+        by_id.setdefault(row["contingency_id"], []).append(row)
+    for city in ("AUSTIN", "CORPUS_CHRISTI", "MIDLAND", "EL_PASO"):
+        stored = by_id.get(city + ":" + island.key)
+        assert stored is not None, city
+        assert len(stored) == 1, city
+        assert stored[0]["violation_kind"] == "non_convergence", city
+        assert stored[0]["details"]["ierr"] == 3, city
+    assert [row for row in _checks(clean_pg) if not row["ok"]] == []
