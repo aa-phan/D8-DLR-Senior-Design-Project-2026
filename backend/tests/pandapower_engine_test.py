@@ -12,6 +12,7 @@ only.
 import datetime
 import json
 import os
+import re
 import socket
 
 import pytest
@@ -19,8 +20,10 @@ import pytest
 pandapower = pytest.importorskip("pandapower")
 
 import pandapower_study_fixture as study_fixture  # noqa: E402
-from psse_job import constants, contract, run_record  # noqa: E402
-from pandapower_job import engine  # noqa: E402
+from psse_job import constants, contract, mapping as mapping_module, run_record, study  # noqa: E402
+from pandapower_job import api as pandapower_api, engine  # noqa: E402
+
+_FNSL_OPTIONS = [0, 0, 0, 0, 0, 0, 0, 0]
 
 
 @pytest.fixture(scope="module")
@@ -97,3 +100,129 @@ def test_tracer_four_cities_in_memory(four_city_run):
     assert len(rows[contract.CONTINGENCY_TABLE]) == len(results.contingencies)
 
     assert os.listdir(str(four_city_run["scratch"])) == []
+
+
+# -- Task 2: refusals at stage mapping ----------------------------------------------------------
+
+
+def _prepared(tmp_path, study_section=None, backend=None):
+    case_path = study_fixture.write_case(tmp_path)
+    mapping_path = study_fixture.write_placeholder_mapping(tmp_path, study=study_section)
+    backend = engine.PLACEHOLDER_BACKEND if backend is None else backend
+    prepared = engine.prepare_run(backend, case_path, mapping_path, allow_placeholder=True)
+    return prepared, case_path, mapping_path
+
+
+def _failure(prepared):
+    with pytest.raises(study.StudyFailed) as raised:
+        prepared.study(study_fixture.selection(), None)
+    return raised.value
+
+
+def _counting_factory(patch):
+    calls = []
+
+    def factory(backend, protected_path=None):
+        calls.append(1)
+        raise AssertionError("an adapter must not be built")
+
+    patch.setitem(study.API_FACTORIES, "pandapower", factory)
+    return calls
+
+
+def test_preflight_refuses_mva_basis(tmp_path):
+    prepared, _, _ = _prepared(tmp_path, {"thermal": {"basis": "mva"}})
+    failure = _failure(prepared)
+    assert failure.stage == "mapping"
+    assert failure.message.startswith("pandapower: ")
+    assert "thermal basis" in failure.message
+
+
+def test_preflight_refuses_fnsl_options(tmp_path):
+    prepared, _, _ = _prepared(tmp_path, {"solve": {"options": _FNSL_OPTIONS}})
+    failure = _failure(prepared)
+    assert failure.stage == "mapping"
+    assert failure.message.startswith("pandapower: ")
+    assert "solve.options" in failure.message
+
+
+def test_preflight_refuses_case_voltage_source(tmp_path):
+    prepared, _, _ = _prepared(tmp_path, {"voltage": {"source": "case"}})
+    failure = _failure(prepared)
+    assert failure.stage == "mapping"
+    assert failure.message.startswith("pandapower: ")
+    assert "voltage.source" in failure.message
+
+
+def test_preflight_refuses_undecided_reactive_limits(tmp_path):
+    backend = study_fixture.fixture_backend(enforce_q_lims=None)
+    prepared, _, _ = _prepared(tmp_path, backend=backend)
+    failure = _failure(prepared)
+    assert failure.stage == "mapping"
+    assert failure.message.startswith("pandapower: ")
+    assert "reactive-limit setting is undecided" in failure.message
+
+
+@pytest.mark.parametrize("study_section, backend", [
+    ({"thermal": {"basis": "mva"}}, None),
+    ({"solve": {"options": _FNSL_OPTIONS}}, None),
+    ({"voltage": {"source": "case"}}, None),
+    (None, study_fixture.fixture_backend(enforce_q_lims=None)),
+])
+def test_preflight_refusal_builds_no_adapter_and_keeps_the_hash(
+        tmp_path, monkeypatch, study_section, backend):
+    calls = _counting_factory(monkeypatch)
+    prepared, case_path, mapping_path = _prepared(tmp_path, study_section, backend)
+    failure = _failure(prepared)
+    assert failure.stage == "mapping"
+    assert calls == []
+    assert prepared.mapping_sha256 == run_record.file_sha256(mapping_path)
+    assert prepared.mapping_error is None
+    assert prepared.case_sha256 == run_record.file_sha256(case_path)
+
+
+def test_unreadable_mapping_is_not_loaded(tmp_path, monkeypatch):
+    calls = _counting_factory(monkeypatch)
+    case_path = study_fixture.write_case(tmp_path)
+    prepared = engine.prepare_run(engine.PLACEHOLDER_BACKEND, case_path,
+                                  os.path.join(str(tmp_path), "no_such_mapping.json"),
+                                  allow_placeholder=True)
+    failure = _failure(prepared)
+    assert failure.stage == "mapping"
+    assert prepared.mapping_sha256 is None
+    assert prepared.mapping_error
+    assert calls == []
+
+
+def test_preflight_accepts_defaults_and_several_rate_sets(tmp_path):
+    for section in ({}, {"rate_sets": ["RATEA", "RATEB"]}):
+        mapping_path = study_fixture.write_placeholder_mapping(tmp_path, study=section)
+        loaded = mapping_module.load_mapping(mapping_path, allow_placeholder=True)
+        assert engine.preflight(loaded.settings, engine.PLACEHOLDER_BACKEND) is None
+
+
+def test_preflight_messages_are_figure_free(tmp_path):
+    texts = study_fixture.synthetic_target_texts(study_fixture.fixture_records())
+    cases = [({"thermal": {"basis": "mva"}}, engine.PLACEHOLDER_BACKEND),
+             ({"solve": {"options": _FNSL_OPTIONS}}, engine.PLACEHOLDER_BACKEND),
+             ({"voltage": {"source": "case"}}, engine.PLACEHOLDER_BACKEND),
+             ({}, study_fixture.fixture_backend(enforce_q_lims=None))]
+    reasons = []
+    for section, backend in cases:
+        mapping_path = study_fixture.write_placeholder_mapping(tmp_path, study=section)
+        loaded = mapping_module.load_mapping(mapping_path, allow_placeholder=True)
+        reason = engine.preflight(loaded.settings, backend)
+        assert reason
+        reasons.append(reason)
+    assert len(set(reasons)) == 4
+    for reason in reasons:
+        assert "\n" not in reason
+        assert not any(text in reason for text in texts)
+        assert re.search(r"\d{5}", reason) is None
+
+
+def test_prepare_run_needs_a_pandapower_backend(tmp_path):
+    case_path = study_fixture.write_case(tmp_path)
+    mapping_path = study_fixture.write_placeholder_mapping(tmp_path)
+    with pytest.raises(TypeError):
+        engine.prepare_run(object(), case_path, mapping_path, allow_placeholder=True)

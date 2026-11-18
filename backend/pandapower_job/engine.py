@@ -90,6 +90,29 @@ def settings_record(backend, solver_version):
     return study.json_safe(record)
 
 
+def preflight(mapping_settings, backend):
+    """The first reason this run cannot be done on pandapower, or None (ENG-02, D-07).
+
+    Refused, in this order: a thermal basis other than current (pandapower has no MVA rating
+    basis in the study's units); PSS/E fnsl solve options; voltage limits taken from the case
+    (the builder does not carry PSS/E's emergency limits, assumption Q4); and a backend whose
+    reactive-limit setting is undecided (assumption Q1, D-14). The adapter's own refusals (MVA
+    basis in branch_loading, options in solve) stay as defence in depth. Reasons only: no value,
+    path or bus number.
+    """
+    if mapping_settings.thermal_basis != "current":
+        return "thermal basis %s cannot be reproduced by pandapower; use current" % (
+            mapping_settings.thermal_basis)
+    if mapping_settings.solve_options is not None:
+        return "solve.options are PSS/E fnsl options and are not supported; use null"
+    if mapping_settings.voltage_source != "config":
+        return ("voltage.source %s is not supported (emergency limits are not carried); "
+                "use config" % mapping_settings.voltage_source)
+    if backend.solve_settings.enforce_q_lims is None:
+        return "the reactive-limit setting is undecided; PSE-02 must decide it (D-14)"
+    return None
+
+
 def _recording_study(inner, run_backend):
     """The study of a run: `inner`'s results with the settings record added to every dispatch
     row's details and psse_version None (a StudyFailed passes through unchanged)."""
@@ -124,7 +147,10 @@ def prepare_run(backend, case_path, mapping_path, allow_placeholder=False, clock
         return study.PreparedRun(
             study.failing_study("mapping", "mapping file not usable: %s" % text),
             case_id, case_sha256, None, text)
-    # Plan 02-04 Task 2: the preflight (settings pandapower cannot reproduce) is called here.
+    reason = preflight(loaded.settings, backend)
+    if reason is not None:
+        return study.PreparedRun(study.failing_study("mapping", "pandapower: " + reason),
+                                 case_id, case_sha256, loaded.sha256, None)
     run_backend = api.PandapowerBackend(
         backend.solve_settings._replace(collapse_voltage_pu=loaded.settings.collapse_voltage_pu),
         backend.scaling_details)
