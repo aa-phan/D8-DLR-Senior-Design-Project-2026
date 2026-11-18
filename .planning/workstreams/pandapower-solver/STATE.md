@@ -6,16 +6,16 @@ current_phase: 01
 current_phase_name: PSS/E Reference Session and Network Parity
 current_plan: 10
 status: executing
-stopped_at: Plan 01-10 Task 1, waiting for the teammate to run the PSS/E session on the licensed laptop (Phase 2 plans 02-01 to 02-05 completed 2026-11-18, in parallel)
-last_updated: "2026-11-18T19:18:02.651Z"
+stopped_at: Plan 01-10 Task 1, waiting for the teammate to run the PSS/E session on the licensed laptop (Phase 2 plans 02-01 to 02-06 completed 2026-11-18, in parallel)
+last_updated: "2026-11-18T19:25:04.041Z"
 last_activity: 2026-11-17
 last_activity_desc: Plans 01-01 to 01-09 complete; 01-10 paused at its laptop checkpoint
-state_head: 6aea55116f4b05c2bcebea43bd2f5e8a75774a08
+state_head: 983cf91e0d6df75754226440533eaaf9124adade
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 18
-  completed_plans: 14
+  completed_plans: 15
 ---
 
 # Project State
@@ -50,7 +50,7 @@ See: .planning/PROJECT.md (shared). Builds on the pss-e-integration workstream (
 ## Current Position
 
 Phase: 01 (PSS/E Reference Session and Network Parity) — EXECUTING
-Plan: 10 of 11 (9 complete: 01-01 to 01-09); Phase 2 plans 02-01 to 02-05 complete (5 of 7)
+Plan: 10 of 11 (9 complete: 01-01 to 01-09); Phase 2 plans 02-01 to 02-06 complete (6 of 7; 02-06 database tier written but only skipped here, not yet run green)
 Status: Paused at plan 01-10 Task 1 (checkpoint:human-action, blocking)
 Last activity: 2026-11-17 — branch pushed; waiting on the laptop session
 
@@ -63,7 +63,7 @@ Last activity: 2026-11-17 — branch pushed; waiting on the laptop session
 
 **Last session:** 2026-11-18T19:18:02.593Z
 
-**Stopped At:** Plan 01-10 Task 1, waiting for the teammate to run the PSS/E session on the licensed laptop (Phase 2 plans 02-01 to 02-05 completed 2026-11-18, in parallel)
+**Stopped At:** Plan 01-10 Task 1, waiting for the teammate to run the PSS/E session on the licensed laptop (Phase 2 plans 02-01 to 02-06 completed 2026-11-18, in parallel)
 **Resume File:** .planning/workstreams/pandapower-solver/phases/01-pss-e-reference-session-and-network-parity/01-10-PLAN.md
 
 To resume:
@@ -85,6 +85,7 @@ Known items from execution:
 | Phase 02 P03 | 30min | 3 tasks | 4 files |
 | Phase 02 P04 | 35min | 3 tasks | 3 files |
 | Phase 02 P05 | 20min | 2 tasks | 1 files |
+| Phase 02 P06 | 25min | 2 tasks | 1 files |
 
 ## Decisions
 
@@ -97,3 +98,5 @@ Known items from execution:
 - [Phase 02]: 02-04: psse_version is None for a pandapower run (version in solve_settings.solver_version until Phase 3 adds solver columns); Phase 5 must refuse a live write when engine.is_placeholder(backend) is True and add the public-log filter (RESEARCH Pitfall 10)
 - [Phase 02]: 02-04: ENG-02 complete (refusal half closed); ENG-05 stays Pending until 02-07, ENG-06 until 02-06; recorded settings must not carry a placeholder source or placeholder evidence
 - [Phase 02]: 02-05: ENG-03 and ENG-04 proven at the study level through the unchanged psse_job loops on the real solver; no production change was needed (island is one non_convergence row, order and a failed outage change no other row, no read after a failed solve, fresh copy per solve, master unchanged, two runs equal)
+- [Phase 02]: 02-06: database tier of ENG-06 written (5 tests); only skipped on this Windows checkout (no Postgres), never run green anywhere; ENG-06 stays Pending until the owner's Mac or CI run with DLR_TEST_PG_AUTOSTART=1 PSSE_REQUIRE_PG=1 passes with nothing skipped
+- [Phase 02]: 02-06: tests assert nothing about a solver or solver_version column (Phase 3 extends them once its migration exists); leak list built from targets actually written to the generated mapping
