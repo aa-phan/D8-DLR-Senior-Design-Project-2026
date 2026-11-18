@@ -25,6 +25,7 @@ Standard library only, Python 3.7 syntax (D-05).
 """
 
 import collections
+import re
 
 PSSE_RUN_TABLE = "public.psse_run"
 DISPATCH_TABLE = "public.psse_dispatched_capacity"
@@ -53,14 +54,30 @@ SOLVER_RUN_COLUMNS = ("solver", "solver_version")
 TAGGED_RUN_COLUMNS = PSSE_RUN_COLUMNS + SOLVER_RUN_COLUMNS
 
 
+_PREFIX_PATTERN = re.compile(r"[a-z]{1,10}")
+
+
 def register_solver_tag(name, prefix):
     """
-    Register a solver `name` with its run-id `prefix`. The second solver's package calls it
-    once on import (rules finished with the tests: an existing name or prefix is never
-    re-bound).
+    Register a solver `name` with its run-id `prefix` (1 to 10 lowercase letters). The second
+    solver's package calls it once on import, next to `study.register_solver`; the database
+    accepts only the solver names in migration 20261118200000's check, and the parity test of
+    the solver package holds the two in step. ValueError (fixed text) when either argument is
+    not a non-empty str, when the prefix is not 1 to 10 lowercase letters, when the name is
+    already registered with another prefix, or when the prefix already belongs to another
+    name, so the PSS/E tag can never be re-bound. The identical pair again is a no-op.
     """
-    if name not in RUN_ID_PREFIXES:
-        RUN_ID_PREFIXES[name] = prefix
+    if not isinstance(name, str) or not name or not isinstance(prefix, str) or not prefix:
+        raise ValueError("a solver tag needs a non-empty text name and prefix")
+    if not _PREFIX_PATTERN.fullmatch(prefix):
+        raise ValueError("a run-id prefix is 1 to 10 lowercase letters")
+    if name in RUN_ID_PREFIXES:
+        if RUN_ID_PREFIXES[name] != prefix:
+            raise ValueError("the solver is already registered with another prefix")
+        return
+    if prefix in RUN_ID_PREFIXES.values():
+        raise ValueError("the run-id prefix already belongs to another solver")
+    RUN_ID_PREFIXES[name] = prefix
 
 
 DISPATCH_COLUMNS = (

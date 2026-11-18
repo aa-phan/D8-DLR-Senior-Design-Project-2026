@@ -9,12 +9,16 @@ this file never imports the second solver.
 
 import contextlib
 import datetime
+import inspect
+import json
 import os
 import re
+import subprocess
 import sys
 
 _HERE = os.path.dirname(__file__)
 _BACKEND = os.path.abspath(os.path.join(_HERE, ".."))
+_ROOT = os.path.abspath(os.path.join(_BACKEND, ".."))
 if _BACKEND not in sys.path:
     sys.path.insert(0, _BACKEND)
 
@@ -240,3 +244,174 @@ def test_insert_texts():
     assert contract.INSERT_RUN_TAGGED_SQL.endswith(conflict)
     for table in contract.RESULT_TABLES:
         assert contract.INSERT_RESULT_SQL[table] == contract.insert_sql(table, "", None)
+
+
+# --------------------------------------------------------------------------- registry and run id
+
+
+def _fresh_registry(monkeypatch):
+    """A private copy of the registry, so a registration in a test never outlives it."""
+    monkeypatch.setattr(contract, "RUN_ID_PREFIXES", dict(contract.RUN_ID_PREFIXES))
+
+
+def _refused(call):
+    try:
+        call()
+    except ValueError as exc:
+        return str(exc)
+    raise AssertionError("expected ValueError")
+
+
+def test_register_solver_tag_rules(monkeypatch):
+    _fresh_registry(monkeypatch)
+    contract.register_solver_tag(SECOND_SOLVER, SECOND_PREFIX)
+    assert contract.RUN_ID_PREFIXES[SECOND_SOLVER] == SECOND_PREFIX
+    contract.register_solver_tag(SECOND_SOLVER, SECOND_PREFIX)  # the identical pair is a no-op
+    both = {"psse": "psse", SECOND_SOLVER: SECOND_PREFIX}
+    assert contract.RUN_ID_PREFIXES == both
+
+    for name, prefix in (
+        (SECOND_SOLVER, "other"),  # the same name with another prefix
+        ("psse", "ps"),  # the PSS/E prefix cannot be replaced
+        ("other", SECOND_PREFIX),  # a prefix already used by another name
+        ("other", "psse"),
+    ):
+        _refused(lambda: contract.register_solver_tag(name, prefix))
+    assert contract.RUN_ID_PREFIXES == both
+
+    for name, prefix in (
+        ("", "xx"), ("xx", ""), (None, "xx"), ("xx", None), (7, "xx"), ("xx", 7),
+        ("xx", "PP"), ("xx", "p-p"), ("xx", "p1"), ("xx", "abcdefghijk"), ("xx", "pp\n"),
+    ):
+        _refused(lambda: contract.register_solver_tag(name, prefix))
+    assert "xx" not in contract.RUN_ID_PREFIXES
+    assert contract.RUN_ID_PREFIXES == both
+
+
+def test_new_run_id_uses_the_registered_prefix(monkeypatch):
+    _register(monkeypatch)
+    assert PSSE_ID.match(run_record.new_run_id(NOW))
+    assert PP_ID.match(run_record.new_run_id(NOW, SECOND_SOLVER))
+    assert PSSE_ID.match(run_record.new_run_id(NOW, "psse"))
+    _refused(lambda: run_record.new_run_id(NOW, "unregistered"))
+    _refused(lambda: run_record.new_run_id(NOW, None))
+
+
+def _context(solver):
+    return contract.RunContext(
+        run_record.new_run_id(NOW, solver), NOW, "CASE", None, None, "t", solver)
+
+
+def test_build_run_record_shapes(monkeypatch):
+    _register(monkeypatch)
+    selection = ratings.select_ratings(_fetch(), NOW)
+    results = psse_fakes.fake_results(selection)
+
+    plain = run_record.build_run_record(_context("psse"), selection, LATER, results=results)
+    assert tuple(plain) == contract.PSSE_RUN_COLUMNS
+
+    def tagged(version):
+        both = results._replace(solver=SECOND_SOLVER, solver_version=version)
+        return run_record.build_run_record(_context(SECOND_SOLVER), selection, LATER, results=both)
+
+    record = tagged("3.5.6")
+    assert tuple(record) == contract.TAGGED_RUN_COLUMNS
+    assert record["solver"] == SECOND_SOLVER
+    assert record["solver_version"] == "3.5.6"
+    assert len(tagged("v" * 150)["solver_version"]) == run_record.SOLVER_VERSION_MAX_CHARS == 100
+    assert tagged("")["solver_version"] is None
+    assert tagged("   ")["solver_version"] is None
+    assert tagged(None)["solver_version"] is None
+    assert tagged(7)["solver_version"] == "7"  # a version is text, so the writer never refuses it
+
+    failure = contract.Failure("mapping", "refused")
+    failed = run_record.build_run_record(_context(SECOND_SOLVER), selection, LATER, failure=failure)
+    assert tuple(failed) == contract.TAGGED_RUN_COLUMNS
+    assert failed["outcome"] == "failed"
+    assert failed["solver"] == SECOND_SOLVER
+    assert failed["solver_version"] is None
+
+
+# --------------------------------------------------------------------------- the run loop
+
+
+def _only_run_insert(conn, expected_sql):
+    """The params of the one statement a run executed, which must be `expected_sql`."""
+    assert [c[0] for c in conn.calls] == [expected_sql]
+    return conn.calls[0][1]
+
+
+def test_results_from_another_solver_are_never_written(monkeypatch):
+    _register(monkeypatch)
+
+    def other_solver(selection, context):
+        return psse_fakes.fake_results(selection)._replace(
+            solver=SECOND_SOLVER, solver_version="3.5.6")
+
+    conn = _RecordingConnection()
+    outcome = _run(other_solver, conn)  # the default solver, results from another one
+    assert outcome.outcome == "failed"
+    assert outcome.failed_stage == "validate_results"
+    assert outcome.exit_code == 1
+    stored = _only_run_insert(conn, contract.INSERT_RUN_SQL)
+    assert stored["outcome"] == "failed"
+    assert "different solver" in stored["error"]
+    assert tuple(stored) == contract.PSSE_RUN_COLUMNS
+
+    conn = _RecordingConnection()
+    outcome = _run(_psse_study, conn, solver=SECOND_SOLVER)  # the reverse
+    assert outcome.outcome == "failed"
+    assert outcome.failed_stage == "validate_results"
+    assert outcome.exit_code == 1
+    stored = _only_run_insert(conn, contract.INSERT_RUN_TAGGED_SQL)
+    assert stored["outcome"] == "failed"
+    assert "different solver" in stored["error"]
+    assert stored["solver"] == SECOND_SOLVER
+    assert PP_ID.match(stored["run_id"])
+
+
+def test_failed_and_refused_tagged_runs_are_stored_tagged(monkeypatch):
+    _register(monkeypatch)
+
+    def refused(selection, context):
+        raise contract.StudyFailed("mapping", "refused")
+
+    conn = _RecordingConnection()
+    outcome = _run(refused, conn, solver=SECOND_SOLVER)
+    assert outcome.status == "failure_recorded"
+    assert outcome.exit_code == 1
+    stored = _only_run_insert(conn, contract.INSERT_RUN_TAGGED_SQL)
+    assert stored["outcome"] == "failed"
+    assert stored["failed_stage"] == "mapping"
+    assert stored["solver"] == SECOND_SOLVER
+    assert stored["solver_version"] is None
+    assert PP_ID.match(stored["run_id"])
+
+
+def test_old_constructions_keep_working():
+    context = contract.RunContext("psse-x", NOW, "CASE", None, None, "t")
+    assert context.solver == "psse"
+    results = contract.StudyResults([], [], [], 0, None, None)
+    assert results.solver == "psse"
+    assert results.solver_version is None
+    parameters = list(inspect.signature(job.run_once).parameters.values())
+    assert parameters[-1].name == "solver"
+    assert parameters[-1].default == "psse"
+
+
+def test_importing_psse_job_registers_only_the_psse_tag():
+    code = (
+        "import json, sys\n"
+        "sys.path.insert(0, sys.argv[1])\n"
+        "from psse_job import contract, job, writer, gaps, launcher, study  # noqa\n"
+        "loaded = sorted(n for n in sys.modules if n.split('.')[0] in json.loads(sys.argv[2]))\n"
+        "print(json.dumps([contract.RUN_ID_PREFIXES, loaded]))\n"
+    )
+    done = subprocess.run(
+        [sys.executable, "-I", "-c", code, _BACKEND, json.dumps(["pandapower", "pandapower_job"])],
+        cwd=_ROOT, capture_output=True, text=True, timeout=120,
+    )
+    assert done.returncode == 0, done.stderr[-500:]
+    registered, loaded = json.loads(done.stdout.strip().splitlines()[-1])
+    assert registered == {"psse": "psse"}
+    assert loaded == []

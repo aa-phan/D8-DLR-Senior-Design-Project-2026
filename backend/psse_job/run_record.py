@@ -48,8 +48,19 @@ def new_run_id(started_at, solver=contract.SOLVER_PSSE):
     The prefix is the one registered for `solver` (`psse` by default).
     """
     _require_aware("started_at", started_at)
+    if not isinstance(solver, str) or solver not in contract.RUN_ID_PREFIXES:
+        raise ValueError("solver is not registered")
     stamp = started_at.astimezone(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     return "%s-%s-%s" % (contract.RUN_ID_PREFIXES[solver], stamp, uuid.uuid4().hex[:8])
+
+
+def _solver_version(value):
+    """The solver's version as stored: None when empty, text cut to SOLVER_VERSION_MAX_CHARS."""
+    if value is None:
+        return None
+    text = value if isinstance(value, str) else str(value)
+    text = text.strip()[:SOLVER_VERSION_MAX_CHARS].strip()
+    return text or None
 
 
 def slot_of(instant):
@@ -149,7 +160,7 @@ def build_run_record(context, selection, finished_at, results=None, failure=None
         n_with_results = len(set(row.get("contingency_id") for row in results.contingencies or []))
         rate_set = results.rate_set
         psse_version = results.psse_version
-        solver_version = results.solver_version
+        solver_version = _solver_version(results.solver_version)
 
     read_error = None
     if selection.read_error:
