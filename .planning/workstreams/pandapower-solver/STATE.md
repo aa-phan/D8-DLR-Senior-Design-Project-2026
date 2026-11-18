@@ -7,15 +7,15 @@ current_phase_name: PSS/E Reference Session and Network Parity
 current_plan: 10
 status: executing
 stopped_at: Plan 01-10 Task 1, waiting for the teammate to run the PSS/E session on the licensed laptop (Phase 2 plans 02-01 to 02-06 completed 2026-11-18, in parallel)
-last_updated: "2026-11-18T20:28:58.877Z"
+last_updated: "2026-11-18T20:42:33.342Z"
 last_activity: 2026-11-17
 last_activity_desc: Plans 01-01 to 01-09 complete; 01-10 paused at its laptop checkpoint
-state_head: a7ac6e7785e1bfc98ded9896ccf43cba51c0711b
+state_head: 4864e56641b7f5f95e9f5f0bd744738e8a3ac642
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 23
-  completed_plans: 16
+  completed_plans: 17
 ---
 
 # Project State
@@ -50,7 +50,7 @@ See: .planning/PROJECT.md (shared). Builds on the pss-e-integration workstream (
 ## Current Position
 
 Phase: 01 (PSS/E Reference Session and Network Parity) — EXECUTING
-Plan: 10 of 11 (9 complete: 01-01 to 01-09); Phase 2 plans 02-01 to 02-06 complete (6 of 7; 02-06 database tier written but only skipped here, not yet run green); Phase 3 plan 03-01 complete (solver-tag migration written; text tier green, database tier only skipped here, not yet run green)
+Plan: 10 of 11 (9 complete: 01-01 to 01-09); Phase 2 plans 02-01 to 02-06 complete (6 of 7; 02-06 database tier written but only skipped here, not yet run green); Phase 3 plan 03-01 complete (solver-tag migration written; text tier green, database tier only skipped here, not yet run green); Phase 3 plan 03-02 complete (solver tag through psse_job, pure Python, all green here; DB-02 stays Pending, the database tie is only skipped here)
 Status: Paused at plan 01-10 Task 1 (checkpoint:human-action, blocking)
 Last activity: 2026-11-17 — branch pushed; waiting on the laptop session
 
@@ -61,7 +61,7 @@ Last activity: 2026-11-17 — branch pushed; waiting on the laptop session
 
 ## Session Continuity
 
-**Last session:** 2026-11-18T19:18:02.593Z
+**Last session:** 2026-11-18T20:42:33.271Z
 
 **Stopped At:** Plan 01-10 Task 1, waiting for the teammate to run the PSS/E session on the licensed laptop (Phase 2 plans 02-01 to 02-06 completed 2026-11-18, in parallel)
 **Resume File:** .planning/workstreams/pandapower-solver/phases/01-pss-e-reference-session-and-network-parity/01-10-PLAN.md
@@ -87,6 +87,7 @@ Known items from execution:
 | Phase 02 P05 | 20min | 2 tasks | 1 files |
 | Phase 02 P06 | 25min | 2 tasks | 1 files |
 | Phase 03 P01 | 35min | 3 tasks | 5 files |
+| Phase 03 P02 | 30min | 3 tasks | 5 files |
 
 ## Decisions
 
@@ -103,3 +104,5 @@ Known items from execution:
 - [Phase 02]: 02-06: tests assert nothing about a solver or solver_version column (Phase 3 extends them once its migration exists); leak list built from targets actually written to the generated mapping
 - [Phase 03]: 03-01: A5 two constraints (psse_run_run_id_ck widened, psse_run_solver_run_id_ck tie) not one combined; A8 no new index; no NOT VALID; migration text proven here, database tier only SKIPPED (DB-01 stays Pending until the Mac run)
 - [Phase 03]: 03-01: pre-migration test database is created fresh per test inside the module cluster (migration cannot be undone); Mac command: DLR_TEST_PG_AUTOSTART=1 PSSE_REQUIRE_PG=1 pytest over solver_tag_migration_test and the migration/writer/schema files, 0 skipped
+- [Phase 03]: 03-02: registry contract.register_solver_tag filled by the solver package on import (no re-bind of a name or prefix, PSS/E included); a tagged PSS/E record is refused so PSS/E always uses the 17-column insert; a second-solver study run with the default tag is stored as one failed psse run with no results, Phase 5's runner passes its tag
+- [Phase 03]: 03-02: a non-text solver_version from a study is stored as text (Rule 2, so the writer never refuses a built record); DB-02 left Pending: Python half done, database tie only skipped here, pandapower job itself is plan 03-04/Phase 5

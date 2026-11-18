@@ -16,7 +16,7 @@
     {
       "number": "3",
       "name": "Solver Tag, Migration and Per-Solver Gaps",
-      "status": "pending"
+      "status": "in_progress"
     },
     {
       "number": "4",
@@ -39,5 +39,5 @@
     "label": "Advance to the next step",
     "reason": "Phase 1 of 6 · executing"
   },
-  "updated_at": "2026-11-18T20:28:55.601Z"
+  "updated_at": "2026-11-18T20:42:29.853Z"
 }
