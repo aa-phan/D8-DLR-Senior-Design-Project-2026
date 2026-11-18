@@ -32,6 +32,10 @@
 --       no run whose id starts with the second program's prefix has a solver other than pandapower
 --   psse_runs_carry_no_solver_version
 --       no run tagged psse has a solver_version
+--   latest_grid_study_reads_psse_runs_only
+--       the public view public.latest_grid_study reads PSS/E runs only (its definition filters the
+--       solver column on psse), so a stored run of the second program never shows on the dashboard
+--       labelled PSS/E; guard decided by the owner on 2026-11-18 (D-03)
 --
 -- A missing column turns its checks false instead of raising an error: the run rows are read as
 -- JSON, so a solver column that is not there yet reads as null. The table public.psse_run itself has
@@ -131,5 +135,14 @@ select check_name, ok, detail
            (select psse_with_version from run_counts) = 0,
            (select tagged_psse from run_counts)::text || ' runs tagged psse, ' ||
                (select psse_with_version from run_counts)::text || ' of them with a solver version'
+    union all
+    select 7,
+           'latest_grid_study_reads_psse_runs_only',
+           coalesce(position('solver = ''psse''' in pg_get_viewdef(to_regclass('public.latest_grid_study'))) > 0, false),
+           case when to_regclass('public.latest_grid_study') is null then 'view missing'
+                when position('solver = ''psse''' in pg_get_viewdef(to_regclass('public.latest_grid_study'))) > 0
+                    then 'the view definition filters runs on solver psse'
+                else 'the view definition has no solver filter'
+           end
   ) as checks
  order by ord;

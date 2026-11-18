@@ -162,7 +162,7 @@ def test_text_the_guarded_view_section_follows_the_table_changes_and_names_the_o
     assert "latest_grid_study" in header
     assert "2026-11-18" in text and "D-03" in text
     # The section comes after the column and constraint statements, never before them.
-    statements = _statements(path)
+    statements = [_normalised(s) for s in _statements(path)]
     last_table_statement = max(i for i, s in enumerate(statements) if s.startswith("alter table public.psse_run "))
     first_view_statement = min(i for i, s in enumerate(statements) if "public.latest_grid_study" in s)
     assert last_table_statement < first_view_statement
