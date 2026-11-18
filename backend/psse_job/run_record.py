@@ -30,6 +30,7 @@ MAX_CONTINGENCY_ROWS = 5000
 
 _JOB_VERSION_MAX_CHARS = 40
 _CASE_LABEL_MAX_CHARS = 200
+SOLVER_VERSION_MAX_CHARS = 100
 
 
 def _require_aware(name, value):
@@ -41,11 +42,14 @@ def _require_aware(name, value):
         raise ValueError("%s must be a timezone-aware datetime" % name)
 
 
-def new_run_id(started_at):
-    """`psse-<started_at in UTC as %Y%m%dT%H%M%SZ>-<8 hex>`, the idempotency key of one run."""
+def new_run_id(started_at, solver=contract.SOLVER_PSSE):
+    """
+    `<prefix>-<started_at in UTC as %Y%m%dT%H%M%SZ>-<8 hex>`, the idempotency key of one run.
+    The prefix is the one registered for `solver` (`psse` by default).
+    """
     _require_aware("started_at", started_at)
     stamp = started_at.astimezone(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    return "psse-%s-%s" % (stamp, uuid.uuid4().hex[:8])
+    return "%s-%s-%s" % (contract.RUN_ID_PREFIXES[solver], stamp, uuid.uuid4().hex[:8])
 
 
 def slot_of(instant):
@@ -116,7 +120,10 @@ def build_run_record(context, selection, finished_at, results=None, failure=None
     order. `results` (a contract.StudyResults) fills rate_set, psse_version, the contingency
     counts and each city's kV and MVA in ratings_used; `failure` (a contract.Failure) makes
     the run 'failed'. ValueError when `finished_at` or the start is naive, when `finished_at`
-    is earlier than the start, or when a run that did not fail has no results.
+    is earlier than the start, or when a run that did not fail has no results. A run of
+    another solver (context.solver is not PSS/E) has contract.TAGGED_RUN_COLUMNS instead:
+    the same keys plus solver and solver_version. contract.ResultsInvalid when `results` come
+    from a different solver than the run.
     """
     _require_aware("finished_at", finished_at)
     slot = slot_of(context.started_at)
@@ -124,6 +131,8 @@ def build_run_record(context, selection, finished_at, results=None, failure=None
         raise ValueError("finished_at is earlier than started_at")
     if failure is None and results is None:
         raise ValueError("a run that did not fail needs study results")
+    if results is not None and results.solver != context.solver:
+        raise contract.ResultsInvalid("the study results come from a different solver than the run")
 
     failed_stage = None
     error = None
@@ -134,11 +143,13 @@ def build_run_record(context, selection, finished_at, results=None, failure=None
     n_with_results = None
     rate_set = None
     psse_version = None
+    solver_version = None
     if results is not None:
         n_contingencies = results.n_contingencies
         n_with_results = len(set(row.get("contingency_id") for row in results.contingencies or []))
         rate_set = results.rate_set
         psse_version = results.psse_version
+        solver_version = results.solver_version
 
     read_error = None
     if selection.read_error:
@@ -162,8 +173,13 @@ def build_run_record(context, selection, finished_at, results=None, failure=None
         "n_contingencies_with_results": n_with_results,
         "job_version": context.job_version,
         "psse_version": psse_version,
+        "solver": context.solver,
+        "solver_version": solver_version,
     }
-    return dict((column, values[column]) for column in contract.PSSE_RUN_COLUMNS)
+    columns = contract.PSSE_RUN_COLUMNS
+    if context.solver != contract.SOLVER_PSSE:
+        columns = contract.TAGGED_RUN_COLUMNS
+    return dict((column, values[column]) for column in columns)
 
 
 def result_rows(record, results):
