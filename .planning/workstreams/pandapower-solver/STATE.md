@@ -7,15 +7,15 @@ current_phase_name: PSS/E Reference Session and Network Parity
 current_plan: 10
 status: executing
 stopped_at: Plan 01-10 Task 1, waiting for the teammate to run the PSS/E session on the licensed laptop (Phase 2 plans 02-01 to 02-06 completed 2026-11-18, in parallel)
-last_updated: "2026-11-18T19:25:04.041Z"
+last_updated: "2026-11-18T20:28:58.877Z"
 last_activity: 2026-11-17
 last_activity_desc: Plans 01-01 to 01-09 complete; 01-10 paused at its laptop checkpoint
-state_head: 983cf91e0d6df75754226440533eaaf9124adade
+state_head: a7ac6e7785e1bfc98ded9896ccf43cba51c0711b
 progress:
   total_phases: 6
   completed_phases: 0
-  total_plans: 18
-  completed_plans: 15
+  total_plans: 23
+  completed_plans: 16
 ---
 
 # Project State
@@ -50,7 +50,7 @@ See: .planning/PROJECT.md (shared). Builds on the pss-e-integration workstream (
 ## Current Position
 
 Phase: 01 (PSS/E Reference Session and Network Parity) — EXECUTING
-Plan: 10 of 11 (9 complete: 01-01 to 01-09); Phase 2 plans 02-01 to 02-06 complete (6 of 7; 02-06 database tier written but only skipped here, not yet run green)
+Plan: 10 of 11 (9 complete: 01-01 to 01-09); Phase 2 plans 02-01 to 02-06 complete (6 of 7; 02-06 database tier written but only skipped here, not yet run green); Phase 3 plan 03-01 complete (solver-tag migration written; text tier green, database tier only skipped here, not yet run green)
 Status: Paused at plan 01-10 Task 1 (checkpoint:human-action, blocking)
 Last activity: 2026-11-17 — branch pushed; waiting on the laptop session
 
@@ -86,6 +86,7 @@ Known items from execution:
 | Phase 02 P04 | 35min | 3 tasks | 3 files |
 | Phase 02 P05 | 20min | 2 tasks | 1 files |
 | Phase 02 P06 | 25min | 2 tasks | 1 files |
+| Phase 03 P01 | 35min | 3 tasks | 5 files |
 
 ## Decisions
 
@@ -100,3 +101,5 @@ Known items from execution:
 - [Phase 02]: 02-05: ENG-03 and ENG-04 proven at the study level through the unchanged psse_job loops on the real solver; no production change was needed (island is one non_convergence row, order and a failed outage change no other row, no read after a failed solve, fresh copy per solve, master unchanged, two runs equal)
 - [Phase 02]: 02-06: database tier of ENG-06 written (5 tests); only skipped on this Windows checkout (no Postgres), never run green anywhere; ENG-06 stays Pending until the owner's Mac or CI run with DLR_TEST_PG_AUTOSTART=1 PSSE_REQUIRE_PG=1 passes with nothing skipped
 - [Phase 02]: 02-06: tests assert nothing about a solver or solver_version column (Phase 3 extends them once its migration exists); leak list built from targets actually written to the generated mapping
+- [Phase 03]: 03-01: A5 two constraints (psse_run_run_id_ck widened, psse_run_solver_run_id_ck tie) not one combined; A8 no new index; no NOT VALID; migration text proven here, database tier only SKIPPED (DB-01 stays Pending until the Mac run)
+- [Phase 03]: 03-01: pre-migration test database is created fresh per test inside the module cluster (migration cannot be undone); Mac command: DLR_TEST_PG_AUTOSTART=1 PSSE_REQUIRE_PG=1 pytest over solver_tag_migration_test and the migration/writer/schema files, 0 skipped
