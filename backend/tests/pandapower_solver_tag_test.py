@@ -47,6 +47,8 @@ from pandapower_job import api, engine  # noqa: E402
 from psse_job import contract, job, run_record  # noqa: E402
 
 STARTED = datetime.datetime(2026, 10, 28, 14, 7, 30, tzinfo=datetime.timezone.utc)
+_MIGRATION = os.path.join(
+    _BACKEND, "..", "supabase", "migrations", "20261118200000_psse_run_solver_tag.sql")
 _PP_RUN_ID = re.compile(r"^pp-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$")
 
 
@@ -152,3 +154,120 @@ def test_tracer_engine_run_is_written_tagged(tmp_path, _private_temp):
     assert len(dispatch) == 4
     assert all(row["run_id"] == outcome.run_id for row in dispatch)
     assert os.listdir(str(_private_temp)) == []
+
+
+# --------------------------------------------------------------------------- parity with the migration
+
+
+def _statements():
+    """The migration without `--` comment lines, split on a semicolon at line end and whitespace
+    normalised (letter case kept: the run id pattern has a capital T and Z), as
+    solver_tag_migration_test.py reads it."""
+    with open(_MIGRATION, encoding="utf-8") as handle:
+        text = handle.read()
+    body = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("--"))
+    parts = re.split(r";[ \t]*(?:\n|$)", body)
+    return [re.sub(r"\s+", " ", part).strip() for part in parts if part.strip()]
+
+
+def _constraint_text(name):
+    found = [s for s in _statements() if "add constraint " + name in s]
+    assert len(found) == 1, name
+    return found[0]
+
+
+def _migration_vocabulary():
+    members = re.search(r"solver in \(([^)]*)\)", _constraint_text("psse_run_solver_ck"))
+    assert members is not None
+    return re.findall(r"'([a-z]+)'", members.group(1))
+
+
+def _migration_tie():
+    """{solver: prefix} named by the tie expression, the trailing dash removed."""
+    expression = _constraint_text("psse_run_solver_run_id_ck")
+    pairs = re.findall(r"solver = '([a-z]+)' and left\(run_id, ([0-9]+)\) = '([a-z-]+)'", expression)
+    assert pairs
+    for _solver, count, prefix in pairs:
+        assert int(count) == len(prefix)
+    return dict((solver, prefix[:-1]) for solver, _count, prefix in pairs)
+
+
+def _migration_run_id_pattern():
+    literals = re.findall(r"run_id ~ '([^']*)'", "\n".join(_statements()))
+    assert len(literals) == 1, len(literals)
+    return literals[0]
+
+
+def test_parity_tag_vocabulary_equals_the_migration():
+    assert api.SOLVER_NAME in contract.RUN_ID_PREFIXES  # importing the solver package registered it
+    assert engine.SOLVER == api.SOLVER_NAME
+    listed = _migration_vocabulary()
+    assert set(contract.RUN_ID_PREFIXES) == set(listed)
+    assert engine.SOLVER in listed
+    assert dict(contract.RUN_ID_PREFIXES) == _migration_tie()
+    assert dict(contract.RUN_ID_PREFIXES) == {"psse": "psse", "pandapower": "pp"}
+
+
+def test_parity_built_run_ids_match_the_migration_pattern():
+    literal = _migration_run_id_pattern()
+    pattern = re.compile(literal)
+    assert pattern.fullmatch(run_record.new_run_id(STARTED))
+    assert pattern.fullmatch(run_record.new_run_id(STARTED, engine.SOLVER))
+    alternation = re.match(r"\^\(([a-z|]+)\)-", literal)
+    assert alternation is not None, "the pattern does not start with a prefix alternation"
+    assert set(alternation.group(1).split("|")) == set(contract.RUN_ID_PREFIXES.values())
+
+
+def test_parity_registration_is_idempotent_and_fixed():
+    before = dict(contract.RUN_ID_PREFIXES)
+    contract.register_solver_tag(api.SOLVER_NAME, "pp")
+    assert dict(contract.RUN_ID_PREFIXES) == before
+    with pytest.raises(ValueError):
+        contract.register_solver_tag(api.SOLVER_NAME, "px")
+    assert contract.RUN_ID_PREFIXES[api.SOLVER_NAME] == "pp"
+    assert dict(contract.RUN_ID_PREFIXES) == before
+
+
+# --------------------------------------------------------------------------- runs that must not be stored as PSS/E
+
+
+def test_refused_default_tag_never_stores_results(tmp_path):
+    """The engine's study run with the default (PSS/E) tag: its results claim another solver, so the
+    run loop refuses them at validate_results and one failed psse- run with no figures is stored."""
+    prepared = _prepared(tmp_path)
+    outcome, conn = _run_recorded(prepared)
+
+    assert outcome.outcome == "failed"
+    assert outcome.failed_stage == "validate_results"
+    assert outcome.status == "failure_recorded"
+    assert outcome.exit_code == 1
+    run_inserts = _calls_with(conn, contract.INSERT_RUN_SQL)
+    assert len(run_inserts) == 1
+    assert run_inserts[0]["outcome"] == "failed"
+    assert run_inserts[0]["failed_stage"] == "validate_results"
+    assert run_inserts[0]["run_id"].startswith("psse-")
+    assert run_inserts[0]["run_id"] == outcome.run_id
+    assert _calls_with(conn, contract.INSERT_RUN_TAGGED_SQL) == []
+    result_sql = set(contract.INSERT_RESULT_SQL.values())
+    assert [sql for sql, _params in conn.calls if sql in result_sql] == []
+    assert len(conn.calls) == 1
+
+
+def test_refused_preflight_is_stored_tagged(tmp_path):
+    """A thermal basis pandapower cannot reproduce, run as a pandapower run: one failed run at stage
+    mapping, stored with the tagged insert and a pp- id, no version (nothing was solved)."""
+    prepared = _prepared(tmp_path, {"thermal": {"basis": "mva"}})
+    outcome, conn = _run_recorded(prepared, solver=engine.SOLVER)
+
+    assert (outcome.outcome, outcome.failed_stage, outcome.exit_code) == ("failed", "mapping", 1)
+    tagged = _calls_with(conn, contract.INSERT_RUN_TAGGED_SQL)
+    assert len(tagged) == 1
+    assert _calls_with(conn, contract.INSERT_RUN_SQL) == []
+    params = tagged[0]
+    assert params["outcome"] == "failed"
+    assert params["failed_stage"] == "mapping"
+    assert params["solver"] == "pandapower"
+    assert params["solver_version"] is None
+    assert _PP_RUN_ID.fullmatch(params["run_id"]), params["run_id"]
+    assert params["error"].startswith("pandapower: "), params["error"]
+    assert len(conn.calls) == 1
