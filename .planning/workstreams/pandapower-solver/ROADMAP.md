@@ -134,11 +134,11 @@ Plans:
   4. Each city, each outage and each margin step solves a fresh copy of its base network: a test shows that running outages in a different order, or after a failed solve, gives identical results, and that no result is read after a failed solve.
   5. The solve settings (reactive limits, iteration limit, tolerance) come from the values recorded in PSE-02 and are stored with each run, and a full four-city study runs end to end on a throwaway local database with the placeholder mapping and no access to live data.
 
-**Plans**: 0/7 plans executed
+**Plans**: 1/7 plans executed
 
 Plans:
 **Wave 1**
-- [ ] 02-01-PLAN.md — Solver factory argument in study.py through a registry, PSS/E tests unchanged (wave 1)
+- [x] 02-01-PLAN.md — Solver factory argument in study.py through a registry, PSS/E tests unchanged (wave 1)
 - [ ] 02-02-PLAN.md — PandapowerApi core: case load, fresh copies, reads, writes, solve outcome mapping (wave 1)
 
 **Wave 2** *(blocked on Wave 1 completion)*
@@ -215,7 +215,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6. Phases 2 and 3
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. PSS/E Reference Session and Network Parity | 9/11 | In Progress | - |
-| 2. PandapowerApi and Study Engine | 0/TBD | Not started | - |
+| 2. PandapowerApi and Study Engine | 1/7 | In Progress | - |
 | 3. Solver Tag, Migration and Per-Solver Gaps | 0/TBD | Not started | - |
 | 4. Replay and Agreement Check | 0/TBD | Not started | - |
 | 5. Hourly Workflow, Dry Run and Live Soak | 0/TBD | Not started | - |

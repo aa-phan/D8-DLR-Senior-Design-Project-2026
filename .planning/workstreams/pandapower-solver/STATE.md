@@ -6,16 +6,16 @@ current_phase: 01
 current_phase_name: PSS/E Reference Session and Network Parity
 current_plan: 10
 status: executing
-stopped_at: "Plan 01-10 Task 1 checkpoint: waiting on the licensed-laptop PSS/E session"
-last_updated: "2026-11-17T00:03:16.753Z"
+stopped_at: "Plan 01-10 Task 1 checkpoint: waiting on the licensed-laptop PSS/E session (Phase 2 plan 02-01 complete, run in parallel)"
+last_updated: "2026-11-18T18:33:00.252Z"
 last_activity: 2026-11-17
 last_activity_desc: Plans 01-01 to 01-09 complete; 01-10 paused at its laptop checkpoint
-state_head: 5c34c9c1d001110aec9a0e47a694e1daa49c90f7
+state_head: 62b290a8be52005b05288e6c5d43841276726770
 progress:
   total_phases: 6
   completed_phases: 0
-  total_plans: 11
-  completed_plans: 9
+  total_plans: 18
+  completed_plans: 10
 ---
 
 # Project State
@@ -50,7 +50,7 @@ See: .planning/PROJECT.md (shared). Builds on the pss-e-integration workstream (
 ## Current Position
 
 Phase: 01 (PSS/E Reference Session and Network Parity) — EXECUTING
-Plan: 10 of 11 (9 complete: 01-01 to 01-09)
+Plan: 10 of 11 (9 complete: 01-01 to 01-09); Phase 2 plan 02-01 complete (1 of 7)
 Status: Paused at plan 01-10 Task 1 (checkpoint:human-action, blocking)
 Last activity: 2026-11-17 — branch pushed; waiting on the laptop session
 
@@ -61,9 +61,9 @@ Last activity: 2026-11-17 — branch pushed; waiting on the laptop session
 
 ## Session Continuity
 
-**Last session:** 2026-11-16T21:12:16.722Z
+**Last session:** 2026-11-18T18:33:00.194Z
 
-**Stopped At:** Plan 01-10 Task 1, waiting for the teammate to run the PSS/E session on the licensed laptop
+**Stopped At:** Plan 01-10 Task 1, waiting for the teammate to run the PSS/E session on the licensed laptop (Phase 2 plan 02-01 completed 2026-11-18, in parallel)
 **Resume File:** .planning/workstreams/pandapower-solver/phases/01-pss-e-reference-session-and-network-parity/01-10-PLAN.md
 
 To resume:
@@ -75,3 +75,14 @@ Known items from execution:
 - `backend/tests/pandapower_fixture.py` `reference_from_solved` reads `res_trafo` with line column names. Tests in 01-08 and 01-09 work around it.
 - The fake session's network is refused by the builder (`machine_at_load_bus`). The real RAW may need parser or builder iteration in 01-10 Task 2.
 - numba is not installed (pandapower warns that it may be slow). Installing it would need its own package-legitimacy check.
+
+## Performance Metrics
+
+| Plan | Duration | Tasks | Files |
+|------|----------|-------|-------|
+| Phase 02 P01 | 5min | 2 tasks | 3 files |
+
+## Decisions
+
+- [Phase 02]: 02-01: solver chosen by name through study.API_FACTORIES/register_solver (D-02 deviation in form: string resolved via registry because the laptop import gate flags any other import; owner to confirm, not blocking)
+- [Phase 02]: 02-01: register_solver refuses to replace a registered name with a different factory; unknown or unregistered solver fails at load_case before any adapter call
