@@ -27,6 +27,8 @@ Follows backend/tests/pandapower_study_job_test.py (module-level imports, plain 
 
 import contextlib
 import datetime
+import functools
+import json
 import os
 import re
 import sys
@@ -43,9 +45,11 @@ if _BACKEND not in sys.path:
 
 import pandapower_study_fixture as study_fixture  # noqa: E402
 import psse_fakes  # noqa: E402
+import psse_local_pg as pg_helper  # noqa: E402
 from pandapower_job import api, engine  # noqa: E402
-from psse_job import contract, job, run_record  # noqa: E402
+from psse_job import contract, job, ratings, run_record, writer  # noqa: E402
 
+WRITER_ROLE = "dlr_psse_writer"
 STARTED = datetime.datetime(2026, 10, 28, 14, 7, 30, tzinfo=datetime.timezone.utc)
 _MIGRATION = os.path.join(
     _BACKEND, "..", "supabase", "migrations", "20261118200000_psse_run_solver_tag.sql")
@@ -271,3 +275,155 @@ def test_refused_preflight_is_stored_tagged(tmp_path):
     assert _PP_RUN_ID.fullmatch(params["run_id"]), params["run_id"]
     assert params["error"].startswith("pandapower: "), params["error"]
     assert len(conn.calls) == 1
+
+
+# --------------------------------------------------------------------------- database tier (skips without Postgres)
+
+
+@pytest.fixture(scope="module")
+def pg(tmp_path_factory):
+    """Admin URL of a throwaway database with the reference schema AND the solver-tag migration."""
+    with pg_helper.cluster(tmp_path_factory) as admin_url:
+        pg_helper.apply_solver_schema(admin_url)
+        yield admin_url
+
+
+@pytest.fixture
+def clean_pg(pg):
+    """The same database with the four result tables empty."""
+    pg_helper.reset(pg)
+    return pg
+
+
+def _connect(admin_url):
+    return functools.partial(writer.connect, pg_helper.role_url(admin_url, WRITER_ROLE))
+
+
+def _scalar(admin_url, sql, params=None):
+    return pg_helper.admin_rows(admin_url, sql, params)[0]["n"]
+
+
+def _counts(admin_url, run_id):
+    """(psse_run, dispatch, margin, contingency) row counts for one run, read as the superuser."""
+    return [
+        _scalar(admin_url, "select count(*) as n from public." + table + " where run_id = %s", (run_id,))
+        for table in pg_helper.RESULT_TABLES
+    ]
+
+
+def _rejected(url, sql, params, constraint):
+    """Run one statement on its own connection; it must raise CheckViolation naming `constraint`."""
+    import psycopg
+    import psycopg.errors
+
+    with psycopg.connect(url) as conn:
+        with pytest.raises(psycopg.errors.CheckViolation) as caught:
+            with conn.transaction():
+                conn.execute(sql, params)
+    assert caught.value.diag.constraint_name == constraint
+
+
+def _bind(columns, row):
+    """The bound parameters of `row` for an insert of exactly `columns`: a column the helper's row
+    leaves out is NULL, a key outside `columns` fails, jsonb columns are bound as json text."""
+    assert set(row) <= set(columns)
+    params = {}
+    for column in columns:
+        value = row.get(column)
+        if column in contract.JSONB_COLUMNS and value is not None:
+            value = json.dumps(value)
+        params[column] = value
+    return params
+
+
+def test_db_tagged_rehearsal_through_the_real_writer(clean_pg, tmp_path):
+    """The engine's four-city study, started as a pandapower run, written by the real writer as
+    dlr_psse_writer: 1 run, 4 dispatch and 4 margin rows, tagged, every completeness check ok."""
+    prepared = _prepared(tmp_path)
+    outcome = job.run_once(
+        fetch=psse_fakes.fake_fetch(_rows()),
+        study=prepared.study,
+        connect=_connect(clean_pg),
+        case_id=prepared.case_id,
+        case_sha256=prepared.case_sha256,
+        mapping_sha256=prepared.mapping_sha256,
+        clock=_clock(datetime.timedelta(0), datetime.timedelta(minutes=4)),
+        env={"PSSE_JOB_VERSION": "test-version"},
+        solver=engine.SOLVER,
+    )
+    assert (outcome.status, outcome.exit_code, outcome.failed_stage) == ("written", 0, None)
+    assert _PP_RUN_ID.fullmatch(outcome.run_id)
+
+    counts = _counts(clean_pg, outcome.run_id)
+    assert counts[:3] == [1, 4, 4]
+    stored = pg_helper.admin_rows(
+        clean_pg, "select solver, solver_version, psse_version from public.psse_run where run_id = %s",
+        (outcome.run_id,))
+    assert stored == [{"solver": "pandapower", "solver_version": pandapower.__version__,
+                       "psse_version": None}]
+    problems = [row for row in pg_helper.admin_rows(clean_pg, pg_helper._read(pg_helper.CHECKS_SQL))
+                if not row["ok"]]
+    assert problems == [], problems
+    assert os.listdir(tempfile.gettempdir()) == []
+
+
+def test_db_a_pandapower_run_cannot_be_stored_as_psse(clean_pg):
+    """The writer's own tag check is bypassed: both run inserts, executed directly as the writer
+    role, are refused by the database tie when a pp- id is sent as psse."""
+    url = pg_helper.role_url(clean_pg, WRITER_ROLE)
+    run_id = pg_helper.make_run_id(50, STARTED, prefix="pp")
+    base = pg_helper.valid_run_rows(run_id, STARTED)["psse_run"][0]
+    assert set(base) <= set(contract.PSSE_RUN_COLUMNS)
+
+    untagged = _bind(contract.PSSE_RUN_COLUMNS, base)
+    _rejected(url, contract.INSERT_RUN_SQL, untagged, "psse_run_solver_run_id_ck")
+
+    as_psse = _bind(contract.TAGGED_RUN_COLUMNS, dict(base, solver="psse", solver_version=None))
+    _rejected(url, contract.INSERT_RUN_TAGGED_SQL, as_psse, "psse_run_solver_run_id_ck")
+
+    assert _scalar(clean_pg, "select count(*) as n from public.psse_run") == 0
+
+
+def test_db_both_solvers_side_by_side_in_one_hour(clean_pg, tmp_path):
+    """A PSS/E run and a pandapower run started in the same UTC hour are both stored, each with its
+    own tag: one psse run with a psse- id and no solver version, one pandapower run with a pp- id."""
+    selection = ratings.select_ratings(psse_fakes.fake_fetch(_rows()), STARTED)
+    psse_outcome = job.run_once(
+        fetch=psse_fakes.fake_fetch(_rows()),
+        study=psse_fakes.FakeStudy(results=psse_fakes.fake_results(selection)),
+        connect=_connect(clean_pg),
+        case_id="summer_peak_case",
+        case_sha256="ab" * 32,
+        mapping_sha256="cd" * 32,
+        clock=_clock(datetime.timedelta(0), datetime.timedelta(minutes=2)),
+        env={"PSSE_JOB_VERSION": "test-version"},
+    )
+    assert psse_outcome.status == "written"
+
+    prepared = _prepared(tmp_path)
+    pp_outcome = job.run_once(
+        fetch=psse_fakes.fake_fetch(_rows()),
+        study=prepared.study,
+        connect=_connect(clean_pg),
+        case_id=prepared.case_id,
+        case_sha256=prepared.case_sha256,
+        mapping_sha256=prepared.mapping_sha256,
+        clock=_clock(datetime.timedelta(minutes=5), datetime.timedelta(minutes=9)),
+        env={"PSSE_JOB_VERSION": "test-version"},
+        solver=engine.SOLVER,
+    )
+    assert pp_outcome.status == "written"
+
+    stored = pg_helper.admin_rows(
+        clean_pg,
+        "select run_id, solver, solver_version from public.psse_run "
+        "where slot_time = %s order by solver",
+        (STARTED.replace(minute=0, second=0),))
+    assert [row["solver"] for row in stored] == ["pandapower", "psse"]
+    by_solver = dict((row["solver"], row) for row in stored)
+    assert by_solver["psse"]["run_id"] == psse_outcome.run_id
+    assert by_solver["psse"]["run_id"].startswith("psse-")
+    assert by_solver["psse"]["solver_version"] is None
+    assert by_solver["pandapower"]["run_id"] == pp_outcome.run_id
+    assert by_solver["pandapower"]["run_id"].startswith("pp-")
+    assert by_solver["pandapower"]["solver_version"] == pandapower.__version__

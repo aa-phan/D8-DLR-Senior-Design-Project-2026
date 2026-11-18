@@ -15,10 +15,11 @@ named in this file.
 
 Honest scope: these tests prove that the pandapower run flows through the unchanged job and writer
 and stores valid rows on the public 39-bus fixture. They do not prove engineering agreement with
-PSS/E, and they assert nothing about a `solver` or `solver_version` column (Phase 3 owns that
-schema change, so these tests still pass after its migration and can be extended there). Until that
-migration exists the run id carries the `psse-` prefix, which is one more reason these tests write
-only to a throwaway local database.
+PSS/E. Since Phase 3 they also assert the solver tag: the schema carries the solver-tag migration,
+every run is started with `solver=engine.SOLVER`, so it is stored with solver `pandapower`, the
+installed pandapower version (NULL for a failed run, which solved nothing) and a `pp-` run id. They
+still write only to a throwaway local database. The tag's own refusals and the PSS/E side by side
+are in `pandapower_solver_tag_test.py`.
 
 Only `test_prepared_run_is_ready_for_the_writer` needs no database. The in-memory tier of ENG-06 is
 `pandapower_engine_test.py` and always runs.
@@ -180,6 +181,9 @@ def test_tracer_engine_run_written_to_local_postgres(clean_pg, tmp_path):
 
     stored = _run_row(clean_pg, outcome.run_id)
     assert stored["psse_version"] is None
+    assert stored["solver"] == "pandapower"
+    assert stored["solver_version"] == pandapower.__version__
+    assert stored["run_id"].startswith("pp-")
     assert stored["case_sha256"] == case_hash
     assert stored["mapping_sha256"] == run_record.file_sha256(mapping_path)
     assert stored["rate_set"] == "RATEA"
@@ -213,6 +217,9 @@ def _assert_failed(admin_url, outcome, stage):
     stored = _run_row(admin_url, outcome.run_id)
     assert stored["outcome"] == "failed"
     assert stored["failed_stage"] == stage
+    assert stored["solver"] == "pandapower"
+    assert stored["solver_version"] is None
+    assert stored["run_id"].startswith("pp-")
     assert [row for row in _checks(admin_url) if not row["ok"]] == []
     return stored
 
@@ -285,6 +292,8 @@ def test_written_island_row_is_stored(clean_pg, tmp_path):
     outcome = _run(clean_pg, prepared)
     assert (outcome.outcome, outcome.status, outcome.exit_code) == ("fallback", "written", 0)
     assert _counts(clean_pg, outcome.run_id)[:3] == [1, 4, 4]
+    stored = _run_row(clean_pg, outcome.run_id)
+    assert (stored["solver"], stored["solver_version"]) == ("pandapower", pandapower.__version__)
 
     rows = _table_rows(clean_pg, "psse_contingency_result", outcome.run_id)
     by_id = {}
