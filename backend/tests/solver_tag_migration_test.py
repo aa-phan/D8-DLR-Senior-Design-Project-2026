@@ -138,3 +138,137 @@ def test_db_tracer_tagged_runs_side_by_side(pg_pre):
     assert pg_helper.admin_rows(
         pg_pre, "select count(*) as n from public.psse_run where run_id = %s", (mismatched,)
     )[0]["n"] == 0
+
+
+# --------------------------------------------------------------------------- text tier
+
+
+def _raw_statements():
+    """Like `_statements` but keeps the letter case (the run id pattern has a capital T and Z)."""
+    body = "\n".join(line for line in _text().splitlines() if not line.lstrip().startswith("--"))
+    parts = re.split(r";[ \t]*(?:\n|$)", body)
+    return [re.sub(r"\s+", " ", part).strip() for part in parts if part.strip()]
+
+
+def _run_id_pattern():
+    literals = re.findall(r"run_id ~ '([^']*)'", "\n".join(_raw_statements()))
+    assert len(literals) == 1, len(literals)
+    return re.compile(literals[0])
+
+
+def _tie_pairs():
+    """[(solver, prefix, left() count)] named by the tie expression."""
+    expression = [s for s in _statements() if "add constraint psse_run_solver_run_id_ck" in s]
+    assert len(expression) == 1
+    return re.findall(r"solver = '([a-z]+)' and left\(run_id, ([0-9]+)\) = '([a-z-]+)'", expression[0])
+
+
+def test_text_run_id_pattern_matches_the_contract_shape():
+    pattern = _run_id_pattern()
+    for good in ("psse-20261118T120000Z-0123abcd", "pp-20261118T120000Z-0123abcd"):
+        assert pattern.fullmatch(good), good
+    for bad in (
+        "pandapower-20261118T120000Z-0123abcd",
+        "pp-20261118T120000Z-0123ABCD",
+        "pp-20261118T120000Z-0123abc",
+        "p-20261118T120000Z-0123abcd",
+        "pp_20261118T120000Z-0123abcd",
+        "psse-20261118T1200Z-0123abcd",
+        "",
+    ):
+        assert not pattern.fullmatch(bad), bad
+
+
+def test_text_solver_vocabulary_is_psse_and_pandapower():
+    listed = [s for s in _raw_statements() if "add constraint psse_run_solver_ck" in s]
+    assert len(listed) == 1
+    members = re.search(r"solver in \(([^)]*)\)", listed[0])
+    assert members is not None
+    assert re.findall(r"'([a-z]+)'", members.group(1)) == ["psse", "pandapower"]
+    pairs = _tie_pairs()
+    assert [(solver, prefix) for solver, _count, prefix in pairs] == [("psse", "psse-"), ("pandapower", "pp-")]
+    for _solver, count, prefix in pairs:
+        assert int(count) == len(prefix)
+
+
+def _tie_accepts(pairs, solver, run_id):
+    """A Python mirror of the tie expression, built from the pairs parsed out of the file."""
+    return any(solver == name and run_id[:int(count)] == prefix for name, count, prefix in pairs)
+
+
+def test_text_tie_mirror_matrix():
+    pairs = _tie_pairs()
+    psse_id = "psse-20261118T120000Z-0123abcd"
+    pp_id = "pp-20261118T120000Z-0123abcd"
+    assert _tie_accepts(pairs, "psse", psse_id)
+    assert _tie_accepts(pairs, "pandapower", pp_id)
+    assert not _tie_accepts(pairs, "psse", pp_id)
+    assert not _tie_accepts(pairs, "pandapower", psse_id)
+    assert not _tie_accepts(pairs, "matpower", pp_id)
+
+
+def test_text_every_constraint_is_dropped_before_it_is_added_and_columns_are_added_if_missing():
+    statements = _statements()
+    names = ("psse_run_solver_ck", "psse_run_solver_version_ck", "psse_run_solver_run_id_ck", "psse_run_run_id_ck")
+    drops = [i for i, s in enumerate(statements) if s.startswith("alter table public.psse_run drop constraint")]
+    adds = [i for i, s in enumerate(statements) if s.startswith("alter table public.psse_run add constraint")]
+    assert len(drops) == 1 and len(adds) == 1 and drops[0] < adds[0]
+    for name in names:
+        assert len(re.findall(r"drop constraint if exists " + name + r"\b", statements[drops[0]])) == 1, name
+        assert len(re.findall(r"add constraint " + name + r"\b", statements[adds[0]])) == 1, name
+    columns = [s for s in statements if s.startswith("alter table public.psse_run add column")]
+    assert len(columns) == 1
+    assert len(re.findall(r"add column if not exists ", columns[0])) == 2
+    assert columns[0].count("add column") == 2
+    assert not any("not valid" in s for s in statements)
+
+
+def test_text_header_is_comments_only_and_names_no_credential():
+    lines = _text().splitlines()
+    first = next(i for i, line in enumerate(lines) if line.strip() and not line.lstrip().startswith("--"))
+    assert first > 0
+    assert all(not line.strip() or line.lstrip().startswith("--") for line in lines[:first])
+    assert lines[first].lower().startswith("alter table public.psse_run")
+    lowered = _text().lower()
+    for word in ("password", "postgres://", "postgresql://", "create role", "alter role"):
+        assert word not in lowered, word
+
+
+def test_text_nothing_privileged_on_the_result_tables():
+    result_tables = ("psse_run", "psse_dispatched_capacity", "psse_voltage_margin", "psse_contingency_result")
+    for statement in _statements():
+        assert "dlr_psse_writer" not in statement
+        if re.match(r"(grant|revoke) ", statement):
+            assert "public.latest_grid_study" in statement
+            roles = re.split(r" (?:to|from) ", statement, maxsplit=1)[1]
+            assert set(re.split(r"[ ,]+", roles.strip())) <= {"public", "anon", "authenticated"}
+            for table in result_tables:
+                assert table not in statement
+
+
+_ALLOWED_STARTS = (
+    "alter table public.psse_run ",
+    "comment on column public.psse_run.solver",
+    "create or replace view public.latest_grid_study ",
+    "revoke all on public.latest_grid_study ",
+    "grant select on public.latest_grid_study ",
+    "comment on view public.latest_grid_study ",
+    "comment on column public.latest_grid_study.",
+)
+
+
+def test_text_statement_inventory():
+    statements = _statements()
+    assert statements
+    for statement in statements:
+        assert statement.startswith(_ALLOWED_STARTS), statement.split(" ")[:5]
+        assert not re.match(r"(update|delete|insert|truncate) ", statement)
+    assert len([s for s in statements if s.startswith("alter table public.psse_run")]) == 3
+
+
+def test_text_both_new_columns_are_commented_unit_first():
+    statements = _statements()
+    for column in ("solver", "solver_version"):
+        found = [s for s in statements if s.startswith("comment on column public.psse_run." + column + " is ")]
+        assert len(found) == 1, column
+        assert found[0].split(" is ", 1)[1].startswith("'none (label): "), column
