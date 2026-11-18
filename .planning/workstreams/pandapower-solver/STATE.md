@@ -7,15 +7,15 @@ current_phase_name: PSS/E Reference Session and Network Parity
 current_plan: 10
 status: executing
 stopped_at: Plan 01-10 Task 1, waiting for the teammate to run the PSS/E session on the licensed laptop (Phase 2 plans 02-01 to 02-06 completed 2026-11-18, in parallel)
-last_updated: "2026-11-18T20:55:58.785Z"
+last_updated: "2026-11-18T21:53:38.319Z"
 last_activity: 2026-11-17
 last_activity_desc: Plans 01-01 to 01-09 complete; 01-10 paused at its laptop checkpoint
-state_head: e42ad9a8bd31522ac4fe3620355cd2dd2b832460
+state_head: 89e3a928ee1c25ccaea1c35f24a0d0bbebc64c57
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 23
-  completed_plans: 18
+  completed_plans: 19
 ---
 
 # Project State
@@ -50,7 +50,7 @@ See: .planning/PROJECT.md (shared). Builds on the pss-e-integration workstream (
 ## Current Position
 
 Phase: 01 (PSS/E Reference Session and Network Parity) — EXECUTING
-Plan: 10 of 11 (9 complete: 01-01 to 01-09); Phase 2 plans 02-01 to 02-06 complete (6 of 7; 02-06 database tier written but only skipped here, not yet run green); Phase 3 plan 03-01 complete (solver-tag migration written; text tier green, database tier only skipped here, not yet run green); Phase 3 plan 03-02 complete (solver tag through psse_job, pure Python, all green here; DB-02 stays Pending, the database tie is only skipped here); Phase 3 plan 03-03 complete (per-solver gap check gaps.run_by_solver, pure Python, 14 passed and 1 database test skipped here; the laptop gaps command stays pooled (A6); DB-03 stays Pending)
+Plan: 10 of 11 (9 complete: 01-01 to 01-09); Phase 2 plans 02-01 to 02-06 complete (6 of 7; 02-06 database tier written but only skipped here, not yet run green); Phase 3 plan 03-01 complete (solver-tag migration written; text tier green, database tier only skipped here, not yet run green); Phase 3 plan 03-02 complete (solver tag through psse_job, pure Python, all green here; DB-02 stays Pending, the database tie is only skipped here); Phase 3 plan 03-03 complete (per-solver gap check gaps.run_by_solver, pure Python, 14 passed and 1 database test skipped here; the laptop gaps command stays pooled (A6); DB-03 stays Pending); Phase 3 plan 03-04 complete (pandapower tag pp registered on import, engine stamps solver and version, parity with the migration proven here, tagged database rehearsal only skipped here; DB-02 stays Pending)
 Status: Paused at plan 01-10 Task 1 (checkpoint:human-action, blocking)
 Last activity: 2026-11-17 — branch pushed; waiting on the laptop session
 
@@ -89,6 +89,7 @@ Known items from execution:
 | Phase 03 P01 | 35min | 3 tasks | 5 files |
 | Phase 03 P02 | 30min | 3 tasks | 5 files |
 | Phase 03 P03 | 25min | 3 tasks | 2 files |
+| Phase 03 P04 | 13min | 3 tasks | 5 files |
 
 ## Decisions
 
@@ -109,3 +110,5 @@ Known items from execution:
 - [Phase 03]: 03-02: a non-text solver_version from a study is stored as text (Rule 2, so the writer never refuses a built record); DB-02 left Pending: Python half done, database tie only skipped here, pandapower job itself is plan 03-04/Phase 5
 - [Phase 03]: 03-03: A6 the laptop gaps command stays the pooled legacy check this phase; run_by_solver (per-solver, each solver from its own first slot, read-only, prints times/tags/kinds/counts) is library-level, Phase 5 wires it in for OPS-05 as gaps.run_by_solver(env, expected=(engine.SOLVER,), fail_on_gaps=True)
 - [Phase 03]: 03-03: exit rule recommendation (owner may change): PSS/E gaps listed but not failing by default (offline machine is the known state), every other present or expected solver fails on a gap or on no rows, failing=(...) overrides; DB-03 left Pending: the two statements and the read-only refusal are database-only and only SKIPPED here
+- [Phase 03]: 03-04: importing pandapower_job.api registers tag pandapower with prefix pp; engine._recording_study stamps solver and solver_version (bare adapter version, A7) and psse_version stays None; the runner must call job.run_once(..., solver=engine.SOLVER), the default tag is refused at validate_results and never stored as PSS/E
+- [Phase 03]: 03-04: DB-02 left Pending: Python half and vocabulary parity with the migration proven here, tagged database rehearsal (3 test_db_* plus 4 study-job tests) only SKIPPED here; Mac command: DLR_TEST_PG_AUTOSTART=1 PSSE_REQUIRE_PG=1 pytest over pandapower_solver_tag_test and pandapower_study_job_test, 0 skipped

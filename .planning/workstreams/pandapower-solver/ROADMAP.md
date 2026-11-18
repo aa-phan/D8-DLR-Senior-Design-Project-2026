@@ -163,7 +163,7 @@ Plans:
   3. With a PSS/E run in an hour and no pandapower run in that hour, the gap check reports that hour as missing for pandapower; PSS/E gaps while its machine is offline are listed separately and do not hide, or get hidden by, pandapower gaps.
   4. After the owner applies the migration to the live project, a read-only check shows the existing runs tagged `psse` and nothing else changed.
 
-**Plans**: 3/5 plans executed
+**Plans**: 4/5 plans executed
 
 Plans:
 **Wave 1**
@@ -172,7 +172,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 - [x] 03-03-PLAN.md — Per-solver gap check beside the untouched pooled one, checked against an independent oracle without a database (wave 2)
-- [ ] 03-04-PLAN.md — pandapower runs tagged end to end, Python/migration vocabulary match, tagged database rehearsal (wave 2)
+- [x] 03-04-PLAN.md — pandapower runs tagged end to end, Python/migration vocabulary match, tagged database rehearsal (wave 2)
 - [ ] 03-05-PLAN.md — Owner's read-only live check, the D-03 decision checkpoint and the view guard (wave 2, checkpoint)
 
 ### Phase 4: Replay and Agreement Check
@@ -226,7 +226,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6. Phases 2 and 3
 |-------|----------------|--------|-----------|
 | 1. PSS/E Reference Session and Network Parity | 9/11 | In Progress | - |
 | 2. PandapowerApi and Study Engine | 6/7 | In Progress | - |
-| 3. Solver Tag, Migration and Per-Solver Gaps | 3/5 | In Progress | - |
+| 3. Solver Tag, Migration and Per-Solver Gaps | 4/5 | In Progress | - |
 | 4. Replay and Agreement Check | 0/TBD | Not started | - |
 | 5. Hourly Workflow, Dry Run and Live Soak | 0/TBD | Not started | - |
 | 6. Dashboard Read Access and DEF-01 | 0/TBD | Not started | - |
