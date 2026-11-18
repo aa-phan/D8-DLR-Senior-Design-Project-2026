@@ -9,7 +9,9 @@ contract compares `PsseApi` on the fake psspy with `PandapowerApi`: types, order
 never numbers (the two networks differ). Failure messages are counts only.
 """
 
+import ast
 import collections
+import inspect
 import math
 import os
 
@@ -19,8 +21,9 @@ pandapower = pytest.importorskip("pandapower")
 
 import pandas  # noqa: E402
 
+import psse_fake_psspy as fake_module  # noqa: E402
 import pandapower_study_fixture as study_fixture  # noqa: E402
-from psse_job import mapping as mapping_module, psse_api, study  # noqa: E402
+from psse_job import mapping as mapping_module, psse_api, settings, study  # noqa: E402
 from pandapower_job import api as pandapower_api  # noqa: E402
 from pandapower_job import scaling  # noqa: E402
 
@@ -329,3 +332,200 @@ def test_margin_step_reloads_a_fresh_copy(case_path, tmp_path):
 
     api.load_case(case_path)
     pandas.testing.assert_frame_equal(_loads(api), base_loads)
+
+
+# -- the signature pin and the study-call pin -------------------------------------------------
+
+_STUDY_MODULES = ("study.py", "contingency.py", "margin.py", "violations.py", "dispatch.py")
+_BACKEND = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
+
+def _public_functions(cls):
+    return {name: function for name, function in inspect.getmembers(cls, inspect.isfunction)
+            if not name.startswith("_")}
+
+
+def test_public_surface_equals_psse_api():
+    theirs = _public_functions(psse_api.PsseApi)
+    ours = _public_functions(pandapower_api.PandapowerApi)
+    assert len(theirs) == 14
+    assert sorted(ours) == sorted(theirs)
+    different = [name for name in theirs
+                 if inspect.signature(ours[name]) != inspect.signature(theirs[name])]
+    assert different == []
+
+
+def test_constructor_matches_psse_api():
+    ours = list(inspect.signature(pandapower_api.PandapowerApi.__init__).parameters.values())
+    theirs = list(inspect.signature(psse_api.PsseApi.__init__).parameters.values())
+    assert [item.name for item in ours[2:]] == ["protected_path"]
+    assert ours[2].default is None
+    assert ours[2:] == theirs[2:]
+
+
+def _methods_called_on_api(path):
+    with open(path, "rb") as handle:
+        tree = ast.parse(handle.read())
+    return {node.func.attr for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name) and node.func.value.id == "api"}
+
+
+def test_study_code_calls_only_the_pinned_surface():
+    called = set()
+    for name in _STUDY_MODULES:
+        called |= _methods_called_on_api(os.path.join(_BACKEND, "psse_job", name))
+    pinned = set(_public_functions(psse_api.PsseApi))
+    assert len(called) == 14
+    assert called == pinned
+
+
+# -- the behavioural contract against PsseApi -------------------------------------------------
+
+
+def _psse_world(tmp_path):
+    """(PsseApi on the fake psspy with a transformer in the case, ref of a line, a bus, path)."""
+    fake = fake_module.FakePsspy()
+    case = fake_module.placeholder_case()
+    case.add_bus(90033)
+    case.add_branch(90031, 90033, "1", kind="transformer", rates=(800.0, 880.0, 960.0))
+    path = str(tmp_path / "PLACEHOLDER_CASE.sav")
+    fake.fake_register_case(path, case)
+    api = psse_api.PsseApi(fake, protected_path=path)
+    api.load_case(path)
+    return api, settings.BranchRef(90001, 90002, "1"), 90002, path
+
+
+def _pandapower_world(tmp_path):
+    path = study_fixture.write_case(tmp_path)
+    api = pandapower_api.PandapowerApi(study_fixture.fixture_backend(), protected_path=path)
+    api.load_case(path)
+    return api, settings.BranchRef(OFFSET + 2, OFFSET + 3, "1"), OFFSET + 3, path
+
+
+def _worlds(tmp_path):
+    """The same script's two adapters: name -> (api, a line ref, a bus, the protected path)."""
+    (tmp_path / "psse").mkdir()
+    (tmp_path / "pp").mkdir()
+    return {"psse": _psse_world(tmp_path / "psse"),
+            "pandapower": _pandapower_world(tmp_path / "pp")}
+
+
+def _types(row):
+    return tuple(type(value) for value in row)
+
+
+def test_contract_return_types_and_order(tmp_path):
+    worlds = _worlds(tmp_path)
+    seen = {}
+    for name, (api, ref, bus, path) in worlds.items():
+        assert isinstance(api.version(), str)
+        assert isinstance(api.branch_table(), tuple)
+        lines, transformers = api.branch_table()
+        assert isinstance(lines, list) and isinstance(transformers, list)
+        assert lines and transformers
+        assert all(isinstance(row, psse_api.BranchRow) and not row.is_transformer for row in lines)
+        assert all(isinstance(row, psse_api.BranchRow) and row.is_transformer
+                   for row in transformers)
+        assert [row.key for row in lines] == sorted(row.key for row in lines)
+        assert [row.key for row in transformers] == sorted(row.key for row in transformers)
+
+        result = api.solve()
+        assert isinstance(result, psse_api.SolveResult)
+        assert result.converged is True
+        assert (type(result.converged), type(result.ierr), type(result.solved_code),
+                type(result.meaning)) == (bool, int, int, str)
+        assert all(item is None or isinstance(item, (int, float))
+                   for item in (result.iterations, result.mismatch_mva))
+
+        buses = api.bus_table()
+        assert isinstance(buses, dict)
+        assert all(type(key) is int and isinstance(row, psse_api.BusRow) and row.number == key
+                   for key, row in buses.items())
+
+        flows = api.branch_loading("RATEA", "current")
+        assert isinstance(flows, list) and flows
+        assert all(isinstance(row, psse_api.BranchFlow) for row in flows)
+        assert [row.key for row in flows] == sorted(row.key for row in flows)
+        assert {row.key for row in flows} <= {row.key for row in lines}
+        assert not {row.key for row in flows} & {row.key for row in transformers}
+
+        totals = api.read_totals()
+        assert isinstance(totals, psse_api.CaseTotals)
+        assert (type(totals.load_mw), type(totals.gen_mw)) == (float, float)
+        seen[name] = (_types(lines[0]), _types(transformers[0]),
+                      _types(next(iter(buses.values()))), _types(flows[0]))
+    assert seen["psse"] == seen["pandapower"]
+
+
+def _refusals(ref, bus, path):
+    nan = float("nan")
+    return (
+        ("read_rate", (ref, "RATEZ")),
+        ("set_rate", (ref, "RATEA", 0)),
+        ("set_rate", (ref, "RATEA", True)),
+        ("set_rate", (ref, "RATEA", float("inf"))),
+        ("set_status", (ref, 1)),
+        ("define_subsystem", (12, [bus])),
+        ("define_subsystem", (True, [bus])),
+        ("define_subsystem", (0, [])),
+        ("define_subsystem", (0, [0])),
+        ("scale_load", (13, 1.0)),
+        ("scale_load", (0, nan)),
+        ("scale_case", (0, 1)),
+        ("scale_case", (1, nan)),
+        ("branch_loading", ("RATEZ", "current")),
+        ("branch_loading", ("RATEA", "volts")),
+        ("save_case", (path,)),
+    )
+
+
+def _outcome(api, method, args):
+    with pytest.raises(Exception) as caught:
+        getattr(api, method)(*args)
+    return caught.value
+
+
+def test_contract_refusals_match(tmp_path):
+    worlds = _worlds(tmp_path)
+    psse, ours = worlds["psse"], worlds["pandapower"]
+    for api, _, _, _ in worlds.values():
+        assert api.solve().converged
+    their_calls = _refusals(*psse[1:])
+    our_calls = _refusals(*ours[1:])
+    assert len(their_calls) == len(our_calls) == 16
+    for (method, theirs), (_, mine) in zip(their_calls, our_calls):
+        expected = _outcome(psse[0], method, theirs)
+        actual = _outcome(ours[0], method, mine)
+        assert isinstance(actual, type(expected)), method
+        if not isinstance(expected, psse_api.PsseCallError):
+            assert type(actual) is type(expected), method
+            assert str(actual) == str(expected), method
+    assert isinstance(_outcome(ours[0], "save_case", (ours[3],)), psse_api.CaseProtected)
+
+
+def test_contract_unknown_branch_is_a_call_error(tmp_path):
+    worlds = _worlds(tmp_path)
+    unknown = settings.BranchRef(1, 2, "9")
+    for api, _, _, _ in worlds.values():
+        for method, args in (("read_rate", (unknown, "RATEA")),
+                             ("set_rate", (unknown, "RATEA", 100.0)),
+                             ("set_status", (unknown, False))):
+            error = _outcome(api, method, args)
+            assert isinstance(error, psse_api.PsseCallError), method
+
+
+def test_registry_holds_the_pandapower_factory():
+    assert pandapower_api.SOLVER_NAME == "pandapower"
+    assert study.API_FACTORIES["pandapower"] is pandapower_api.factory
+    before = dict(study.API_FACTORIES)
+    study.register_solver("pandapower", pandapower_api.factory)
+    assert study.API_FACTORIES == before
+
+    def another(backend, case_path):
+        return None
+
+    with pytest.raises(ValueError):
+        study.register_solver("pandapower", another)
+    assert study.API_FACTORIES == before
+    assert study.API_FACTORIES["pandapower"] is pandapower_api.factory
