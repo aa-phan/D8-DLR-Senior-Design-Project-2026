@@ -21,7 +21,8 @@ pandapower = pytest.importorskip("pandapower")
 
 import pandapower_study_fixture as study_fixture  # noqa: E402
 from psse_job import constants, contract, mapping as mapping_module, run_record, study  # noqa: E402
-from pandapower_job import api as pandapower_api, engine  # noqa: E402
+from psse_job import settings as settings_module  # noqa: E402
+from pandapower_job import api as pandapower_api, cli, engine, scaling, solve  # noqa: E402
 
 _FNSL_OPTIONS = [0, 0, 0, 0, 0, 0, 0, 0]
 
@@ -226,3 +227,234 @@ def test_prepare_run_needs_a_pandapower_backend(tmp_path):
     mapping_path = study_fixture.write_placeholder_mapping(tmp_path)
     with pytest.raises(TypeError):
         engine.prepare_run(object(), case_path, mapping_path, allow_placeholder=True)
+
+
+# -- Task 3: recorded settings drop in, fail closed ---------------------------------------------
+
+_SOURCES = {"enforce_q_lims": "recorded session", "tolerance_mva": "recorded session",
+            "max_iteration": "recorded session", "collapse_voltage_pu": "mapping"}
+
+
+def _settings_doc(enforce=True, tolerance=1e-6, iterations=25, collapse=0.5, sources=None,
+                  deviations=()):
+    values = solve.SolveSettings(enforce, tolerance, iterations, collapse,
+                                 dict(_SOURCES if sources is None else sources), deviations)
+    return cli._settings_record(values)
+
+
+def _scaling_doc(details=("yes", "no", "yes")):
+    return {"swing_in_total": details[0], "clamped_at_limits": details[1],
+            "q_scales_with_p": details[2], "evidence": {"swing": {"counted": 2}},
+            "snapshots_wanted": 4, "snapshots_read": 4, cli.REPORT_MARKER: 1}
+
+
+def _refusal(settings_record, scaling_record):
+    with pytest.raises(engine.RecordsRefused) as raised:
+        engine.backend_from_records(settings_record, scaling_record)
+    assert str(raised.value) == "recorded settings refused: %s" % raised.value.reason
+    assert raised.value.reason in engine.RECORD_REFUSAL_REASONS
+    return raised.value.reason
+
+
+def test_records_drop_in_and_are_not_placeholder():
+    backend = engine.backend_from_records(_settings_doc(), _scaling_doc())
+    assert isinstance(backend, pandapower_api.PandapowerBackend)
+    assert backend.solve_settings.enforce_q_lims is True
+    assert backend.solve_settings.tolerance_mva == 1e-6
+    assert backend.solve_settings.max_iteration == 25
+    assert backend.solve_settings.collapse_voltage_pu == 0.5
+    assert backend.solve_settings.sources == _SOURCES
+    assert backend.scaling_details.swing_in_total == "yes"
+    assert engine.is_placeholder(backend) is False
+    assert engine.is_placeholder(engine.PLACEHOLDER_BACKEND) is True
+    record = engine.settings_record(backend, "3.5.6")
+    assert tuple(record) == engine.SETTINGS_RECORD_KEYS
+    assert record["placeholder"] is False
+    assert record["solver_version"] == "3.5.6"
+    assert record["enforce_q_lims"] is True
+    assert record["tolerance_mva"] == 1e-6
+    assert record["max_iteration"] == 25
+    assert record["scaling_details"] == {
+        "swing_in_total": "yes", "clamped_at_limits": "no", "q_scales_with_p": "yes"}
+
+
+def test_records_keep_an_undecided_reactive_limit():
+    backend = engine.backend_from_records(_settings_doc(enforce=None), _scaling_doc())
+    assert backend.solve_settings.enforce_q_lims is None
+    assert engine.settings_record(backend, "3.5.6")["enforce_q_lims"] is None
+    reason = engine.preflight(settings_module.DEFAULT_SETTINGS, backend)
+    assert reason is not None and "undecided" in reason
+
+
+def test_records_accept_pandapower_default_iterations_only_with_its_source():
+    sources = dict(_SOURCES, max_iteration="pandapower default")
+    backend = engine.backend_from_records(
+        _settings_doc(iterations="auto", sources=sources, deviations=["D-14 deviation"]),
+        _scaling_doc())
+    assert backend.solve_settings.max_iteration == "auto"
+    assert backend.solve_settings.deviations == ("D-14 deviation",)
+    assert _refusal(_settings_doc(iterations="auto"), _scaling_doc()) == "bad_value"
+    assert _refusal(_settings_doc(iterations="25", sources=sources), _scaling_doc()) == "bad_value"
+
+
+def test_records_refusals():
+    good = _settings_doc()
+    scale = _scaling_doc()
+
+    assert _refusal({"refused": "var_limit_conflict"}, scale) == "settings_refused"
+    assert _refusal([], scale) == "not_a_dict"
+    assert _refusal(good, []) == "not_a_dict"
+    assert _refusal(None, scale) == "not_a_dict"
+
+    missing = dict(good)
+    del missing["tolerance_mva"]
+    assert _refusal(missing, scale) == "missing_field"
+    assert _refusal(dict(good, extra=1), scale) == "unknown_field"
+    no_detail = dict(scale)
+    del no_detail["swing_in_total"]
+    assert _refusal(good, no_detail) == "missing_field"
+    assert _refusal(good, dict(scale, extra=1)) == "unknown_field"
+
+    for field, value in (
+            ("tolerance_mva", 0), ("tolerance_mva", float("nan")), ("tolerance_mva", True),
+            ("tolerance_mva", "1e-6"), ("tolerance_mva", -1e-6),
+            ("max_iteration", 0), ("max_iteration", True), ("max_iteration", 2.5),
+            ("collapse_voltage_pu", 1.5), ("collapse_voltage_pu", 0), ("collapse_voltage_pu", 1),
+            ("collapse_voltage_pu", None), ("enforce_q_lims", "yes"), ("enforce_q_lims", 1),
+            ("sources", ["a"]), ("sources", {"a": 1}), ("sources", {1: "a"}),
+            ("deviations", "none"), ("deviations", [1]), ("deviations", ("a",))):
+        assert _refusal(dict(good, **{field: value}), scale) == "bad_value", (field, repr(value))
+
+    assert _refusal(dict(good, sources=dict(_SOURCES, tolerance_mva="placeholder: x")),
+                    scale) == "placeholder_source"
+    assert _refusal(dict(good, sources=dict(_SOURCES, tolerance_mva=" Placeholder")),
+                    scale) == "placeholder_source"
+    assert _refusal(good, dict(scale, evidence={"placeholder": True})) == "placeholder_source"
+
+    for name in ("swing_in_total", "clamped_at_limits", "q_scales_with_p"):
+        assert _refusal(good, dict(scale, **{name: "maybe"})) == "bad_detail"
+        assert _refusal(good, dict(scale, **{name: None})) == "bad_detail"
+
+
+def _dump(path, document):
+    with open(str(path), "w", encoding="ascii") as handle:
+        handle.write(json.dumps(document, sort_keys=True, allow_nan=False, indent=1) + "\n")
+
+
+def _write_check(directory, settings=None, details=None):
+    """The two files of a check directory in the shape the check command writes them."""
+    _dump(directory / "report.json", {
+        "stamp": "20260101T000000Z", "settings": _settings_doc() if settings is None else settings,
+        cli.REPORT_MARKER: 1})
+    _dump(directory / "scaling_details.json", _scaling_doc() if details is None else details)
+
+
+def test_load_recorded_backend_reads_the_check_shape(tmp_path):
+    _write_check(tmp_path)
+    backend = engine.load_recorded_backend(str(tmp_path))
+    assert backend == engine.backend_from_records(_settings_doc(), _scaling_doc())
+    assert engine.is_placeholder(backend) is False
+    assert engine.load_recorded_backend(tmp_path).solve_settings.tolerance_mva == 1e-6
+
+    # a check that could not decide the reactive limits still loads (the preflight refuses it)
+    _write_check(tmp_path, settings=_settings_doc(enforce=None))
+    assert engine.load_recorded_backend(str(tmp_path)).solve_settings.enforce_q_lims is None
+
+
+def test_load_recorded_backend_refusals(tmp_path):
+    def refused(directory):
+        with pytest.raises(engine.RecordsRefused) as raised:
+            engine.load_recorded_backend(str(directory))
+        text = str(raised.value)
+        assert text == "recorded settings refused: %s" % raised.value.reason
+        assert str(directory) not in text
+        assert os.path.basename(str(directory)) not in text
+        return raised.value.reason
+
+    def fresh(name):
+        directory = tmp_path / ("check_dir_" + name)
+        directory.mkdir()
+        _write_check(directory)
+        return directory
+
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert refused(empty) == "unreadable"
+
+    directory = fresh("only_report")
+    os.remove(str(directory / "scaling_details.json"))
+    assert refused(directory) == "unreadable"
+
+    directory = fresh("big")
+    with open(str(directory / "report.json"), "w", encoding="ascii") as handle:
+        handle.write(" " * (engine.MAX_RECORD_BYTES + 1))
+    assert refused(directory) == "too_large"
+
+    for name, text in (("garbage", "not json"), ("nan", '{"a": NaN}'),
+                       ("infinity", '{"a": -Infinity}'), ("duplicate", '{"a": 1, "a": 2}')):
+        directory = fresh(name)
+        with open(str(directory / "scaling_details.json"), "w", encoding="ascii") as handle:
+            handle.write(text)
+        assert refused(directory) == "not_json", name
+
+    directory = fresh("not_a_dict")
+    _dump(directory / "report.json", [1, 2])
+    assert refused(directory) == "not_a_dict"
+
+    directory = fresh("no_marker")
+    _dump(directory / "report.json", {"settings": _settings_doc()})
+    assert refused(directory) == "bad_marker"
+
+    directory = fresh("bad_marker_value")
+    _dump(directory / "report.json", {"settings": _settings_doc(), cli.REPORT_MARKER: True})
+    assert refused(directory) == "bad_marker"
+
+    directory = fresh("scaling_no_marker")
+    document = _scaling_doc()
+    del document[cli.REPORT_MARKER]
+    _dump(directory / "scaling_details.json", document)
+    assert refused(directory) == "bad_marker"
+
+    directory = fresh("no_settings")
+    _dump(directory / "report.json", {cli.REPORT_MARKER: 1})
+    assert refused(directory) == "missing_field"
+
+    directory = tmp_path / "phase1_refused"
+    directory.mkdir()
+    _write_check(directory, settings={"refused": "var_limit_conflict"})
+    assert refused(directory) == "settings_refused"
+
+
+def test_adapter_solves_with_the_backend_settings(tmp_path, monkeypatch):
+    backend = engine.backend_from_records(
+        _settings_doc(enforce=False, tolerance=1e-6, iterations=25), _scaling_doc())
+    assert backend.solve_settings != engine.PLACEHOLDER_SOLVE
+    seen = []
+    real = solve.run_load_flow
+
+    def recorder(net, settings, enforce_q_lims):
+        seen.append((settings, enforce_q_lims))
+        return real(net, settings, enforce_q_lims)
+
+    monkeypatch.setattr(solve, "run_load_flow", recorder)
+    adapter = pandapower_api.PandapowerApi(backend)
+    adapter.load_case(study_fixture.write_case(tmp_path))
+    result = adapter.solve()
+    assert result.converged
+    assert len(seen) == 1
+    assert seen[0][0] is backend.solve_settings
+    assert seen[0][1] is backend.solve_settings.enforce_q_lims
+
+
+def test_placeholder_is_detectable():
+    assert engine.is_placeholder(engine.PLACEHOLDER_BACKEND) is True
+    assert engine.settings_record(engine.PLACEHOLDER_BACKEND, "3.5.6")["placeholder"] is True
+    recorded = engine.backend_from_records(_settings_doc(), _scaling_doc())
+    by_source = recorded._replace(solve_settings=recorded.solve_settings._replace(
+        sources=dict(recorded.solve_settings.sources, tolerance_mva=engine.PLACEHOLDER_NOTE)))
+    assert engine.is_placeholder(by_source) is True
+    by_evidence = recorded._replace(scaling_details=scaling.ScalingDetails(
+        "yes", "no", "yes", {"placeholder": True}))
+    assert engine.is_placeholder(by_evidence) is True
+    assert engine.is_placeholder(recorded) is False
+    assert recorded.solve_settings.sources != engine.PLACEHOLDER_SOLVE.sources

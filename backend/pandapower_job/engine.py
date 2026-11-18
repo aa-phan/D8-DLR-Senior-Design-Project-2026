@@ -37,9 +37,12 @@ Every refusal text is a reason only: no path, bus number or value.
 """
 
 import copy
+import json
+import math
+import os
 
 from psse_job import mapping as mapping_module, run_record, study
-from pandapower_job import api, scaling, solve   # importing api registers the "pandapower" factory
+from pandapower_job import api, cli, scaling, solve   # importing api registers the "pandapower" factory
 
 SOLVER = api.SOLVER_NAME
 
@@ -57,11 +60,15 @@ SETTINGS_RECORD_KEYS = (
     "collapse_voltage_pu", "sources", "deviations", "scaling_details")
 
 
+def _says_placeholder(text):
+    return str(text).strip().lower().startswith("placeholder")
+
+
 def is_placeholder(backend):
     """True when any solve-setting source starts with "placeholder", or the scaling details'
     evidence is a dict whose "placeholder" key is True."""
     sources = backend.solve_settings.sources
-    if any(str(value).startswith("placeholder") for value in sources.values()):
+    if any(_says_placeholder(value) for value in sources.values()):
         return True
     evidence = backend.scaling_details.evidence
     return isinstance(evidence, dict) and evidence.get("placeholder") is True
@@ -157,3 +164,166 @@ def prepare_run(backend, case_path, mapping_path, allow_placeholder=False, clock
     inner = study.make_study(run_backend, case_path, loaded, clock, solver=api.SOLVER_NAME)
     return study.PreparedRun(_recording_study(inner, run_backend), case_id, case_sha256,
                              loaded.sha256, None)
+
+
+# -- recorded PSE-02 settings (ENG-05, D-06, Phase 1 D-14) -----------------------------------------
+
+RECORD_REFUSAL_REASONS = (
+    "not_a_dict", "settings_refused", "missing_field", "unknown_field", "bad_value",
+    "placeholder_source", "bad_detail", "unreadable", "too_large", "not_json", "bad_marker")
+MAX_RECORD_BYTES = 1048576
+
+# The six keys of cli._settings_record, and the scaling document's keys (Phase 1's check output).
+_SETTINGS_FIELDS = ("enforce_q_lims", "tolerance_mva", "max_iteration", "collapse_voltage_pu",
+                    "sources", "deviations")
+_DETAIL_FIELDS = ("swing_in_total", "clamped_at_limits", "q_scales_with_p")
+_SCALING_OPTIONAL = ("evidence", "snapshots_wanted", "snapshots_read", cli.REPORT_MARKER)
+# solve.settings_from_session stores pandapower's own default under this source when PSS/E's
+# value could not be read, and the count may then be the word "auto".
+_DEFAULT_SOURCE = "pandapower default"
+
+
+class RecordsRefused(ValueError):
+    """Recorded settings were refused. `reason` is one of RECORD_REFUSAL_REASONS; the message holds
+    nothing else (no path, no value)."""
+
+    def __init__(self, reason):
+        self.reason = reason
+        ValueError.__init__(self, "recorded settings refused: %s" % reason)
+
+
+def _is_number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _check_settings_keys(record):
+    if "refused" in record:
+        raise RecordsRefused("settings_refused")
+    keys = set(record)
+    if not set(_SETTINGS_FIELDS) <= keys:
+        raise RecordsRefused("missing_field")
+    if keys != set(_SETTINGS_FIELDS):
+        raise RecordsRefused("unknown_field")
+
+
+def _checked_sources(sources):
+    if not isinstance(sources, dict) or not all(
+            isinstance(key, str) and isinstance(value, str) for key, value in sources.items()):
+        raise RecordsRefused("bad_value")
+    if any(_says_placeholder(value) for value in sources.values()):
+        raise RecordsRefused("placeholder_source")
+    return dict(sources)
+
+
+def _checked_iterations(value, sources):
+    if isinstance(value, str):
+        if value == "auto" and sources.get("max_iteration") == _DEFAULT_SOURCE:
+            return value
+        raise RecordsRefused("bad_value")
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 1:
+        return value
+    raise RecordsRefused("bad_value")
+
+
+def _solve_from_record(record):
+    _check_settings_keys(record)
+    enforce = record["enforce_q_lims"]
+    if enforce is not None and not isinstance(enforce, bool):
+        raise RecordsRefused("bad_value")
+    tolerance = record["tolerance_mva"]
+    if not _is_number(tolerance) or tolerance <= 0:
+        raise RecordsRefused("bad_value")
+    collapse = record["collapse_voltage_pu"]
+    if not _is_number(collapse) or not 0 < collapse < 1:
+        raise RecordsRefused("bad_value")
+    sources = _checked_sources(record["sources"])
+    iterations = _checked_iterations(record["max_iteration"], sources)
+    deviations = record["deviations"]
+    if not isinstance(deviations, list) or not all(isinstance(item, str) for item in deviations):
+        raise RecordsRefused("bad_value")
+    return solve.SolveSettings(enforce, float(tolerance), iterations, float(collapse), sources,
+                               tuple(deviations))
+
+
+def _details_from_record(record):
+    keys = set(record)
+    if not set(_DETAIL_FIELDS) <= keys:
+        raise RecordsRefused("missing_field")
+    if not keys <= set(_DETAIL_FIELDS) | set(_SCALING_OPTIONAL):
+        raise RecordsRefused("unknown_field")
+    for name in _DETAIL_FIELDS:
+        value = record[name]
+        if not isinstance(value, str) or value not in scaling.DETAIL_VALUES:
+            raise RecordsRefused("bad_detail")
+    evidence = record.get("evidence")
+    evidence = copy.deepcopy(evidence) if isinstance(evidence, dict) else {}
+    if evidence.get("placeholder") is True:
+        raise RecordsRefused("placeholder_source")
+    return scaling.ScalingDetails(record["swing_in_total"], record["clamped_at_limits"],
+                                  record["q_scales_with_p"], evidence)
+
+
+def backend_from_records(settings_record, scaling_record):
+    """An api.PandapowerBackend from the Phase 1 check output (the `settings` value of report.json
+    and the scaling_details.json document), or RecordsRefused (fail closed).
+
+    The settings record must hold exactly the six keys of the check command's record;
+    `enforce_q_lims` None is kept (the preflight refuses it at run time). A source that says
+    "placeholder" is refused, so a placeholder can never pass as a recorded value.
+    """
+    if not isinstance(settings_record, dict) or not isinstance(scaling_record, dict):
+        raise RecordsRefused("not_a_dict")
+    values = _solve_from_record(settings_record)
+    details = _details_from_record(scaling_record)
+    return api.PandapowerBackend(values, details)
+
+
+def _strict_pairs(pairs):
+    seen = {}
+    for key, value in pairs:
+        if key in seen:
+            raise ValueError("duplicate key")
+        seen[key] = value
+    return seen
+
+
+def _refuse_constant(name):
+    raise ValueError("non-finite number")
+
+
+def _read_document(path):
+    try:
+        with open(path, "rb") as handle:
+            data = handle.read(MAX_RECORD_BYTES + 1)
+    except (OSError, TypeError, ValueError):
+        raise RecordsRefused("unreadable") from None
+    if len(data) > MAX_RECORD_BYTES:
+        raise RecordsRefused("too_large")
+    try:
+        document = json.loads(data.decode("utf-8"), parse_constant=_refuse_constant,
+                              object_pairs_hook=_strict_pairs)
+    except (ValueError, RecursionError):
+        raise RecordsRefused("not_json") from None
+    if not isinstance(document, dict):
+        raise RecordsRefused("not_a_dict")
+    marker = document.get(cli.REPORT_MARKER)
+    if not isinstance(marker, int) or isinstance(marker, bool) or marker != 1:
+        raise RecordsRefused("bad_marker")
+    return document
+
+
+def load_recorded_backend(check_dir):
+    """The backend recorded by one check run: read `report.json` (key `settings`) and
+    `scaling_details.json` from `check_dir`, each written by the check command with the
+    cli.REPORT_MARKER key, and validate them through backend_from_records. Strict JSON only (no
+    NaN, infinity or duplicate key), at most MAX_RECORD_BYTES a file; no message holds a path."""
+    try:
+        report_path = os.path.join(str(check_dir), "report.json")
+        scaling_path = os.path.join(str(check_dir), "scaling_details.json")
+    except (TypeError, ValueError):
+        raise RecordsRefused("unreadable") from None
+    report = _read_document(report_path)
+    scaling_document = _read_document(scaling_path)
+    if "settings" not in report:
+        raise RecordsRefused("missing_field")
+    return backend_from_records(report["settings"], scaling_document)
