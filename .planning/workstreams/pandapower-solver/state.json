@@ -1,0 +1,43 @@
+{
+  "contract": "1.0.0",
+  "flavor": "core",
+  "milestone": "v1.7 — pandapower Solver",
+  "phases": [
+    {
+      "number": "1",
+      "name": "PSS/E Reference Session and Network Parity",
+      "status": "in_progress"
+    },
+    {
+      "number": "2",
+      "name": "PandapowerApi and Study Engine",
+      "status": "pending"
+    },
+    {
+      "number": "3",
+      "name": "Solver Tag, Migration and Per-Solver Gaps",
+      "status": "pending"
+    },
+    {
+      "number": "4",
+      "name": "Replay and Agreement Check",
+      "status": "pending"
+    },
+    {
+      "number": "5",
+      "name": "Hourly Workflow, Dry Run and Live Soak",
+      "status": "pending"
+    },
+    {
+      "number": "6",
+      "name": "Dashboard Read Access and DEF-01",
+      "status": "pending"
+    }
+  ],
+  "next": {
+    "command": "/gsd-progress --next",
+    "label": "Advance to the next step",
+    "reason": "Phase 1 of 6 · executing"
+  },
+  "updated_at": "2026-11-17T00:03:16.771Z"
+}

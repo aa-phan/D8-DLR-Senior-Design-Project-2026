@@ -4,18 +4,18 @@ milestone: v1.7
 milestone_name: pandapower Solver
 current_phase: 01
 current_phase_name: PSS/E Reference Session and Network Parity
-current_plan: 1
+current_plan: 10
 status: executing
-stopped_at: Phase 1 context gathered
+stopped_at: "Plan 01-10 Task 1 checkpoint: waiting on the licensed-laptop PSS/E session"
 last_updated: "2026-11-17T00:03:16.753Z"
-last_activity: 2026-11-16
-last_activity_desc: Phase 01 execution started
+last_activity: 2026-11-17
+last_activity_desc: Plans 01-01 to 01-09 complete; 01-10 paused at its laptop checkpoint
 state_head: 5c34c9c1d001110aec9a0e47a694e1daa49c90f7
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 11
-  completed_plans: 0
+  completed_plans: 9
 ---
 
 # Project State
@@ -50,18 +50,28 @@ See: .planning/PROJECT.md (shared). Builds on the pss-e-integration workstream (
 ## Current Position
 
 Phase: 01 (PSS/E Reference Session and Network Parity) — EXECUTING
-Plan: 1 of 11
-Status: Executing Phase 01
-Last activity: 2026-11-16 — Phase 01 execution started
+Plan: 10 of 11 (9 complete: 01-01 to 01-09)
+Status: Paused at plan 01-10 Task 1 (checkpoint:human-action, blocking)
+Last activity: 2026-11-17 — branch pushed; waiting on the laptop session
 
 ## Progress
 
 **Phases Complete:** 0 of 6
-**Current Plan:** 1
+**Current Plan:** 10
 
 ## Session Continuity
 
 **Last session:** 2026-11-16T21:12:16.722Z
 
-**Stopped At:** Phase 1 context gathered
-**Resume File:** .planning/workstreams/pandapower-solver/phases/01-pss-e-reference-session-and-network-parity/01-CONTEXT.md
+**Stopped At:** Plan 01-10 Task 1, waiting for the teammate to run the PSS/E session on the licensed laptop
+**Resume File:** .planning/workstreams/pandapower-solver/phases/01-pss-e-reference-session-and-network-parity/01-10-PLAN.md
+
+To resume:
+1. The teammate runs the session per `docs/data-science/decisions/psse_pandapower_session_guide.md`. Laptop paths are in `.planning/workstreams/pss-e-integration/HANDOFF.md`. Pass `-Mapping` a COPY of `dlr-psse\mapping_real.json`, because the session deletes the file it is given, and the original is the hourly job's mapping.
+2. Put the zip in `data/private/pandapower/incoming/` and the mapping at `data/private/pandapower/mapping.json` (both git-ignored).
+3. Run `/gsd-execute-phase 1 --ws pandapower-solver`. Plans 01-01 to 01-09 have SUMMARYs and are skipped. Then resume 01-10 at Task 2 with the pasted session summary.
+
+Known items from execution:
+- `backend/tests/pandapower_fixture.py` `reference_from_solved` reads `res_trafo` with line column names. Tests in 01-08 and 01-09 work around it.
+- The fake session's network is refused by the builder (`machine_at_load_bus`). The real RAW may need parser or builder iteration in 01-10 Task 2.
+- numba is not installed (pandapower warns that it may be slow). Installing it would need its own package-legitimacy check.
