@@ -132,3 +132,116 @@ def test_tracer_a_psse_hour_does_not_hide_a_missing_pandapower_hour():
         ("execute", gaps.CURRENT_HOUR_SQL),
         ("close",),
     ]
+
+
+# --------------------------------------------------------------------------- compute_gaps vs the oracle
+
+
+def reference_gaps(runs, current_slot):
+    """
+    The independent oracle: `runs` is a list of (slot, outcome); returns the gaps as
+    (slot, kind, runs, failed_runs) tuples. Plain loops, no SQL concepts: group the outcomes by
+    slot, walk the hours from the first slot up to the hour before `current_slot`, list a slot
+    with no outcome at all as no_run and a slot whose outcomes are all failed as failed_only.
+    """
+    by_slot = {}
+    for slot, outcome in runs:
+        by_slot.setdefault(slot, []).append(outcome)
+    if not by_slot:
+        return []
+    found = []
+    hour = min(by_slot)
+    while hour < current_slot:
+        outcomes = by_slot.get(hour)
+        if outcomes is None:
+            found.append((hour, "no_run", 0, 0))
+        elif all(outcome == "failed" for outcome in outcomes):
+            found.append((hour, "failed_only", len(outcomes), len(outcomes)))
+        hour += HOUR
+    return found
+
+
+def _tuples(rows):
+    return [(r.slot_time, r.gap_kind, r.runs, r.failed_runs) for r in rows]
+
+
+def _random_rows(rng):
+    """0 to 40 rows over the two solvers, each solver with its own first slot within 72 hours before H."""
+    rows = []
+    for solver in (PSSE, PP):
+        if rng.random() < 0.15:
+            continue  # this solver has no rows at all in this history
+        first_back = rng.randint(1, 72)
+        for _ in range(rng.randint(0, 20)):
+            back = rng.randint(0, first_back)
+            outcome = rng.choice(["ok", "fallback", "failed"])
+            rows.append((H - back * HOUR, solver, outcome))
+            if rng.random() < 0.2:  # several rows in one hour
+                rows.append((H - back * HOUR, solver, rng.choice(["ok", "fallback", "failed"])))
+        # the solver's own first slot always carries a row so its walk really starts there
+        rows.append((H - first_back * HOUR, solver, rng.choice(["ok", "fallback", "failed"])))
+    rng.shuffle(rows)
+    return rows[:40]
+
+
+def test_compute_gaps_matches_the_oracle_per_solver():
+    rng = random.Random(20261118)
+    with_gaps = 0
+    for _ in range(300):
+        rows = _random_rows(rng)
+        result = gaps.compute_gaps(rows, H)
+        for solver in (PSSE, PP):
+            mine = [(slot, outcome) for slot, name, outcome in rows if name == solver]
+            if not mine:
+                assert solver not in result
+                continue
+            expected = reference_gaps(mine, H)
+            assert _tuples(result[solver]) == expected
+            with_gaps += bool(expected)
+    assert with_gaps > 50  # the histories really do contain gaps, so the comparison is not vacuous
+
+
+def test_hours_before_a_solvers_first_slot_are_not_its_gaps():
+    rows = [(H - n * HOUR, PSSE, "ok") for n in range(1, 11)]
+    rows += [(H - n * HOUR, PP, "ok") for n in range(1, 4)]
+    result = gaps.compute_gaps(rows, H)
+    assert result[PP] == []
+    assert result[PSSE] == []
+
+
+def test_pss_e_offline_is_listed_separately():
+    rows = [(H - n * HOUR, PP, "ok") for n in range(1, 7)]
+    rows += [(H - 6 * HOUR, PSSE, "ok"), (H - 1 * HOUR, PSSE, "ok")]
+    result = gaps.compute_gaps(rows, H)
+    assert _tuples(result[PSSE]) == [(H - n * HOUR, "no_run", 0, 0) for n in (5, 4, 3, 2)]
+    assert result[PP] == []
+
+
+def test_failed_only_is_per_solver():
+    rows = [
+        (H - 3 * HOUR, PSSE, "ok"), (H - 3 * HOUR, PP, "ok"),
+        (H - 2 * HOUR, PSSE, "ok"), (H - 2 * HOUR, PP, "failed"), (H - 2 * HOUR, PP, "failed"),
+        (H - 1 * HOUR, PSSE, "ok"), (H - 1 * HOUR, PP, "ok"),
+    ]
+    result = gaps.compute_gaps(rows, H)
+    assert result[PP] == [gaps.GapRow(H - 2 * HOUR, "failed_only", 2, 2)]
+    assert result[PSSE] == []
+
+
+def test_only_the_current_hour_and_later_rows():
+    assert gaps.compute_gaps([(H, PSSE, "failed")], H) == {PSSE: []}
+    # A row at H+1h (a clock ahead of the database) is not walked and creates no gap.
+    result = gaps.compute_gaps([(H - 2 * HOUR, PSSE, "ok"), (H - 1 * HOUR, PSSE, "ok"), (H + HOUR, PSSE, "ok")], H)
+    assert result == {PSSE: []}
+    assert gaps.compute_gaps([(H + HOUR, PP, "failed")], H) == {PP: []}
+
+
+def test_unknown_solver_label():
+    rows = [(H - 2 * HOUR, "Bad Label!", "ok"), (H - 1 * HOUR, "Bad Label!", "ok"), (H - 1 * HOUR, PSSE, "ok")]
+    result = gaps.compute_gaps(rows, H)
+    assert set(result) == {"unknown", PSSE}
+    summaries = gaps.summarize(rows)
+    assert summaries["unknown"].runs == 2
+    assert "Bad Label!" not in gaps.format_solver_report(summaries, result)
+    # A value that is not even text, and an over-long tag, are grouped the same way.
+    assert set(gaps.summarize([(H, None, "ok"), (H, "a" * 33, "ok")])) == {"unknown"}
