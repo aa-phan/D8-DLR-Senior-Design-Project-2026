@@ -121,6 +121,13 @@ class PandapowerApi(object):
         A parser or builder refusal is a ValueError and passes through unchanged.
         """
         normalised = psse_api._normalise_path(path)
+        snapshot = self._snapshots.get(normalised)
+        if snapshot is not None:
+            saved_net, saved_state = snapshot
+            self._net = copy.deepcopy(saved_net)
+            self._state = SOLVED if saved_state == SOLVED else FRESH
+            self._last_reason = None
+            return
         master = self._masters.get(normalised)
         if master is None:
             master = self._build_master(normalised)
@@ -128,6 +135,19 @@ class PandapowerApi(object):
         self._net = copy.deepcopy(master)
         self._state = FRESH
         self._last_reason = None
+
+    def save_case(self, path):
+        """Keep a deep copy of the working network and its state in memory under `path`.
+
+        No file is written (D-09). A later `load_case(path)` restores the copy: state SOLVED when
+        it was saved solved, FRESH otherwise (a failed or stale state is never restored). Never onto
+        the case file that was loaded.
+        """
+        normalised = psse_api._normalise_path(path)
+        if normalised == self._protected:
+            raise psse_api.CaseProtected("refusing to save onto the case file that was loaded")
+        net = self._need_net("save_case")
+        self._snapshots[normalised] = (copy.deepcopy(net), self._state)
 
     # -- helpers -------------------------------------------------------------------------
 
@@ -229,6 +249,24 @@ class PandapowerApi(object):
         net.line.at[index, "max_i_ka"] = value / (math.sqrt(3) * self._from_kv(net, index))
         self._state = STALE
 
+    def set_status(self, ref, in_service):
+        """Put the line in service (True) or out of service (False); the state becomes STALE.
+
+        Ratings are untouched. A status is never flipped back to repair a network: callers
+        reload a snapshot.
+        """
+        if not isinstance(in_service, bool):
+            raise ValueError("in_service must be True or False")
+        from_bus, to_bus, ckt = psse_api.PsseApi._ref_parts(ref)
+        net = self._need_net("set_status")
+        index = self._line_index(net, from_bus, to_bus, ckt)
+        if index is None:
+            if self._is_transformer(net, from_bus, to_bus, ckt):
+                raise PandapowerCallError("set_status", 3, psse_api.BRANCH_CHNG_ERRORS[3])
+            raise PandapowerCallError("set_status", 9, psse_api.BRANCH_CHNG_ERRORS[9])
+        net.line.at[index, "in_service"] = in_service
+        self._state = STALE
+
     # -- load flow -----------------------------------------------------------------------
 
     def solve(self, options=None):
@@ -259,6 +297,40 @@ class PandapowerApi(object):
         return psse_api.classify_solve(0, 1)
 
     # -- reads that need a solution ------------------------------------------------------
+
+    def bus_table(self):
+        """dict bus number -> BusRow for every bus.
+
+        FRESH gives NaN voltages (never read from the result tables), so a caller that skipped
+        the solve fails closed; FAILED and STALE are refused. Type code: 4 out of service, 3 an
+        in-service external grid on it, 2 an in-service machine, else 1. The builder does not carry
+        emergency limits, so evlmlo and evlmhi are 0.0; nvlmlo and nvlmhi are NaN when absent.
+        """
+        net = self._need_net("bus_table")
+        if self._state not in (FRESH, SOLVED):
+            self._require_solved("bus_table")
+        swing = set(int(bus) for bus in net.ext_grid.bus[net.ext_grid.in_service.astype(bool)])
+        machines = set(int(bus) for bus in net.gen.bus[net.gen.in_service.astype(bool)])
+        table = {}
+        for index in net.bus.index:
+            number = int(index)
+            if not bool(net.bus.at[index, "in_service"]):
+                code = 4
+            elif number in swing:
+                code = 3
+            elif number in machines:
+                code = 2
+            else:
+                code = 1
+            if self._state == SOLVED and index in net.res_bus.index:
+                pu = float(net.res_bus.at[index, "vm_pu"])
+            else:
+                pu = float("nan")
+            table[number] = psse_api.BusRow(
+                number, code, float(net.bus.at[index, "vn_kv"]), pu,
+                float(net.bus.at[index, "min_vm_pu"]), float(net.bus.at[index, "max_vm_pu"]),
+                0.0, 0.0)
+        return table
 
     def branch_loading(self, rate_set, basis):
         """BranchFlow for every line (any status), sorted by key, on pandapower's current basis."""
