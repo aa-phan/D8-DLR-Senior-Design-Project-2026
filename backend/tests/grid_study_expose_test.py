@@ -242,10 +242,20 @@ def test_the_migration_reapplies_cleanly(pg_url):
                            ).fetchone()[0]
         return definition, acl
 
+    # The grid-study file on its own would restore the unguarded view that the solver-tag migration
+    # replaces (the PSS/E-only guard, decision D-03), so the whole chain from this file onward is
+    # re-applied, in name order, twice.
+    grid_study_name = os.path.basename(_MIGRATION)
+    chain = [path for path in local_pg.migration_files() if os.path.basename(path) >= grid_study_name]
+    assert os.path.basename(chain[0]) == grid_study_name and len(chain) >= 2
+
     with _session(pg_url) as conn:
         before = snapshot(conn)
     for _ in range(2):
-        with psycopg.connect(pg_url) as conn:
-            conn.execute(_text())
+        for path in chain:
+            with open(path, encoding="utf-8") as handle:
+                sql_text = handle.read()
+            with psycopg.connect(pg_url) as conn:
+                conn.execute(sql_text)
     with _session(pg_url) as conn:
         assert snapshot(conn) == before
