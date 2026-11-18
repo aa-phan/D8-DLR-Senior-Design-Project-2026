@@ -134,7 +134,23 @@ Plans:
   4. Each city, each outage and each margin step solves a fresh copy of its base network: a test shows that running outages in a different order, or after a failed solve, gives identical results, and that no result is read after a failed solve.
   5. The solve settings (reactive limits, iteration limit, tolerance) come from the values recorded in PSE-02 and are stored with each run, and a full four-city study runs end to end on a throwaway local database with the placeholder mapping and no access to live data.
 
-**Plans**: TBD
+**Plans**: 0/7 plans executed
+
+Plans:
+**Wave 1**
+- [ ] 02-01-PLAN.md — Solver factory argument in study.py through a registry, PSS/E tests unchanged (wave 1)
+- [ ] 02-02-PLAN.md — PandapowerApi core: case load, fresh copies, reads, writes, solve outcome mapping (wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+- [ ] 02-03-PLAN.md — Scaling methods, registration, 14-method signature pin against PsseApi (wave 2)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+- [ ] 02-04-PLAN.md — Engine entry point: preflight refusals, placeholder settings, four-city study in memory (wave 3)
+- [ ] 02-05-PLAN.md — Study-level proof of island, order and stale-result behaviour on the real solver (wave 3)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+- [ ] 02-06-PLAN.md — Database tier: four-city study through job.run_once into a throwaway Postgres (wave 4)
+- [ ] 02-07-PLAN.md — Close ENG-05 with the recorded PSE-02 values; needs the laptop session (wave 4, checkpoint)
 
 ### Phase 3: Solver Tag, Migration and Per-Solver Gaps
 
