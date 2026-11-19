@@ -195,9 +195,9 @@ _FORUM_STATUS = (1, 1, 1, 0, 0, 0, 0)
 # builder is not None. The forum option list is used, never a bus-name option. UNVERIFIED.
 RAW_EXPORT_FORMS = (
     ("writerawversion_33_positional", "writerawversion",
-     lambda path: (33, 0, path), None),
+     lambda path: ("33", 0, path), None),
     ("writerawversion_33_keywords", "writerawversion",
-     None, lambda path: dict(vernum=33, out=0, ofile=path)),
+     None, lambda path: dict(vernum="33", out=0, ofile=path)),
     ("rawd_2_forum_positional", "rawd_2",
      lambda path: (0, 1, list(_FORUM_STATUS), 0, path), None),
     ("rawd_2_forum_keywords", "rawd_2",
@@ -227,7 +227,13 @@ def _field(text):
 def _header_revision(head):
     """The revision (third field of the first line) of RAW bytes or text, or None."""
     text = head.decode("latin-1") if isinstance(head, (bytes, bytearray)) else head
-    first = text.split("\n", 1)[0]
+    first = ""
+    for line in text.split("\n"):
+        # Revision 35 and later start with "@!" comment lines (the real 36.4 export did); the header
+        # is the first line that is not one.
+        if not line.lstrip().startswith("@!"):
+            first = line
+            break
     fields = first.split("/")[0].split(",")
     if len(fields) < 3:
         return None
@@ -277,6 +283,8 @@ def count_raw(data):
     except Exception:  # noqa: BLE001
         return counts
     lines = text.splitlines()
+    while lines and lines[0].lstrip().startswith("@!"):
+        lines = lines[1:]
     if len(lines) < 3:
         return counts
     revision = _header_revision(lines[0])

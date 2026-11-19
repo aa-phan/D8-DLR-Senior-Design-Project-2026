@@ -984,3 +984,21 @@ def test_unexpected_error_exit7_redacted(tmp_path, monkeypatch):
     assert "fakeuser" not in err + out and str(tmp_path) not in err + out
     # the cleanup still ran: the mapping copy and the work folder are gone
     assert os.listdir(str(world.out)) == [] and not world.mapping.exists()
+
+
+def test_header_revision_and_counts_skip_leading_comment_lines():
+    """The real 36.4 export starts with an @! comment line; the revision is on the first other line."""
+    body = psse_session_fake.fake_raw_bytes(placeholder_case())
+    commented = b"@!IC,SBASE,REV,XFRRAT,NXFRAT,BASFRQ\n" + body
+    assert session._header_revision(commented) == 33
+    assert session.count_raw(commented) == session.count_raw(body)
+
+
+def test_writerawversion_forms_pass_the_version_as_text_and_an_int_is_refused_by_the_fake(tmp_path):
+    forms = [item for item in session.RAW_EXPORT_FORMS if item[1] == "writerawversion"]
+    assert len(forms) == 2
+    path = str(tmp_path / "x.raw")
+    assert forms[0][2](path)[0] == "33" and forms[1][3](path)["vernum"] == "33"
+    fake = psse_session_fake.FakeSessionPsspy(raw_forms=("writerawversion_33_positional",))
+    with pytest.raises(TypeError):
+        fake.writerawversion(33, 0, path)

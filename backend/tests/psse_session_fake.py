@@ -185,10 +185,13 @@ class FakeSessionPsspy(FakePsspy):
 
     @_recorded
     def writerawversion(self, vernum, out, ofile):
-        if vernum != 33 or out != 0:
+        if not isinstance(vernum, str):
+            # the real 36.4 routine takes the version as a character argument (an int raised TypeError)
+            raise TypeError("vernum must be a string")
+        if vernum != "33" or out != 0:
             return 1
         return self._export(
-            "writerawversion", "writerawversion_33_" + self._call_kind(), ofile, vernum)
+            "writerawversion", "writerawversion_33_" + self._call_kind(), ofile, 33)
 
     # -- parameter reads ---------------------------------------------------------------------
 
