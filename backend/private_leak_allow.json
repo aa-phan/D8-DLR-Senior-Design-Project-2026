@@ -1,0 +1,70 @@
+[
+  {
+    "path": ".planning/milestones/ws-production-pipeline-2026-11-09/phases/05-scheduled-live-runs/05-05-PLAN.md",
+    "sha256": "c0e2918e034e4f8a70f4fa47060f025e67bf2152702fe6c3b7e4e6f768b29009"
+  },
+  {
+    "path": ".planning/milestones/ws-production-pipeline-2026-11-09/phases/05-scheduled-live-runs/05-08-SUMMARY.md",
+    "sha256": "aa65316abebb0e78eec25f8b45bbdbf6c308f64631b8cfa7f221cdbb5ac6d2af"
+  },
+  {
+    "path": ".planning/workstreams/input-provenance/phase2/ieee_sensitivity.py",
+    "sha256": "c00dae03274d2e26a4f2658932139201872b6349bb5b17f6accbb80a6d92e370"
+  },
+  {
+    "path": ".planning/workstreams/input-provenance/phase2/out/sensitivity_bearing_75C.csv",
+    "sha256": "4ce322987408003c31d1ec11d0ffabc131d5e01a6d8d8d5780430a5fe7757516"
+  },
+  {
+    "path": ".planning/workstreams/input-provenance/phase2/out/sensitivity_bounds_2025.csv",
+    "sha256": "3036c2a5235a3203654cec4d3377516c17023d983fe7433ff73e3670fd0e3dfc"
+  },
+  {
+    "path": "backend/tests/day_ahead_verify_test.py",
+    "sha256": "594c203f5216e20a43c9b1095a40f958ad2905b62064aefe2ecbe28fe5cf1a77"
+  },
+  {
+    "path": "backend/tests/real_data_validation_val02_test.py",
+    "sha256": "06b936a5c22bc9cb19dd60f4ca578d5b3581f123df6d5a0f0f4add816ebf0128"
+  },
+  {
+    "path": "backend/tests/supabase_store_test.py",
+    "sha256": "0af07e46015c1701508dfaa7d6d0d0da23ac4fecc7878ef68997023816ecef3a"
+  },
+  {
+    "path": "data/shadow/evaluation/v4-read1/reconstructed_frames_20261102T175156Z/frames/anchored_pair_frame_EL_PASO_2026-09-28_2026-10-24_lead24_previous_runs.csv",
+    "sha256": "ad7635759de339f66193da4a33dc9a2e94f1222dcd988aa765466394d045156c"
+  },
+  {
+    "path": "data/shadow/evaluation/v4-read1/reconstructed_frames_20261102T175156Z/frames/anchored_pair_frame_MIDLAND_2026-09-28_2026-10-24_lead24_previous_runs.csv",
+    "sha256": "928457803b02d32268d804f9bcb924576c902fb8d3cf88e85dc4d35a32d4bc84"
+  },
+  {
+    "path": "data/shadow/evaluation/v4-read2/reconstructed_frames_20261108T012106Z/frames/anchored_pair_frame_EL_PASO_2026-09-28_2026-10-31_lead24_previous_runs.csv",
+    "sha256": "1f671d0d77da5477a7e8e58ff6a6f32056fb5384210911bd8679aa4812503b95"
+  },
+  {
+    "path": "data/shadow/evaluation/v4-read2/reconstructed_frames_20261108T012106Z/frames/anchored_pair_frame_MIDLAND_2026-09-28_2026-10-31_lead24_previous_runs.csv",
+    "sha256": "6ce4ba827cb769c0a16a49435770edd89282e0b42b9e4b2adfdb7d878b8c26ca"
+  },
+  {
+    "path": "data/wtm_stations.csv",
+    "sha256": "964ff46a477762ed86faf5c3adf56f0d12ef2e8c0b6d5904fa2b727c87aca5ed"
+  },
+  {
+    "path": "docs/data-science/citations.md",
+    "sha256": "0408125c7dfd9a5e1551428ebb29bc058aff92e5ec312b20d10a56cc203252ca"
+  },
+  {
+    "path": "docs/data-science/decisions/dlr_live_runbook.md",
+    "sha256": "b1737751b047812e5c5f0cbfa63dffaf573a15053e964dca8ba843c23408392c"
+  },
+  {
+    "path": "docs/data-science/exploratory/2026-11-02_ml_vs_naive/cache/open_meteo_EL_PASO_2025-12-25_2026-09-29.csv",
+    "sha256": "5f403dcdc410b8a4df5ac4e013184ad226f85c0af3cb19d3f0da49b92dc1ea05"
+  },
+  {
+    "path": "docs/data-science/exploratory/2026-11-02_ml_vs_naive/cache/open_meteo_MIDLAND_2025-12-25_2026-09-29.csv",
+    "sha256": "0d281931066041a009aa4784ecfaa66dbaaddf592725f974c35b1530854bcf58"
+  }
+]
