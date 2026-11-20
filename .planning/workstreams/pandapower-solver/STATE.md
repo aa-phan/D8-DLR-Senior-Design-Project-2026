@@ -6,7 +6,7 @@ current_phase: 02
 current_phase_name: PandapowerApi and Study Engine
 current_plan: 7
 status: verifying
-stopped_at: "Phase 2 plans 02-01 to 02-07 complete (ENG-05 closed 2026-11-20); ready for Phase 2 verification; ENG-06 and the database proofs need a Postgres"
+stopped_at: "Phase 4 wave 1 complete (plans 04-01, 04-02 done 2026-11-20); wave 2 (04-03) next; Phase 2 and 3 verification still pending (need Postgres for ENG-06 and DB proofs)"
 last_updated: "2026-11-20T22:48:53.555Z"
 last_activity: 2026-11-20
 last_activity_desc: Phase 1 complete, transitioned to Phase 02

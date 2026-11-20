@@ -37,7 +37,7 @@
 ### Agreement (AGR)
 
 - [ ] **AGR-01**: A read-only replay runs each recorded PSS/E run through pandapower using that run's stored ratings and the same mapping (matched by its recorded hash), and writes nothing to the database.
-- [ ] **AGR-02**: The replay passes when, for each replayed run, the set of overloads, voltage violations and non-converged outages per outage is the same, and margins and dispatched capacity agree within 2%; near-limit elements are reported as borderline rather than failing.
+- [x] **AGR-02**: The replay passes when, for each replayed run, the set of overloads, voltage violations and non-converged outages per outage is the same, and margins and dispatched capacity agree within 2%; near-limit elements are reported as borderline rather than failing.
 - [ ] **AGR-03**: The agreement report states how many runs and how many non-empty comparisons it checked, the largest deviation even on a pass, and which runs were excluded and why; a deliberate mismatch test proves it can fail.
 - [ ] **AGR-04**: Detailed agreement output stays on the owner's machine; anything printed in GitHub Actions is counts and pass/fail only.
 
@@ -95,7 +95,7 @@
 | DB-02 | Phase 3 | Pending |
 | DB-03 | Phase 3 | Pending |
 | AGR-01 | Phase 4 | Pending |
-| AGR-02 | Phase 4 | Pending |
+| AGR-02 | Phase 4 | Complete |
 | AGR-03 | Phase 4 | Pending |
 | AGR-04 | Phase 4 | Pending |
 | OPS-01 | Phase 5 | Pending |
