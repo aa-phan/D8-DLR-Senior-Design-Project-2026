@@ -187,7 +187,18 @@ Plans:
   4. A deliberate mismatch test makes the replay fail, proving the check can fail.
   5. Detailed output stays on the owner's machine; the output printed in CI mode contains counts and pass or fail only, and a test scanning it finds no identifier or study value.
 
-**Plans**: TBD
+**Plans**: 0/4 plans executed
+
+Plans:
+**Wave 1**
+- [ ] 04-01-PLAN.md — Owner-run read-only export SQL, strict ingest and private snapshot, counts-only profile; no database connection anywhere (wave 1)
+- [ ] 04-02-PLAN.md — Pure agreement rules and the gate: tolerances imported from compare.py, margin floor, borderline, pass or fail or incomplete (wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+- [ ] 04-03-PLAN.md — Replay of stored runs through the engine matched by hash, deliberate-mismatch matrix on the real solver, the owner's commands, private report and CI mode (wave 2)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+- [ ] 04-04-PLAN.md — Scanned-output leak test with planted identifiers, the owner's blocking export, the real replay record (wave 3, checkpoint)
 
 ### Phase 5: Hourly Workflow, Dry Run and Live Soak
 
@@ -227,6 +238,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6. Phases 2 and 3
 | 1. PSS/E Reference Session and Network Parity | 11/11 | Complete    | 2026-11-20 |
 | 2. PandapowerApi and Study Engine | 7/7 | In Progress | - |
 | 3. Solver Tag, Migration and Per-Solver Gaps | 5/5 | In Progress | - |
-| 4. Replay and Agreement Check | 0/TBD | Not started | - |
+| 4. Replay and Agreement Check | 0/4 | Planned | - |
 | 5. Hourly Workflow, Dry Run and Live Soak | 0/TBD | Not started | - |
 | 6. Dashboard Read Access and DEF-01 | 0/TBD | Not started | - |
