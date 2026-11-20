@@ -66,5 +66,21 @@
   {
     "path": "docs/data-science/exploratory/2026-11-02_ml_vs_naive/cache/open_meteo_MIDLAND_2025-12-25_2026-09-29.csv",
     "sha256": "0d281931066041a009aa4784ecfaa66dbaaddf592725f974c35b1530854bcf58"
+  },
+  {
+    "path": ".planning/milestones/ws-production-pipeline-2026-11-09/phases/07-per-city-conductors-shadow-refit-and-early-model-selection/07-RESEARCH.md",
+    "sha256": "eacaba9a3dec5a8b605c284d4804222d6b50acc523a963410e752a23cbb500ee"
+  },
+  {
+    "path": "backend/tests/pandapower_raw_test.py",
+    "sha256": "686309c0b16baa6d7dce9131ffcd2f9492560259813a3af650066648d074659a"
+  },
+  {
+    "path": "backend/tests/psse_contingency_test.py",
+    "sha256": "30650a67473957da2a44eda7c5f28f69e30a08ecba670a629cf506b3d8ba1d28"
+  },
+  {
+    "path": "docs/data-science/decisions/confirmation_protocol_v3_per_city.md",
+    "sha256": "3f5e63e39ca0bbe042fac9cf03e8927abbdb83ac765b916bff0e67f00ee1ee00"
   }
 ]
