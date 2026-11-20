@@ -273,14 +273,194 @@ def _compare_violations(run, recorded, replayed):
         run.counts["outages_" + kind] = len(outages[kind])
 
 
+# -- the per-city input data, margins and dispatch -------------------------------------------------
+
+_RATING_FIELDS_TEXT = ("rating_source", "fallback_reason", "subconductors_per_phase")
+_RATING_FIELDS_NUMBER = ("applied_amps_per_conductor", "line_voltage_kv", "applied_mva")
+
+_RATING_CLASS = "rating"
+_VOLTAGE_CLASS = "voltage"
+_BASE_CLASS = "base"
+_MARGIN_CLASSES = {
+    "dlr_rating": _RATING_CLASS, "voltage_criterion": _VOLTAGE_CLASS,
+    "non_convergence": _VOLTAGE_CLASS, "base_case": _BASE_CLASS,
+}
+
+
+def _hashable(item):
+    return tuple(item) if isinstance(item, (list, tuple)) else item
+
+
+def _key_set(value):
+    """A stored list as a set (None stays None, so a missing detail differs from an empty one)."""
+    if value is None:
+        return None
+    if not isinstance(value, (list, tuple)):
+        return value
+    return frozenset(_hashable(item) for item in value)
+
+
+def _sorted_numbers(value):
+    if value is None:
+        return None
+    if not isinstance(value, (list, tuple)):
+        return value
+    return sorted(value, key=lambda item: (item is None, item if _finite(item) else 0.0))
+
+
+def _same_numbers(left, right):
+    left, right = _sorted_numbers(left), _sorted_numbers(right)
+    if left is None or right is None:
+        return left is None and right is None
+    if not isinstance(left, list) or not isinstance(right, list) or len(left) != len(right):
+        return False
+    return all(_close(one, other, DATA_RELATIVE_TOLERANCE) for one, other in zip(left, right))
+
+
+def _check_rating_data(run, city, recorded, replayed):
+    unlike = [name for name in _RATING_FIELDS_TEXT if recorded.get(name) != replayed.get(name)]
+    unlike += [name for name in _RATING_FIELDS_NUMBER
+               if not _close(recorded.get(name), replayed.get(name), DATA_RELATIVE_TOLERANCE)]
+    if unlike:
+        run.fail("rating_data", ("dispatch", city), unlike)
+    rec, rep = _details(recorded), _details(replayed)
+    if _key_set(rec.get("branches")) != _key_set(rep.get("branches")):
+        run.fail("branches", ("dispatch", city))
+    if not _same_numbers(rec.get("rate_before_mva"), rep.get("rate_before_mva")):
+        run.fail("rate_before", ("dispatch", city))
+
+
+def _positive(value):
+    return _finite(value) and value > 0
+
+
+def _check_search_settings(run, city, recorded, replayed):
+    """Returns whether the floor of the recorded search can be derived."""
+    rec, rep = _details(recorded), _details(replayed)
+    if _key_set(rec.get("sink_buses")) != _key_set(rep.get("sink_buses")):
+        run.fail("sink_buses", ("margins", city))
+    unlike = []
+    for name in ("step_mw", "tolerance_mw"):
+        if not (_positive(rec.get(name)) and _positive(rep.get(name))
+                and _close(rec.get(name), rep.get(name), DATA_RELATIVE_TOLERANCE)):
+            unlike.append(name)
+    if not (_finite(rec.get("criterion_pu")) and _finite(rep.get("criterion_pu"))
+            and _close(rec.get("criterion_pu"), rep.get("criterion_pu"), DATA_RELATIVE_TOLERANCE)):
+        unlike.append("criterion_pu")
+    if unlike:
+        run.fail("search_settings", ("margins", city), unlike)
+    return _positive(rec.get("step_mw")) and _positive(rec.get("tolerance_mw"))
+
+
+def margin_allowance(ref_mw, resolution_mw):
+    """D-02: the most a margin may differ from `ref_mw`, the larger of the relative tolerance of
+    the recorded value and the resolution of the search that produced it."""
+    return max(compare.FLOW_RELATIVE_TOLERANCE * abs(ref_mw), resolution_mw)
+
+
+def _margin_pair(run, city, quantity, reference, got, allowance):
+    """Compare one margin-table quantity; `allowance` is the quantity's tolerance."""
+    run.counts["margin_comparisons"] += 1
+    if not _finite(reference) or not _finite(got):
+        run.fail("margin_value", ("margins", city), quantity)
+        return
+    _record(run.worst, _deviation(quantity, reference, got, allowance, ("margins", city)))
+    if not abs(got - reference) <= allowance + compare.COMPARISON_EPSILON:
+        run.fail("margin_value", ("margins", city), quantity)
+
+
+def _compare_margin(run, city, recorded, replayed):
+    derivable = _check_search_settings(run, city, recorded, replayed)
+    rec, rep = _details(recorded), _details(replayed)
+    rec_class = _MARGIN_CLASSES.get(rec.get("bounded_by"))
+    rep_class = _MARGIN_CLASSES.get(rep.get("bounded_by"))
+    if rec_class is None or rep_class is None or rec_class != rep_class:
+        run.fail("margin_bound_class", ("margins", city))
+        return
+    if rec.get("bounded_by") != rep.get("bounded_by"):
+        run.notes["bound_member_differs"] += 1
+    if recorded.get("critical_bus") != replayed.get("critical_bus"):
+        run.notes["critical_bus_differs"] += 1
+    if not derivable:
+        return
+    resolution = rec["step_mw"] if rec_class == _RATING_CLASS else rec["tolerance_mw"]
+    for quantity in ("margin_mw", "limit_transfer_mw"):
+        reference = recorded.get(quantity)
+        allowance = margin_allowance(reference, resolution) if _finite(reference) else None
+        _margin_pair(run, city, quantity, reference, replayed.get(quantity), allowance)
+    reference, got = recorded.get("base_transfer_mw"), replayed.get("base_transfer_mw")
+    _margin_pair(run, city, "base_transfer_mw", reference, got,
+                 compare.flow_allowance(reference) if _finite(reference) else None)
+    if rec_class == _RATING_CLASS:
+        run.counts["margin_quantised"] += 1
+        return
+    _margin_pair(run, city, "min_voltage_pu", recorded.get("min_voltage_pu"),
+                 replayed.get("min_voltage_pu"), compare.VOLTAGE_TOLERANCE_PU)
+    reference = recorded.get("voltage_limit_mva")
+    _margin_pair(run, city, "voltage_limit_mva", reference, replayed.get("voltage_limit_mva"),
+                 compare.flow_allowance(reference) if _finite(reference) else None)
+
+
+def _dispatch_pair(run, city, quantity, reference, got):
+    if not _finite(reference) or not _finite(got):
+        run.fail("dispatch_value", ("dispatch", city), quantity)
+        return
+    allowance = compare.flow_allowance(reference)
+    _record(run.worst, _deviation(quantity, reference, got, allowance, ("dispatch", city)))
+    if not compare.within_flow(reference, got):
+        run.fail("dispatch_value", ("dispatch", city), quantity)
+
+
+def _factor_gap(row):
+    """(gap, band) between the applied rating and the voltage limit of a dispatch row."""
+    applied, limit = row.get("applied_mva"), row.get("voltage_limit_mva")
+    if not _finite(applied) or not _finite(limit):
+        return None
+    return abs(applied - limit), compare.flow_allowance(applied)
+
+
+def _compare_dispatch(run, city, recorded, replayed):
+    run.counts["dispatch_comparisons"] += 1
+    _dispatch_pair(run, city, "dispatched_mva", recorded.get("dispatched_mva"),
+                   replayed.get("dispatched_mva"))
+    rec_factor, rep_factor = recorded.get("limiting_factor"), replayed.get("limiting_factor")
+    if rec_factor == rep_factor == "voltage_stability":
+        run.counts["dispatch_informative"] += 1
+        _dispatch_pair(run, city, "voltage_limit_mva", recorded.get("voltage_limit_mva"),
+                       replayed.get("voltage_limit_mva"))
+    if rec_factor == rep_factor and rec_factor in constants.LIMITING_FACTORS:
+        return
+    if rec_factor not in constants.LIMITING_FACTORS or rep_factor not in constants.LIMITING_FACTORS:
+        run.fail("limiting_factor", ("dispatch", city), "unknown")
+        return
+    near = []
+    for row in (recorded, replayed):
+        gap = _factor_gap(row)
+        if gap is not None and gap[0] <= gap[1] + compare.COMPARISON_EPSILON:
+            near.append(gap)
+    if near:
+        gap, band = min(near, key=lambda item: item[0] / item[1])
+        run.borderline("limiting_factor", ("dispatch", city), gap, band)
+    else:
+        run.fail("limiting_factor", ("dispatch", city), "different")
+
+
 def compare_run(recorded, replayed):
     """Compare a recorded Side with a replayed Side; returns a RunComparison."""
     run = _Run()
     if recorded.n_contingencies != replayed.n_contingencies:
         run.fail("n_contingencies", None, None)
+    if recorded.rate_set != replayed.rate_set:
+        run.fail("rate_set", None, None)
     for name, side in (("recorded", recorded), ("replayed", replayed)):
         for check, where in side.problems:
             run.fail(check, where, name)
+    for city in constants.CITIES:
+        if city in recorded.dispatch and city in replayed.dispatch:
+            _check_rating_data(run, city, recorded.dispatch[city], replayed.dispatch[city])
+            _compare_dispatch(run, city, recorded.dispatch[city], replayed.dispatch[city])
+        if city in recorded.margins and city in replayed.margins:
+            _compare_margin(run, city, recorded.margins[city], replayed.margins[city])
     _compare_violations(run, recorded, replayed)
     return run.result()
 
