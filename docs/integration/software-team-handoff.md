@@ -1,6 +1,6 @@
 # Rating database: handoff to the Software team
 
-**Audience:** the Software sub-team building the React dashboard (`frontend/`) and the Flask layer (`api/`).
+**Audience:** the Software sub-team building the Django dashboard (`frontend/`) and the Flask layer (`api/`).
 **Owner of the data:** the Data Science sub-team. Questions, keys and access go to the Data Science owner, Aaron Phan.
 **Contract this document routes to:** [`rest-api.md`](rest-api.md) (v1). Where this handoff and the contract disagree, the contract wins and this handoff is the bug.
 
