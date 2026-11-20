@@ -186,7 +186,7 @@ def _read_bytes(path, cap):
 # -- reading the export -----------------------------------------------------------------------------
 
 
-def _parts_from_text(text):
+def _json_parts(text):
     """(None, parts) or (reason, None) for the text of a JSON export."""
     ok, value = _parse_json(text)
     if not ok:
@@ -200,6 +200,52 @@ def _parts_from_text(text):
     return "wrong_shape", None
 
 
+def _csv_rows(text):
+    """The non-blank rows of CSV text, or None when the text is not well-formed CSV. The csv field
+    size limit is raised for the call and restored afterwards."""
+    previous = csv.field_size_limit(MAX_EXPORT_BYTES + 1)
+    try:
+        reader = csv.reader(io.StringIO(text, newline=""), strict=True)
+        return [row for row in reader if any(cell.strip() for cell in row)]
+    except csv.Error:
+        return None
+    finally:
+        csv.field_size_limit(previous)
+
+
+def _csv_cell(cell):
+    """(True, value) for one cell of JSON text; a cell that is a JSON string holding JSON text (a
+    value that was serialised twice) is unwrapped once."""
+    ok, value = _parse_json(cell)
+    if ok and isinstance(value, str):
+        ok, value = _parse_json(value)
+    return ok, value
+
+
+def _csv_parts(text):
+    """(None, parts) or (reason, None) for the text of a CSV export: a header of the five column
+    names in any order and exactly one data row whose cells are JSON text."""
+    rows = _csv_rows(text)
+    if rows is None or len(rows) != 2:
+        return "not_csv", None
+    names = [cell.strip() for cell in rows[0]]
+    if len(set(names)) != len(names):
+        return "not_csv", None
+    if any(column not in names for column in EXPORT_COLUMNS):
+        return "missing_column", None
+    if any(name not in EXPORT_COLUMNS for name in names):
+        return "unknown_column", None
+    if len(rows[1]) != len(names):
+        return "not_csv", None
+    parts = {}
+    for name, cell in zip(names, rows[1]):
+        ok, value = _csv_cell(cell)
+        if not ok:
+            return "not_json", None
+        parts[name] = value
+    return None, parts
+
+
 def _read_export(path):
     reason, data = _read_bytes(path, MAX_EXPORT_BYTES)
     if reason is not None:
@@ -208,14 +254,20 @@ def _read_export(path):
         text = data.decode("utf-8-sig")
     except UnicodeDecodeError:
         return "not_json", None
-    return _parts_from_text(text)
+    if text.lstrip()[:1] in ("[", "{"):
+        return _json_parts(text)
+    return _csv_parts(text)
 
 
 def read_export(path):
     """
-    The parsed content of an export file (the parts, not yet validated): a one-element JSON list
-    holding an object, or the bare object. Strict JSON, at most MAX_EXPORT_BYTES. ExportRefused
-    otherwise (reasons unreadable, too_large, not_json, wrong_shape).
+    The parsed content of an export file (the parts, not yet validated). Two forms, told apart by
+    the first non-blank character (an opening bracket or brace means JSON, anything else CSV): JSON
+    is a one-element list holding the object, or the bare object; CSV is a header of the five column
+    names in any order and exactly one data row, each cell JSON text. A byte-order mark and CRLF
+    line ends are tolerated. Strict parsing (no NaN, infinity or duplicate key), at most
+    MAX_EXPORT_BYTES. ExportRefused otherwise (reasons unreadable, too_large, not_json, not_csv,
+    wrong_shape, missing_column, unknown_column).
     """
     reason, parts = _read_export(path)
     if reason is not None:
@@ -226,8 +278,183 @@ def read_export(path):
 # -- validating -------------------------------------------------------------------------------------
 
 
+# One rule per column. A rule returns the normalised value, or _BAD. The rules are functions of the
+# value alone; the closed lists come from psse_job.constants, which the schema's CHECK lists equal.
+_BAD = object()
+_HEX = re.compile(r"[0-9a-f]{64}\Z")
+_RUN_ID = re.compile(r"psse-[0-9A-Za-z._-]{1,100}\Z")
+_MAX_TEXT = 1000
+_MAX_INTEGER = 2 ** 63 - 1
+_MAX_MAGNITUDE = 10 ** 300
+
+
+def _is_integer(value):
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
 def _is_count(value):
-    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+    return _is_integer(value) and 0 <= value <= _MAX_INTEGER
+
+
+def _is_number(value):
+    """A finite number that is not a boolean (an integer is a number: 1825.0 may be stored as 1825)."""
+    if _is_integer(value):
+        return abs(value) < _MAX_MAGNITUDE
+    return isinstance(value, float) and math.isfinite(value)
+
+
+def _finite_tree(value):
+    """True when a JSON value holds no non-finite number (iterative: no recursion limit)."""
+    stack = [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, float):
+            if not math.isfinite(item):
+                return False
+        elif isinstance(item, dict):
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
+    return True
+
+
+def _rule_text(value):
+    return value if isinstance(value, str) and 0 < len(value) <= _MAX_TEXT else _BAD
+
+
+def _rule_nullable_text(value):
+    return value if value is None or (isinstance(value, str) and len(value) <= _MAX_TEXT) else _BAD
+
+
+def _rule_run_id(value):
+    return value if isinstance(value, str) and _RUN_ID.match(value) else _BAD
+
+
+def _rule_hash(value):
+    return value if value is None or (isinstance(value, str) and _HEX.match(value)) else _BAD
+
+
+def _rule_time(value):
+    """An ISO timestamp with an offset, normalised to `datetime.isoformat()` text."""
+    if not isinstance(value, str):
+        return _BAD
+    try:
+        moment = datetime.datetime.fromisoformat(value)
+    except ValueError:
+        return _BAD
+    if moment.tzinfo is None or moment.utcoffset() is None:
+        return _BAD
+    return moment.isoformat()
+
+
+def _rule_count(value):
+    return value if _is_count(value) else _BAD
+
+
+def _rule_nullable_count(value):
+    return value if value is None or _is_count(value) else _BAD
+
+
+def _rule_number(value):
+    return value if _is_number(value) else _BAD
+
+
+def _rule_nullable_number(value):
+    return value if value is None or _is_number(value) else _BAD
+
+
+def _rule_object(value):
+    """A JSON object or None, without a non-finite number inside."""
+    if value is None or (isinstance(value, dict) and _finite_tree(value)):
+        return value
+    return _BAD
+
+
+def _rule_member(allowed, nullable=False):
+    def rule(value):
+        if value is None:
+            return None if nullable else _BAD
+        return value if isinstance(value, str) and value in allowed else _BAD
+    return rule
+
+
+_RULES = {
+    "runs": {
+        "run_id": _rule_run_id,
+        "slot_time": _rule_time,
+        "outcome": _rule_member(constants.OUTCOMES),
+        "failed_stage": _rule_member(constants.FAILED_STAGES, True),
+        "case_sha256": _rule_hash,
+        "mapping_sha256": _rule_hash,
+        "rate_set": _rule_nullable_text,
+        "ratings_used": _rule_object,
+        "n_contingencies": _rule_nullable_count,
+        "n_contingencies_with_results": _rule_nullable_count,
+        "job_version": _rule_text,
+    },
+    "dispatch": {
+        "run_id": _rule_run_id,
+        "city": _rule_member(constants.CITIES),
+        "rating_source": _rule_member(constants.SOURCES),
+        "fallback_reason": _rule_member(constants.FALLBACK_REASONS, True),
+        "applied_amps_per_conductor": _rule_number,
+        "subconductors_per_phase": _rule_count,
+        "applied_amps_circuit": _rule_number,
+        "line_voltage_kv": _rule_number,
+        "applied_mva": _rule_number,
+        "voltage_limit_mva": _rule_number,
+        "dispatched_mva": _rule_number,
+        "limiting_factor": _rule_member(constants.LIMITING_FACTORS),
+        "details": _rule_object,
+    },
+    "margins": {
+        "run_id": _rule_run_id,
+        "city": _rule_member(constants.CITIES),
+        "method": _rule_text,
+        "base_transfer_mw": _rule_nullable_number,
+        "limit_transfer_mw": _rule_nullable_number,
+        "margin_mw": _rule_number,
+        "voltage_limit_mva": _rule_number,
+        "critical_bus": _rule_nullable_text,
+        "min_voltage_pu": _rule_nullable_number,
+        "details": _rule_object,
+    },
+    "contingencies": {
+        "run_id": _rule_run_id,
+        "contingency_id": _rule_text,
+        "violation_kind": _rule_member(constants.VIOLATION_KINDS),
+        "element_type": _rule_member(constants.ELEMENT_TYPES),
+        "element_id": _rule_text,
+        "city": _rule_member(constants.CITIES, True),
+        "limit_value": _rule_nullable_number,
+        "observed_value": _rule_nullable_number,
+        "exceeded_by": _rule_nullable_number,
+        "unit": _rule_member(constants.RESULT_UNITS, True),
+    },
+}
+
+
+def _first_duplicate(tables):
+    """The refusal reason of the first duplicate (a run twice, a row twice), else None."""
+    seen = set()
+    for row in tables["runs"]:
+        if row["run_id"] in seen:
+            return "duplicate_run"
+        seen.add(row["run_id"])
+    for name in ("dispatch", "margins"):
+        seen = set()
+        for row in tables[name]:
+            key = (row["run_id"], row["city"])
+            if key in seen:
+                return "duplicate_row"
+            seen.add(key)
+    seen = set()
+    for row in tables["contingencies"]:
+        key = (row["run_id"], row["contingency_id"], row["violation_kind"], row["element_id"])
+        if key in seen:
+            return "duplicate_row"
+        seen.add(key)
+    return None
 
 
 def _validate(parts):
@@ -252,16 +479,32 @@ def _validate(parts):
         rows = parts[name]
         if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
             return "wrong_shape", None
+        rules = _RULES[name]
+        clean_rows = []
         for row in rows:
             if any(column not in row for column in columns):
                 return "missing_column", None
             if any(column not in columns for column in row):
                 return "unknown_column", None
-        tables[name] = [dict(row) for row in rows]
-    usable = sum(1 for row in tables["runs"] if row["outcome"] != "failed")
+            clean = {}
+            for column in columns:
+                value = rules[column](row[column])
+                if value is _BAD:
+                    return "bad_value", None
+                clean[column] = value
+            clean_rows.append(clean)
+        tables[name] = clean_rows
+    reason = _first_duplicate(tables)
+    if reason is not None:
+        return reason, None
+    usable_ids = set(row["run_id"] for row in tables["runs"] if row["outcome"] != "failed")
+    for name in ("dispatch", "margins", "contingencies"):
+        if any(row["run_id"] not in usable_ids for row in tables[name]):
+            return "orphan_row", None
     expected = {
-        "runs": len(tables["runs"]), "usable_runs": usable, "dispatch": len(tables["dispatch"]),
-        "margins": len(tables["margins"]), "contingencies": len(tables["contingencies"])}
+        "runs": len(tables["runs"]), "usable_runs": len(usable_ids),
+        "dispatch": len(tables["dispatch"]), "margins": len(tables["margins"]),
+        "contingencies": len(tables["contingencies"])}
     if dict(counts) != expected:
         return "counts_mismatch", None
     return None, Snapshot(
@@ -313,6 +556,10 @@ def ingest_export(export_path, repo_root=None, snapshots_dir=None, now=None):
     target = os.path.join(snapshots_dir, "snapshot_%s.json" % _stamp(now))
     private.require_private(target, repo_root)
     document = _snapshot_document(snapshot)
+    size = len(json.dumps(
+        dict(document, **{REPORT_MARKER: 1}), sort_keys=True, allow_nan=False, indent=1)) + 1
+    if size > MAX_SNAPSHOT_BYTES:
+        raise ExportRefused("too_large")
     written = private.write_private_json(target, document, REPORT_MARKER, repo_root)
     return IngestResult(written, snapshot)
 
@@ -341,6 +588,27 @@ def load_snapshot(path, repo_root=None):
     parts = dict((key, value) for key, value in document.items()
                  if key not in (REPORT_MARKER, "kind", "snapshot_version"))
     return validate(parts)
+
+
+def complete(recorded_run):
+    """
+    True when a run's own rows are a full result set: a usable run (outcome ok or fallback) with
+    exactly one dispatch row and one margin row per city, and as many distinct contingency ids among
+    its contingency rows as `n_contingencies_with_results` says. A per-run fact, so one damaged run
+    excludes itself (the replay's rows_incomplete) instead of refusing the whole file. False for a
+    failed run.
+    """
+    run = recorded_run.run
+    if run["outcome"] == "failed":
+        return False
+    expected = run["n_contingencies_with_results"]
+    if expected is None:
+        return False
+    cities = sorted(constants.CITIES)
+    for rows in (recorded_run.dispatch, recorded_run.margins):
+        if sorted(row["city"] for row in rows) != cities:
+            return False
+    return len(set(row["contingency_id"] for row in recorded_run.contingencies)) == expected
 
 
 def _slot_key(run):
