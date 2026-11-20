@@ -73,7 +73,7 @@
   },
   {
     "path": "backend/tests/pandapower_raw_test.py",
-    "sha256": "686309c0b16baa6d7dce9131ffcd2f9492560259813a3af650066648d074659a"
+    "sha256": "a6497189764a7c91efc5256ca851300709b970b83de91e95481b80ca36b180be"
   },
   {
     "path": "backend/tests/psse_contingency_test.py",
@@ -82,5 +82,9 @@
   {
     "path": "docs/data-science/decisions/confirmation_protocol_v3_per_city.md",
     "sha256": "3f5e63e39ca0bbe042fac9cf03e8927abbdb83ac765b916bff0e67f00ee1ee00"
+  },
+  {
+    "path": "backend/tests/pandapower_raw_test.py",
+    "sha256": "1c146e141211acc1ac916ea8fb6cef252b1a70408bcecdfb7dfa9ebe3b66c34e"
   }
 ]

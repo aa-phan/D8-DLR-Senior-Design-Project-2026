@@ -156,7 +156,11 @@ def _refusal_cases():
         add("transformer_with_%s" % field.lower(),
             fixture.mutate(base, "transformer", 1, field, 0.001), "magnetizing_branch",
             [_key(base["transformer"][1])])
-    add("controlling_transformer", fixture.mutate(base, "transformer", 1, "COD1", 1),
+    add("controlling_transformer", fixture.mutate(base, "transformer", 1, "COD1", 2),
+        "controlling_transformer", [_key(base["transformer"][1])])
+    add("transformer_controlling_a_remote_bus",
+        fixture.mutate(fixture.mutate(base, "transformer", 1, "COD1", 1), "transformer", 1,
+                       "CONT1", base["bus"][0]["I"] + 1000),
         "controlling_transformer", [_key(base["transformer"][1])])
     add("phase_shifting_transformer", fixture.mutate(base, "transformer", 1, "ANG1", 30.0),
         "phase_shift", [_key(base["transformer"][1])])
@@ -319,6 +323,56 @@ def test_fixed_shunt_sign():
         -100.0 * shunted.res_bus.at[bus, "vm_pu"] ** 2, rel=1e-9)
     assert shunted.res_shunt.at[0, "p_mw"] == pytest.approx(
         5.0 * shunted.res_bus.at[bus, "vm_pu"] ** 2, rel=1e-9)
+
+
+def _with_switched_shunt(records, **changes):
+    bus = records["load"][0]["I"]
+    shunt = dict({"I": bus, "MODSW": 1, "ADJM": 0, "STAT": 1, "VSWHI": 1.05, "VSWLO": 0.95,
+                  "SWREM": 0, "RMPCT": 100.0, "RMIDNT": "", "BINIT": 100.0}, **changes)
+    for n in range(1, 9):
+        shunt.setdefault("N%d" % n, 0)
+        shunt.setdefault("B%d" % n, 0.0)
+    return dict(records, switched_shunt=[shunt]), bus
+
+
+def test_switched_shunt_is_a_fixed_shunt_at_its_initial_setting():
+    records = _records()
+    plain = network.build_network(_parse(records))
+    switched_records, bus = _with_switched_shunt(records)
+    shunted = network.build_network(_parse(switched_records))
+    assert list(shunted.shunt.name) == ["%d-sw" % bus] and shunted.shunt.at[0, "q_mvar"] == -100.0
+    assert shunted.shunt.at[0, "p_mw"] == 0.0 and bool(shunted.shunt.at[0, "in_service"])
+    pandapower.runpp(plain)
+    pandapower.runpp(shunted)
+    assert shunted.res_bus.at[bus, "vm_pu"] > plain.res_bus.at[bus, "vm_pu"]
+    assert shunted.res_shunt.at[0, "q_mvar"] == pytest.approx(
+        -100.0 * shunted.res_bus.at[bus, "vm_pu"] ** 2, rel=1e-9)
+    # the control mode does not change the model (assumption A-shunt): locked, discrete, continuous
+    for mode in (0, 1, 2):
+        again, _ = _with_switched_shunt(records, MODSW=mode)
+        assert network.build_network(_parse(again)).shunt.at[0, "q_mvar"] == -100.0
+
+
+def test_out_of_service_switched_shunt_is_copied_and_a_remote_one_is_refused():
+    records = _records()
+    off, _ = _with_switched_shunt(records, STAT=0)
+    assert list(network.build_network(_parse(off)).shunt.in_service) == [False]
+    remote_bus = records["load"][1]["I"]
+    remote, _ = _with_switched_shunt(records, SWREM=remote_bus)
+    with pytest.raises(network.BuildRefused) as caught:
+        network.build_network(_parse(remote))
+    assert caught.value.reason == "remote_regulation" and caught.value.count == 1
+
+
+def test_local_voltage_control_transformer_is_built_at_its_initial_tap():
+    records = _records()
+    plain = network.build_network(_parse(records))
+    controlled = fixture.mutate(records, "transformer", 1, "COD1", 1)
+    net = network.build_network(_parse(controlled))
+    assert net.trafo.equals(plain.trafo), "local voltage control must not change the built tap"
+    own_bus = records["transformer"][1]["J"]
+    own = fixture.mutate(controlled, "transformer", 1, "CONT1", own_bus)
+    assert network.build_network(_parse(own)).trafo.equals(plain.trafo)
 
 
 def test_build_is_pure_and_leaves_the_case_unchanged():

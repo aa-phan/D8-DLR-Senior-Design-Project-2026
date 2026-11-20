@@ -79,6 +79,12 @@ _LOAD = _spec(
      "YP": 0.0, "YQ": 0.0, "OWNER": 1, "SCALE": 1, "INTRPT": 0})
 _FIXED_SHUNT = _spec(
     "I ID STATUS GL BL", 5, {"ID": "1", "STATUS": 1, "GL": 0.0, "BL": 0.0})
+_SWITCHED_SHUNT = _spec(
+    "I MODSW ADJM STAT VSWHI VSWLO SWREM RMPCT RMIDNT BINIT "
+    + " ".join("N%d B%d" % (n, n) for n in range(1, 9)), 10,
+    dict({"MODSW": 1, "ADJM": 0, "STAT": 1, "VSWHI": 1.0, "VSWLO": 1.0, "SWREM": 0, "RMPCT": 100.0,
+          "RMIDNT": "", "BINIT": 0.0},
+         **dict(("N%d" % n, 0) for n in range(1, 9)), **dict(("B%d" % n, 0.0) for n in range(1, 9))))
 _GENERATOR = _spec(
     "I ID PG QG QT QB VS IREG MBASE ZR ZX RT XT GTAP STAT RMPCT PT PB O1 F1 O2 F2 O3 F3 O4 F4 "
     "WMOD WPF", 7,
@@ -109,7 +115,7 @@ FIELD_TABLES = {
         "bus": _BUS, "load": _LOAD, "fixed_shunt": _FIXED_SHUNT, "generator": _GENERATOR,
         "branch": _BRANCH, "transformer_1": _TRANSFORMER_1, "transformer_2": _TRANSFORMER_2,
         "transformer_3": _TRANSFORMER_3, "transformer_4": _TRANSFORMER_4, "area": _AREA,
-        "zone": _ZONE, "owner": _OWNER}}
+        "zone": _ZONE, "owner": _OWNER, "switched_shunt": _SWITCHED_SHUNT}}
 
 SECTION_ORDER = {
     33: ("bus", "load", "fixed_shunt", "generator", "branch", "transformer", "area",
@@ -118,7 +124,7 @@ SECTION_ORDER = {
          "switched_shunt", "gne", "induction_machine")}
 
 SUPPORTED_SECTIONS = ("bus", "load", "fixed_shunt", "generator", "branch", "transformer", "area",
-                      "zone", "owner")
+                      "zone", "owner", "switched_shunt")
 
 _TRANSFORMER_TABLES = ("transformer_1", "transformer_2", "transformer_3", "transformer_4")
 
@@ -152,11 +158,11 @@ _UNIQUE = {
     "transformer": ("duplicate_branch", "branch",
                     lambda v: branch_key(v["I"], v["J"], v["CKT"]))}
 
-_STRING_FIELDS = frozenset(["NAME", "ID", "CKT", "VECGRP", "ARNAME", "ZONAME", "OWNAME"])
+_STRING_FIELDS = frozenset(["NAME", "ID", "CKT", "VECGRP", "ARNAME", "ZONAME", "OWNAME", "RMIDNT"])
 _INT_FIELDS = frozenset([
     "I", "J", "K", "IDE", "AREA", "ZONE", "OWNER", "STATUS", "STAT", "ST", "MET", "CW", "CZ", "CM",
     "NMETR", "IREG", "O1", "O2", "O3", "O4", "SCALE", "INTRPT", "WMOD", "ISW", "COD1", "CONT1",
-    "NTP1", "TAB1"])
+    "NTP1", "TAB1", "MODSW", "ADJM", "SWREM"] + ["N%d" % n for n in range(1, 9)])
 
 # Range rules: a value outside them is a bad_value, so the builder never sees it.
 _CHECKS = {

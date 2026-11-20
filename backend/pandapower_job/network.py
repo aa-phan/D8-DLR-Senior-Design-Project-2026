@@ -19,6 +19,14 @@ for this phase:
   passes against PSS/E's own answers (assumption A4).
 - A fixed shunt's BL is positive for a capacitor and pandapower's shunt q_mvar is positive for an
   inductor, so `q_mvar = -BL` (and `p_mw = GL`).
+- A transformer with local voltage control (COD1 1) is built at its initial tap WINDV1, the same
+  assumption as for the switched shunt (A-tap); other control modes are refused.
+- A switched shunt becomes a plain shunt at its initial setting, `q_mvar = -BINIT` (BINIT is Mvar at
+  1.0 pu, positive for a capacitor). That equals PSS/E's answer only while PSS/E leaves the steps
+  where they start, whatever the control mode (MODSW), so the choice is an explicit assumption
+  (A-shunt, owner's choice 2026-11-19) that the base-case comparison against PSS/E's own answers
+  tests; if it fails there, the upgrade is step control, never a tuned value. A switched shunt
+  that regulates a remote bus is refused.
 - The swing machine becomes the `ext_grid`; its RAW limits and output ride along in the extra
   columns `psse_pg_mw`, `psse_qg_mvar`, `psse_pt_mw`, `psse_pb_mw`, `psse_qt_mvar` and
   `psse_qb_mvar`. Machines at voltage-controlled buses become `gen` rows.
@@ -67,6 +75,20 @@ class BuildRefused(ValueError):
         if self.lines:
             text += " (first at line %d)" % min(self.lines)
         ValueError.__init__(self, text)
+
+
+def _fixed_tap_ok(values):
+    """
+    True for a transformer with no control (COD1 0) or with local voltage control (COD1 1, the
+    controlled bus is one of its own terminals or unset), which is built at its initial tap
+    WINDV1 (assumption A-tap, the same owner's choice as A-shunt, 2026-11-19: the base-case
+    comparison against PSS/E tests it; a failure upgrades to tap control, never a tuned value).
+    Every other control mode, and a remote controlled bus, is refused.
+    """
+    code = values["COD1"]
+    if code == 0:
+        return True
+    return code == 1 and abs(values["CONT1"]) in (0, values["I"], values["J"])
 
 
 def _machine_key(values):
@@ -140,6 +162,9 @@ def _check(case, buses):
     _refuse("remote_regulation",
             [(_machine_key(rec.values), rec.line) for rec in machines
              if rec.values["IREG"] not in (0, rec.values["I"])])
+    _refuse("remote_regulation",
+            [(_machine_key(dict(rec.values, ID="sw")), rec.line) for rec in sections["switched_shunt"]
+             if rec.values["SWREM"] not in (0, rec.values["I"])])
     transformers = sections["transformer"]
     _refuse("transformer_winding_codes",
             [(_branch_key(rec), rec.line) for rec in transformers
@@ -148,7 +173,8 @@ def _check(case, buses):
             [(_branch_key(rec), rec.line) for rec in transformers
              if rec.values["MAG1"] != 0.0 or rec.values["MAG2"] != 0.0])
     _refuse("controlling_transformer",
-            [(_branch_key(rec), rec.line) for rec in transformers if rec.values["COD1"] != 0])
+            [(_branch_key(rec), rec.line) for rec in transformers
+             if not _fixed_tap_ok(rec.values)])
     _refuse("phase_shift",
             [(_branch_key(rec), rec.line) for rec in transformers if rec.values["ANG1"] != 0.0])
     _refuse("windv2_not_one",
@@ -158,7 +184,7 @@ def _check(case, buses):
             [(_branch_key(rec), rec.line) for rec in sections["branch"]
              if rec.values["RATEA"] <= 0.0])
     unknown = []
-    for name in ("load", "fixed_shunt", "generator"):
+    for name in ("load", "fixed_shunt", "switched_shunt", "generator"):
         for rec in sections[name]:
             if rec.values["I"] not in buses:
                 unknown.append((_machine_key(rec.values), rec.line))
@@ -172,6 +198,8 @@ def _check(case, buses):
     for name in ("load", "fixed_shunt", "generator"):
         _refuse("duplicate_name",
                 _duplicates([(_machine_key(rec.values), rec.line) for rec in sections[name]]))
+    _refuse("duplicate_name",
+            _duplicates([(str(rec.values["I"]), rec.line) for rec in sections["switched_shunt"]]))
     _refuse("duplicate_name",
             _duplicates([(str(rec.values["I"]), rec.line) for rec in sections["bus"]]))
     return at_swing[0]
@@ -221,6 +249,11 @@ def build_network(case):
         v = rec.values
         pp.create_shunt(net, v["I"], q_mvar=-v["BL"], p_mw=v["GL"], vn_kv=kv[v["I"]],
                         name="%d-%s" % (v["I"], v["ID"]), in_service=_in_service(v["STATUS"]))
+
+    for rec in case.sections["switched_shunt"]:
+        v = rec.values
+        pp.create_shunt(net, v["I"], q_mvar=-v["BINIT"], p_mw=0.0, vn_kv=kv[v["I"]],
+                        name="%d-sw" % v["I"], in_service=_in_service(v["STAT"]))
 
     for rec in case.sections["generator"]:
         if rec is swing:

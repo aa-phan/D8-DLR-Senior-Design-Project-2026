@@ -153,6 +153,22 @@ def _shunt_case():
     return _built(records)
 
 
+def test_a_switched_shunt_is_compared_as_the_shunt_it_is_built_as():
+    records = fixture.case39_records(OFFSET)
+    bus = records["load"][0]["I"]
+    shunt = {"I": bus, "MODSW": 1, "ADJM": 0, "STAT": 1, "VSWHI": 1.05, "VSWLO": 0.95, "SWREM": 0,
+             "RMPCT": 100.0, "RMIDNT": "", "BINIT": 40.0}
+    for n in range(1, 9):
+        shunt["N%d" % n] = 0
+        shunt["B%d" % n] = 0.0
+    records["switched_shunt"] = [shunt]
+    case, net = _built(records)
+    report = parity.parity_report(case, net)
+    assert report.passed is True and report.differences == ()
+    net.shunt.at[net.shunt.index[0], "q_mvar"] = 0.0
+    assert _triples(parity.parity_report(case, net)) == {("shunts", "%d-sw" % bus, "BL")}
+
+
 def _triples(report):
     return {(item.category, item.element, item.quantity) for item in report.differences}
 

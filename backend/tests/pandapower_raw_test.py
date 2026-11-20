@@ -93,11 +93,15 @@ def _refusal_cases():
         text.replace(bus_end, "0 / " + "END" + " OF BUS DATA, " + "BEG" + "IN GENERATOR DATA", 1),
         "unknown_section", bus_end_line)
 
-    switched = fixture.terminator_line("switched_shunt")
-    switched_line = _line_of(text, switched)
-    add("switched_shunt_record",
+    facts = fixture.terminator_line("facts")
+    facts_line = _line_of(text, facts)
+    add("facts_record",
+        _insert_before(text, "facts", ["'F1', 90001, 0, 1"]),
+        "unsupported_section", facts_line)
+    switched_line = _line_of(text, fixture.terminator_line("switched_shunt"))
+    add("switched_shunt_record_too_short",
         _insert_before(text, "switched_shunt", ["90001, 1, 0, 1, 1.1, 0.9"]),
-        "unsupported_section", switched_line)
+        "field_count", switched_line)
 
     first_bus = _record_line(text, "bus")
     short_bus = ",".join(_lines(text)[first_bus - 1].split(",")[:5])
@@ -336,6 +340,7 @@ _LITERALS = {
                     "0.005,0.08,100.0",
                     "1.025,345.0,0.0,500.0,600.0,700.0,0,0,1.1,0.9,1.1,0.9,33,0,0.0,0.0,0.0",
                     "1.0,138.0"],
+    "switched_shunt": ["90001,1,0,1,1.05,0.95,0,100.0,'',25.0,2,12.5"],
     "area": ["1,90001,10.5,5.0,'AREA ONE'"],
     "zone": ["1,'ZONE ONE'"],
     "owner": ["1,'OWNER ONE'"],
@@ -365,6 +370,10 @@ _EXPECTED = {
                     "RATB1": 600.0, "RATC1": 700.0, "COD1": 0, "CONT1": 0, "RMA1": 1.1,
                     "RMI1": 0.9, "VMA1": 1.1, "VMI1": 0.9, "NTP1": 33, "TAB1": 0, "CR1": 0.0,
                     "CX1": 0.0, "CNXA1": 0.0, "WINDV2": 1.0, "NOMV2": 138.0},
+    "switched_shunt": dict(
+        {"I": 90001, "MODSW": 1, "ADJM": 0, "STAT": 1, "VSWHI": 1.05, "VSWLO": 0.95, "SWREM": 0,
+         "RMPCT": 100.0, "RMIDNT": "", "BINIT": 25.0, "N1": 2, "B1": 12.5},
+        **dict([("N%d" % n, 0) for n in range(2, 9)] + [("B%d" % n, 0.0) for n in range(2, 9)])),
     "area": {"I": 1, "ISW": 90001, "PDES": 10.5, "PTOL": 5.0, "ARNAME": "AREA ONE"},
     "zone": {"I": 1, "ZONAME": "ZONE ONE"},
     "owner": {"I": 1, "OWNAME": "OWNER ONE"},
@@ -396,7 +405,7 @@ def test_field_tables_are_self_consistent_and_match_the_fixture_order():
         assert set(spec.defaults) <= set(spec.names)
     lengths = {name: len(spec.names) for name, spec in tables.items()}
     assert lengths["bus"] == 13 and lengths["load"] == 14 and lengths["fixed_shunt"] == 5
-    assert lengths["generator"] == 28 and lengths["branch"] == 24
+    assert lengths["generator"] == 28 and lengths["branch"] == 24 and lengths["switched_shunt"] == 26
     assert [lengths["transformer_%d" % n] for n in (1, 2, 3, 4)] == [21, 3, 17, 2]
 
 

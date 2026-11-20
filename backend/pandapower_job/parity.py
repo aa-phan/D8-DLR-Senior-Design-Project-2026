@@ -370,10 +370,17 @@ def _loads(case, net, rec, bus_kv):
 def _shunts(case, net, rec, bus_kv):
     exported = {"%d-%s" % (item.values["I"], item.values["ID"]): item.values
                 for item in case.sections["fixed_shunt"]}
+    # A switched shunt is built as a shunt at its initial setting (assumption A-shunt in
+    # network.py), named bus-sw: the export side is GL 0 and BL = BINIT, so its quantities are
+    # compared like a fixed shunt's.
+    for item in case.sections["switched_shunt"]:
+        exported["%d-sw" % item.values["I"]] = {
+            "I": item.values["I"], "GL": 0.0, "BL": item.values["BINIT"],
+            "STATUS": item.values["STAT"]}
     built = {}
     for _, row in _rows(net.shunt):
         built.setdefault(str(row.get("name")), []).append(row)
-    rec.check("counts", "shunts", "count", len(case.sections["fixed_shunt"]), len(net.shunt))
+    rec.check("counts", "shunts", "count", len(exported), len(net.shunt))
     matched, union = _check_presence(rec, set(exported), set(built))
     rec.apply_to(("names", "in_service", "shunts"), len(union))
     for key in matched:
