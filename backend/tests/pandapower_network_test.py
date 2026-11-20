@@ -148,6 +148,13 @@ def _refusal_cases():
     add("machine_regulating_another_bus",
         fixture.mutate(base, "generator", pv_machine, "IREG", other_bus), "remote_regulation",
         [_machine_key(base["generator"][pv_machine])])
+    shunt_bus = base["load"][0]["I"]
+    continuous = dict(base, switched_shunt=[dict(
+        {"I": shunt_bus, "MODSW": 2, "ADJM": 0, "STAT": 1, "VSWHI": 1.05, "VSWLO": 0.95,
+         "SWREM": 0, "RMPCT": 100.0, "RMIDNT": "", "BINIT": 0.0},
+        **dict([("N%d" % n, 0) for n in range(1, 9)] + [("B%d" % n, 0.0) for n in range(1, 9)]))])
+    add("continuous_control_switched_shunt", continuous, "switched_shunt_control",
+        ["%d-sw" % shunt_bus])
     for field in ("CW", "CZ", "CM"):
         add("transformer_with_%s_2" % field.lower(),
             fixture.mutate(base, "transformer", 1, field, 2), "transformer_winding_codes",
@@ -328,7 +335,8 @@ def test_fixed_shunt_sign():
 def _with_switched_shunt(records, **changes):
     bus = records["load"][0]["I"]
     shunt = dict({"I": bus, "MODSW": 1, "ADJM": 0, "STAT": 1, "VSWHI": 1.05, "VSWLO": 0.95,
-                  "SWREM": 0, "RMPCT": 100.0, "RMIDNT": "", "BINIT": 100.0}, **changes)
+                  "SWREM": 0, "RMPCT": 100.0, "RMIDNT": "", "BINIT": 100.0, "N1": 4, "B1": 25.0},
+                 **changes)
     for n in range(1, 9):
         shunt.setdefault("N%d" % n, 0)
         shunt.setdefault("B%d" % n, 0.0)
@@ -347,10 +355,36 @@ def test_switched_shunt_is_a_fixed_shunt_at_its_initial_setting():
     assert shunted.res_bus.at[bus, "vm_pu"] > plain.res_bus.at[bus, "vm_pu"]
     assert shunted.res_shunt.at[0, "q_mvar"] == pytest.approx(
         -100.0 * shunted.res_bus.at[bus, "vm_pu"] ** 2, rel=1e-9)
-    # the control mode does not change the model (assumption A-shunt): locked, discrete, continuous
-    for mode in (0, 1, 2):
+    # locked and discrete control both start at the initial setting
+    for mode in (0, 1):
         again, _ = _with_switched_shunt(records, MODSW=mode)
         assert network.build_network(_parse(again)).shunt.at[0, "q_mvar"] == -100.0
+
+
+def test_a_discrete_control_shunt_carries_its_band_and_levels_and_a_locked_one_does_not():
+    records = _records()
+    stepped, _ = _with_switched_shunt(records)
+    row = network.build_network(_parse(stepped)).shunt.iloc[0]
+    assert row["psse_ctl"] == 1.0 and row["psse_vswlo"] == 0.95 and row["psse_vswhi"] == 1.05
+    assert row["psse_levels"] == "0.0,25.0,50.0,75.0,100.0"
+    two_blocks, _ = _with_switched_shunt(records, N2=2, B2=10.0)
+    assert network.build_network(_parse(two_blocks)).shunt.iloc[0]["psse_levels"] == (
+        "0.0,25.0,50.0,75.0,100.0,110.0,120.0")
+    locked, _ = _with_switched_shunt(records, MODSW=0)
+    assert "psse_ctl" not in network.build_network(_parse(locked)).shunt.columns
+    off, _ = _with_switched_shunt(records, STAT=0)
+    assert "psse_ctl" not in network.build_network(_parse(off)).shunt.columns
+
+
+@pytest.mark.parametrize("change", [
+    {"MODSW": 2}, {"ADJM": 1}, {"BINIT": 30.0}, {"VSWLO": 1.1, "VSWHI": 0.9},
+    {"N1": 0, "B1": 0.0, "BINIT": 0.0}], ids=["continuous", "sorted_blocks", "off_level",
+                                           "inverted_band", "no_levels"])
+def test_unsupported_switched_shunt_control_is_refused(change):
+    records, _ = _with_switched_shunt(_records(), **change)
+    with pytest.raises(network.BuildRefused) as caught:
+        network.build_network(_parse(records))
+    assert caught.value.reason == "switched_shunt_control" and caught.value.count == 1
 
 
 def test_out_of_service_switched_shunt_is_copied_and_a_remote_one_is_refused():

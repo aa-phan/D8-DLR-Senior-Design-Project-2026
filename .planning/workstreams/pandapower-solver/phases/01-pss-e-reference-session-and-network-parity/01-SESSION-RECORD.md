@@ -36,11 +36,12 @@ Versions, counts, statuses, rule names and pass or fail only. No bus number, bra
 |------|--------|
 | session export form | `writerawversion` takes the version as text; the first two forms raised TypeError with an int |
 | session header read | the revision sits after `@!` comment lines in revision 35 and later |
-| `switched_shunt` section | read with the revision 33 field table; built as a shunt at its initial setting (A-shunt); remote regulation refused |
+| `switched_shunt` section | read with the revision 33 field table; built at its initial setting and, for discrete voltage control (MODSW 1, ADJM 0), stepped one level at a time by the solve until the bus voltage is inside the band (A-shunt); locked shunts stay fixed; other modes, off-level starts, inverted bands and remote control refused (`switched_shunt_control`, `remote_regulation`) |
 | local voltage-control transformer | COD1 1 with a local or unset controlled bus is built at its initial tap (A-tap); every other control mode and a remote bus refused |
 | parity | the switched shunts the builder creates are counted and compared on the export side |
+| comparison join | a branch the reference lists from the opposite end is joined to the net's branch and compared at the net's other end (2 transformers in this case); a branch under both orientations on one side stays missing |
 
-A-shunt and A-tap were the owner's choice on 2026-11-19 (fixed at the starting setting; the base-case comparison against PSS/E tests them).
+A-shunt and A-tap were first the owner's choice on 2026-11-19 (fixed at the starting setting; the base-case comparison against PSS/E tests them). The first full comparison failed (see below), PSS/E's own solved case showed it moved both shunts in every city and no tap, and the owner then approved step control for the shunts (A-tap stays fixed: no tap moved in any city).
 
 ## Parity (NET-02)
 
@@ -48,25 +49,27 @@ Pass: 0 differences in all 11 categories (counts 5, classification 56, names 278
 
 D-06 evidence (the public pandapower case against the real export): 39 buses matched, 46 branches matched, 1 classification difference; the export has 12 transformers and 34 lines against 11 and 35, and 19 loads against 21; differences beyond 1e-6 in rating 34, voltage_limits 39, machine_limits 10, loads 9, setpoints 7, impedance 2, shunts 0.
 
-## NET-03: FAIL (not yet explained)
+## NET-03: PASS (4 of 4 cities)
 
-Every city fails in both runs, with identical counts, so the failure is not the scaling rule (see below).
+Both runs pass in every city with nothing failed and no explained-differences entry.
 
-| City | Buses compared / failed | Flows compared / failed | Complete |
-|------|-------------------------|-------------------------|----------|
-| AUSTIN | 39 / 17 | 132 / 72 | no |
-| CORPUS_CHRISTI | 39 / 14 | 132 / 78 | no |
-| MIDLAND | 39 / 15 | 132 / 70 | no |
-| EL_PASO | 39 / 19 | 132 / 81 | no |
+| City | Run | Buses compared / failed | Flows compared / failed | Complete |
+|------|-----|-------------------------|-------------------------|----------|
+| AUSTIN | algorithm, injected | 39 / 0 | 138 / 0 | yes |
+| CORPUS_CHRISTI | algorithm, injected | 39 / 0 | 138 / 0 | yes |
+| MIDLAND | algorithm, injected | 39 / 0 | 138 / 0 | yes |
+| EL_PASO | algorithm, injected | 39 / 0 | 138 / 0 | yes |
 
-- Algorithm run and injected-snapshot run give the same counts in every city. By D-12's attribution, a failure in both means a network or settings problem, not the scaling rule.
-- Unexplained deviations per city: 85 to 100; explained: 0. The explained-differences registry is empty.
-- Each city has 4 comparison keys with no counterpart (2 branches present under one orientation in pandapower and the opposite in the reference). That alone makes every comparison `incomplete`, so it needs fixing in how the reference names those two branches before any city can pass.
-- The failures are reactive: bus voltages (14 to 19 buses per city, largest difference about 0.04 pu), reactive branch flows (39 to 43 per city, up to about 180 Mvar) and the apparent-power flows that follow from them (27 to 37 per city). Real-power flow differences appear in one city only (EL_PASO, 5 flows, about 2 MW at most). Candidate causes, none tested yet: the two switched shunts and the one voltage-control transformer held at their starting step (A-shunt, A-tap) while PSS/E may move them; how reactive limits are enforced; the two branch-orientation keys.
+### How it got here (counts only)
 
-Nothing was changed to make NET-03 pass (R-3, D-12).
+1. First comparison, shunts and taps held at their starting setting: every city failed in both runs with identical counts (buses failed 14 to 19, flows failed 70 to 81 of 132), all of it reactive power and voltage, and 4 branch keys per city unjoined (so incomplete).
+2. Diagnosis from PSS/E's own pre-solve and solved cases: both switched shunts changed step in all four cities; no transformer tap changed; 0 or 1 of 10 machines sat at a reactive limit. With PSS/E's final shunt steps given to pandapower, every bus voltage matched within 1e-4 pu in every city.
+3. A band-stepping rule (a shunt above its band steps down one level, below it steps up one level, repeat until nothing moves) reproduced PSS/E's final step of both shunts in all four cities. It was built into the solve with synthetic tests.
+4. With the stepping, buses and flows failed 0 in every city; the remaining incompleteness was the 4 unjoined keys per city (2 transformers listed from the opposite end by PSS/E). They are joined by orientation (see the table above) with a synthetic test, and every comparison became complete.
+
+Nothing was tuned: no tolerance, no network parameter and no registry entry changed (R-3, D-12). The voltage and flow tolerances are untouched.
 
 ## Still open
 
-- NET-03 for all four cities, and the explanation of every unexplained difference (needs the owner).
-- ENG-05 (plan 02-07) and Phase 4 depend on NET-03.
+- ENG-05 (plan 02-07) and Phase 4 can proceed: they needed the real settings and a passing NET-03.
+- The real run showed `enforce_q_lims` is on (settings classification), with 0 deviations from D-14.

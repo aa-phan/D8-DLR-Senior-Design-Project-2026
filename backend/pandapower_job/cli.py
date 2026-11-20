@@ -307,7 +307,8 @@ def _unsolved():
 
 def _solve_note(outcome):
     return outcome.reason if outcome.reason in (
-        "not_converged", "nan_voltage", "voltage_collapse") else "solver_error"
+        "not_converged", "nan_voltage", "voltage_collapse",
+        "shunt_control_not_settled") else "solver_error"
 
 
 def _solved_or_stand_in(net, settings, enforce, notes):

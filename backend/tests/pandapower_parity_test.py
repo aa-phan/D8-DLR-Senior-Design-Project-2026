@@ -159,8 +159,8 @@ def test_a_switched_shunt_is_compared_as_the_shunt_it_is_built_as():
     shunt = {"I": bus, "MODSW": 1, "ADJM": 0, "STAT": 1, "VSWHI": 1.05, "VSWLO": 0.95, "SWREM": 0,
              "RMPCT": 100.0, "RMIDNT": "", "BINIT": 40.0}
     for n in range(1, 9):
-        shunt["N%d" % n] = 0
-        shunt["B%d" % n] = 0.0
+        shunt["N%d" % n] = 2 if n == 1 else 0
+        shunt["B%d" % n] = 20.0 if n == 1 else 0.0
     records["switched_shunt"] = [shunt]
     case, net = _built(records)
     report = parity.parity_report(case, net)

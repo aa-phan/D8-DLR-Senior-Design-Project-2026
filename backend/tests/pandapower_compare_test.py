@@ -355,6 +355,49 @@ def test_incomplete_comparisons_never_pass():
     assert len(verdict.unexplained) == 1 and len(verdict.missing) == 1
 
 
+def _flip_reference_orientation(solved, reference, key, swap_ends=True):
+    """Name branch `key` from the other end in both reference tables, as PSS/E may."""
+    opposite = compare._opposite(key)
+    index = solved.line.index[solved.line.name == key][0]
+    p_to = float(solved.res_line.at[index, "p_to_mw"])
+    for row in reference["line_flows"]:
+        if row["key"] == key:
+            row["key"] = opposite
+            if swap_ends:
+                row["p_mw"] = p_to
+    for row in reference["branch_flows"]["rows"]:
+        if row["key"] == key:
+            row["key"] = opposite
+            if swap_ends:
+                row["p_mw"] = p_to
+                row["q_mvar"] = float(solved.res_line.at[index, "q_to_mvar"])
+
+
+def test_a_branch_the_reference_lists_from_the_other_end_is_joined_and_turned_round():
+    solved, reference = _city()
+    busiest = max(range(len(solved.line)), key=lambda i: abs(solved.res_line.iloc[i].p_from_mw))
+    key = str(solved.line.iloc[busiest]["name"])
+    assert abs(float(solved.res_line.iloc[busiest].p_from_mw)) > 20.0
+    base = _compare(solved, reference)
+    assert base.passed
+    turned = copy.deepcopy(reference)
+    _flip_reference_orientation(solved, turned, key)
+    verdict = _compare(solved, turned)
+    assert verdict.complete and verdict.passed and verdict.missing == ()
+    assert verdict.flows_compared == base.flows_compared
+    # the names alone are not enough: a reference whose values were not turned round fails
+    unturned = copy.deepcopy(reference)
+    _flip_reference_orientation(solved, unturned, key, swap_ends=False)
+    wrong = _compare(solved, unturned)
+    assert wrong.complete and not wrong.passed and len(wrong.unexplained) > 0
+    # a branch under both orientations in the reference is never joined: it stays missing
+    both = copy.deepcopy(turned)
+    both["branch_flows"]["rows"].append(
+        dict(both["branch_flows"]["rows"][0], key=key))
+    verdict = _compare(solved, both)
+    assert not verdict.complete and (compare._opposite(key), "not_in_net") in verdict.missing
+
+
 def test_shuffled_reference_gives_an_equal_verdict():
     solved, reference = _city()
     reference["buses"][7]["pu"] += 0.011

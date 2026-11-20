@@ -11,6 +11,13 @@ when the reference has it and the larger-end apparent flow (the quantity the job
 uses), joined by bus number and by the from-to-circuit key, never by position. Angles, losses and
 machine Q are not gates.
 
+Orientation. PSS/E may list a branch from the opposite end to the one the RAW record names (the
+first real session did for two transformers). When the net holds a branch under one orientation
+and the reference holds the same circuit only under the opposite one, the two are the same branch:
+the reference's from end is the net's to end, so the reference is compared with the net's to-end P
+and Q, and the key reported is the reference's. A branch present under both orientations on one
+side, or under neither on the other, is never joined this way and stays missing.
+
 D-12, in words. Nothing is tuned to make pandapower agree with PSS/E. The four constants below are
 the only place a tolerance is written (a test walks this file's syntax tree to prove it). The
 explained-differences registry is the only way an out-of-tolerance value passes: it must list the
@@ -133,7 +140,7 @@ _TRAFO_COLUMNS = ("p_hv_mw", "q_hv_mvar", "p_lv_mw", "q_lv_mvar")
 
 
 def _net_branches(net):
-    """{key: (is_transformer, in_service, p_from, q_from, larger-end apparent flow)}."""
+    """{key: (is_transformer, in_service, p_from, q_from, larger-end apparent flow, p_to, q_to)}."""
     table = {}
     for is_transformer, rows, results, columns in (
             (False, net.line, net.res_line, _LINE_COLUMNS),
@@ -147,8 +154,30 @@ def _net_branches(net):
             apparent = max(_end_flow(p_from, q_from), _end_flow(p_to, q_to)) if all(
                 math.isfinite(item) for item in values) else math.nan
             table[key] = (is_transformer, bool(rows.at[index, "in_service"]), p_from, q_from,
-                          apparent)
+                          apparent, p_to, q_to)
     return table
+
+
+def _opposite(key):
+    """The key of the same circuit named from the other end, or None when it is not from-to-ckt."""
+    first, dash, rest = str(key).partition("-")
+    second, dash_two, circuit = rest.partition("-")
+    if not (dash and dash_two):
+        return None
+    return "%s-%s-%s" % (second, first, circuit)
+
+
+def _join_opposite_orientations(ours, theirs):
+    """`ours` with each branch the reference lists from the other end re-keyed and turned round."""
+    joined = dict(ours)
+    for key, mine in ours.items():
+        other = _opposite(key)
+        if key in theirs or other is None or other not in theirs or other in ours:
+            continue
+        is_transformer, live, _, _, apparent, p_to, q_to = mine
+        del joined[key]
+        joined[other] = (is_transformer, live, p_to, q_to, apparent, None, None)
+    return joined
 
 
 def _reference_branches(reference):
@@ -247,8 +276,8 @@ def _quantities(entry, got_p, got_q, got_apparent):
 
 def _compare_branches(tally, net, reference):
     """The branch comparison; returns the transformer-flow status."""
-    ours = _net_branches(net)
     theirs, status = _reference_branches(reference)
+    ours = _join_opposite_orientations(_net_branches(net), theirs)
     for key in sorted(set(ours) | set(theirs)):
         mine = ours.get(key)
         entry = theirs.get(key)
@@ -260,7 +289,7 @@ def _compare_branches(tally, net, reference):
         if mine is None:
             tally.absent(key, "not_in_net")
             continue
-        is_transformer, live, got_p, got_q, got_apparent = mine
+        is_transformer, live, got_p, got_q, got_apparent = mine[:5]
         if entry["is_transformer"] is not None and entry["is_transformer"] != is_transformer:
             tally.absent(key, "class_differs")
             continue

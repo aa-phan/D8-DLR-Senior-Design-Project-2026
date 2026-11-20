@@ -21,12 +21,16 @@ for this phase:
   inductor, so `q_mvar = -BL` (and `p_mw = GL`).
 - A transformer with local voltage control (COD1 1) is built at its initial tap WINDV1, the same
   assumption as for the switched shunt (A-tap); other control modes are refused.
-- A switched shunt becomes a plain shunt at its initial setting, `q_mvar = -BINIT` (BINIT is Mvar at
-  1.0 pu, positive for a capacitor). That equals PSS/E's answer only while PSS/E leaves the steps
-  where they start, whatever the control mode (MODSW), so the choice is an explicit assumption
-  (A-shunt, owner's choice 2026-11-19) that the base-case comparison against PSS/E's own answers
-  tests; if it fails there, the upgrade is step control, never a tuned value. A switched shunt
-  that regulates a remote bus is refused.
+- A switched shunt becomes a shunt at its initial setting, `q_mvar = -BINIT` (BINIT is Mvar at
+  1.0 pu, positive for a capacitor). One with discrete voltage control (MODSW 1, input-order
+  blocks ADJM 0, local bus) also carries the extra columns `psse_ctl` (1.0), `psse_vswlo`,
+  `psse_vswhi` and `psse_levels` (its available Mvar settings, comma-separated, in block order
+  starting from zero) and `solve.run_load_flow` steps it one level at a time until the bus voltage
+  is inside the band. The first real session (2026-11-19) showed PSS/E moves these shunts, and the
+  rule reproduced its final steps in all four cities, so a fixed setting (assumption A-shunt) was
+  replaced by this control. A locked shunt (MODSW 0) stays fixed; every other control mode, a
+  different adjustment method, a starting setting that is not one of the levels, an inverted
+  band and a remote controlled bus are refused.
 - The swing machine becomes the `ext_grid`; its RAW limits and output ride along in the extra
   columns `psse_pg_mw`, `psse_qg_mvar`, `psse_pt_mw`, `psse_pb_mw`, `psse_qt_mvar` and
   `psse_qb_mvar`. Machines at voltage-controlled buses become `gen` rows.
@@ -49,7 +53,8 @@ from pandapower_job import raw
 BUILD_REFUSAL_REASONS = (
     "no_buses", "no_swing_bus", "swing_bus_machines", "pv_bus_without_machine",
     "machine_at_load_bus", "conflicting_setpoints", "load_not_constant_power",
-    "line_shunt_terminals", "remote_regulation", "transformer_winding_codes",
+    "line_shunt_terminals", "remote_regulation", "switched_shunt_control",
+    "transformer_winding_codes",
     "magnetizing_branch", "controlling_transformer", "phase_shift", "windv2_not_one",
     "zero_rating", "unknown_bus", "duplicate_name")
 
@@ -75,6 +80,41 @@ class BuildRefused(ValueError):
         if self.lines:
             text += " (first at line %d)" % min(self.lines)
         ValueError.__init__(self, text)
+
+
+SHUNT_LEVEL_TOLERANCE = 1e-9
+
+
+def shunt_levels(values):
+    """The Mvar settings (at 1.0 pu) a switched shunt can take, in block order from zero."""
+    levels = [0.0]
+    total = 0.0
+    for number in range(1, 9):
+        for _ in range(values["N%d" % number]):
+            total += values["B%d" % number]
+            levels.append(total)
+    return levels
+
+
+def _start_level(values):
+    """The index of the level equal to BINIT, or None when BINIT is not one of the levels."""
+    for index, level in enumerate(shunt_levels(values)):
+        if abs(level - values["BINIT"]) <= SHUNT_LEVEL_TOLERANCE * max(1.0, abs(level)):
+            return index
+    return None
+
+
+def _shunt_control_ok(values):
+    """True for an out-of-service or locked shunt, or discrete control the solver can step."""
+    if values["STAT"] == 0 or values["MODSW"] == 0:
+        return True
+    return (values["MODSW"] == 1 and values["ADJM"] == 0 and values["VSWLO"] <= values["VSWHI"]
+            and len(shunt_levels(values)) >= 2 and _start_level(values) is not None)
+
+
+def _stepped(values):
+    """True when the solver steps this switched shunt (in service, discrete control)."""
+    return values["STAT"] == 1 and values["MODSW"] == 1
 
 
 def _fixed_tap_ok(values):
@@ -165,6 +205,9 @@ def _check(case, buses):
     _refuse("remote_regulation",
             [(_machine_key(dict(rec.values, ID="sw")), rec.line) for rec in sections["switched_shunt"]
              if rec.values["SWREM"] not in (0, rec.values["I"])])
+    _refuse("switched_shunt_control",
+            [(_machine_key(dict(rec.values, ID="sw")), rec.line) for rec in sections["switched_shunt"]
+             if not _shunt_control_ok(rec.values)])
     transformers = sections["transformer"]
     _refuse("transformer_winding_codes",
             [(_branch_key(rec), rec.line) for rec in transformers
@@ -252,8 +295,12 @@ def build_network(case):
 
     for rec in case.sections["switched_shunt"]:
         v = rec.values
+        extra = {}
+        if _stepped(v):
+            extra = {"psse_ctl": 1.0, "psse_vswlo": v["VSWLO"], "psse_vswhi": v["VSWHI"],
+                     "psse_levels": ",".join(repr(float(level)) for level in shunt_levels(v))}
         pp.create_shunt(net, v["I"], q_mvar=-v["BINIT"], p_mw=0.0, vn_kv=kv[v["I"]],
-                        name="%d-sw" % v["I"], in_service=_in_service(v["STAT"]))
+                        name="%d-sw" % v["I"], in_service=_in_service(v["STAT"]), **extra)
 
     for rec in case.sections["generator"]:
         if rec is swing:

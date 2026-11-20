@@ -13,8 +13,17 @@ Settings table (research Pattern 2), PSS/E setting to pandapower argument:
   reference (swing) machine's Q is never limited. Whether PSS/E does the same is not known.
 - mismatch tolerance, MVA -> `tolerance_mva`
 - iteration limit         -> `max_iteration`
-- tap, switched-shunt and area-interchange adjustment, flat start, non-divergent solution have no
+- switched-shunt adjustment -> the stepping loop below (the builder marks a shunt with discrete
+  voltage control by the columns `psse_ctl`, `psse_vswlo`, `psse_vswhi` and `psse_levels`)
+- tap and area-interchange adjustment, flat start and the non-divergent solution have no
   pandapower equivalent used here: the builder refuses a case where they could matter.
+
+Shunt stepping (A-shunt): after each solve, a controlled in-service shunt whose bus voltage is above
+its band moves one level down, below its band one level up (never past the first or last level);
+the net is solved again until no shunt moves. On the first real session this reproduced PSS/E's
+final step of every switched shunt in all four cities. A loop that revisits a set of levels it has
+already solved (the band is too narrow for the step size) does not settle: the outcome is
+`shunt_control_not_settled`, never a guess.
 
 A load flow counts as converged only when `runpp` raises nothing, `net.converged` is True, no
 in-service bus has a NaN voltage and none is below the collapse limit (the same limit the PSS/E
@@ -59,14 +68,60 @@ def _iterations(net):
         return None
 
 
+def _controlled_shunts(net):
+    """[(shunt index, bus, band low, band high, levels tuple)] of the shunts the loop steps."""
+    if "psse_ctl" not in net.shunt.columns:
+        return []
+    found = []
+    for index, row in net.shunt.iterrows():
+        if not (row["psse_ctl"] == 1.0 and bool(row["in_service"])):
+            continue
+        levels = tuple(float(text) for text in str(row["psse_levels"]).split(","))
+        found.append((index, int(row["bus"]), float(row["psse_vswlo"]), float(row["psse_vswhi"]),
+                      levels))
+    return found
+
+
+def _level_of(net, index, levels):
+    """The index of the level the shunt is at now (its q_mvar is minus the level)."""
+    now = -float(net.shunt.at[index, "q_mvar"])
+    return min(range(len(levels)), key=lambda number: abs(levels[number] - now))
+
+
 def run_load_flow(net, settings, enforce_q_lims):
     """
     Solve `net` in place with Newton-Raphson under `settings` and the explicit `enforce_q_lims`
     (True or False; `settings.enforce_q_lims` None means the caller runs both, so None here is a
-    ValueError). Returns a SolveOutcome; see the module docstring for the convergence rule.
+    ValueError). Returns a SolveOutcome; see the module docstring for the convergence rule and the
+    shunt stepping loop.
     """
     if not isinstance(enforce_q_lims, bool):
         raise ValueError("enforce_q_lims must be True or False")
+    controlled = _controlled_shunts(net)
+    seen = set()
+    while True:
+        outcome = _solve_once(net, settings, enforce_q_lims)
+        if not outcome.converged or not controlled:
+            return outcome
+        moves = []
+        for index, bus, low, high, levels in controlled:
+            level = _level_of(net, index, levels)
+            voltage = float(net.res_bus.at[bus, "vm_pu"])
+            if voltage > high and level > 0:
+                moves.append((index, levels[level - 1]))
+            elif voltage < low and level < len(levels) - 1:
+                moves.append((index, levels[level + 1]))
+        if not moves:
+            return outcome
+        state = tuple(float(net.shunt.at[item[0], "q_mvar"]) for item in controlled)
+        if state in seen:
+            return SolveOutcome(False, "shunt_control_not_settled", outcome.iterations)
+        seen.add(state)
+        for index, level in moves:
+            net.shunt.at[index, "q_mvar"] = -level
+
+
+def _solve_once(net, settings, enforce_q_lims):
     try:
         pp.runpp(net, algorithm="nr", calculate_voltage_angles=True,
                  enforce_q_lims=enforce_q_lims, tolerance_mva=settings.tolerance_mva,
