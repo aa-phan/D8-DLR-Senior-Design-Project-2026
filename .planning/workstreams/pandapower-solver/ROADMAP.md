@@ -117,7 +117,7 @@ Plans:
 - [x] 01-09-PLAN.md — Owner commands ingest and check, safe unzip, private-only outputs, laptop-to-Mac seam (wave 5)
 
 **Wave 6** *(blocked on Wave 5 completion)*
-- [ ] 01-10-PLAN.md — The PSS/E session with the teammate, then parity and NET-03 on the real data (wave 6, checkpoints)
+- [x] 01-10-PLAN.md — The PSS/E session with the teammate, then parity and NET-03 on the real data (wave 6, checkpoints)
 
 **Wave 7** *(blocked on Wave 6 completion)*
 - [ ] 01-11-PLAN.md — The owner's D-06 decision on the converted network, recorded and carried out (wave 7, checkpoint)

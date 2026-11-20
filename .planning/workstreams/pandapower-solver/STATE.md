@@ -50,21 +50,21 @@ See: .planning/PROJECT.md (shared). Builds on the pss-e-integration workstream (
 ## Current Position
 
 Phase: 01 (PSS/E Reference Session and Network Parity) — EXECUTING
-Plan: 10 of 11 (9 complete: 01-01 to 01-09); Phase 2 plans 02-01 to 02-06 complete (6 of 7; 02-06 database tier written but only skipped here, not yet run green); Phase 3 plan 03-01 complete (solver-tag migration written; text tier green, database tier only skipped here, not yet run green); Phase 3 plan 03-02 complete (solver tag through psse_job, pure Python, all green here; DB-02 stays Pending, the database tie is only skipped here); Phase 3 plan 03-03 complete (per-solver gap check gaps.run_by_solver, pure Python, 14 passed and 1 database test skipped here; the laptop gaps command stays pooled (A6); DB-03 stays Pending); Phase 3 plan 03-04 complete (pandapower tag pp registered on import, engine stamps solver and version, parity with the migration proven here, tagged database rehearsal only skipped here; DB-02 stays Pending); Phase 3 plan 03-05 complete (owner's read-only solver-tag check verify_solver_tag.sql written; D-03 answered by the owner 2026-11-18: guard, so the solver-tag migration also guards latest_grid_study to PSS/E runs; text tier green, database tier only skipped here; DB-01 stays Pending; Phase 3 has no plan left, verification is the orchestrator's)
-Status: Paused at plan 01-10 Task 1 (checkpoint:human-action, blocking)
-Last activity: 2026-11-17 — branch pushed; waiting on the laptop session
+Plan: 11 of 11 (10 complete: 01-01 to 01-10); Phase 2 plans 02-01 to 02-06 complete (6 of 7; 02-06 database tier written but only skipped here, not yet run green); Phase 3 plan 03-01 complete (solver-tag migration written; text tier green, database tier only skipped here, not yet run green); Phase 3 plan 03-02 complete (solver tag through psse_job, pure Python, all green here; DB-02 stays Pending, the database tie is only skipped here); Phase 3 plan 03-03 complete (per-solver gap check gaps.run_by_solver, pure Python, 14 passed and 1 database test skipped here; the laptop gaps command stays pooled (A6); DB-03 stays Pending); Phase 3 plan 03-04 complete (pandapower tag pp registered on import, engine stamps solver and version, parity with the migration proven here, tagged database rehearsal only skipped here; DB-02 stays Pending); Phase 3 plan 03-05 complete (owner's read-only solver-tag check verify_solver_tag.sql written; D-03 answered by the owner 2026-11-18: guard, so the solver-tag migration also guards latest_grid_study to PSS/E runs; text tier green, database tier only skipped here; DB-01 stays Pending; Phase 3 has no plan left, verification is the orchestrator's)
+Status: Plan 01-10 complete; next is plan 01-11 (owner's D-06 decision, checkpoint)
+Last activity: 2026-11-20 — plan 01-10 approved: parity 0 differences, NET-03 passes for all four cities
 
 ## Progress
 
 **Phases Complete:** 0 of 6
-**Current Plan:** 10
+**Current Plan:** 11
 
 ## Session Continuity
 
 **Last session:** 2026-11-18T22:04:27.368Z
 
-**Stopped At:** Plan 01-10 Task 1, waiting for the teammate to run the PSS/E session on the licensed laptop (Phase 2 plans 02-01 to 02-06 completed 2026-11-18, in parallel)
-**Resume File:** .planning/workstreams/pandapower-solver/phases/01-pss-e-reference-session-and-network-parity/01-10-PLAN.md
+**Stopped At:** Plan 01-10 complete (owner approved 2026-11-20); plan 01-11 (D-06 publish-or-keep-private) not started
+**Resume File:** .planning/workstreams/pandapower-solver/phases/01-pss-e-reference-session-and-network-parity/01-11-PLAN.md
 
 To resume:
 1. The teammate runs the session per `docs/data-science/decisions/psse_pandapower_session_guide.md`. Laptop paths are in `.planning/workstreams/pss-e-integration/HANDOFF.md`. Pass `-Mapping` a COPY of `dlr-psse\mapping_real.json`, because the session deletes the file it is given, and the original is the hourly job's mapping.
