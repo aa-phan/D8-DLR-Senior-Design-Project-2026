@@ -189,7 +189,9 @@ UNSAFE = [
     ("missing_member", _missing, None, None),
     ("bad_member_name", _bad_name("../escape.json"), None, None),
     ("bad_member_name", _bad_name("/abs.json"), None, None),
-    ("bad_member_name", _bad_name("dir\\x.json"), None, None),
+    pytest.param("bad_member_name", _bad_name("dir\\x.json"), None, None,
+                 marks=pytest.mark.skipif(os.name != "posix",
+                                          reason="zipfile turns a backslash into a slash on Windows")),
     ("bad_member_name", _bad_name("Upper.json"), None, None),
     ("duplicate_member", _duplicate, None, None),
     ("symlink_member", _symlink, None, None),
@@ -237,7 +239,8 @@ def test_ingest_refuses_each_unsafe_archive(tmp_path, monkeypatch, reason, build
 
 
 def test_every_refusal_reason_but_the_mapping_one_is_exercised():
-    exercised = set(item[0] for item in UNSAFE) | {"destination_exists"}
+    exercised = set((item.values if hasattr(item, "values") else item)[0]
+                    for item in UNSAFE) | {"destination_exists"}
     assert exercised == set(ingest.INGEST_REFUSAL_REASONS) - {"mapping_mismatch"}
 
 
@@ -481,7 +484,8 @@ def test_private_writers_add_the_marker_and_keep_the_file_private(tmp_path):
     document = json.loads(text)
     assert document == {"a": [0.5], "b": 1, MARKER: 1}
     assert list(document) == sorted(document)
-    assert stat.S_IMODE(os.stat(written).st_mode) == 0o600
+    if os.name == "posix":  # Windows has no 0o600 file mode
+        assert stat.S_IMODE(os.stat(written).st_mode) == 0o600
     with pytest.raises(ValueError):
         private.write_private_json(path + "2", {"x": float("nan")}, MARKER, repo)
     with pytest.raises(ValueError):

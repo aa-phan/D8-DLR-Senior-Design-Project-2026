@@ -474,7 +474,7 @@ def test_cli_exit_codes(tmp_path, monkeypatch, capsys):
     (bare / "data" / "private" / "x.json").write_text("{}\n", encoding="utf-8")
     monkeypatch.chdir(bare)
     assert scanner.main(["--private-root", absent]) == 1
-    assert capsys.readouterr().out.splitlines() == [
+    assert capsys.readouterr().out.replace("\\", "/").splitlines() == [
         "data/private:0:path:private_dir_not_ignored",
         "data/private/x.json:0:path:private_path_in_tree",
     ]

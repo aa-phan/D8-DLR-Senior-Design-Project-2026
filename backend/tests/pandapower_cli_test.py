@@ -586,7 +586,8 @@ def test_private_outputs_are_ignored_and_flagged_by_the_leak_guard(tmp_path):
         findings = private_leak_scan.scan_paths([os.path.realpath(path)], root=world.repo)
         assert any(item.layer == "shape" and item.pattern == "pandapower_marker"
                    for item in findings), "an output carries no leak-guard marker"
-        assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+        if os.name == "posix":  # Windows has no 0o600 file mode
+            assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
     # a second check in the same second is refused, not merged into the first folder
     code, out, err = check_session(world)
     assert code == 2 and err.splitlines() == ["private path: refused (exists)"]
