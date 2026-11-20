@@ -8,7 +8,12 @@ between PSS/E and pandapower. Follows `pandapower_compare_test.py`. Failure mess
 only.
 """
 
+import ast
 import copy
+import json
+import os
+import subprocess
+import sys
 
 import pytest
 
@@ -464,3 +469,273 @@ def test_compare_run_never_raises_on_malformed_sides():
     assert not comparison.passed
     assert {"city_rows", "search_settings", "value_thermal", "element_fields"} <= set(
         check for _, check in produced)
+
+
+# -- Task 3: the gate (D-04), the counts-only summary, the private detail, the proofs -------------
+
+
+def _comparison(mutate=None):
+    return agree.compare_run(*_pair(mutate))
+
+
+def _empty(rec, rep):
+    rec["contingencies"] = []
+    rep["contingencies"] = []
+
+
+def _gate(compared, exclusions=(), runs=None):
+    return agree.gate(list(compared), list(exclusions),
+                      len(compared) + len(exclusions) if runs is None else runs, 1)
+
+
+def test_gate_pass_fail_incomplete():
+    assert _gate([("r1", _comparison())]).word == "pass"
+    assert _gate([("r1", _comparison()), ("r2", _comparison())]).word == "pass"
+    failing = _comparison(_rep(_setv(0, observed_value=1200.0)))
+    assert _gate([("r1", _comparison()), ("r2", failing)]).word == "fail"
+
+
+def test_gate_incomplete_is_never_pass():
+    assert _gate([]).word == "incomplete"
+    assert _gate([], [("r1", "mapping_hash_differs"), ("r2", "failed_run")]).word == "incomplete"
+    assert _gate([("r1", _comparison(_empty))]).word == "incomplete"
+    gated = _gate([("r1", _comparison(_empty))], [("r2", "case_hash_missing")])
+    assert gated.word == "incomplete"
+    assert gated.summary.word == "incomplete" and gated.summary.runs_replayed == 1
+
+
+def test_gate_failure_beats_incomplete():
+    assert _gate([("r1", _comparison(_empty)), ("r2", agree.replay_failed("load_flow"))]
+                 ).word == "fail"
+    assert _gate([("r1", agree.replay_failed("mapping"))]).word == "fail"
+    # a failure with nothing non-empty compared anywhere
+    broken = _comparison(lambda rec, rep: (_empty(rec, rep), rep["run"].update(rate_set=9)))
+    assert _gate([("r1", broken)]).word == "fail"
+
+
+def test_gate_lists_kinds_not_exercised():
+    summary = _gate([("r1", _comparison())]).summary
+    assert summary.not_exercised == ("voltage_high",)
+    assert summary.nonempty == {"thermal_overload": 1, "voltage_low": 1, "voltage_high": 0,
+                                "non_convergence": 1}
+    summary = _gate([("r1", _comparison(_empty))]).summary
+    assert summary.not_exercised == agree.KINDS
+    assert set(summary.nonempty) == set(agree.KINDS)
+    summary = _gate([("r1", _comparison(_rec(_add(_BORDER_VH))))]).summary
+    assert summary.not_exercised == ()
+    assert _gate([]).summary.not_exercised == agree.KINDS
+
+
+def test_gate_counts_every_exclusion_reason_zeros_included():
+    summary = _gate([("r1", _comparison())]).summary
+    assert summary.excluded == dict.fromkeys(agree.EXCLUSION_REASONS, 0)
+    reasons = list(agree.EXCLUSION_REASONS)
+    summary = _gate([("r1", _comparison())], [("x%d" % n, why) for n, why in enumerate(reasons)]
+                    ).summary
+    assert summary.excluded == dict.fromkeys(agree.EXCLUSION_REASONS, 1)
+    summary = _gate([], [("a", "failed_run"), ("b", "failed_run")]).summary
+    assert summary.excluded["failed_run"] == 2 and summary.runs_in_snapshot == 2
+    with pytest.raises(ValueError):
+        _gate([], [("a", "no_such_reason")])
+
+
+def test_gate_summary_counts():
+    passing, failing = _comparison(), _comparison(_rep(_setv(0, observed_value=1200.0)))
+    borderline = _comparison(_rep(_add(_BORDER_TH)))
+    summary = agree.gate([("a", passing), ("b", failing), ("c", borderline)], [], 5, 3).summary
+    assert (summary.runs_in_snapshot, summary.runs_replayed, summary.runs_passed,
+            summary.runs_failed, summary.configurations) == (5, 3, 2, 1, 3)
+    assert summary.borderline == 1
+    assert summary.pairs_compared == passing.counts["pairs_compared"] * 3
+    assert summary.dispatch_comparisons == 3 * len(CITIES)
+    assert summary.margin_comparisons == 3 * 5 * len(CITIES)
+
+
+def test_three_failure_counts_are_kept_apart():
+    mapping = _gate([("r", agree.replay_failed("mapping"))]).summary
+    assert mapping.failed_stages["mapping"] == 1 and sum(mapping.failed_stages.values()) == 1
+    assert mapping.runs_disagreeing == 0 and sum(mapping.data_differences.values()) == 0
+    assert set(mapping.failed_stages) == set(constants.FAILED_STAGES)
+    assert set(mapping.data_differences) == set(agree.DATA_CHECK_WORDS)
+
+    for mutate, word in ((_rep(_setd(rating_source="static")), "rating_data"),
+                         (_rep(_setmd(step_mw=50.0)), "search_settings"),
+                         (_rep(_setdd(branches=["b1-b2-1"])), "branches")):
+        summary = _gate([("r", _comparison(mutate))]).summary
+        assert summary.data_differences[word] == 1
+        assert sum(summary.data_differences.values()) == 1
+        assert summary.runs_disagreeing == 0
+        assert sum(summary.failed_stages.values()) == 0
+
+    for mutate in (_rep(_setv(0, observed_value=1200.0)), _rec(_add(_BORDER_VH_OUT)),
+                   _rep(_setm(margin_mw=700.0)), _rep(_add(_LONE_NC)),
+                   _rep(_setd(dispatched_mva=900.0))):
+        summary = _gate([("r", _comparison(mutate))]).summary
+        assert summary.runs_disagreeing == 1
+        assert sum(summary.data_differences.values()) == 0
+        assert sum(summary.failed_stages.values()) == 0
+
+    both = _comparison(_all(_rep(_setd(rating_source="static")),
+                            _rep(_setv(0, observed_value=1200.0))))
+    summary = _gate([("r", both)]).summary
+    assert summary.data_differences["rating_data"] == 1 and summary.runs_disagreeing == 1
+
+
+def test_replay_failed_is_a_failed_run_with_zero_counts():
+    comparison = agree.replay_failed("contingency")
+    assert not comparison.passed
+    assert [(item.klass, item.check, item.detail) for item in comparison.findings] == [
+        ("failure", "replay_failed", "contingency")]
+    assert comparison.counts == dict.fromkeys(agree.COMPARE_COUNT_KEYS, 0)
+    assert comparison.worst == {}
+    unknown = _gate([("r", agree.replay_failed("not a stage"))]).summary
+    assert unknown.failed_stages["internal"] == 1
+    assert sum(unknown.failed_stages.values()) == 1
+    assert _gate([("r", comparison)]).summary.runs_failed == 1
+
+
+def _leaves(value):
+    if isinstance(value, dict):
+        for key, item in value.items():
+            yield key
+            for leaf in _leaves(item):
+                yield leaf
+    elif isinstance(value, (tuple, list)):
+        for item in value:
+            for leaf in _leaves(item):
+                yield leaf
+    else:
+        yield value
+
+
+def test_summary_is_counts_and_fixed_words_only():
+    run_id = "run-secret-id-77"
+    changed = _comparison(_rep(_setv(0, observed_value=1234.5678)))
+    gated = agree.gate([(run_id, changed), ("run-two", _comparison(_rep(_add(_BORDER_TH)))),
+                        ("run-three", agree.replay_failed("dispatch"))],
+                       [("run-four", "failed_run")], 4, 2)
+    words = (set(agree.VERDICT_WORDS) | set(agree.EXCLUSION_REASONS) | set(agree.KINDS)
+             | set(constants.FAILED_STAGES) | set(agree.DATA_CHECK_WORDS))
+    fields = set(agree.Summary._fields)
+    for name, value in gated.summary.as_dict().items():
+        assert name in fields
+        for leaf in _leaves(value):
+            assert not isinstance(leaf, (float, bool))
+            assert isinstance(leaf, int) or leaf in words
+    text = repr(gated.summary.as_dict()) + repr(gated.summary)
+    for secret in (run_id, "run-two", "run-four", "1234", "AUSTIN", "out01", "br1"):
+        assert secret not in text
+    # the value and the id are in the private detail
+    assert run_id in repr(gated.detail)
+    # the summary cannot be made to carry a figure, an id or an element
+    good = gated.summary._asdict()
+    for bad in (0.5, run_id, "AUSTIN", True, None, {run_id: 1}, ("br1",)):
+        with pytest.raises(ValueError):
+            agree.Summary(**dict(good, borderline=bad))
+
+
+def test_detail_largest_deviation_is_kept_on_a_pass():
+    small = _comparison(_rep(_setv(0, observed_value=1111.0)))
+    gated = _gate([("r1", _comparison()), ("r2", small)])
+    assert gated.word == "pass"
+    largest = gated.detail.largest
+    assert largest.quantity == "thermal_mva"
+    assert largest.deviation == pytest.approx(11.0)
+    assert 0 < largest.utilisation < 1
+    assert largest.where[0] == "r2"
+    assert gated.detail.worst["thermal_mva"] == largest
+    assert set(gated.detail.worst) <= set(agree.QUANTITIES)
+    assert gated.detail.findings == [] and gated.detail.exclusions == []
+    assert _gate([]).detail.largest is None
+    assert _gate([("r1", agree.replay_failed("write"))]).detail.largest is None
+
+
+def test_detail_holds_findings_exclusions_borderline_and_notes():
+    borderline = _comparison(_all(_rep(_add(_BORDER_TH)),
+                                  _rep(_setmd(bounded_by="non_convergence"))))
+    failing = _comparison(_rep(_setm(critical_bus="bus-z", margin_mw=700.0)))
+    gated = agree.gate([("r1", borderline), ("r2", failing)], [("r3", "ratings_unusable")], 3, 1)
+    detail = gated.detail
+    assert [(run_id, item.klass, item.check) for run_id, item in detail.findings] == [
+        ("r1", "borderline", "set_one_sided"), ("r2", "failure", "margin_value")]
+    assert detail.exclusions == [("r3", "ratings_unusable")]
+    assert detail.notes == {"bound_member_differs": 1, "critical_bus_differs": 1}
+    near = detail.borderline_largest
+    assert near.where == ("r1", ("AUSTIN:out04", "thermal_overload", "br2"))
+    assert near.utilisation == pytest.approx(1.0)
+    assert _gate([("r1", _comparison())]).detail.borderline_largest is None
+
+
+def test_tolerance_header_reads_compare_by_name():
+    header = agree.tolerance_header()
+    assert header["voltage_tolerance_pu"] == compare.VOLTAGE_TOLERANCE_PU
+    assert header["flow_relative_tolerance"] == compare.FLOW_RELATIVE_TOLERANCE
+    assert header["flow_floor_mva"] == compare.FLOW_FLOOR_MVA
+    assert header["comparison_epsilon"] == compare.COMPARISON_EPSILON
+    assert header["data_relative_tolerance"] == agree.DATA_RELATIVE_TOLERANCE
+    assert "stored step" in header["margin_rule"] and "stored tolerance" in header["margin_rule"]
+    assert "2 percent" in header["margin_rule"]
+    assert "borderline" in header["borderline_rule"]
+    assert agree.margin_allowance(1000.0, 0.0) == header["flow_relative_tolerance"] * 1000.0
+
+
+def _agree_source():
+    with open(agree.__file__, encoding="utf-8") as handle:
+        return handle.read()
+
+
+def _stray_tolerances(source):
+    tree = ast.parse(source)
+    wanted = {compare.VOLTAGE_TOLERANCE_PU, compare.FLOW_RELATIVE_TOLERANCE,
+              compare.FLOW_FLOOR_MVA, compare.COMPARISON_EPSILON}
+    return [node for node in ast.walk(tree)
+            if isinstance(node, ast.Constant) and not isinstance(node.value, (str, bytes, bool))
+            and isinstance(node.value, (int, float)) and node.value in wanted]
+
+
+def test_no_second_tolerance_literal_in_agree():
+    source = _agree_source()
+    assert _stray_tolerances(source) == []
+    for planted in ("0.01", "0.02", "2.0", "1e-12", "2"):
+        assert len(_stray_tolerances(source + "\nSTRAY = %s\n" % planted)) == 1, planted
+    tree = ast.parse(source)
+    used = set(node.attr for node in ast.walk(tree)
+               if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
+               and node.value.id == "compare")
+    assert {"VOLTAGE_TOLERANCE_PU", "FLOW_RELATIVE_TOLERANCE", "within_voltage", "within_flow",
+            "flow_allowance", "COMPARISON_EPSILON"} <= used
+    assert source.count("compare.") >= 5
+    # no flag or override takes a tolerance
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef):
+            names = [arg.arg for arg in node.args.args + node.args.kwonlyargs]
+            assert not [name for name in names if "toler" in name or "epsilon" in name], node.name
+
+
+def test_agree_is_pure():
+    tree = ast.parse(_agree_source())
+    imported = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported |= set(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            imported |= set("%s.%s" % (node.module, alias.name) for alias in node.names)
+    assert imported == {"collections", "math", "pandapower_job.compare", "psse_job.constants"}
+
+    backend = os.path.dirname(os.path.dirname(os.path.abspath(agree.__file__)))
+    code = (
+        "import json, sys\n"
+        "sys.path.insert(0, sys.argv[1])\n"
+        "import pandapower_job.agree\n"
+        "print(json.dumps(sorted(n for n in sys.modules if n.split('.')[0] in json.loads("
+        "sys.argv[2]))))\n"
+    )
+    names = ["pandapower", "psycopg", "psycopg2", "numpy", "pandas", "psse_job",
+             "pandapower_job"]
+    done = subprocess.run(
+        [sys.executable, "-I", "-c", code, backend, json.dumps(names)],
+        capture_output=True, text=True, timeout=120)
+    assert done.returncode == 0, done.stderr[-500:]
+    loaded = json.loads(done.stdout.strip().splitlines()[-1])
+    assert loaded == ["pandapower_job", "pandapower_job.agree", "pandapower_job.compare",
+                      "psse_job", "psse_job.constants"]

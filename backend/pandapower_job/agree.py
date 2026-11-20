@@ -467,19 +467,170 @@ def compare_run(recorded, replayed):
 
 # -- the gate ------------------------------------------------------------------------------------
 
+VERDICT_WORDS = ("pass", "fail", "incomplete")
+
+# Every string a Summary may hold, besides its own field names: the verdict word and the members
+# of the closed vocabularies. A run id, an element or a value is not among them.
+_SUMMARY_WORDS = frozenset(
+    VERDICT_WORDS + EXCLUSION_REASONS + KINDS + tuple(constants.FAILED_STAGES)
+    + DATA_CHECK_WORDS)
+
+_SUMMARY_FIELDS = (
+    "word", "runs_in_snapshot", "runs_replayed", "runs_passed", "runs_failed", "excluded",
+    "configurations", "nonempty", "not_exercised", "pairs_compared", "margin_comparisons",
+    "dispatch_comparisons", "borderline", "failed_stages", "data_differences",
+    "runs_disagreeing")
+
+
+def _safe(value):
+    """Check that `value` is built from integers and closed-vocabulary words only."""
+    if isinstance(value, bool):
+        raise ValueError("a summary holds integers and words only")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value in _SUMMARY_WORDS:
+        return value
+    if isinstance(value, tuple):
+        return tuple(_safe(item) for item in value)
+    if isinstance(value, dict):
+        return dict((_safe(key), _safe(item)) for key, item in value.items())
+    raise ValueError("a summary holds integers and words only")
+
+
+class Summary(collections.namedtuple("Summary", _SUMMARY_FIELDS)):
+    """Counts and fixed words only (D-03): it can be printed or put in a CI log. A figure, an
+    element or a run id cannot be put in it; building one with such a value raises."""
+
+    __slots__ = ()
+
+    def __new__(cls, *args, **kwargs):
+        made = super(Summary, cls).__new__(cls, *args, **kwargs)
+        for value in made:
+            _safe(value)
+        return made
+
+    def as_dict(self):
+        return collections.OrderedDict(
+            (name, getattr(self, name)) for name in _SUMMARY_FIELDS)
+
+
+Detail = collections.namedtuple(
+    "Detail", ["largest", "worst", "borderline_largest", "findings", "exclusions", "notes"])
 Gate = collections.namedtuple("Gate", ["word", "summary", "detail"])
 
 
+def replay_failed(stage):
+    """The comparison of a run whose replay raised: one failure finding and zero counts, so a
+    study the engine could not run is a failed run, never an exclusion and never dropped. A stage
+    outside constants.FAILED_STAGES is stored as internal, so the stage counts stay closed."""
+    word = stage if stage in constants.FAILED_STAGES else "internal"
+    return RunComparison(
+        (Finding(FAILURE, "replay_failed", None, word),), dict.fromkeys(COMPARE_COUNT_KEYS, 0),
+        dict.fromkeys(NOTE_WORDS, 0), {})
+
+
+def tolerance_header():
+    """The rules in force, for the private report header (read by name from compare.py)."""
+    return {
+        "voltage_tolerance_pu": compare.VOLTAGE_TOLERANCE_PU,
+        "flow_relative_tolerance": compare.FLOW_RELATIVE_TOLERANCE,
+        "flow_floor_mva": compare.FLOW_FLOOR_MVA,
+        "comparison_epsilon": compare.COMPARISON_EPSILON,
+        "margin_rule": (
+            "a margin may differ by the larger of %g percent of the recorded value and the stored "
+            "step (a rating-bound search) or the stored tolerance (a voltage-bound search)"
+            % (compare.FLOW_RELATIVE_TOLERANCE * 100)),
+        "borderline_rule": (
+            "a one-sided element within the tolerance of its limit (the band equals the "
+            "tolerance) is borderline; outside it, or a one-sided non-convergence, is a failure"),
+        "data_relative_tolerance": DATA_RELATIVE_TOLERANCE,
+    }
+
+
+def _failure_checks(comparison):
+    return set(item.check for item in comparison.findings if item.klass == FAILURE)
+
+
+def _failure_stages(comparison):
+    return set(item.detail if item.detail in constants.FAILED_STAGES else "internal"
+               for item in comparison.findings
+               if item.klass == FAILURE and item.check == "replay_failed")
+
+
+def _merge_worst(compared):
+    worst, largest = {}, None
+    for run_id, item in compared:
+        for quantity, deviation in item.worst.items():
+            held = Deviation(deviation.quantity, deviation.deviation, deviation.allowance,
+                             deviation.utilisation, (run_id, deviation.where))
+            _record(worst, held)
+            if largest is None or held.utilisation > largest.utilisation:
+                largest = held
+    return largest, worst
+
+
+def _borderline_largest(findings):
+    largest = None
+    for run_id, item in findings:
+        if item.klass != BORDERLINE or not isinstance(item.detail, dict):
+            continue
+        excess, band = item.detail["excess"], item.detail["band"]
+        held = Deviation(item.check, excess, band, excess / band, (run_id, item.where))
+        if largest is None or held.utilisation > largest.utilisation:
+            largest = held
+    return largest
+
+
 def gate(compared, exclusions, runs_in_snapshot, configurations):
-    """The verdict over many comparisons (D-04). `compared` is a list of (run_id, RunComparison).
-    Pass needs a replayed run, a non-empty set comparison and no failure; a failure beats
-    incomplete; incomplete beats pass."""
-    nonempty = sum(sum(item.counts["outages_" + kind] for kind in KINDS) for _, item in compared)
-    failing = any(not item.passed for _, item in compared)
-    if failing:
+    """The verdict over many comparisons (D-04). `compared` is a list of (run_id, RunComparison)
+    and `exclusions` a list of (run_id, reason). Pass needs a replayed run, a non-empty set
+    comparison and no failure; a failure beats incomplete; incomplete beats pass. Returns a
+    Gate(word, summary, detail): the summary holds counts and words only, the detail holds every
+    value, element and run id."""
+    compared, exclusions = list(compared), list(exclusions)
+    for _, reason in exclusions:
+        if reason not in EXCLUSION_REASONS:
+            raise ValueError("an exclusion needs a reason of %s" % ", ".join(EXCLUSION_REASONS))
+    nonempty = dict((kind, sum(item.counts["outages_" + kind] for _, item in compared))
+                    for kind in KINDS)
+    failed = sum(1 for _, item in compared if not item.passed)
+    if failed:
         word = "fail"
-    elif compared and nonempty:
+    elif compared and sum(nonempty.values()) > 0:
         word = "pass"
     else:
         word = "incomplete"
-    return Gate(word, None, None)
+    stages = dict.fromkeys(constants.FAILED_STAGES, 0)
+    data = dict.fromkeys(DATA_CHECK_WORDS, 0)
+    disagreeing = 0
+    for _, item in compared:
+        for stage in _failure_stages(item):
+            stages[stage] += 1
+        checks = _failure_checks(item)
+        for check in checks & set(DATA_CHECK_WORDS):
+            data[check] += 1
+        if checks - set(DATA_CHECK_WORDS) - {"replay_failed"}:
+            disagreeing += 1
+    excluded = dict.fromkeys(EXCLUSION_REASONS, 0)
+    for _, reason in exclusions:
+        excluded[reason] += 1
+
+    def total(key):
+        return sum(item.counts[key] for _, item in compared)
+
+    summary = Summary(
+        word=word, runs_in_snapshot=runs_in_snapshot, runs_replayed=len(compared),
+        runs_passed=len(compared) - failed, runs_failed=failed, excluded=excluded,
+        configurations=configurations, nonempty=nonempty,
+        not_exercised=tuple(kind for kind in KINDS if nonempty[kind] == 0),
+        pairs_compared=total("pairs_compared"), margin_comparisons=total("margin_comparisons"),
+        dispatch_comparisons=total("dispatch_comparisons"), borderline=total("borderline"),
+        failed_stages=stages, data_differences=data, runs_disagreeing=disagreeing)
+    findings = [(run_id, found) for run_id, item in compared for found in item.findings]
+    largest, worst = _merge_worst(compared)
+    notes = dict.fromkeys(NOTE_WORDS, 0)
+    for _, item in compared:
+        for name, count in item.notes.items():
+            notes[name] += count
+    detail = Detail(largest, worst, _borderline_largest(findings), findings, exclusions, notes)
+    return Gate(word, summary, detail)
