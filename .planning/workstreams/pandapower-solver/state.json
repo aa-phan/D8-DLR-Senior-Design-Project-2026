@@ -6,7 +6,7 @@
     {
       "number": "1",
       "name": "PSS/E Reference Session and Network Parity",
-      "status": "in_progress"
+      "status": "complete"
     },
     {
       "number": "2",
@@ -37,7 +37,7 @@
   "next": {
     "command": "/gsd-progress --next",
     "label": "Advance to the next step",
-    "reason": "Phase 1 of 6 · executing"
+    "reason": "Phase 2 of 6 · 17% · executing"
   },
-  "updated_at": "2026-11-18T22:04:23.188Z"
+  "updated_at": "2026-11-20T22:46:58.467Z"
 }

@@ -73,7 +73,7 @@ Phase 6 is last so that no unverified figure reaches the dashboard.
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: PSS/E Reference Session and Network Parity** - Private export, settings and reference solution from the licensed machine; a pandapower network proven identical to the PSS/E copy, with nothing committed
+- [x] **Phase 1: PSS/E Reference Session and Network Parity** - Private export, settings and reference solution from the licensed machine; a pandapower network proven identical to the PSS/E copy, with nothing committed (completed 2026-11-20)
 - [ ] **Phase 2: PandapowerApi and Study Engine** - The unchanged study code runs a full four-city study on pandapower through one factory argument, with no live data
 - [ ] **Phase 3: Solver Tag, Migration and Per-Solver Gaps** - One additive migration and a tagged writer path so both solvers' runs live side by side and gaps are reported per solver
 - [ ] **Phase 4: Replay and Agreement Check** - A read-only replay of recorded PSS/E runs through pandapower, with an honest report that can fail; the go-live gate
@@ -94,7 +94,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   4. The parity report compares the built network with the export element by element (counts, line versus transformer classification, ratings, limits, setpoints), lists every difference, and shows none.
   5. The base-case load flow of each city's scaled copy matches the PSS/E reference: every bus voltage within 0.01 pu and every branch flow within 2% (with an absolute floor for lightly loaded branches).
 
-**Plans**: 9/11 plans executed
+**Plans**: 11/11 plans complete
 
 Plans:
 **Wave 1**
@@ -120,7 +120,7 @@ Plans:
 - [x] 01-10-PLAN.md — The PSS/E session with the teammate, then parity and NET-03 on the real data (wave 6, checkpoints)
 
 **Wave 7** *(blocked on Wave 6 completion)*
-- [ ] 01-11-PLAN.md — The owner's D-06 decision on the converted network, recorded and carried out (wave 7, checkpoint)
+- [x] 01-11-PLAN.md — The owner's D-06 decision on the converted network, recorded and carried out (wave 7, checkpoint)
 
 ### Phase 2: PandapowerApi and Study Engine
 
@@ -224,7 +224,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6. Phases 2 and 3
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. PSS/E Reference Session and Network Parity | 9/11 | In Progress | - |
+| 1. PSS/E Reference Session and Network Parity | 11/11 | Complete    | 2026-11-20 |
 | 2. PandapowerApi and Study Engine | 6/7 | In Progress | - |
 | 3. Solver Tag, Migration and Per-Solver Gaps | 5/5 | In Progress | - |
 | 4. Replay and Agreement Check | 0/TBD | Not started | - |

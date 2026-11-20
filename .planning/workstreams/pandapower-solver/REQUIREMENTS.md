@@ -8,16 +8,16 @@
 
 ### PSS/E reference session (PSE)
 
-- [ ] **PSE-01**: A teammate can run one scripted, read-only session on a licensed PSS/E machine that exports the 39-bus case's network data (buses, loads, shunts, machines with limits and setpoints, every branch and two-winding transformer with its ratings) to a private text file, and returns a masked report of what was exported.
-- [ ] **PSE-02**: The same session records PSS/E's load-flow solution settings that affect agreement (reactive-limit handling, tap and switched-shunt adjustment, mismatch tolerance, iteration limit) and the three scaling details (whether total generation includes the swing machine, whether machines are clamped at their limits, whether the increment form scales Q with P).
-- [ ] **PSE-03**: The same session exports a private reference solution: every bus voltage and every branch flow for the base case of each city's scaled copy, and for each screened outage.
-- [ ] **PSE-04**: Nothing from the session (network data, reference solution, mapping targets, bus numbers) is committed to the public repository; the ignore rules and a secret/identifier scan are in place before any exported file reaches the owner's machine.
+- [x] **PSE-01**: A teammate can run one scripted, read-only session on a licensed PSS/E machine that exports the 39-bus case's network data (buses, loads, shunts, machines with limits and setpoints, every branch and two-winding transformer with its ratings) to a private text file, and returns a masked report of what was exported.
+- [x] **PSE-02**: The same session records PSS/E's load-flow solution settings that affect agreement (reactive-limit handling, tap and switched-shunt adjustment, mismatch tolerance, iteration limit) and the three scaling details (whether total generation includes the swing machine, whether machines are clamped at their limits, whether the increment form scales Q with P).
+- [x] **PSE-03**: The same session exports a private reference solution: every bus voltage and every branch flow for the base case of each city's scaled copy, and for each screened outage.
+- [x] **PSE-04**: Nothing from the session (network data, reference solution, mapping targets, bus numbers) is committed to the public repository; the ignore rules and a secret/identifier scan are in place before any exported file reaches the owner's machine.
 
 ### Network parity (NET)
 
-- [ ] **NET-01**: The job builds a pandapower network from the PSS/E export, keeping PSS/E bus numbers as bus indices and `from-to-circuit` names for branches, so the private mapping and contingency ids work unchanged; it refuses (fails closed) any record type it does not understand.
-- [ ] **NET-02**: A parity report compares the built network with the PSS/E export element by element (counts, line vs transformer classification, ratings, limits, setpoints) and lists every difference; it must show none before study code relies on the network.
-- [ ] **NET-03**: The base-case load flow of each city's scaled copy matches the PSS/E reference solution: every bus voltage within 0.01 pu and every branch flow within 2% (with an absolute floor for lightly loaded branches).
+- [x] **NET-01**: The job builds a pandapower network from the PSS/E export, keeping PSS/E bus numbers as bus indices and `from-to-circuit` names for branches, so the private mapping and contingency ids work unchanged; it refuses (fails closed) any record type it does not understand.
+- [x] **NET-02**: A parity report compares the built network with the PSS/E export element by element (counts, line vs transformer classification, ratings, limits, setpoints) and lists every difference; it must show none before study code relies on the network.
+- [x] **NET-03**: The base-case load flow of each city's scaled copy matches the PSS/E reference solution: every bus voltage within 0.01 pu and every branch flow within 2% (with an absolute floor for lightly loaded branches).
 
 ### Study engine (ENG)
 
@@ -78,13 +78,13 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| PSE-01 | Phase 1 | Pending |
-| PSE-02 | Phase 1 | Pending |
-| PSE-03 | Phase 1 | Pending |
-| PSE-04 | Phase 1 | Pending |
-| NET-01 | Phase 1 | Pending |
-| NET-02 | Phase 1 | Pending |
-| NET-03 | Phase 1 | Pending |
+| PSE-01 | Phase 1 | Complete |
+| PSE-02 | Phase 1 | Complete |
+| PSE-03 | Phase 1 | Complete |
+| PSE-04 | Phase 1 | Complete |
+| NET-01 | Phase 1 | Complete |
+| NET-02 | Phase 1 | Complete |
+| NET-03 | Phase 1 | Complete |
 | ENG-01 | Phase 2 | Complete |
 | ENG-02 | Phase 2 | Complete |
 | ENG-03 | Phase 2 | Complete |

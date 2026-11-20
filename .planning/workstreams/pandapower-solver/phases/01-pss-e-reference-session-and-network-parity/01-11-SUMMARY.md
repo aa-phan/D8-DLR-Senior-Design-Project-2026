@@ -35,7 +35,7 @@ coverage:
         ref: "docs/data-science/decisions/pandapower_network_data_decision.md"
         status: pass
   - id: D3
-    description: "Nothing private is committed: the leak scan is clean on the staged record, and no data/pandapower files, .sha256 pin or private_leak_allow.json were created"
+    description: "Nothing private is committed: the leak scan is clean on the staged record, and no data/pandapower files, .sha256 pin or new private_leak_allow.json entry was added (the file already holds 22 path-and-hash entries from the real session, all public false positives)"
     requirement: "PSE-04"
     verification:
       - kind: unit
@@ -57,7 +57,7 @@ At the blocking checkpoint the owner was shown the counts-only evidence: parity 
 
 `docs/data-science/decisions/pandapower_network_data_decision.md` records the decision, its date, the evidence, the licence status, the consequences (including the negative ones), the publication alternative and why it was not chosen, and what the hourly workflow does next.
 
-Because the decision was keep-private, none of `data/pandapower/network_39bus.json`, its `.sha256` pin, `backend/private_leak_allow.json` or the guard test was created. The plan's own rule for this branch is that only the decision record is committed.
+Because the decision was keep-private, none of `data/pandapower/network_39bus.json`, its `.sha256` pin or the guard test was created, and no network entry was added to `backend/private_leak_allow.json` (it already holds 22 path-and-hash entries from the real session). The plan's own rule for this branch is that only the decision record is committed.
 
 ## Deviations from plan
 
