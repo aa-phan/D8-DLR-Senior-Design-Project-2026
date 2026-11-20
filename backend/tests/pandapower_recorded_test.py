@@ -909,3 +909,101 @@ def test_the_import_pin_flags_planted_imports():
         assert _import_problems(text), text
     clean = "import json\nfrom psse_job import constants\nfrom pandapower_job import private\n"
     assert _import_problems(clean) == []
+
+
+# -- the owner's export statement (text tier; the database tier is pandapower_replay_pg_test.py) -----
+
+_ROOT = os.path.abspath(os.path.join(_BACKEND, ".."))
+EXPORT_SQL = os.path.join(_ROOT, "supabase", "ops", "export_psse_runs_for_replay.sql")
+RESULT_TABLES = ("psse_contingency_result", "psse_dispatched_capacity", "psse_run", "psse_voltage_margin")
+
+
+def _sql_raw():
+    with open(EXPORT_SQL, encoding="utf-8") as handle:
+        return handle.read()
+
+
+def _sql_code():
+    """The file with every `--` comment removed."""
+    return "\n".join(line.split("--", 1)[0] for line in _sql_raw().splitlines())
+
+
+def _sql_comments():
+    return "\n".join(line.split("--", 1)[1] for line in _sql_raw().splitlines() if "--" in line)
+
+
+def _squeeze(text):
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def test_text_export_is_one_read_only_select():
+    code = _sql_code()
+    # String literals are blanked first: a pattern or a default may hold a word that is no keyword.
+    bare = re.sub(r"'(?:[^']|'')*'", "''", code)
+    statements = [part.strip() for part in bare.split(";") if part.strip()]
+    assert len(statements) == 1
+    assert bare.rstrip().endswith(";")
+    statement = statements[0].lower()
+    assert re.match(r"with\b", statement)
+    for word in ("insert", "update", "delete", "alter", "drop", "create", "grant", "revoke",
+                 "truncate", "copy", "call", "execute", "vacuum"):
+        assert not re.search(r"\b%s\b" % word, statement), word
+
+
+def test_text_export_reads_only_the_four_result_tables_without_a_solver_column():
+    raw = _sql_raw()
+    code = _sql_code()
+    assert sorted(re.findall(r"\bfrom\s+public\.(\w+)", code)) == sorted(RESULT_TABLES)
+    # The word solver appears nowhere, comments included: the file works before and after the
+    # migration that adds the column.
+    assert "solver" not in raw.lower()
+    assert "like 'psse-%'" in code
+    assert "outcome in ('ok', 'fallback')" in code
+    assert code.count("where run_id in (select run_id from usable)") == 3
+    for never_read in ("error", "ratings_read_error", "case_id", "started_at", "finished_at"):
+        assert not re.search(r"\b%s\b" % never_read, code), never_read
+
+
+def test_text_export_selects_exactly_the_pinned_columns():
+    code = _squeeze(_sql_code())
+    pinned = (
+        ("runs", recorded.RUN_COLUMNS),
+        ("dispatch", recorded.DISPATCH_COLUMNS),
+        ("margins", recorded.MARGIN_COLUMNS),
+        ("contingencies", recorded.CONTINGENCY_COLUMNS),
+    )
+    for name, columns in pinned:
+        found = re.search(r"\b%s as \( select (.*?) from public\." % name, code)
+        assert found, name
+        assert tuple(part.strip() for part in found.group(1).split(",")) == columns, name
+    final = code.split(") select ", 1)[1]
+    assert tuple(re.findall(r"\bas (counts|runs|dispatch|margins|contingencies)\b", final)) == \
+        recorded.EXPORT_COLUMNS
+    assert final.count("jsonb_agg(") == 4
+    assert final.count("jsonb_build_object(") == 1
+    assert final.count("coalesce(") == 4
+    assert final.count("'[]'::jsonb") == 4
+    for key in recorded.COUNT_KEYS:
+        assert "'%s'," % key in final
+    # One jsonb_agg per line of the file (the acceptance check counts lines).
+    assert sum(1 for line in _sql_raw().splitlines() if "jsonb_agg" in line) == 4
+
+
+def test_text_export_header_tells_the_owner_what_to_do():
+    header = _squeeze(_sql_comments()).lower()
+    for phrase in (
+        "read-only",
+        "changes nothing",
+        "never applied by the supabase cli",
+        "sql editor",
+        "private channel",
+        "do not paste the result",
+        "first export should be narrow",
+        "date prefix",
+        "'psse-%'",
+        "data/private/pandapower/incoming/",
+        "that migration may not be applied to the live project yet",
+        "cut short",
+    ):
+        assert phrase in header, phrase
+    assert "jsonb_agg" not in header
