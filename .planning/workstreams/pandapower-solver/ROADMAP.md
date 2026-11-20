@@ -134,7 +134,7 @@ Plans:
   4. Each city, each outage and each margin step solves a fresh copy of its base network: a test shows that running outages in a different order, or after a failed solve, gives identical results, and that no result is read after a failed solve.
   5. The solve settings (reactive limits, iteration limit, tolerance) come from the values recorded in PSE-02 and are stored with each run, and a full four-city study runs end to end on a throwaway local database with the placeholder mapping and no access to live data.
 
-**Plans**: 6/7 plans executed
+**Plans**: 7/7 plans executed
 
 Plans:
 **Wave 1**
@@ -150,7 +150,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 - [x] 02-06-PLAN.md — Database tier: four-city study through job.run_once into a throwaway Postgres (wave 4)
-- [ ] 02-07-PLAN.md — Close ENG-05 with the recorded PSE-02 values; needs the laptop session (wave 4, checkpoint)
+- [x] 02-07-PLAN.md — Close ENG-05 with the recorded PSE-02 values; needs the laptop session (wave 4, checkpoint)
 
 ### Phase 3: Solver Tag, Migration and Per-Solver Gaps
 
@@ -225,7 +225,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6. Phases 2 and 3
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. PSS/E Reference Session and Network Parity | 11/11 | Complete    | 2026-11-20 |
-| 2. PandapowerApi and Study Engine | 6/7 | In Progress | - |
+| 2. PandapowerApi and Study Engine | 7/7 | In Progress | - |
 | 3. Solver Tag, Migration and Per-Solver Gaps | 5/5 | In Progress | - |
 | 4. Replay and Agreement Check | 0/TBD | Not started | - |
 | 5. Hourly Workflow, Dry Run and Live Soak | 0/TBD | Not started | - |

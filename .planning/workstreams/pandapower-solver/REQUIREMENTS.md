@@ -25,7 +25,7 @@
 - [x] **ENG-02**: A city's rating is applied as a current limit per circuit and line loading is read on the current basis, matching the PSS/E study's default; a mapping that asks for a basis pandapower cannot reproduce is refused.
 - [x] **ENG-03**: A load flow counts as converged only if it raises no error, leaves no in-service bus without a voltage, and leaves no bus below the collapse limit; an outage that islands part of the grid becomes a `non_convergence` row, as in PSS/E.
 - [x] **ENG-04**: Each city, each outage and each margin step solves a fresh copy of its base network; no result is ever read after a failed solve.
-- [ ] **ENG-05**: The pandapower solve settings (reactive limits, iteration limit, tolerance) are set from the values recorded in PSE-02 and stored with each run.
+- [x] **ENG-05**: The pandapower solve settings (reactive limits, iteration limit, tolerance) are set from the values recorded in PSE-02 and stored with each run.
 - [ ] **ENG-06**: A full four-city study runs end to end on a throwaway local database with the placeholder mapping, with no access to live data.
 
 ### Results storage (DB)
@@ -89,7 +89,7 @@
 | ENG-02 | Phase 2 | Complete |
 | ENG-03 | Phase 2 | Complete |
 | ENG-04 | Phase 2 | Complete |
-| ENG-05 | Phase 2 | Pending |
+| ENG-05 | Phase 2 | Complete |
 | ENG-06 | Phase 2 | Pending |
 | DB-01 | Phase 3 | Pending |
 | DB-02 | Phase 3 | Pending |
