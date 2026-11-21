@@ -332,3 +332,29 @@ def load_recorded_backend(check_dir):
     if "settings" not in report:
         raise RecordsRefused("missing_field")
     return backend_from_records(report["settings"], scaling_document)
+
+
+def _session_hash(value):
+    """A session hash as stored: a 64-character lowercase hex string, or None when absent."""
+    if value is None:
+        return None
+    if not (isinstance(value, str) and len(value) == 64
+            and all(char in "0123456789abcdef" for char in value)):
+        raise RecordsRefused("bad_value")
+    return value
+
+
+def load_session_hashes(check_dir):
+    """The (case_sha256, mapping_sha256) the Phase 1 session recorded, read from `report.json` of
+    `check_dir` (key `session`), each a 64-character lowercase hex string or None when the key is
+    absent. A missing session object is RecordsRefused missing_field and a hash of the wrong shape
+    bad_value; an unreadable file, bad JSON or a missing marker keep their reasons (strict reader,
+    no message holds a path or a value)."""
+    try:
+        report_path = os.path.join(str(check_dir), "report.json")
+    except (TypeError, ValueError):
+        raise RecordsRefused("unreadable") from None
+    session = _read_document(report_path).get("session")
+    if not isinstance(session, dict):
+        raise RecordsRefused("missing_field")
+    return _session_hash(session.get("case_sha256")), _session_hash(session.get("mapping_sha256"))

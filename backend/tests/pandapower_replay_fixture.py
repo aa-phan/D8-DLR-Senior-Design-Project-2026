@@ -256,3 +256,30 @@ def ingest_standins(repo, standins, now=FIXED_NOW):
     rows reach the caller only through the export file, the ingest and the loader."""
     result = ingest_standins_result(repo, standins, now)
     return recorded.load_snapshot(result.path, repo_root=repo)
+
+
+def snapshot_of_bundles(repo, bundles, now=FIXED_NOW, counts=None):
+    """Write `bundles` as an export file into the repository, ingest it and load the snapshot back."""
+    export = export_document(bundles, counts=counts)
+    path = write_export_json(
+        os.path.join(repo, "data", "private", "pandapower", "incoming", "export.json"), export)
+    result = recorded.ingest_export(path, repo_root=repo, now=now)
+    return recorded.load_snapshot(result.path, repo_root=repo)
+
+
+def perturbed_bundle(stand, mutate, recount=True):
+    """A deep copy of the stand-in's bundle changed by `mutate(bundle)`. When `recount` is true the
+    run's n_contingencies_with_results is recomputed from the perturbed contingency rows, so a run
+    with an added or removed row stays complete, as a real stored run would."""
+    bundle = copy.deepcopy(stand.bundle)
+    mutate(bundle)
+    if recount:
+        bundle["run"]["n_contingencies_with_results"] = len(
+            set(row["contingency_id"] for row in bundle["contingencies"]))
+    return bundle
+
+
+def perturbed_snapshot(repo, stand, mutate, recount=True):
+    """The snapshot of one perturbed copy of the stand-in's run (see perturbed_bundle), reached
+    through an export file, the ingest and the loader."""
+    return snapshot_of_bundles(repo, [perturbed_bundle(stand, mutate, recount)])
