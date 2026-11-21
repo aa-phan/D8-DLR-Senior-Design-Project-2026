@@ -6,10 +6,10 @@ current_phase: 02
 current_phase_name: PandapowerApi and Study Engine
 current_plan: 7
 status: verifying
-stopped_at: "Phase 4 plans 04-01 to 04-03 and 04-04 task 1 complete (2026-11-20). Waiting on 04-04 task 2: Aaron runs supabase/ops/export_psse_runs_for_replay.sql (pattern psse-202611%) and sends the CSV; save it as data/private/pandapower/incoming/psse_runs_export.csv, then run 04-04 task 3 (ingest, replay, 04-REPLAY-RECORD.md). Phase 2 and 3 verification pending (need Postgres)."
+stopped_at: "Phase 4 plans 04-01 to 04-04 complete (2026-11-21). Real replay of Aaron's export: 19 of 19 runs passed, verdict pass (04-REPLAY-RECORD.md); AGR-01 to AGR-04 complete; voltage_low and non_convergence not exercised by the recorded runs. Next: Phase 4 verification, then plan Phase 5. Phase 2 and 3 verification pending (need Postgres)."
 last_updated: "2026-11-20T22:48:53.555Z"
-last_activity: 2026-11-20
-last_activity_desc: Phase 1 complete, transitioned to Phase 02
+last_activity: 2026-11-21
+last_activity_desc: Phase 4 plan 04-04 complete - real replay verdict pass (19 of 19 runs)
 state_head: 0ef35dca620672a9613221399be8e1866042d3d7
 progress:
   total_phases: 6
