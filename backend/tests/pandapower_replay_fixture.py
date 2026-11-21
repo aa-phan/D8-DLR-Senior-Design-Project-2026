@@ -283,3 +283,18 @@ def perturbed_snapshot(repo, stand, mutate, recount=True):
     """The snapshot of one perturbed copy of the stand-in's run (see perturbed_bundle), reached
     through an export file, the ingest and the loader."""
     return snapshot_of_bundles(repo, [perturbed_bundle(stand, mutate, recount)])
+
+
+def light_standin(tmp_path):
+    """A stand-in with the files and hashes of a real one but no solve (results None): the
+    network and the mapping are written, and the recorded run is the public synthetic run of
+    `run_bundle` carrying the mapping hash, the case hash and the fixture's stored ratings. For the
+    command tests that stub the replay or whose own replay is a recorder."""
+    network = study_fixture.write_converted(tmp_path)
+    mapping = write_mapping(tmp_path)
+    backend = study_fixture.fixture_backend()
+    selection = study_fixture.selection()
+    sha = engine.prepare_run(backend, network, mapping).mapping_sha256
+    bundle = run_bundle(1, FIXED_NOW, "fallback", sha, CASE_SHA)
+    bundle["run"]["ratings_used"] = ratings.ratings_used(selection)
+    return StandIn(network, mapping, backend, selection, None, bundle, sha, CASE_SHA)
