@@ -6,7 +6,7 @@ current_phase: 02
 current_phase_name: PandapowerApi and Study Engine
 current_plan: 7
 status: verifying
-stopped_at: "Phase 4 plans 04-01 to 04-03 complete (2026-11-20); 04-04 next (its task 2 needs the Supabase owner export); Phase 2 and 3 verification pending (need Postgres)"
+stopped_at: "Phase 4 plans 04-01 to 04-03 and 04-04 task 1 complete (2026-11-20). Waiting on 04-04 task 2: Aaron runs supabase/ops/export_psse_runs_for_replay.sql (pattern psse-202611%) and sends the CSV; save it as data/private/pandapower/incoming/psse_runs_export.csv, then run 04-04 task 3 (ingest, replay, 04-REPLAY-RECORD.md). Phase 2 and 3 verification pending (need Postgres)."
 last_updated: "2026-11-20T22:48:53.555Z"
 last_activity: 2026-11-20
 last_activity_desc: Phase 1 complete, transitioned to Phase 02
