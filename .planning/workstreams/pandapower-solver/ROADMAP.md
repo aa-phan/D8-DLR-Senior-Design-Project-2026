@@ -76,7 +76,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 1: PSS/E Reference Session and Network Parity** - Private export, settings and reference solution from the licensed machine; a pandapower network proven identical to the PSS/E copy, with nothing committed (completed 2026-11-20)
 - [ ] **Phase 2: PandapowerApi and Study Engine** - The unchanged study code runs a full four-city study on pandapower through one factory argument, with no live data
 - [ ] **Phase 3: Solver Tag, Migration and Per-Solver Gaps** - One additive migration and a tagged writer path so both solvers' runs live side by side and gaps are reported per solver
-- [ ] **Phase 4: Replay and Agreement Check** - A read-only replay of recorded PSS/E runs through pandapower, with an honest report that can fail; the go-live gate
+- [x] **Phase 4: Replay and Agreement Check** - A read-only replay of recorded PSS/E runs through pandapower, with an honest report that can fail; the go-live gate
 - [ ] **Phase 5: Hourly Workflow, Dry Run and Live Soak** - The hourly GitHub Actions job runs as a dry run, then writes live for 24 consecutive hours
 - [ ] **Phase 6: Dashboard Read Access and DEF-01** - One read-only view of the newest result per city and solver, and the dashboard requirements updated to say the blockers are cleared
 
@@ -187,7 +187,7 @@ Plans:
   4. A deliberate mismatch test makes the replay fail, proving the check can fail.
   5. Detailed output stays on the owner's machine; the output printed in CI mode contains counts and pass or fail only, and a test scanning it finds no identifier or study value.
 
-**Plans**: 3/4 plans executed
+**Plans**: 4/4 plans executed
 
 Plans:
 **Wave 1**
@@ -198,7 +198,7 @@ Plans:
 - [x] 04-03-PLAN.md — Replay of stored runs through the engine matched by hash, deliberate-mismatch matrix on the real solver, the owner's commands, private report and CI mode (wave 2)
 
 **Wave 3** *(blocked on Wave 2 completion)*
-- [ ] 04-04-PLAN.md — Scanned-output leak test with planted identifiers, the owner's blocking export, the real replay record (wave 3, checkpoint)
+- [x] 04-04-PLAN.md — Scanned-output leak test with planted identifiers, the owner's blocking export, the real replay record (wave 3, checkpoint)
 
 ### Phase 5: Hourly Workflow, Dry Run and Live Soak
 
@@ -238,6 +238,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6. Phases 2 and 3
 | 1. PSS/E Reference Session and Network Parity | 11/11 | Complete    | 2026-11-20 |
 | 2. PandapowerApi and Study Engine | 7/7 | In Progress | - |
 | 3. Solver Tag, Migration and Per-Solver Gaps | 5/5 | In Progress | - |
-| 4. Replay and Agreement Check | 3/4 | In Progress | - |
+| 4. Replay and Agreement Check | 4/4 | Complete (verified, passed with limits) | 2026-11-21 |
 | 5. Hourly Workflow, Dry Run and Live Soak | 0/TBD | Not started | - |
 | 6. Dashboard Read Access and DEF-01 | 0/TBD | Not started | - |

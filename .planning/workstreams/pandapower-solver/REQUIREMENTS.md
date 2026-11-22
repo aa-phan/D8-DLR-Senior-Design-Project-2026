@@ -37,7 +37,7 @@
 ### Agreement (AGR)
 
 - [x] **AGR-01**: A read-only replay runs each recorded PSS/E run through pandapower using that run's stored ratings and the same mapping (matched by its recorded hash), and writes nothing to the database.
-- [x] **AGR-02**: The replay passes when, for each replayed run, the set of overloads, voltage violations and non-converged outages per outage is the same, and margins and dispatched capacity agree within 2%; near-limit elements are reported as borderline rather than failing.
+- [x] **AGR-02**: The replay passes when, for each replayed run, the set of overloads, voltage violations and non-converged outages per outage is the same, and margins and dispatched capacity agree within the owner-decided tolerances (flows and dispatch: the larger of 2% or 2 MVA; margins: the larger of 2% or the run's stored step or tolerance, so a rating-bound margin may differ by up to one stored step; voltages: 0.01 pu); near-limit elements are reported as borderline rather than failing. Real-data evidence (2026-11-21, 04-REPLAY-RECORD.md): 19 of 19 recorded runs passed on one mapping, case and job version; thermal_overload and voltage_high were exercised, voltage_low and non_convergence were not.
 - [x] **AGR-03**: The agreement report states how many runs and how many non-empty comparisons it checked, the largest deviation even on a pass, and which runs were excluded and why; a deliberate mismatch test proves it can fail.
 - [x] **AGR-04**: Detailed agreement output stays on the owner's machine; anything printed in GitHub Actions is counts and pass/fail only.
 
