@@ -26,13 +26,13 @@
 - [x] **ENG-03**: A load flow counts as converged only if it raises no error, leaves no in-service bus without a voltage, and leaves no bus below the collapse limit; an outage that islands part of the grid becomes a `non_convergence` row, as in PSS/E.
 - [x] **ENG-04**: Each city, each outage and each margin step solves a fresh copy of its base network; no result is ever read after a failed solve.
 - [x] **ENG-05**: The pandapower solve settings (reactive limits, iteration limit, tolerance) are set from the values recorded in PSE-02 and stored with each run.
-- [ ] **ENG-06**: A full four-city study runs end to end on a throwaway local database with the placeholder mapping, with no access to live data.
+- [x] **ENG-06**: A full four-city study runs end to end on a throwaway local database with the placeholder mapping, with no access to live data.
 
 ### Results storage (DB)
 
-- [ ] **DB-01**: One additive migration adds a `solver` column (`psse` or `pandapower`, default `psse` so the existing 19 runs and the unchanged PSS/E job stay valid) and a `solver_version` column to `psse_run`, and allows a `pp-` run-id prefix tied to `solver = 'pandapower'` by a check constraint.
-- [ ] **DB-02**: The pandapower job writes through the existing all-or-nothing writer as `dlr_psse_writer`, tagging every run with its solver; a pandapower run can never be stored as `psse`.
-- [ ] **DB-03**: The gap check reports missing hours per solver, so a PSS/E run in an hour cannot hide a missing pandapower hour, and PSS/E gaps while its machine is offline are listed separately.
+- [x] **DB-01**: One additive migration adds a `solver` column (`psse` or `pandapower`, default `psse` so the existing 19 runs and the unchanged PSS/E job stay valid) and a `solver_version` column to `psse_run`, and allows a `pp-` run-id prefix tied to `solver = 'pandapower'` by a check constraint.
+- [x] **DB-02**: The pandapower job writes through the existing all-or-nothing writer as `dlr_psse_writer`, tagging every run with its solver; a run with a `pp-` run id can never be stored as `psse`, and a pandapower study given the default tag is refused and stored as a failed run with no results.
+- [x] **DB-03**: The gap check reports missing hours per solver, so a PSS/E run in an hour cannot hide a missing pandapower hour, and PSS/E gaps while its machine is offline are listed separately.
 
 ### Agreement (AGR)
 
@@ -90,10 +90,10 @@
 | ENG-03 | Phase 2 | Complete |
 | ENG-04 | Phase 2 | Complete |
 | ENG-05 | Phase 2 | Complete |
-| ENG-06 | Phase 2 | Pending |
-| DB-01 | Phase 3 | Pending |
-| DB-02 | Phase 3 | Pending |
-| DB-03 | Phase 3 | Pending |
+| ENG-06 | Phase 2 | Complete (throwaway local database only) |
+| DB-01 | Phase 3 | Complete (throwaway local database; live apply pending) |
+| DB-02 | Phase 3 | Complete (throwaway local database; live apply pending) |
+| DB-03 | Phase 3 | Complete (throwaway local database; live apply pending) |
 | AGR-01 | Phase 4 | Complete |
 | AGR-02 | Phase 4 | Complete |
 | AGR-03 | Phase 4 | Complete |

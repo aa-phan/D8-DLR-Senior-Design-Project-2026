@@ -74,7 +74,7 @@ Phase 6 is last so that no unverified figure reaches the dashboard.
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: PSS/E Reference Session and Network Parity** - Private export, settings and reference solution from the licensed machine; a pandapower network proven identical to the PSS/E copy, with nothing committed (completed 2026-11-20)
-- [ ] **Phase 2: PandapowerApi and Study Engine** - The unchanged study code runs a full four-city study on pandapower through one factory argument, with no live data
+- [x] **Phase 2: PandapowerApi and Study Engine** - The unchanged study code runs a full four-city study on pandapower through one factory argument, with no live data (completed 2026-11-23)
 - [ ] **Phase 3: Solver Tag, Migration and Per-Solver Gaps** - One additive migration and a tagged writer path so both solvers' runs live side by side and gaps are reported per solver
 - [x] **Phase 4: Replay and Agreement Check** - A read-only replay of recorded PSS/E runs through pandapower, with an honest report that can fail; the go-live gate
 - [ ] **Phase 5: Hourly Workflow, Dry Run and Live Soak** - The hourly GitHub Actions job runs as a dry run, then writes live for 24 consecutive hours
@@ -236,8 +236,8 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6. Phases 2 and 3
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. PSS/E Reference Session and Network Parity | 11/11 | Complete    | 2026-11-20 |
-| 2. PandapowerApi and Study Engine | 7/7 | In Progress | - |
-| 3. Solver Tag, Migration and Per-Solver Gaps | 5/5 | In Progress | - |
+| 2. PandapowerApi and Study Engine | 7/7 | Complete (verified, passed with limits) | 2026-11-23 |
+| 3. Solver Tag, Migration and Per-Solver Gaps | 5/5 | Verified, human_needed (owner live apply pending) | - |
 | 4. Replay and Agreement Check | 4/4 | Complete (verified, passed with limits) | 2026-11-21 |
 | 5. Hourly Workflow, Dry Run and Live Soak | 0/TBD | Not started | - |
 | 6. Dashboard Read Access and DEF-01 | 0/TBD | Not started | - |
