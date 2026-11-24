@@ -217,6 +217,11 @@ def test_db_tracer_every_check_is_ok_after_the_chain(clean_pg):
     with psycopg.connect(clean_pg) as conn:
         _insert_complete(conn, psse_rows)
         _insert_complete(conn, pp_rows)
+        # The exposure checker needs a rating per city to read; with none, four of its checks
+        # report false by design ("rows checked=0"), so seed one fresh row per city.
+        now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+        local_pg.insert_rows(conn, [local_pg.rating_row(city, now)
+                                    for city in ("AUSTIN", "CORPUS_CHRISTI", "EL_PASO", "MIDLAND")])
 
     with psycopg.connect(clean_pg) as conn:
         rows = _check_rows(conn)

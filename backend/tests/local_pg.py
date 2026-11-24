@@ -121,12 +121,17 @@ def cluster(tmp_path_factory):
         ["initdb", "-D", data, "-U", "postgres", "-A", "trust", "-E", "UTF8", "--no-locale"],
         check=True, capture_output=True,
     )
-    options = (f"-p {port} -c listen_addresses=127.0.0.1 -c unix_socket_directories='' "
-               "-c fsync=off -c synchronous_commit=off")
+    options = f"-p {port} -c listen_addresses=127.0.0.1 -c fsync=off -c synchronous_commit=off"
+    if os.name != "nt":
+        # Windows creates no Unix socket by default and the quoted empty value does not
+        # survive pg_ctl's command line there (the server reads the two quotes as a path).
+        options += " -c unix_socket_directories=''"
     try:
         subprocess.run(
             ["pg_ctl", "-D", data, "-l", log_file, "-w", "-o", options, "start"],
-            check=True, capture_output=True,
+            # No pipes: on Windows the server inherits pg_ctl's handles, so a captured pipe
+            # never reaches EOF. The server log (log_file) keeps the diagnostics.
+            check=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
         with psycopg.connect(f"postgresql://postgres@127.0.0.1:{port}/postgres", autocommit=True) as conn:
             conn.execute("create database dlr_test")
