@@ -1,0 +1,49 @@
+h1{
+    font-family: 'Courier', monospace;
+}
+
+.form-container{
+    width: 600px;
+    margin: 50px auto;
+}
+
+label{
+    display: block;
+    text-align: center;
+    font-family: 'Courier', monospace;
+    margin-top: 5px;
+    margin-bottom: 5px;
+}
+
+select{
+    font-family: 'Courier', monospace;
+    width: 50%;
+    padding: 10px;
+    margin: 0 auto;
+    display: block;
+    box-sizing: border-box;
+}
+
+.displayform{
+    display: flex;
+    gap: 20px;
+    align-items: flex-start;
+}
+
+#thermal-limit{
+    flex: 1;
+    padding: 20px;
+    border: 1px solid beige;
+    border-radius: 10px;
+    font-family: 'Courier', monospace;
+}
+
+#trusted-duration{
+    flex: 1;
+    padding: 20px;
+    border: 1px solid grey;
+    border-radius: 10px;
+    background-color: grey;
+    color: gainsboro;
+    font-family: 'Courier', monospace;
+}

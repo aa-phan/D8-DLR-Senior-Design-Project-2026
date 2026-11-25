@@ -1,0 +1,51 @@
+{% load static %}
+<link rel="stylesheet" href="{% static 'css/style.css' %}">
+<!DOCTYPE html>
+<html>
+    <head>
+        <title>Dynamic Line Rating</title>
+    </head>
+    <body style="background-color: beige;">
+        <h1>Dynamic Line Rating</h1>
+        <div class="form-container">
+            <p style="text-align: center; font-family: 'Courier', monospace;">Currently {{ isDynamic }}</p>
+            <form method="GET">
+                <label for="category">City</label>
+                <select id="category" name="category" onchange="this.form.submit()">
+                    <option value="" 
+                        {% if not selected_city %}selected{% endif %} disabled>Choose a City</option>
+                    <option value="Austin"
+                        {% if selected_city == "AUSTIN" %}selected{% endif %}>Austin
+                    </option>
+                    <option value="Corpus Christi"
+                        {% if selected_city == "CORPUS_CHRISTI" %}selected{% endif %}>Corpus Christi
+                    </option>
+                    <option value="Midland"
+                        {% if selected_city == "MIDLAND" %}selected{% endif %}>Midland
+                    </option>
+                    <option value="El Paso"
+                        {% if selected_city == "EL_PASO" %}selected{% endif %}>El Paso
+                    </option>
+                </select>
+            </form>
+        </div>
+        <div class="displayform">
+            <div id="thermal-limit">
+                <p>Thermal Limit</p>
+                <h1>{{ thermal_limit }} A</h1>
+                <h2>Forecast current-carrying limit</h2>
+                <h4>Rounded to the nearest thousandth</h4>
+            </div>
+            <div id="trusted-duration">
+                <p>Trusted Duration</p>
+                <h1>{{ trusted_duration }} s</h1>
+                <h2>Time associated with the rating</h2>
+            </div>
+            
+        </div>
+        <div class="form-container">
+            <a href="{% url '' %}" class="btn btn-primary">View details</a>
+        </div>
+        
+    </body>
+</html>

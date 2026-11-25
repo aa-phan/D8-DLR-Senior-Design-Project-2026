@@ -1,0 +1,64 @@
+{% load static %}
+<link rel="stylesheet" href="{% static 'css/style.css' %}">
+<!DOCTYPE html>
+<html>
+    <head>
+        <title>Future Forecast</title>
+    </head>
+    <body style="background-color: beige">
+        <div class="form-container">
+            <form method="GET">
+                <label for="category">City</label>
+                <select id="category" name="category" onchange="this.form.submit()">
+                    <option value="" 
+                        {% if not selected_city %}selected{% endif %} disabled>Choose a City</option>
+                    <option value="Austin"
+                        {% if selected_city == "AUSTIN" %}selected{% endif %}>Austin
+                    </option>
+                    <option value="Corpus Christi"
+                        {% if selected_city == "CORPUS_CHRISTI" %}selected{% endif %}>Corpus Christi
+                    </option>
+                    <option value="Midland"
+                        {% if selected_city == "MIDLAND" %}selected{% endif %}>Midland
+                    </option>
+                    <option value="El Paso"
+                        {% if selected_city == "EL_PASO" %}selected{% endif %}>El Paso
+                    </option>
+                </select>
+                
+            </form>
+            {% if selected_city %}
+                <h2>{{ selected_city }} upcoming day-ahead forecast</h2>
+            {% else %}
+                <p>Select a city to see its forecast</p>
+            {% endif %}
+
+            {% if selected_city %}
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Valid Time (UTC)</th>
+                            <th>Forecast (A)</th>
+                            <th>Lower 5% (A)</th>
+                            <th>Upper 95% (A)</th>
+                            <th>Time until</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in rows %}
+                            <tr>
+                                <td>{{ row.valid_time|date:"M j, H:i" }}</td>
+                                <td>{{ row.forecast_amps|floatformat:0 }}</td>
+                                <td>{{ row.forecast_ci_lower_amps|floatformat:0 }}</td>
+                                <td>{{ row.forecast_ci_upper_amps|floatformat:0 }}</td>
+                                <td>{{ row.lead_minutes }} min</td>
+                            </tr>
+                        {% empty %}
+                            <tr><td colspan="5">No upcoming forecasts for this city.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            {% endif %}
+        </div>
+    </body>
+</html>
