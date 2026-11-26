@@ -260,6 +260,39 @@ def dry_run(prepared, fetch, environ, clock=None):
     return DryOutcome(run_record.outcome_for(selection, False), None, counts, rows, EXIT_OK)
 
 
+# -- the live path (D-04): the only code that imports the writer side ------------------------------
+
+
+def live_run(prepared, fetch, connect, environ, clock=None):
+    """One recorded run: `job.run_once` with this engine's solver tag (a run started with the
+    default tag would be stored as a failed PSS/E run with no figures). `job` and `writer` are
+    imported here and nowhere else, so a dry run never loads them (D-10). `connect` defaults to the
+    writer connection built from SUPABASE_PSSE_DB_URL of `environ`; this function never calls it,
+    `job.run_once` does, after the study. Returns a LiveOutcome; the run id is not part of it."""
+    from psse_job import job, writer
+
+    if connect is None:
+        connect = functools.partial(writer.connect, env=environ)
+    seen = {}
+
+    def recording_study(selection, context):
+        seen["selection"] = selection
+        results = prepared.study(selection, context)
+        seen["results"] = results
+        return results
+
+    outcome = job.run_once(
+        fetch, recording_study, connect, prepared.case_id, prepared.case_sha256,
+        prepared.mapping_sha256, clock=clock, env=environ, solver=engine.SOLVER)
+    selection = seen.get("selection")
+    counts = None if selection is None else _rating_counts(selection)
+    rows = None
+    if outcome.status == "written" and seen.get("results") is not None:
+        rows = _row_counts(seen["results"])
+    return LiveOutcome(outcome.outcome, outcome.status, outcome.failed_stage, counts, rows,
+                       outcome.exit_code)
+
+
 # -- the main --------------------------------------------------------------------------------------
 
 
@@ -289,23 +322,51 @@ def _say_result(say, result):
         say("rows: run=%d dispatch=%d margin=%d contingency=%d" % result.rows)
 
 
+def _require_present(environ, mode):
+    """Every secret, both read settings and, in live mode, the writer value must be non-blank;
+    checked before any folder exists (InputsRefused missing_secret)."""
+    names = [name for _word, name, _file, _cap in SECRET_ENV] + list(READ_ENV)
+    if mode == "live":
+        names.append(constants.ENV_PSSE_DB_URL)
+    for name in names:
+        value = environ.get(name)
+        if value is None or not str(value).strip():
+            raise InputsRefused("missing_secret")
+
+
 def _run_command(say, environ, fetch, connect, clock, prepare, backend_loader):
     mode = decide_mode(environ)
     say("mode: %s" % mode)
-    folder = tempfile.mkdtemp(prefix=TEMP_PREFIX, dir=environ.get("RUNNER_TEMP") or None)
     try:
-        paths = materialize(environ, folder)
-        say("inputs: ok")
-        backend = (backend_loader or engine.load_recorded_backend)(folder)
-        prepared = (prepare or engine.prepare_run)(
-            backend, paths["network"], paths["mapping"], allow_placeholder=False)
-        read = fetch if fetch is not None else (lambda: ratings.fetch_latest_rating(environ))
-        result = dry_run(prepared, read, environ, clock)
-        _say_result(say, result)
-        say("dry run: nothing was written to the database")
-        return result.exit_code
-    finally:
-        shutil.rmtree(folder, ignore_errors=True)
+        _require_present(environ, mode)
+        folder = tempfile.mkdtemp(prefix=TEMP_PREFIX, dir=environ.get("RUNNER_TEMP") or None)
+        try:
+            paths = materialize(environ, folder)
+            say("inputs: ok")
+            backend = (backend_loader or engine.load_recorded_backend)(folder)
+            if mode == "live" and engine.is_placeholder(backend):
+                say("placeholder: refused")
+                return EXIT_USAGE
+            prepared = (prepare or engine.prepare_run)(
+                backend, paths["network"], paths["mapping"], allow_placeholder=False)
+            read = fetch if fetch is not None else (lambda: ratings.fetch_latest_rating(environ))
+            if mode == "dry":
+                result = dry_run(prepared, read, environ, clock)
+                _say_result(say, result)
+                say("dry run: nothing was written to the database")
+            else:
+                result = live_run(prepared, read, connect, environ, clock)
+                _say_result(say, result)
+                say("run status: %s" % result.status)
+            return result.exit_code
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+    except InputsRefused as problem:
+        say("inputs: refused (%s)" % problem.reason)
+        return EXIT_USAGE
+    except engine.RecordsRefused as problem:
+        say("records: refused (%s)" % problem.reason)
+        return EXIT_USAGE
 
 
 def main(argv, out=None, environ=None, repo_root=None, fetch=None, connect=None, clock=None,
