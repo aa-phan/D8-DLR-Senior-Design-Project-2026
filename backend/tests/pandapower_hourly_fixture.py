@@ -1,0 +1,100 @@
+"""
+Shared helper for the hourly-runner tests (pandapower-solver Phase 5, plan 05-01). Not collected by
+pytest (the file name does not match `*_test.py`, and nothing here has a `test_` prefix).
+
+Synthetic data only: every file is generated from the public 39-bus fixture into the test's own
+`tmp_path`, and nothing here reads `data/private`. The four secrets of the runner are produced as
+the single-line base64 text the workflow would hand over in the environment, so a test exercises
+the runner exactly as the workflow does.
+"""
+
+import base64
+import json
+import os
+import sys
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_BACKEND = os.path.abspath(os.path.join(_HERE, ".."))
+for _folder in (_BACKEND, _HERE):
+    if _folder not in sys.path:
+        sys.path.insert(0, _folder)
+
+import pandapower  # noqa: E402
+import pandapower_replay_fixture as replay_fixture  # noqa: E402
+import pandapower_study_fixture as study_fixture  # noqa: E402
+import psse_fakes  # noqa: E402
+from pandapower_job import cli, engine, hourly  # noqa: E402
+
+FIXED_NOW = study_fixture.NOW
+
+
+def _write_json(path, document):
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(document, handle)
+    return path
+
+
+def secret_files(tmp_path, island=False):
+    """Write the four private inputs into `tmp_path` and return a dict from the secret's word
+    (network, mapping, settings, scaling) to its path: the converted fixture network, the
+    non-placeholder mapping, the recorded settings document and the scaling document, both with
+    the report marker key (built from `cli.REPORT_MARKER`, never a literal)."""
+    values = study_fixture.fixture_backend().solve_settings
+    details = study_fixture.fixture_backend().scaling_details
+    settings_path = os.path.join(str(tmp_path), "settings_document.json")
+    scaling_path = os.path.join(str(tmp_path), "scaling_document.json")
+    _write_json(settings_path, {
+        "settings": {
+            "enforce_q_lims": values.enforce_q_lims, "tolerance_mva": values.tolerance_mva,
+            "max_iteration": values.max_iteration,
+            "collapse_voltage_pu": values.collapse_voltage_pu,
+            "sources": dict(values.sources), "deviations": list(values.deviations)},
+        cli.REPORT_MARKER: 1})
+    _write_json(scaling_path, {
+        "swing_in_total": details.swing_in_total, "clamped_at_limits": details.clamped_at_limits,
+        "q_scales_with_p": details.q_scales_with_p, cli.REPORT_MARKER: 1})
+    return {
+        "network": study_fixture.write_converted(tmp_path),
+        "mapping": replay_fixture.write_mapping(tmp_path, island=island),
+        "settings": settings_path,
+        "scaling": scaling_path}
+
+
+def _single_line_base64(path):
+    with open(path, "rb") as handle:
+        return base64.b64encode(handle.read()).decode("ascii")
+
+
+def hourly_env(tmp_path, live=False, island=False, **extra):
+    """The environment of one runner call: each secret of `hourly.SECRET_ENV` as the single-line
+    base64 text of its file, synthetic Supabase read settings, a job version and PANDAPOWER_LIVE
+    set to `true` only when `live`. `extra` replaces or adds names."""
+    files = secret_files(tmp_path, island=island)
+    environ = dict((name, _single_line_base64(files[word]))
+                   for word, name, _file, _cap in hourly.SECRET_ENV)
+    environ["SUPABASE_URL"] = "https://hourly-example-project.supabase.example"
+    environ["SUPABASE_PUBLISHABLE_KEY"] = psse_fakes.fake_publishable_key()
+    environ["PSSE_JOB_VERSION"] = "test-version"
+    if live:
+        environ[hourly.LIVE_VARIABLE] = "true"
+    environ.update(extra)
+    return environ
+
+
+def fake_fetch_for(now):
+    """A ratings read of four current, non-provisional rows (every city gets its city rating)."""
+    return psse_fakes.fake_fetch(psse_fakes.latest_rows(now, provisional=False))
+
+
+def fake_pandapower_study(selection, context):
+    """A study that takes no time: valid results of the public synthetic rows, tagged pandapower."""
+    results = psse_fakes.fake_results(selection)
+    return results._replace(solver=engine.SOLVER, solver_version=pandapower.__version__,
+                            psse_version=None)
+
+
+def fast_prepare(backend, case_path, mapping_path, allow_placeholder=False, clock=None):
+    """The real `engine.prepare_run` (real hashes, real mapping load) with its study replaced by
+    `fake_pandapower_study`, so a test that is not about the solver takes milliseconds."""
+    prepared = engine.prepare_run(backend, case_path, mapping_path, allow_placeholder, clock)
+    return prepared._replace(study=fake_pandapower_study)
