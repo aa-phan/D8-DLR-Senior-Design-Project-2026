@@ -34,6 +34,8 @@ _VERIFY_EXPOSURE = os.path.join(_OPS_DIR, "verify_exposure.sql")
 _GRID_STUDY_EXPOSE_MIGRATION = "20261116200000_expose_latest_grid_study.sql"
 # The solver-tag migration alters psse_run (pandapower-solver DB-01), so it sorts after the view.
 _SOLVER_TAG_MIGRATION = "20261118200000_psse_run_solver_tag.sql"
+# The per-solver grid-study view (pandapower-solver phase 6) replaces the view again, so it sorts after the solver tag.
+_GRID_STUDY_PER_SOLVER_MIGRATION = "20261126200000_latest_grid_study_per_solver.sql"
 _EXPOSURE_CHECKS_WITHOUT_GRID_STUDY = 29
 _EXPOSURE_CHECKS = 36
 _EXPOSE_MIGRATION = "20261108120100_expose_day_ahead_forecast.sql"
@@ -88,14 +90,15 @@ def test_psse_migration_is_unchanged_after_apply():
             assert hashlib.sha256(handle.read()).hexdigest() == expected, name
 
 
-def test_text_there_is_one_psse_migration_named_by_utc_timestamp_and_only_the_grid_study_view_and_the_solver_tag_sort_after_it():
+def test_text_there_is_one_psse_migration_named_by_utc_timestamp_and_only_the_grid_study_views_and_the_solver_tag_sort_after_it():
     paths = _psse_paths()
     assert len(paths) == 1, paths
     name = os.path.basename(paths[0])
     assert re.fullmatch(r"[0-9]{14}_psse_results\.sql", name), name
     names = sorted(n for n in os.listdir(_MIGRATIONS_DIR) if n.endswith(".sql"))
     assert name > _EXPOSE_MIGRATION
-    assert names[names.index(name) + 1:] == [_GRID_STUDY_EXPOSE_MIGRATION, _SOLVER_TAG_MIGRATION]
+    assert names[names.index(name) + 1:] == [
+        _GRID_STUDY_EXPOSE_MIGRATION, _SOLVER_TAG_MIGRATION, _GRID_STUDY_PER_SOLVER_MIGRATION]
 
 
 def test_text_the_marked_region_is_the_reference_ddl_byte_for_byte():

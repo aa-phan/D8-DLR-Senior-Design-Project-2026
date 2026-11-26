@@ -1,7 +1,8 @@
 """
 Tests of the owner's read-only check `supabase/ops/verify_solver_tag.sql` (pandapower-solver
-workstream, phase 3, requirement DB-01, success criterion 4, decision D-07), and later the public
-view guard that the solver-tag migration appends (decision D-03).
+workstream, phase 3, requirement DB-01, success criterion 4, decision D-07). The public view guard
+this file once proved (decision D-03) was replaced in phase 6 by the per-solver view (migration
+20261126200000_latest_grid_study_per_solver.sql, decision D-05).
 
 The owner applies `supabase/migrations/20261118200000_psse_run_solver_tag.sql` to the live project
 and then runs the check. These tests are what makes that run mean something: the check is one
@@ -40,7 +41,7 @@ _SOLVER_TAG_MIGRATION = psse_local_pg.SOLVER_TAG_MIGRATION
 
 STARTED = datetime(2026, 10, 28, 14, 7, 30, tzinfo=timezone.utc)
 
-# The last name is the view guard (decision D-03, chosen by the owner on 2026-11-18).
+# The six checks of verify_solver_tag.sql; the view-guard check was retired in phase 6 (D-05).
 CHECK_NAMES = (
     "psse_run_solver_column_is_text_not_null_default_psse",
     "psse_run_solver_version_column_is_nullable_text",
@@ -48,7 +49,6 @@ CHECK_NAMES = (
     "psse_prefixed_runs_are_tagged_psse",
     "pp_prefixed_runs_are_tagged_pandapower",
     "psse_runs_carry_no_solver_version",
-    "latest_grid_study_reads_psse_runs_only",
 )
 
 
@@ -269,12 +269,6 @@ def _sabotage_psse_run_with_version(conn):
     psse_local_pg.insert_rows(conn, "psse_run", rows["psse_run"])
 
 
-def _sabotage_unguarded_view(conn):
-    # The grid-study file's own view statement, as it stood before the guard.
-    statement = _only(_statements(_GRID_STUDY_MIGRATION), _VIEW)
-    conn.execute(statement)
-
-
 # Each sabotage makes exactly the named check false; a related check may fall with it (dropping the
 # tie also fails the constraints check), so only the named one is asserted.
 _SABOTAGE = {
@@ -284,7 +278,6 @@ _SABOTAGE = {
     "psse_prefixed_runs_are_tagged_psse": _sabotage_psse_run_tagged_pandapower,
     "pp_prefixed_runs_are_tagged_pandapower": _sabotage_pp_run_tagged_psse,
     "psse_runs_carry_no_solver_version": _sabotage_psse_run_with_version,
-    "latest_grid_study_reads_psse_runs_only": _sabotage_unguarded_view,
 }
 
 
@@ -302,7 +295,7 @@ def test_db_each_check_can_fail(clean_pg, name):
 
 
 # --------------------------------------------------------------------------------------------------
-# database: the guarded public view (decision D-03)
+# database: the public view after the whole chain (one row per city per solver since phase 6)
 # --------------------------------------------------------------------------------------------------
 
 def _view_rows(url, role="anon"):
@@ -322,7 +315,7 @@ def _view_rows(url, role="anon"):
         conn.close()
 
 
-def test_db_a_newer_pandapower_run_never_changes_the_view(clean_pg):
+def test_db_after_the_chain_the_view_shows_each_solvers_newest_run(clean_pg):
     import psycopg
 
     hour = local_pg.current_utc_hour()
@@ -334,19 +327,32 @@ def test_db_a_newer_pandapower_run_never_changes_the_view(clean_pg):
         _insert_complete(conn, psse_rows)
         _insert_complete(conn, pp_rows)
 
-    # The newer pandapower run is complete and its four city rows exist, yet the view shows the
-    # older PSS/E run: four rows, that run's hour, solver psse.
-    rows = _view_rows(clean_pg)
-    assert sorted(row["city"] for row in rows) == sorted(psse_local_pg.CITIES)
-    assert {row["slot_time"] for row in rows} == {hour - timedelta(hours=2)}
-    assert {row["solver"] for row in rows} == {"psse"}
+    def check_both(rows):
+        assert len(rows) == 8
+        for solver, slot in (("psse", hour - timedelta(hours=2)), ("pandapower", hour - timedelta(hours=1))):
+            mine = [row for row in rows if row["solver"] == solver]
+            assert sorted(row["city"] for row in mine) == sorted(psse_local_pg.CITIES)
+            assert {row["slot_time"] for row in mine} == {slot}
 
-    # With only pandapower runs in the table the view is empty.
+    # Each solver shows its own newest complete run: four rows each, at that run's hour.
+    check_both(_view_rows(clean_pg))
+
+    # A newer failed pandapower run is skipped and changes nothing.
+    failed_started = hour + timedelta(seconds=1)
+    failed = psse_local_pg.failed_run_row(psse_local_pg.make_run_id(22, failed_started, prefix="pp"), failed_started)
+    failed = dict(failed, solver="pandapower", solver_version="3.5.6")
+    with psycopg.connect(clean_pg) as conn:
+        psse_local_pg.insert_rows(conn, "psse_run", [failed])
+    check_both(_view_rows(clean_pg))
+
+    # With only a complete pandapower run in the tables the view shows its four rows, solver pandapower.
     psse_local_pg.reset(clean_pg)
-    _, pp_only = _complete_run(22, prefix="pp", started=pp_started, solver="pandapower", solver_version="3.5.6")
+    _, pp_only = _complete_run(23, prefix="pp", started=pp_started, solver="pandapower", solver_version="3.5.6")
     with psycopg.connect(clean_pg) as conn:
         _insert_complete(conn, pp_only)
-    assert _view_rows(clean_pg) == []
+    rows = _view_rows(clean_pg)
+    assert len(rows) == 4
+    assert {row["solver"] for row in rows} == {"pandapower"}
 
 
 @pytest.fixture
