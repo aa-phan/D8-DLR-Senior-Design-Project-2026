@@ -13,6 +13,10 @@ fixture; the other tests use a fast stand-in study.
 What the database tier of plan 05-04 adds: that a dry run leaves the four result tables unchanged
 and that a live run stores a run set with solver pandapower, on a throwaway local Postgres.
 
+Plan 05-04 also adds the `soak` command, tested here on a fake connection (the last tests of this
+file): the per-solver gap check with pandapower expected, the counts-only lines, the trailing 24-slot
+count and the exit rules.
+
 Synthetic data only; nothing here reads `data/private`. No test asserts a file mode or pins file
 bytes (Windows).
 """
@@ -33,6 +37,7 @@ if _BACKEND not in sys.path:
 
 import ast  # noqa: E402
 import base64  # noqa: E402
+import datetime  # noqa: E402
 import io  # noqa: E402
 import json  # noqa: E402
 import logging  # noqa: E402
@@ -41,7 +46,7 @@ import warnings  # noqa: E402
 
 import pandapower_hourly_fixture as fixture  # noqa: E402
 from pandapower_job import cli, engine, hourly  # noqa: E402
-from psse_job import contract, job, ratings  # noqa: E402
+from psse_job import contract, gaps, job, ratings  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -527,3 +532,285 @@ def test_entry_script_without_arguments_prints_usage_and_exits_2():
     assert done.returncode == 2
     assert done.stdout.splitlines() == [hourly.USAGE_LINE, "usage error: bad or missing arguments"]
     assert done.stderr == ""
+
+
+# -- the soak command (D-04, D-09, D-12) -----------------------------------------------------------
+
+HOUR = datetime.timedelta(hours=1)
+UTC = datetime.timezone.utc
+H = datetime.datetime(2026, 11, 24, 12, 0, 0, tzinfo=UTC)  # the database's current hour here
+PSSE = contract.SOLVER_PSSE
+PP = engine.SOLVER
+ISO = r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z"
+SINCE = "2026-11-24T10:00:00Z"
+PLANTED = "planted-pw-4417 db-host-4417.invalid"
+CHECK_FAILED_LINES = ["gap check: could not run"]
+USAGE_LINES = [hourly.USAGE_LINE, "usage error: bad or missing arguments"]
+
+
+class _Result(object):
+    def __init__(self, rows=None, one=None):
+        self._rows = rows
+        self._one = one
+
+    def fetchall(self):
+        return self._rows
+
+    def fetchone(self):
+        return self._one
+
+
+class _FakeConnection(object):
+    """A connection that records `("set", name, value)` for the autocommit and read_only assignments
+    and `("execute", sql)` for each statement, answers the two statements of the per-solver check and
+    refuses any other (the same shape as `psse_gaps_solver_test._FakeConnection`)."""
+
+    def __init__(self, rows, current_slot):
+        object.__setattr__(self, "events", [])
+        object.__setattr__(self, "_rows", rows)
+        object.__setattr__(self, "_current", current_slot)
+
+    def __setattr__(self, name, value):
+        self.events.append(("set", name, value))
+
+    def execute(self, sql, params=None):
+        self.events.append(("execute", sql))
+        if sql == gaps.RUNS_SQL:
+            return _Result(rows=list(self._rows))
+        if sql == gaps.CURRENT_HOUR_SQL:
+            return _Result(one=(self._current,))
+        raise AssertionError("unexpected statement: " + sql)
+
+    def close(self):
+        self.events.append(("close",))
+
+
+READ_ONLY_EVENTS = [("set", "autocommit", False), ("set", "read_only", True),
+                    ("execute", gaps.RUNS_SQL), ("execute", gaps.CURRENT_HOUR_SQL), ("close",)]
+
+
+def _connector(rows, current=H):
+    """(connect, made): `connect()` returns a new fake connection holding the same rows each call;
+    `made` lists them."""
+    made = []
+
+    def connect():
+        conn = _FakeConnection(rows, current)
+        made.append(conn)
+        return conn
+
+    return connect, made
+
+
+def _soak(argv, rows=(), environ=None, connect=None):
+    """(exit code, printed lines, connections made) of one `soak` call on a fake connection; every
+    printed line is asserted to be in the vocabulary."""
+    made = []
+    if connect is None:
+        connect, made = _connector(list(rows))
+    buffer = io.StringIO()
+    code = hourly.main(["soak"] + list(argv), out=buffer, environ={} if environ is None else environ,
+                       connect=connect, sink=False)
+    lines = buffer.getvalue().splitlines()
+    assert _vocabulary_ok(lines)
+    return code, lines, made
+
+
+def _consecutive(solver, count, first_back=1, fallback_every=None):
+    """`count` hourly runs of `solver`, from `first_back` hours before H going back; every
+    `fallback_every`-th one is a fallback run, the others are ok."""
+    rows = []
+    for k in range(first_back, first_back + count):
+        fallback = fallback_every is not None and k % fallback_every == 0
+        rows.append((H - k * HOUR, solver, "fallback" if fallback else "ok"))
+    return rows
+
+
+def _report(rows, current=H, since=None, expected=(PP,)):
+    return gaps.format_solver_report(gaps.summarize(rows), gaps.compute_gaps(rows, current),
+                                     since=since, expected=expected)
+
+
+def test_gap_lines_turn_the_report_into_counts():
+    psse_rows = [(H - 10 * HOUR, PSSE, "ok"), (H - 9 * HOUR, PSSE, "ok"), (H - 6 * HOUR, PSSE, "ok")]
+    report = _report(psse_rows)
+    assert gaps.compute_gaps(psse_rows, H)[PSSE]
+    lines = hourly.gap_lines(report)
+    assert lines == ["gap check: solver psse runs=3 gaps=7",
+                     "gap check: solver pandapower no runs recorded"]
+    assert re.search(ISO, "\n".join(lines)) is None
+    assert re.search(ISO, report) is not None
+
+    windowed = hourly.gap_lines(_report(psse_rows, since=H - 6 * HOUR))
+    assert windowed == ["gap check: solver psse runs=3 gaps=5",
+                        "gap check: solver pandapower no runs recorded"]
+
+    both = psse_rows + _consecutive(PP, 24)
+    assert hourly.gap_lines(_report(both)) == ["gap check: solver psse runs=3 gaps=7",
+                                              "gap check: solver pandapower runs=24 gaps=0"]
+
+    odd = [(H - 3 * HOUR, "Weird Tag!", "ok"), (H - 3 * HOUR, "zzz", "ok"), (H - 3 * HOUR, PP, "ok")]
+    words = hourly.gap_lines(_report(odd))
+    assert sorted(words) == sorted([
+        "gap check: solver unknown runs=1 gaps=2", "gap check: solver other runs=1 gaps=2",
+        "gap check: solver pandapower runs=1 gaps=2"])
+    assert _vocabulary_ok(words)
+    assert hourly.gap_lines("no runs recorded") == []
+    assert hourly.gap_lines("") == []
+
+
+def test_soak_calls_run_by_solver_with_the_pandapower_expectation(monkeypatch):
+    calls = []
+
+    def recorder(env, **kwargs):
+        calls.append((env, kwargs))
+        return 0
+
+    monkeypatch.setattr(gaps, "run_by_solver", recorder)
+    connect, made = _connector(_consecutive(PP, 24))
+    environ = {"UNRELATED": "value"}
+
+    code, lines, _ = _soak([], environ=environ, connect=connect)
+    assert code == 0
+    assert len(calls) == 1
+    env, kwargs = calls[0]
+    assert env is environ
+    assert kwargs["expected"] == (PP,)
+    assert kwargs["fail_on_gaps"] is False
+    assert kwargs["since"] is None
+    assert kwargs["connect"] is connect
+    assert isinstance(kwargs["out"], io.StringIO)
+    assert lines[-2:] == ["soak: consecutive_slots=24 of 24 fallback_slots=0", "soak: pass"]
+
+    code, _, _ = _soak(["--since", SINCE], environ=environ, connect=connect)
+    assert code == 0
+    assert len(calls) == 2
+    kwargs = calls[1][1]
+    assert kwargs["fail_on_gaps"] is True
+    assert kwargs["since"] == datetime.datetime(2026, 11, 24, 10, 0, 0, tzinfo=UTC)
+    assert kwargs["expected"] == (PP,)
+
+
+def test_soak_prints_the_trailing_count_and_exits_0_with_gaps():
+    rows = _consecutive(PP, 24, fallback_every=6) + [(H - 30 * HOUR, PP, "ok")]
+    code, lines, made = _soak([], rows)
+    assert code == 0
+    assert lines == ["gap check: solver pandapower runs=25 gaps=5",
+                     "soak: consecutive_slots=24 of 24 fallback_slots=4", "soak: pass"]
+
+    short = _consecutive(PP, 23) + [(H - 24 * HOUR - HOUR, PP, "ok")]
+    code, lines, _ = _soak([], short)
+    assert code == 0
+    assert lines[-2:] == ["soak: consecutive_slots=23 of 24 fallback_slots=0", "soak: not yet"]
+    assert lines[0] == "gap check: solver pandapower runs=24 gaps=1"
+
+    none_yet = [(H - 2 * HOUR, PSSE, "ok"), (H - 1 * HOUR, PSSE, "ok")]
+    code, lines, _ = _soak([], none_yet)
+    assert code == 0
+    assert lines == ["gap check: solver psse runs=2 gaps=0",
+                     "gap check: solver pandapower no runs recorded",
+                     "soak: consecutive_slots=0 of 24 fallback_slots=0", "soak: not yet"]
+
+
+def test_soak_second_read_is_read_only():
+    rows = _consecutive(PP, 24)
+    code, _, made = _soak([], rows)
+    assert code == 0
+    assert len(made) == 2
+    assert made[0].events == READ_ONLY_EVENTS
+    assert made[1].events == READ_ONLY_EVENTS
+    statements = [event[1] for conn in made for event in conn.events if event[0] == "execute"]
+    assert statements == [gaps.RUNS_SQL, gaps.CURRENT_HOUR_SQL] * 2
+    assert all(statement.lstrip().lower().startswith("select") for statement in statements)
+
+
+def test_soak_exits_6_and_prints_no_error_text_when_the_check_cannot_run():
+    environ = {"SUPABASE_PSSE_DB_URL": "postgresql://user:" + PLANTED + "@host/db"}
+
+    def refusing():
+        raise RuntimeError("connection failed for " + PLANTED)
+
+    code, lines, _ = _soak([], environ=environ, connect=refusing)
+    assert code == 6
+    assert lines == CHECK_FAILED_LINES
+
+    # the first read works and the second does not: still one line, still exit 6
+    good, made = _connector(_consecutive(PP, 24))
+    state = {"n": 0}
+
+    def second_fails():
+        state["n"] += 1
+        if state["n"] > 1:
+            raise RuntimeError("second read failed for " + PLANTED)
+        return good()
+
+    code, lines, _ = _soak([], environ=environ, connect=second_fails)
+    assert code == 6
+    assert lines == CHECK_FAILED_LINES
+
+    # the same with --since: the closing check cannot run either
+    code, lines, _ = _soak(["--since", SINCE], environ=environ, connect=refusing)
+    assert code == 6
+    assert lines == CHECK_FAILED_LINES
+
+    # no writer value at all: the real connection factory refuses before any driver import, and the
+    # variable's name (part of that error text) is not printed either
+    buffer = io.StringIO()
+    code = hourly.main(["soak"], out=buffer, environ={}, sink=False)
+    assert code == 6
+    assert buffer.getvalue().splitlines() == CHECK_FAILED_LINES
+    assert "SUPABASE" not in buffer.getvalue()
+
+
+def test_soak_since_closing_check_exit_rule():
+    # 24 consecutive hours, no gap in the window: exit 0
+    code, lines, _ = _soak(["--since", SINCE], _consecutive(PP, 24))
+    assert code == 0
+    assert lines[-1] == "soak: pass"
+
+    # a gap older than the window does not count against the closing check
+    older = _consecutive(PP, 24) + [(H - 30 * HOUR, PP, "ok")]
+    code, lines, _ = _soak(["--since", SINCE], older)
+    assert code == 0
+    # the window filters the gaps shown (the five older ones are outside it); the run count is not
+    assert lines[0] == "gap check: solver pandapower runs=25 gaps=0"
+    assert lines[-1] == "soak: pass"
+
+    # the hour before the current one is missing: a gap in the window, so exit 5
+    gap_in_window = _consecutive(PP, 24, first_back=2)
+    code, lines, _ = _soak(["--since", SINCE], gap_in_window)
+    assert code == 5
+    assert lines[-2:] == ["soak: consecutive_slots=0 of 24 fallback_slots=0", "soak: not yet"]
+
+    # no gap at all, but only 12 consecutive hours: the count is below 24, exit 5
+    code, lines, _ = _soak(["--since", SINCE], _consecutive(PP, 12))
+    assert code == 5
+    assert lines[0] == "gap check: solver pandapower runs=12 gaps=0"
+    assert lines[-2:] == ["soak: consecutive_slots=12 of 24 fallback_slots=0", "soak: not yet"]
+
+    # pandapower expected but absent: the check fails (exit 5) and prints it
+    code, lines, _ = _soak(["--since", SINCE], [(H - 1 * HOUR, PSSE, "ok")])
+    assert code == 5
+    assert "gap check: solver pandapower no runs recorded" in lines
+
+    # the same histories without --since all exit 0
+    for rows in (older, gap_in_window, _consecutive(PP, 12)):
+        assert _soak([], rows)[0] == 0
+
+
+def test_soak_since_must_be_a_whole_hour():
+    assert hourly.parse_since(SINCE) == datetime.datetime(2026, 11, 24, 10, 0, 0, tzinfo=UTC)
+    refused = ["2026-11-24T10:30:00Z", "2026-11-24T10:00:01Z", "2026-11-24T10:00:00",
+               "2026-11-24T10:00:00+00:00", "2026-11-24", "2026-11-24T10:00Z",
+               "2026-13-24T10:00:00Z", "2026-11-24T24:00:00Z", "2026-11-24T10:00:00Z\n",
+               " 2026-11-24T10:00:00Z", "2026-11-24t10:00:00z", "", "now", "-1"]
+    for text in refused:
+        connect, made = _connector(_consecutive(PP, 24))
+        code, lines, _ = _soak(["--since=" + text], connect=connect)
+        assert code == 2, repr(text)
+        assert lines == USAGE_LINES, repr(text)
+        assert made == [], repr(text)
+        with pytest.raises(hourly._UsageError):
+            hourly.parse_since(text)
+    code, lines, _ = _soak(["--since"])
+    assert (code, lines) == (2, USAGE_LINES)

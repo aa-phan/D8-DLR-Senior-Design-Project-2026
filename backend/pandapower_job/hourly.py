@@ -4,8 +4,16 @@ decisions D-02, D-03, D-04, D-05, D-08, D-10, D-13, D-14).
 
     pandapower_hourly.py run
 
-`run` is the command the workflow runs every hour. The commands `soak`, `bundle` and `scan-log`
-arrive in plans 05-04 and 05-05; the usage line names them already so it does not change later.
+`run` is the command the workflow runs every hour. `soak` (plan 05-04: OPS-05; decisions D-04, D-09,
+D-12) is the per-solver gap check and the trailing 24-slot count, run after it:
+
+    pandapower_hourly.py soak [--since YYYY-MM-DDTHH:00:00Z]
+
+Without `--since` it reports and exits 0 whatever the gaps are (6 only when the check cannot run), so
+one missed hour does not keep every later hourly run red. With `--since` it is the owner's closing
+check: exit 0 only when pandapower has no gap in the window and the count is at least 24, else 5.
+The commands `bundle` and `scan-log` arrive in plan 05-05; the usage line names them already so it
+does not change later.
 
 What is printed (D-05, D-14). Everything printed goes through one printer (`_Printer.say`) that
 accepts only lines matching `HOURLY_LINE_PATTERNS`: counts of one to nine digits and words of fixed
@@ -29,7 +37,8 @@ before any connection is opened.
 
 Exit codes: 0 (the run is ok, a dry run passed), 1 (the study failed, or the run was recorded as
 failed), 2 (usage, any refusal or unexpected error), 3 (a live run could not be recorded), 5 and 6
-(the gap check, plan 05-04), 130 (interrupted).
+(the `soak` command: 5 gaps or a count below 24 under `--since`, 6 the check could not run), 130
+(interrupted).
 """
 
 import argparse
@@ -38,6 +47,7 @@ import binascii
 import collections
 import datetime
 import functools
+import io
 import logging
 import os
 import re
@@ -47,7 +57,7 @@ import tempfile
 import warnings
 
 from psse_job import constants, contract, ratings, run_record
-from pandapower_job import cli, convert, engine
+from pandapower_job import cli, convert, engine, soak
 
 PROGRAM = "pandapower_hourly.py"
 LIVE_VARIABLE = "PANDAPOWER_LIVE"
@@ -72,9 +82,13 @@ EXIT_CHECK_FAILED = 6
 
 USAGE_LINE = "usage: pandapower_hourly.py {run,soak,bundle,scan-log} ..."
 # command -> its flags; later plans add keys
-COMMAND_FLAGS = {"run": ()}
+COMMAND_FLAGS = {"run": (), "soak": ("--since",)}
+# the solver labels the gap check can print: the two tags, the gap check's own `unknown` for a
+# label that is not a plain tag, and `other` for any other plain tag
+SOLVER_WORDS = (contract.SOLVER_PSSE, engine.SOLVER, "unknown", "other")
 
 _NUM = "[0-9]{1,9}"
+_COUNT_LIMIT = 999999999
 
 
 def _alt(words):
@@ -97,6 +111,11 @@ HOURLY_LINE_PATTERNS = tuple(re.compile(pattern + r"\Z") for pattern in (
     re.escape(USAGE_LINE),
     "usage error: %s" % _alt(("unknown command", "bad or missing arguments")),
     "error: unexpected \\([A-Z][A-Za-z]{0,39}\\)",
+    "gap check: solver %s runs=%s gaps=%s" % (_alt(SOLVER_WORDS), _NUM, _NUM),
+    "gap check: solver %s no runs recorded" % _alt(SOLVER_WORDS),
+    "gap check: could not run",
+    "soak: consecutive_slots=%s of %d fallback_slots=%s" % (_NUM, soak.SOAK_SLOTS, _NUM),
+    "soak: (?:pass|not yet)",
 ))
 
 
@@ -291,6 +310,128 @@ def live_run(prepared, fetch, connect, environ, clock=None):
         rows = _row_counts(seen["results"])
     return LiveOutcome(outcome.outcome, outcome.status, outcome.failed_stage, counts, rows,
                        outcome.exit_code)
+
+
+# -- the soak command (D-04, D-09, D-12): reads only; imports the writer side inside its functions ---
+
+_SINCE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:00:00Z\Z")
+_SOLVER_SECTION = re.compile(r"solver ([a-z][a-z0-9_]*): ([0-9]+) runs recorded\Z")
+_SOLVER_EMPTY = re.compile(r"solver ([a-z][a-z0-9_]*): no runs recorded\Z")
+_GAPS_FOUND = re.compile(r"([0-9]+) gaps(?: |\Z)")
+_NO_GAPS = re.compile(r"no gaps(?: |\Z)")
+SOAK_CHECK_FAILED = "gap check: could not run"
+
+
+def parse_since(text):
+    """The aware UTC datetime of `text`, which must be a whole UTC hour spelled exactly
+    `YYYY-MM-DDTHH:00:00Z`; anything else (minutes set, no `Z`, a date only, an impossible date) is
+    a usage error."""
+    if not isinstance(text, str) or _SINCE.match(text) is None:
+        raise _UsageError()
+    try:
+        value = datetime.datetime.strptime(text, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        raise _UsageError() from None
+    return value.replace(tzinfo=datetime.timezone.utc)
+
+
+def _solver_word(name):
+    return name if name in SOLVER_WORDS else "other"
+
+
+def gap_lines(text):
+    """The counts-only lines of the report `gaps.format_solver_report` built: one
+    `gap check: solver NAME runs=N gaps=N` line per solver section (gaps from its `N gaps` or
+    `no gaps` line) and `gap check: solver NAME no runs recorded` for a solver with no rows. A label
+    outside the solver words prints as `other`. Slot times and gap lines are never copied."""
+    lines = []
+    pending = None
+    for line in text.splitlines():
+        empty = _SOLVER_EMPTY.match(line)
+        if empty is not None:
+            pending = None
+            lines.append("gap check: solver %s no runs recorded" % _solver_word(empty.group(1)))
+            continue
+        section = _SOLVER_SECTION.match(line)
+        if section is not None:
+            pending = (_solver_word(section.group(1)), min(int(section.group(2)), _COUNT_LIMIT))
+            continue
+        if pending is None:
+            continue
+        found = _GAPS_FOUND.match(line)
+        if found is not None:
+            gaps_count = min(int(found.group(1)), _COUNT_LIMIT)
+        elif _NO_GAPS.match(line) is not None:
+            gaps_count = 0
+        else:
+            continue
+        lines.append("gap check: solver %s runs=%d gaps=%d" % (pending[0], pending[1], gaps_count))
+        pending = None
+    return lines
+
+
+def read_runs(connect):
+    """`(runs, current_slot)`: every run as (slot_time, solver, outcome) and the database's current
+    UTC hour, read on a new connection that is made read-only before its first statement and closed
+    at the end. `psycopg` applies `read_only` only to transactions it opens itself, and the writer
+    connection is autocommit, so autocommit is left first (as `gaps.run_by_solver` does)."""
+    from psse_job import gaps
+
+    conn = connect()
+    try:
+        conn.autocommit = False
+        conn.read_only = True
+        runs = gaps.fetch_runs(conn)
+        current = gaps.fetch_current_slot(conn)
+    finally:
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+    return runs, current
+
+
+def run_soak(environ, connect=None, since=None):
+    """The per-solver gap check with pandapower expected, plus the trailing 24-slot count.
+
+    Returns `(lines, exit_code)`. The report of `gaps.run_by_solver` goes to a buffer and only its
+    counts are printed (`gap_lines`); the runs are then read once more, read-only, for the count
+    of `soak.trailing_slots`. Without `since` the exit is 0 whatever the gaps are (D-09, so one
+    missed hour does not keep every later hourly run red); with `since` (an aware UTC datetime) it is
+    0 only when the check found no pandapower gap in the window and the count is at least 24, else 5.
+    The exit is 6 and the only line `gap check: could not run` whenever the check cannot run; the
+    buffer's text and any error text are never printed."""
+    from psse_job import gaps, writer
+
+    if connect is None:
+        connect = functools.partial(writer.connect, env=environ)
+    buffer = io.StringIO()
+    try:
+        code = gaps.run_by_solver(
+            environ, since=since, fail_on_gaps=since is not None, out=buffer, connect=connect,
+            expected=(engine.SOLVER,))
+        if code == EXIT_CHECK_FAILED:
+            return [SOAK_CHECK_FAILED], EXIT_CHECK_FAILED
+        runs, current = read_runs(connect)
+        lines = gap_lines(buffer.getvalue())
+        count = soak.trailing_slots(runs, current, engine.SOLVER)
+    except Exception:  # noqa: BLE001 - the check could not run; no error text is ever printed
+        return [SOAK_CHECK_FAILED], EXIT_CHECK_FAILED
+    passed = soak.soak_passed(count)
+    lines.append("soak: consecutive_slots=%d of %d fallback_slots=%d" % (
+        min(count.slots, _COUNT_LIMIT), soak.SOAK_SLOTS, min(count.fallback_slots, _COUNT_LIMIT)))
+    lines.append("soak: pass" if passed else "soak: not yet")
+    if since is None:
+        return lines, EXIT_OK
+    return lines, (EXIT_OK if code == EXIT_OK and passed else EXIT_GAPS)
+
+
+def _soak_command(say, environ, connect, since_text):
+    since = None if since_text is None else parse_since(since_text)
+    lines, code = run_soak(environ, connect=connect, since=since)
+    for line in lines:
+        say(line)
+    return code
 
 
 # -- the main --------------------------------------------------------------------------------------
@@ -493,6 +634,8 @@ def _dispatch(argv, printer, environment, fetch, connect, clock, prepare, backen
             args = _build_parser().parse_args(list(argv))
             if args.command is None:
                 raise _UsageError()
+            if args.command == "soak":
+                return _soak_command(say, environment, connect, args.since)
         except _UsageError:
             say(USAGE_LINE)
             say("usage error: bad or missing arguments")
