@@ -179,3 +179,142 @@ def test_dashboard_branch_holds_the_current_or_the_replacement_text():
     else:
         assert actual, "the branch is in neither state: current (%s) / committed (%s)" % (
             "; ".join(state_problems["current"]), "; ".join(state_problems["committed"]))
+
+
+# ---------------------------------------------------------------------------------------------------
+# lifecycle of the apply date, hygiene, and the REST reference (plan 06-03, task 2)
+# ---------------------------------------------------------------------------------------------------
+
+_ISO_DATE = re.compile(r"20\d\d-\d\d-\d\d")
+# dates quoted from the current texts of the dashboard branch; the only ones a replacement may hold
+# before the apply
+_QUOTED_DATES = {"2026-11-11", "2026-11-12", "2026-11-16"}
+_FIRST_POSSIBLE_APPLY = datetime.date(2026, 11, 26)
+
+# credential-shaped text (each is assembled from pieces in the teeth below, never written whole)
+_CREDENTIAL_SHAPES = {
+    "url with a password": re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s/:@]+:[^\s/@]+@"),
+    "supabase secret key": re.compile(r"sb_secret_"),
+    "jwt": re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\."),
+    "github token": re.compile(
+        r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})"),
+    "64 hex characters": re.compile(r"\b[0-9a-fA-F]{64}\b"),
+    "private data path": re.compile(r"data[\/]private"),
+}
+
+
+def _apply_date_problems(doc, today):
+    """What is wrong with the apply-date state of `doc` (an empty list when it is a valid state)."""
+    out = []
+    header = _header(doc)
+    blocks = _blocks(doc)
+    replacements = {key: pair[1] for key, pair in blocks.items()}
+    status = header.get("Status", "")
+    applied = header.get("Applied live", "")
+    if applied == PLACEHOLDER:
+        if status != "Not handed over yet":
+            out.append("the placeholder remains but the Status is %r" % status)
+        for key, replacement in replacements.items():
+            if PLACEHOLDER not in replacement:
+                out.append("Block %s holds no placeholder" % key)
+        return out
+    if PLACEHOLDER in doc:
+        out.append("the Applied-live row is filled but the placeholder remains elsewhere")
+    if not re.fullmatch(r"\d{4}-\d\d-\d\d", applied):
+        return out + ["the Applied-live row is neither the placeholder nor one ISO date: %r" % applied]
+    try:
+        date = datetime.date.fromisoformat(applied)
+    except ValueError:
+        return out + ["the Applied-live row is not a real date: %r" % applied]
+    if date < _FIRST_POSSIBLE_APPLY:
+        out.append("the apply date %s is before the migration was written" % applied)
+    if date > today:
+        out.append("the apply date %s is in the future" % applied)
+    for key, replacement in replacements.items():
+        if applied not in replacement:
+            out.append("Block %s does not hold the apply date" % key)
+    if not (status == "Ready to hand over" or status.startswith("Handed over:")):
+        out.append("a filled apply date needs the Status Ready to hand over or Handed over: ..., not %r" % status)
+    return out
+
+
+def test_the_apply_date_is_a_placeholder_or_one_real_date():
+    doc = _doc()
+    today = datetime.datetime.now(datetime.timezone.utc).date()
+    assert _apply_date_problems(doc, today) == []
+
+    # teeth, on edited copies of the real document
+    fixed = datetime.date(2026, 12, 1)
+    filled = doc.replace(PLACEHOLDER, "2026-11-28").replace("Not handed over yet", "Ready to hand over")
+    assert _apply_date_problems(filled, fixed) == []
+    assert _apply_date_problems(filled.replace("Ready to hand over", "Not handed over yet"), fixed)
+    assert _apply_date_problems(doc.replace("Not handed over yet", "Ready to hand over"), fixed)
+    assert _apply_date_problems(filled.replace("2026-11-28", "2026-12-24"), fixed)       # in the future
+    assert _apply_date_problems(filled.replace("2026-11-28", "2026-11-20"), fixed)       # before the migration
+    assert _apply_date_problems(filled.replace("2026-11-28", "not a date"), fixed)
+    first_row = doc.replace(PLACEHOLDER, "2026-11-28", 1)                                # only the header row
+    assert _apply_date_problems(first_row, fixed)
+
+
+def _dates_in(text):
+    return set(_ISO_DATE.findall(text))
+
+
+def test_no_new_date_is_claimed_before_the_apply():
+    doc = _doc()
+    if _header(doc)["Applied live"] == PLACEHOLDER:
+        for key, (_, replacement) in _blocks(doc).items():
+            extra = _dates_in(replacement) - _QUOTED_DATES
+            assert not extra, "Block %s claims %s before the apply" % (key, sorted(extra))
+    # teeth
+    assert _dates_in("on 2026-11-11, 2026-11-12 and 2026-11-16") <= _QUOTED_DATES
+    assert _dates_in("since 2026-11-27 and 2027-01-02") - _QUOTED_DATES == {"2026-11-27", "2027-01-02"}
+
+
+def test_the_document_holds_no_credential_or_private_value():
+    text = _doc()
+    for name, shape in _CREDENTIAL_SHAPES.items():
+        assert shape.search(text) is None, name
+
+    samples = {
+        "url with a password": "postgres" + "ql://" + "user" + ":" + "pw" + "@" + "host",
+        "supabase secret key": "sb_" + "secret_" + "abc",
+        "jwt": "ey" + "J" + "a" * 12 + "." + "b" * 12 + "." + "c" * 12,
+        "github token": "gh" + "p_" + "A" * 24,
+        "64 hex characters": "ab" * 32,
+        "private data path": "data" + "/" + "private" + "/x",
+    }
+    assert set(samples) == set(_CREDENTIAL_SHAPES)
+    for name, sample in samples.items():
+        assert _CREDENTIAL_SHAPES[name].search("x " + sample + " y") is not None, name
+
+
+def _rest_doc():
+    return _read("docs", "integration", "rest-api.md")
+
+
+def _grid_study_prose(text):
+    """From the heading '## Grid-study results (preliminary)' to the heading after the columns heading."""
+    start = text.index("## Grid-study results (preliminary)")
+    columns = text.index("## `latest_grid_study` columns")
+    assert columns > start
+    after = re.search(r"^## ", text[columns + 3:], re.M)
+    end = columns + 3 + after.start() if after else len(text)
+    return text[start:end]
+
+
+def test_rest_api_doc_describes_the_per_solver_view():
+    text = _rest_doc()
+    prose = _norm(_grid_study_prose(text))
+    for phrase in ("one row per city per solver", "pandapower"):
+        assert phrase in prose, phrase
+    assert re.search(r"filter on\s+`solver`", prose, re.I), "the prose must say to filter on `solver`"
+    for stale in ("Every row today is", "A later release adds", "in a later release"):
+        assert stale not in prose, stale
+
+    row = [line for line in text.splitlines() if line.startswith("| `GET /rest/v1/latest_grid_study` |")]
+    assert len(row) == 1
+    row = _norm(row[0])
+    assert "one row per city per solver" in row
+    assert MIGRATION in row
+    assert "up to four rows" not in row
