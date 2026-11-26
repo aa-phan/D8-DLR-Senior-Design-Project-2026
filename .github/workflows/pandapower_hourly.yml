@@ -1,0 +1,82 @@
+name: pandapower hourly
+
+# Hourly pandapower study (pandapower-solver workstream, Phase 5, OPS-01 to OPS-05).
+# Runs backend/pandapower_hourly.py: the study of the four-city case with the latest
+# stored ratings, then a read-only gap and 24-slot soak check.
+#
+# Triggered externally by cron-job.org (POST .../actions/workflows/pandapower_hourly.yml/dispatches)
+# at minute 20 of every hour, UTC, the same way the other hourly workflows are triggered.
+# There is deliberately no GitHub scheduler trigger: it started runs hours late (see
+# shadow_collect.yml).
+#
+# It is a dry run unless the repository variable PANDAPOWER_LIVE is exactly "true" (D-02):
+# a dry run reads the ratings, runs the study and prints counts, and writes nothing to
+# the database. The workflow has no inputs, so a person who dispatches it cannot choose
+# live mode; only the owner's repository variable switches it (D-13).
+#
+# The private inputs (network, mapping, solve settings, scaling) come from base64
+# secrets of the `production` environment and are decoded only into the runner's
+# temporary folder, which the last step removes (D-08).
+#
+# This workflow is separate from dlr_live.yml and shadow_collect.yml and never touches
+# them. Operational reference: docs/data-science/decisions/pandapower_hourly_runbook.md.
+
+on:
+  workflow_dispatch: # cron-job.org (hourly, minute 20) and manual runs from the Actions tab; no inputs
+
+permissions:
+  contents: read # the job pushes nothing
+
+concurrency:
+  group: pandapower-hourly
+  cancel-in-progress: false # never cancel a run in flight; the next dispatch queues behind it
+
+jobs:
+  study:
+    # Only main runs with the secrets. The ref guard stops a branch dispatch of an edited
+    # runner; the `production` environment (main-only deployment branch rule, set in
+    # GitHub settings) also covers a branch that edits this file.
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    runs-on: ubuntu-latest
+    # 30 minutes. A four-city study on the fixture takes under a minute; the rest is
+    # checkout, install and the database writes. 30 minutes is shorter than the 60-minute
+    # cadence, so a run cut off at its timeout never overlaps the next slot.
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code (main)
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false # nothing here pushes
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip' # cuts billed minutes at an hourly cadence
+          cache-dependency-path: requirements-pandapower.txt # the file that is installed below
+
+      - name: Install dependencies
+        # requirements-pandapower.txt does not list the Postgres driver, so the two pins of
+        # requirements.txt are installed with it (psycopg-binary must equal psycopg).
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-pandapower.txt psycopg==3.3.6 psycopg-binary==3.3.6
+
+      - name: Run study
+        run: python -I -B backend/pandapower_hourly.py run
+        # Exit 0: the study ran and, in live mode, its rows were recorded; a dry run prints counts only.
+        # Exit 1: the study failed or a failure row was recorded -- the run turns red and GitHub's
+        #         workflow-failure email doubles as alerting.
+        # Exit 2: refusal or usage error (a missing or unusable private input, a placeholder in live mode).
+        # Exit 3: the outcome could not be recorded.
+
+      - name: Gap and soak check
+        if: success() || failure()
+        run: python -I -B backend/pandapower_hourly.py soak
+        # Reports the per-solver gaps and the trailing 24-slot count; it does not fail on gaps
+        # already in the history. Exit 6 only when the check itself cannot run (D-09).
+
+      - name: Remove private files
+        if: always()
+        run: rm -rf "$RUNNER_TEMP"/pandapower_hourly_*
