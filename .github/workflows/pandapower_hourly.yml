@@ -64,6 +64,22 @@ jobs:
           python -m pip install -r requirements-pandapower.txt psycopg==3.3.6 psycopg-binary==3.3.6
 
       - name: Run study
+        env:
+          # The owner's switch, and the only one (D-02, D-13): the runner is live only for the
+          # exact text true; empty, unset or anything else is a dry run.
+          PANDAPOWER_LIVE: ${{ vars.PANDAPOWER_LIVE }}
+          # Read-only ratings access (the ratings view) and the project address.
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+          # The writer value is handed over only when the variable is exactly true, so a dry
+          # run's study step never holds it (D-10).
+          SUPABASE_PSSE_DB_URL: ${{ vars.PANDAPOWER_LIVE == 'true' && secrets.SUPABASE_PSSE_DB_URL || '' }}
+          # The four private inputs, one base64 value per secret, kept in the `production`
+          # environment and decoded only into the runner's temporary folder (D-08).
+          PANDAPOWER_NETWORK_B64: ${{ secrets.PANDAPOWER_NETWORK_B64 }}
+          PANDAPOWER_MAPPING_B64: ${{ secrets.PANDAPOWER_MAPPING_B64 }}
+          PANDAPOWER_SETTINGS_B64: ${{ secrets.PANDAPOWER_SETTINGS_B64 }}
+          PANDAPOWER_SCALING_B64: ${{ secrets.PANDAPOWER_SCALING_B64 }}
         run: python -I -B backend/pandapower_hourly.py run
         # Exit 0: the study ran and, in live mode, its rows were recorded; a dry run prints counts only.
         # Exit 1: the study failed or a failure row was recorded -- the run turns red and GitHub's
@@ -73,6 +89,10 @@ jobs:
 
       - name: Gap and soak check
         if: success() || failure()
+        env:
+          # Read-only session only. It also proves the credential and the live migration from
+          # the runner before the owner flips the variable (D-10).
+          SUPABASE_PSSE_DB_URL: ${{ secrets.SUPABASE_PSSE_DB_URL }}
         run: python -I -B backend/pandapower_hourly.py soak
         # Reports the per-solver gaps and the trailing 24-slot count; it does not fail on gaps
         # already in the history. Exit 6 only when the check itself cannot run (D-09).

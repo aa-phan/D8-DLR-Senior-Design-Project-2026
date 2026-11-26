@@ -137,3 +137,138 @@ def test_steps_run_the_entry_script_in_order():
         "Gap and soak check",
         "Remove private files",
     ]
+
+
+# ---------------------------------------------------------------------------
+# What each step receives (OPS-02; D-02, D-08, D-10, D-13)
+# ---------------------------------------------------------------------------
+
+_B64_SECRETS = (
+    "PANDAPOWER_NETWORK_B64",
+    "PANDAPOWER_MAPPING_B64",
+    "PANDAPOWER_SETTINGS_B64",
+    "PANDAPOWER_SCALING_B64",
+)
+_WRITER_PLAIN = "${{ secrets.SUPABASE_PSSE_DB_URL }}"
+_WRITER_WHEN_LIVE = "${{ vars.PANDAPOWER_LIVE == 'true' && secrets.SUPABASE_PSSE_DB_URL || '' }}"
+
+
+def _env(step: str) -> dict:
+    """The `env:` mapping of one step as {name: value}; comment lines are skipped."""
+    match = re.search(r"^        env:\s*\n((?:          .*\n|\s*\n)*)", step, flags=re.M)
+    if not match:
+        return {}
+    mapping = {}
+    for line in match.group(1).splitlines():
+        if not line.strip() or line.strip().startswith("#"):
+            continue
+        entry = re.match(r"^          ([A-Z][A-Z0-9_]*):\s*(.*?)\s*$", line)
+        assert entry, line
+        mapping[entry.group(1)] = entry.group(2)
+    return mapping
+
+
+def _code_lines(text: str) -> list:
+    """Every line that is not a whole-line comment."""
+    return [line for line in text.splitlines() if not re.match(r"^\s*#", line)]
+
+
+def _run_bodies(text: str) -> list:
+    """The body of every `run:` key: its own line plus the deeper-indented lines after it."""
+    lines = text.splitlines()
+    bodies = []
+    for i, line in enumerate(lines):
+        run = re.match(r"^(\s*)(?:-\s+)?run:\s*(.*)$", line)
+        if not run:
+            continue
+        body = [run.group(2)]
+        indent = len(run.group(1))
+        for following in lines[i + 1:]:
+            if following.strip() and len(following) - len(following.lstrip()) <= indent:
+                break
+            body.append(following)
+        bodies.append("\n".join(body))
+    return bodies
+
+
+def test_study_step_receives_the_secrets_and_the_switch():
+    step = _step(_workflow(), "Run study")
+    env = _env(step)
+
+    expected = {
+        "PANDAPOWER_LIVE": "${{ vars.PANDAPOWER_LIVE }}",
+        "SUPABASE_URL": "${{ secrets.SUPABASE_URL }}",
+        "SUPABASE_PUBLISHABLE_KEY": "${{ secrets.SUPABASE_PUBLISHABLE_KEY }}",
+        "SUPABASE_PSSE_DB_URL": _WRITER_WHEN_LIVE,
+    }
+    for name in _B64_SECRETS:
+        expected[name] = "${{ secrets.%s }}" % name
+    assert env == expected
+
+
+def test_writer_value_reaches_the_study_step_only_when_live():
+    text = _workflow()
+    study = _env(_step(text, "Run study"))
+
+    # Handed over only when the repository variable is exactly the text true.
+    assert study["SUPABASE_PSSE_DB_URL"] == _WRITER_WHEN_LIVE
+    assert study["SUPABASE_PSSE_DB_URL"] != _WRITER_PLAIN
+
+    # The switch is the repository variable and nothing else: two code lines name it (the
+    # env mapping and the writer condition), and no other context ever supplies it.
+    code = "\n".join(_code_lines(text))
+    assert len(re.findall(r"vars\.PANDAPOWER_LIVE", code)) == 2
+    assert not re.search(r"(secrets|env|inputs|github\.event)\.PANDAPOWER_LIVE", code)
+
+    # The plain writer secret appears twice only: the conditional above and the soak step.
+    assert len(re.findall(r"secrets\.SUPABASE_PSSE_DB_URL", code)) == 2
+
+
+def test_soak_step_receives_only_the_writer_value():
+    env = _env(_step(_workflow(), "Gap and soak check"))
+
+    assert env == {"SUPABASE_PSSE_DB_URL": _WRITER_PLAIN}
+
+
+def test_no_other_step_receives_anything():
+    text = _workflow()
+
+    for name in (
+        "Checkout code (main)",
+        "Set up Python 3.12",
+        "Install dependencies",
+        "Remove private files",
+    ):
+        step = _step(text, name)
+        assert not re.search(r"^\s*env:", step, flags=re.M), name
+        assert "${{" not in step, name
+
+    # Only the study and soak steps carry an env block at all.
+    assert len(re.findall(r"^        env:\s*$", text, flags=re.M)) == 2
+
+
+def test_no_expression_inside_a_run_body_and_no_secret_in_an_if():
+    text = _workflow()
+
+    bodies = _run_bodies(text)
+    assert len(bodies) == 4  # install, study, soak, removal
+    for body in bodies:
+        assert "${{" not in body, body
+
+    # `secrets` is not available in an `if`, and a condition must never name one.
+    conditions = [line for line in _code_lines(text) if re.match(r"^\s*(-\s+)?if:", line)]
+    assert len(conditions) == 3  # job guard, soak step, removal step
+    for line in conditions:
+        assert "secrets." not in line, line
+
+
+def test_no_debug_or_echo_and_only_first_party_actions():
+    text = _workflow()
+
+    for body in _run_bodies(text):
+        assert not re.search(r"\b(set -x|printenv|cat|echo)\b", body), body
+
+    uses = re.findall(r"^\s*(?:-\s+)?uses:\s*(\S+)\s*$", text, flags=re.M)
+    assert sorted(uses) == ["actions/checkout@v4", "actions/setup-python@v5"]
+
+    assert re.search(r"^\s*persist-credentials:\s*false\b", text, flags=re.M)
