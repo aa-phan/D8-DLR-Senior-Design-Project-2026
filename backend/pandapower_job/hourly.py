@@ -296,6 +296,101 @@ def live_run(prepared, fetch, connect, environ, clock=None):
 # -- the main --------------------------------------------------------------------------------------
 
 
+class OutputSink(object):
+    """A context manager that closes every public-log route while a command runs (D-05, D-14).
+
+    On enter it opens the printer's stream as a duplicate of the real standard output (unless the
+    caller supplied `out`), then points file descriptors 1 and 2, `sys.stdout` and `sys.stderr` at
+    the null device, disables logging and ignores warnings. It returns the printer's stream. On exit,
+    each step guarded so one failure does not skip the rest, it closes the printer's stream, puts
+    warnings, logging, `sys.stdout`, `sys.stderr` and descriptors 1 and 2 back and closes every
+    descriptor and stream it opened. Output of the study, of pandapower, of the run loop's logger
+    (which logs the stored error text, and a mapping error can name a bus) and of a traceback
+    therefore goes nowhere; only the printer's lines are shown.
+    """
+
+    def __init__(self, out=None):
+        self.out = out
+        self._undo = []
+        self._printer_stream = None
+
+    def _push(self, step):
+        self._undo.append(step)
+
+    def __enter__(self):
+        try:
+            return self._enter()
+        except BaseException:
+            self._unwind()
+            raise
+
+    def _enter(self):
+        for stream in (sys.stdout, sys.stderr):
+            try:
+                stream.flush()
+            except Exception:  # noqa: BLE001
+                pass
+        target = self.out
+        if target is None:
+            target = os.fdopen(os.dup(1), "w", encoding="utf-8", newline="\n")
+            self._printer_stream = target
+        saved = []
+        for number in (1, 2):
+            saved.append((number, os.dup(number)))
+        self._push(lambda: self._restore_descriptors(saved))
+        null = os.open(os.devnull, os.O_WRONLY)
+        self._push(lambda: os.close(null))
+        for number in (1, 2):
+            os.dup2(null, number)
+        previous = (sys.stdout, sys.stderr)
+        quiet = [open(os.devnull, "w", encoding="utf-8") for _ in (1, 2)]
+        sys.stdout, sys.stderr = quiet
+        self._push(lambda: [setattr(sys, "stdout", previous[0]), setattr(sys, "stderr", previous[1]),
+                            [stream.close() for stream in quiet]])
+        level = logging.root.manager.disable
+        logging.disable(logging.CRITICAL)
+        self._push(lambda: logging.disable(level))
+        caught = warnings.catch_warnings()
+        caught.__enter__()
+        self._push(lambda: caught.__exit__(None, None, None))
+        warnings.simplefilter("ignore")
+        return target
+
+    @staticmethod
+    def _restore_descriptors(saved):
+        for number, copy in saved:
+            try:
+                os.dup2(copy, number)
+            except Exception:  # noqa: BLE001 - the other descriptor is still restored
+                pass
+            finally:
+                try:
+                    os.close(copy)
+                except Exception:  # noqa: BLE001
+                    pass
+
+    def _unwind(self):
+        # The printer's stream is flushed and closed first, so the lines leave before anything
+        # else is put back.
+        stream, self._printer_stream = self._printer_stream, None
+        if stream is not None:
+            try:
+                stream.flush()
+                stream.close()
+            except Exception:  # noqa: BLE001
+                pass
+        steps, self._undo = self._undo, []
+        for step in reversed(steps):
+            try:
+                step()
+            except Exception:  # noqa: BLE001 - one failed step must not skip the rest
+                pass
+
+    def __exit__(self, exc_type, exc, tb):
+        self._unwind()
+        return False
+
+
 class _PlainStream(object):
     """The output stream without redirects (a test seam; the entry script always redirects)."""
 
@@ -381,7 +476,7 @@ def main(argv, out=None, environ=None, repo_root=None, fetch=None, connect=None,
     test seam). Never raises.
     """
     environment = dict(os.environ) if environ is None else environ
-    stream = _PlainStream(out)
+    stream = OutputSink(out) if sink else _PlainStream(out)
     try:
         with stream as target:
             printer = _Printer(target)
