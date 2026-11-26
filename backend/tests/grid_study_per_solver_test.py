@@ -34,6 +34,12 @@ _NEW_MIGRATION = os.path.join(local_pg.MIGRATIONS_DIR, _NEW_NAME)
 _SOLVER_TAG_NAME = "20261118200000_psse_run_solver_tag.sql"
 _SOLVER_TAG_MIGRATION = psse_local_pg.SOLVER_TAG_MIGRATION
 
+_OPS_DIR = os.path.join(local_pg.REPO_ROOT, "supabase", "ops")
+_VERIFY_EXPOSURE = os.path.join(_OPS_DIR, "verify_exposure.sql")
+_VERIFY_PSSE = os.path.join(_OPS_DIR, "verify_psse_results.sql")
+_VERIFY_SOLVER_TAG = os.path.join(_OPS_DIR, "verify_solver_tag.sql")
+_NEW_CHECK = "latest_grid_study_has_each_solvers_newest_complete_run"
+
 _VIEW = "create or replace view public.latest_grid_study "
 _COLUMN_COMMENT = "comment on column public.latest_grid_study."
 
@@ -506,3 +512,137 @@ def test_db_the_migration_reapplies_cleanly(clean_pg):
     assert "solver = 'psse'" in snapshot()[0]["definition"]
     apply(_NEW_MIGRATION)
     assert snapshot() == before
+
+
+# --------------------------------------------------------------------------------------------------
+# database: the owner's checks of the per-solver view (VIEW-02, D-03 and D-05)
+# --------------------------------------------------------------------------------------------------
+
+def _checker_rows(conn, path=_VERIFY_EXPOSURE):
+    return local_pg.run_select_file(conn, path)
+
+
+def _checker_bad(conn):
+    """The names of the exposure checks whose ok is not true."""
+    return {row["check_name"] for row in _checker_rows(conn) if row["ok"] is not True}
+
+
+def _new_check_detail(conn):
+    found = [row["detail"] for row in _checker_rows(conn) if row["check_name"] == _NEW_CHECK]
+    assert len(found) == 1
+    return found[0]
+
+
+def test_db_the_three_owner_checks_are_all_ok_with_both_solvers(clean_pg):
+    import psycopg
+
+    hour = local_pg.current_utc_hour()
+    psse_id, psse_rows = _complete_run(80, started=hour - timedelta(hours=2) + timedelta(minutes=7))
+    pp_id, pp_rows = _pp_run(81, hour + timedelta(seconds=1))
+    with psycopg.connect(clean_pg) as conn:
+        _insert_complete(conn, psse_rows)
+        _insert_complete(conn, pp_rows)
+
+    header, _ = _header_and_text(_NEW_MIGRATION)
+    named = {}
+    for name in ("verify_solver_tag.sql", "verify_psse_results.sql", "verify_exposure.sql"):
+        found = re.search(re.escape(name) + r" \((\d+) checks\)", header)
+        assert found, name
+        named[name] = int(found.group(1))
+
+    counts = {}
+    with psycopg.connect(clean_pg) as conn:
+        for path in (_VERIFY_SOLVER_TAG, _VERIFY_PSSE, _VERIFY_EXPOSURE):
+            rows = _checker_rows(conn, path)
+            name = os.path.basename(path)
+            counts[name] = len(rows)
+            failing = [(row["check_name"], row["detail"]) for row in rows if row["ok"] is not True]
+            assert failing == [], name
+            # The detail holds counts and labels only: no run id, no prefix, no stored version.
+            for row in rows:
+                for fragment in ("psse-", "pp-", psse_id, pp_id, "3.5.6"):
+                    assert fragment not in row["detail"], (name, row["check_name"], fragment)
+        assert _new_check_detail(conn) == "view rows=8, solvers with a complete run=2"
+
+    assert counts == {"verify_solver_tag.sql": 6, "verify_psse_results.sql": 7, "verify_exposure.sql": 37}
+    assert counts == named
+
+
+@pytest.mark.parametrize("state", ["none", "psse", "pandapower"])
+def test_db_the_new_exposure_check_holds_with_no_runs_and_with_one_solver(clean_pg, state):
+    import psycopg
+
+    started = local_pg.current_utc_hour() + timedelta(seconds=1)
+    if state == "psse":
+        _, rows_of_run = _complete_run(90, started=started)
+    elif state == "pandapower":
+        _, rows_of_run = _pp_run(91, started)
+    with psycopg.connect(clean_pg) as conn:
+        if state != "none":
+            _insert_complete(conn, rows_of_run)
+
+    expected = "view rows=0, solvers with a complete run=0" if state == "none" else (
+        "view rows=4, solvers with a complete run=1")
+    with psycopg.connect(clean_pg) as conn:
+        rows = _checker_rows(conn)
+        assert len(rows) == 37
+        assert [row["check_name"] for row in rows if row["ok"] is not True] == []
+        assert _new_check_detail(conn) == expected
+
+
+def _sabotaged_view(url, runs, statement):
+    """Store `runs`, replace the view by `statement` in a transaction that is rolled back, and return
+    (names of the failing checks, detail of the new check) as seen inside it."""
+    import psycopg
+
+    with psycopg.connect(url, autocommit=True) as conn:
+        with conn.transaction(force_rollback=True):
+            for rows_of_run in runs:
+                _insert_complete(conn, rows_of_run)
+            assert _checker_bad(conn) == set(), "the checker is not all ok before the sabotage"
+            conn.execute(statement)
+            bad, detail = _checker_bad(conn), _new_check_detail(conn)
+        # The rollback restored the view and emptied the tables.
+        assert _checker_bad(conn) == set()
+        assert _new_check_detail(conn) == "view rows=0, solvers with a complete run=0"
+    return bad, detail
+
+
+def test_db_the_new_exposure_check_fails_for_the_phase3_psse_only_view(clean_pg):
+    hour = local_pg.current_utc_hour()
+    _, psse_rows = _complete_run(100, started=hour - timedelta(hours=2) + timedelta(minutes=7))
+    _, pp_rows = _pp_run(101, hour + timedelta(seconds=1))
+    phase3 = _only(_statements(_SOLVER_TAG_MIGRATION), _VIEW)
+
+    bad, detail = _sabotaged_view(clean_pg, [psse_rows, pp_rows], phase3)
+    assert bad == {_NEW_CHECK}
+    assert detail == "view rows=4, solvers with a complete run=2"
+
+
+def test_db_the_new_exposure_check_fails_for_a_view_that_hides_a_city(clean_pg):
+    hour = local_pg.current_utc_hour()
+    _, psse_rows = _complete_run(110, started=hour - timedelta(hours=2) + timedelta(minutes=7))
+    _, pp_rows = _pp_run(111, hour + timedelta(seconds=1))
+    view = _only(_statements(_NEW_MIGRATION), _VIEW)
+    fragment = "order by d.city, n.solver"
+    assert view.count(fragment) == 1
+    hiding = view.replace(fragment, "where d.city <> 'EL_PASO'" + chr(10) + fragment)
+
+    bad, detail = _sabotaged_view(clean_pg, [psse_rows, pp_rows], hiding)
+    assert bad == {_NEW_CHECK}
+    assert detail == "view rows=6, solvers with a complete run=2"
+
+
+def test_db_the_new_exposure_check_fails_for_a_view_that_shows_an_older_run(clean_pg):
+    hour = local_pg.current_utc_hour()
+    _, psse_rows = _complete_run(120, started=hour - timedelta(hours=2) + timedelta(minutes=7))
+    _, older_rows = _pp_run(121, hour - timedelta(hours=2) + timedelta(minutes=7))
+    _, newer_rows = _pp_run(122, hour - timedelta(hours=1) + timedelta(minutes=7))
+    view = _only(_statements(_NEW_MIGRATION), _VIEW)
+    fragment = "r.slot_time desc"
+    assert view.count(fragment) == 1
+    oldest_first = view.replace(fragment, "r.slot_time asc")
+
+    bad, detail = _sabotaged_view(clean_pg, [psse_rows, older_rows, newer_rows], oldest_first)
+    assert bad == {_NEW_CHECK}
+    assert detail == "view rows=8, solvers with a complete run=2"
