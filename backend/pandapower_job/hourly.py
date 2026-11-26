@@ -97,7 +97,8 @@ EXIT_CHECK_FAILED = 6
 
 USAGE_LINE = "usage: pandapower_hourly.py {run,soak,bundle,scan-log} ..."
 # command -> its flags; later plans add keys
-COMMAND_FLAGS = {"run": (), "soak": ("--since",), "bundle": ("--check-dir", "--mapping")}
+COMMAND_FLAGS = {"run": (), "soak": ("--since",), "bundle": ("--check-dir", "--mapping"),
+                 "scan-log": ("--log",)}
 
 # the owner commands (plan 05-05)
 BUNDLE_DIR = "secrets"
@@ -105,6 +106,19 @@ BUNDLE_PREFIX = "secrets_"
 BUNDLE_REFUSAL_REASONS = (
     "in_ci", "private_path", "records_missing", "mapping_missing", "network_refused",
     "mapping_refused", "preflight_refused", "placeholder", "too_large", "exists")
+# a token of a bundled secret at least this long is a needle of scan-log
+SECRET_FRAGMENT_CHARS = 20
+# the kinds of finding scan-log can print: the needle kinds of the scanner, the kind of a fragment
+# of a bundled secret, `needle` for any other, the scanner's shape names and its path and size layers
+SCAN_KINDS = (
+    "mapping_key", "scaling_target", "file_hash", "decimal", "secret_fragment", "needle",
+    *private_leak_scan.SHAPE_PATTERNS, "private_path_in_tree", "session_artifact_path",
+    "oversize_unscanned")
+# `log_binary` is the scanner's own `binary` status: a log it cannot read as text would otherwise
+# be reported clean after scanning nothing
+SCAN_REFUSAL_REASONS = (
+    "in_ci", "log_missing", "log_inside_private", "log_outside_drive", "log_too_large",
+    "no_needles", "allow_list", "log_binary")
 # the solver labels the gap check can print: the two tags, the gap check's own `unknown` for a
 # label that is not a plain tag, and `other` for any other plain tag
 SOLVER_WORDS = (contract.SOLVER_PSSE, engine.SOLVER, "unknown", "other")
@@ -143,6 +157,9 @@ HOURLY_LINE_PATTERNS = tuple(re.compile(pattern + r"\Z") for pattern in (
     "bundle: verified",
     "bundle: written",
     "bundle: refused \\(%s\\)" % _alt(BUNDLE_REFUSAL_REASONS),
+    "scan-log: lines=%s findings=%s" % (_NUM, _NUM),
+    "scan-log: finding line=%s kind=%s" % (_NUM, _alt(SCAN_KINDS)),
+    "scan-log: refused \\(%s\\)" % _alt(SCAN_REFUSAL_REASONS),
 ))
 
 
@@ -661,6 +678,115 @@ def _bundle_command(say, environ, repo_root, clock, check_dir, mapping_path):
     return EXIT_OK
 
 
+# -- the owner's scan-log command (D-11): reads data/private, never runs on a runner ---------------
+
+
+class ScanRefused(ValueError):
+    """The scan was refused; `reason` is one of SCAN_REFUSAL_REASONS and the message holds nothing
+    else (no path, no text)."""
+
+    def __init__(self, reason):
+        self.reason = reason
+        ValueError.__init__(self, "scan refused: %s" % reason)
+
+
+ScanResult = collections.namedtuple("ScanResult", ["lines", "findings"])
+
+
+def _inside_folder(path, folder):
+    path, folder = os.path.normcase(path), os.path.normcase(folder)
+    return path == folder or path.startswith(folder + os.sep)
+
+
+def _line_count(text):
+    """The number of lines the scanner numbers: pieces split at newlines, a final newline not
+    opening another."""
+    if not text:
+        return 0
+    return len(text.split("\n")) - (1 if text.endswith("\n") else 0)
+
+
+def _newest_bundle_folder(private_root):
+    folder = os.path.join(private_root, "pandapower", BUNDLE_DIR)
+    try:
+        names = sorted(name for name in os.listdir(folder) if name.startswith(BUNDLE_PREFIX))
+    except OSError:
+        return None
+    return os.path.join(folder, names[-1]) if names else None
+
+
+def _add_secret_fragments(needles, private_root):
+    """Add every token of SECRET_FRAGMENT_CHARS or more of the four files of the newest bundle
+    folder, when one exists, as a `secret_fragment` needle."""
+    folder = _newest_bundle_folder(private_root)
+    if folder is None:
+        return
+    for _word, name, _file, _cap in SECRET_ENV:
+        data = _read_bytes(os.path.join(folder, name + ".txt"), engine.MAX_RECORD_BYTES)
+        if data is None:
+            continue
+        for token in private_leak_scan._TOKEN.findall(data.decode("latin-1")):
+            if len(token) >= SECRET_FRAGMENT_CHARS:
+                needles.add_needle(token, "secret_fragment")
+
+
+def scan_log(repo_root, log_path):
+    """Scan the downloaded Actions log `log_path` against the needles of the private folder and
+    the bundled secrets; returns a ScanResult: the log's line count and the findings as
+    `(line number, kind)` pairs, kinds from SCAN_KINDS, never the matched text. ScanRefused for a
+    path that is not a file (`log_missing`), a log inside data/private (`log_inside_private`: the
+    scanner would count it as a private file and take needles from it), a log larger than the
+    scanner reads (`log_too_large`) or not readable as text (`log_binary`), a malformed allow
+    list, an empty needle set (`no_needles`: an empty set proves nothing) and a log on another
+    drive than the repository."""
+    repo = _repo_of(repo_root)
+    root = private.private_root(repo_root)
+    if not isinstance(log_path, str) or not os.path.isfile(log_path):
+        raise ScanRefused("log_missing")
+    resolved = os.path.realpath(log_path)
+    for folder in (root, os.path.realpath(root)):
+        if _inside_folder(resolved, folder) or _inside_folder(os.path.abspath(log_path), folder):
+            raise ScanRefused("log_inside_private")
+    status, text = private_leak_scan._read_text(resolved)
+    if status == "oversize":
+        raise ScanRefused("log_too_large")
+    if status == "binary":
+        raise ScanRefused("log_binary")
+    if status != "ok":
+        raise ScanRefused("log_missing")
+    try:
+        allow = private_leak_scan.load_allow_list(repo)
+    except private_leak_scan.AllowListError:
+        raise ScanRefused("allow_list") from None
+    needles = private_leak_scan.derive_needles(root, allow=allow)
+    _add_secret_fragments(needles, root)
+    if len(needles) == 0:
+        raise ScanRefused("no_needles")
+    try:
+        found = private_leak_scan.scan_paths([resolved], needles=needles, allow=allow, root=repo)
+    except ValueError:
+        raise ScanRefused("log_outside_drive") from None
+    findings = [(item.line, item.pattern if item.pattern in SCAN_KINDS else "needle")
+                for item in found]
+    return ScanResult(_line_count(text), findings)
+
+
+def _scan_log_command(say, environ, repo_root, log_path):
+    if environ.get("GITHUB_ACTIONS") == "true":
+        say("scan-log: refused (in_ci)")
+        return EXIT_USAGE
+    try:
+        result = scan_log(repo_root, log_path)
+    except ScanRefused as problem:
+        say("scan-log: refused (%s)" % problem.reason)
+        return EXIT_USAGE
+    say("scan-log: lines=%d findings=%d" % (
+        min(result.lines, _COUNT_LIMIT), min(len(result.findings), _COUNT_LIMIT)))
+    for number, kind in result.findings:
+        say("scan-log: finding line=%d kind=%s" % (min(number, _COUNT_LIMIT), kind))
+    return EXIT_OK if not result.findings else EXIT_FAILED
+
+
 # -- the main --------------------------------------------------------------------------------------
 
 
@@ -867,6 +993,10 @@ def _dispatch(argv, printer, environment, fetch, connect, clock, prepare, backen
             if args.command == "bundle":
                 return _bundle_command(say, environment, repo_root, clock, args.check_dir,
                                        args.mapping)
+            if args.command == "scan-log":
+                if args.log is None:
+                    raise _UsageError()
+                return _scan_log_command(say, environment, repo_root, args.log)
         except _UsageError:
             say(USAGE_LINE)
             say("usage error: bad or missing arguments")

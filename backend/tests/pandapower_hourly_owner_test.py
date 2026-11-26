@@ -35,6 +35,7 @@ import re  # noqa: E402
 import shutil  # noqa: E402
 
 import pandapower_hourly_fixture as fixture  # noqa: E402
+import private_leak_scan  # noqa: E402
 import pandapower_replay_fixture as replay_fixture  # noqa: E402
 import pandapower_study_fixture as study_fixture  # noqa: E402
 from pandapower_job import cli, convert, engine, hourly  # noqa: E402
@@ -293,3 +294,139 @@ def test_bundle_secret_limit_boundary(tmp_path, monkeypatch):
     assert all(SIZE_LINE.match(line).group(4) == "fits" for line in lines[1:4])
     assert lines[4:] == ["bundle: refused (too_large)"]
     assert not os.path.exists(_secrets_root(other))
+
+
+# -- scan-log (D-11) -------------------------------------------------------------------------------
+
+FINDING_LINE = re.compile(r"scan-log: finding line=([0-9]+) kind=([a-z_]+)\Z")
+RUNNER_LINES = (
+    "2026-11-26T10:20:03.1234567Z Current runner version: 'x'",
+    "2026-11-26T10:20:04.1234567Z mode: dry",
+    "2026-11-26T10:20:05.1234567Z inputs: ok",
+    "2026-11-26T10:20:41.1234567Z study: ok",
+    "2026-11-26T10:20:42.1234567Z outcome: ok",
+    "2026-11-26T10:20:42.1234567Z dry run: nothing was written to the database",
+)
+
+
+def _write_log(path, lines):
+    os.makedirs(os.path.dirname(str(path)), exist_ok=True)
+    with open(path, "w", encoding="ascii", newline="") as handle:
+        handle.write("\n".join(lines) + "\n")
+    return str(path)
+
+
+def _bundled(tmp_path, name="repo"):
+    """A throwaway repository with its private tree and one bundle folder."""
+    repo, layout = _world(tmp_path, name)
+    assert _owner(["bundle"], repo)[0] == 0
+    return repo, layout
+
+
+def _needle_of(repo, kind):
+    needles = private_leak_scan.derive_needles(os.path.join(repo, "data", "private"))
+    chosen = sorted(text for text, name in needles.kinds.items() if name == kind)
+    assert chosen, "precondition not reached: no needle of kind %s" % kind
+    return chosen[0]
+
+
+def _fragment_of(repo):
+    folder = _bundle_folder(repo)
+    text = _read_text(os.path.join(folder, "PANDAPOWER_SETTINGS_B64.txt"))
+    tokens = [token for token in private_leak_scan._TOKEN.findall(text)
+              if len(token) >= hourly.SECRET_FRAGMENT_CHARS]
+    assert tokens, "precondition not reached: no long token in the settings bundle"
+    return tokens[0]
+
+
+def test_scan_log_clean_log_prints_counts_only(tmp_path):
+    repo, _layout = _bundled(tmp_path)
+    log = _write_log(tmp_path / "downloads" / "run.log", RUNNER_LINES)
+    code, lines = _owner(["scan-log", "--log", log], repo)
+    assert code == 0
+    assert lines == ["scan-log: lines=%d findings=0" % len(RUNNER_LINES)]
+    assert os.listdir(tempfile.gettempdir()) == []
+
+
+def test_scan_log_finds_planted_values_without_printing_them(tmp_path):
+    repo, _layout = _bundled(tmp_path)
+    planted = [("mapping_key", _needle_of(repo, "mapping_key")),
+               ("secret_fragment", _fragment_of(repo)),
+               ("scaling_target", _needle_of(repo, "scaling_target"))]
+    extra = ["2026-11-26T10:21:00.1234567Z note " + text for _kind, text in planted]
+    log = _write_log(tmp_path / "downloads" / "run.log", list(RUNNER_LINES) + extra)
+    code, lines = _owner(["scan-log", "--log", log], repo)
+    assert code == 1
+    assert lines[0] == "scan-log: lines=%d findings=%d" % (len(RUNNER_LINES) + 3, len(lines) - 1)
+    found = [FINDING_LINE.match(line) for line in lines[1:]]
+    assert all(match is not None for match in found)
+    seen = set((int(match.group(1)), match.group(2)) for match in found)
+    for offset, (kind, _text) in enumerate(planted):
+        assert (len(RUNNER_LINES) + 1 + offset, kind) in seen, "the scan missed the %s" % kind
+    # the printed lines hold none of the planted texts, nor a path
+    shown = "\n".join(lines)
+    for _kind, text in planted:
+        assert text not in shown
+    assert os.path.basename(log) not in shown and str(tmp_path) not in shown
+    # the planted line numbers are the only findings: the clean part of the log stays clean
+    assert all(number > len(RUNNER_LINES) for number, _kind in seen)
+
+
+def test_scan_log_refusals(tmp_path, monkeypatch):
+    repo, _layout = _bundled(tmp_path)
+    log = _write_log(tmp_path / "downloads" / "run.log", RUNNER_LINES)
+
+    def refused(argv, reason, repository=repo, environ=None):
+        code, lines = _owner(argv, repository, environ=environ)
+        assert code == 2 and lines == ["scan-log: refused (%s)" % reason], reason
+
+    # a log stored inside the private folder
+    inside = _write_log(os.path.join(repo, "data", "private", "pandapower", "run.log"),
+                        RUNNER_LINES)
+    refused(["scan-log", "--log", inside], "log_inside_private")
+    # no such file
+    refused(["scan-log", "--log", str(tmp_path / "downloads" / "absent.log")], "log_missing")
+    # a repository with no private folder derives no needle, and an empty set proves nothing
+    bare = replay_fixture.make_repo(tmp_path / "bare")
+    refused(["scan-log", "--log", log], "no_needles", repository=bare)
+    # under GitHub Actions
+    refused(["scan-log", "--log", log], "in_ci", environ={"GITHUB_ACTIONS": "true"})
+    # a log the scanner would silently skip: over its size limit, or not text
+    limit = private_leak_scan.MAX_BYTES
+    big = str(tmp_path / "downloads" / "big.log")
+    with open(big, "wb") as handle:
+        handle.write(b"a\n" * (limit // 2) + b"b")
+    assert os.path.getsize(big) == limit + 1
+    refused(["scan-log", "--log", big], "log_too_large")
+    binary = str(tmp_path / "downloads" / "binary.log")
+    with open(binary, "wb") as handle:
+        handle.write(b"text\x00more\n")
+    refused(["scan-log", "--log", binary], "log_binary")
+    # a malformed allow list is refused, not ignored
+    allow = os.path.join(repo, "backend", "private_leak_allow.json")
+    os.makedirs(os.path.dirname(allow))
+    with open(allow, "w", encoding="ascii") as handle:
+        handle.write("{}")
+    refused(["scan-log", "--log", log], "allow_list")
+    os.remove(allow)
+
+    # exactly at the scanner's limit the log is scanned, not refused
+    at_limit = str(tmp_path / "downloads" / "limit.log")
+    with open(at_limit, "wb") as handle:
+        handle.write(b"a\n" * (limit // 2))
+    assert os.path.getsize(at_limit) == limit
+    code, lines = _owner(["scan-log", "--log", at_limit], repo)
+    assert code == 0 and lines == ["scan-log: lines=%d findings=0" % (limit // 2)]
+
+    # a path on another drive cannot be compared with the repository
+    def other_drive(*args, **kwargs):
+        raise ValueError("path is on mount")
+    monkeypatch.setattr(private_leak_scan, "scan_paths", other_drive)
+    refused(["scan-log", "--log", log], "log_outside_drive")
+
+
+def test_scan_log_without_a_log_argument_is_a_usage_error(tmp_path):
+    repo, _layout = _bundled(tmp_path)
+    code, lines = _owner(["scan-log"], repo)
+    assert code == 2
+    assert lines == [hourly.USAGE_LINE, "usage error: bad or missing arguments"]
