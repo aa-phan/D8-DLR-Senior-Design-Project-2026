@@ -4,18 +4,18 @@ milestone: v1.7
 milestone_name: pandapower Solver
 current_phase: 5
 current_phase_name: Hourly Workflow, Dry Run and Live Soak
-current_plan: 4
+current_plan: 5
 status: executing
-stopped_at: Completed 05-03-PLAN.md
-last_updated: "2026-11-26T06:35:54.042Z"
+stopped_at: Completed 05-04-PLAN.md
+last_updated: "2026-11-26T07:00:28.862Z"
 last_activity: 2026-11-26
 last_activity_desc: Phase 5 execution started
-state_head: ebf7cb18fad2f2e31ec40814909a37a8e3b5e320
+state_head: aa70104b1e552e32d2302e5d94a638c0bc87696e
 progress:
   total_phases: 6
   completed_phases: 4
   total_plans: 35
-  completed_plans: 30
+  completed_plans: 31
 ---
 
 # Project State
@@ -50,20 +50,20 @@ See: .planning/PROJECT.md (shared). Builds on the pss-e-integration workstream (
 ## Current Position
 
 Phase: 5 (Hourly Workflow, Dry Run and Live Soak) — EXECUTING
-Plan: 4 of 8
+Plan: 5 of 8
 Status: Ready to execute
 Last activity: 2026-11-26 — Phase 5 execution started
 
 ## Progress
 
 **Phases Complete:** 1 of 6
-**Current Plan:** 4
+**Current Plan:** 5
 
 ## Session Continuity
 
-**Last session:** 2026-11-26T06:35:52.921Z
+**Last session:** 2026-11-26T07:00:27.734Z
 
-**Stopped At:** Completed 05-03-PLAN.md
+**Stopped At:** Completed 05-04-PLAN.md
 **Resume File:** None
 
 To resume:
@@ -94,6 +94,7 @@ Known items from execution:
 | Phase 05 P01 | 45min | 3 tasks | 4 files |
 | Phase 05 P02 | 10min | 2 tasks | 4 files |
 | Phase 05 P03 | 15min | 2 tasks | 2 files |
+| Phase 05 P04 | 75min | 3 tasks | 3 files |
 
 ## Decisions
 
@@ -123,3 +124,5 @@ Known items from execution:
 - [Phase 05]: 05-02: soak count walks back from the hour before the database's current hour; any non-failed outcome counts; fallback-only hours reported separately
 - [Phase 05]: 05-02: retention keeps every row (about 5,100 rows a day); 100,000-row trigger replaced by an owner-named size limit read with psse_result_size.sql
 - [Phase 05]: 05-03: the live switch is only vars.PANDAPOWER_LIVE; the study step gets the writer secret only through a conditional on it, the soak step holds it unconditionally (read-only)
+- [Phase 05]: 05-04: with --since the gap check windows the gaps shown (gaps=N) but not the run count, so a gap older than the window does not fail the closing check; the 24-slot count covers the last 24 hours
+- [Phase 05]: 05-04: any failure of the soak's two reads or its report parse is one fixed line, gap check: could not run, exit 6, with no error text or variable name
