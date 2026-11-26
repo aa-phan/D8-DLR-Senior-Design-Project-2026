@@ -12,8 +12,19 @@ D-12) is the per-solver gap check and the trailing 24-slot count, run after it:
 Without `--since` it reports and exits 0 whatever the gaps are (6 only when the check cannot run), so
 one missed hour does not keep every later hourly run red. With `--since` it is the owner's closing
 check: exit 0 only when pandapower has no gap in the window and the count is at least 24, else 5.
-The commands `bundle` and `scan-log` arrive in plan 05-05; the usage line names them already so it
-does not change later.
+The two owner commands (plan 05-05: OPS-02; decisions D-08, D-11) run on the owner's machine, never
+on a runner (both refuse when GITHUB_ACTIONS is `true`), and read the private folder:
+
+    pandapower_hourly.py bundle [--check-dir DIR] [--mapping PATH]
+    pandapower_hourly.py scan-log --log PATH
+
+`bundle` writes the four base64 secret files into a new folder under data/private/pandapower/secrets/
+and prints only byte counts, base64 lengths and whether each fits the secret limit. It rebuilds the
+settings and scaling documents from the validated backend, so the check report's session hashes,
+NET-03 verdicts, parity detail and scaling evidence never reach a secret. `scan-log` scans a
+downloaded Actions log against the needles derived from the private folder and the bundled secrets
+and prints the line count, the finding count and each finding's line number and kind, never the
+matched text.
 
 What is printed (D-05, D-14). Everything printed goes through one printer (`_Printer.say`) that
 accepts only lines matching `HOURLY_LINE_PATTERNS`: counts of one to nine digits and words of fixed
@@ -47,7 +58,9 @@ import binascii
 import collections
 import datetime
 import functools
+import hashlib
 import io
+import json
 import logging
 import os
 import re
@@ -56,8 +69,10 @@ import sys
 import tempfile
 import warnings
 
+import private_leak_scan
 from psse_job import constants, contract, ratings, run_record
-from pandapower_job import cli, convert, engine, soak
+from psse_job import mapping as mapping_module
+from pandapower_job import cli, convert, engine, private, soak
 
 PROGRAM = "pandapower_hourly.py"
 LIVE_VARIABLE = "PANDAPOWER_LIVE"
@@ -82,7 +97,14 @@ EXIT_CHECK_FAILED = 6
 
 USAGE_LINE = "usage: pandapower_hourly.py {run,soak,bundle,scan-log} ..."
 # command -> its flags; later plans add keys
-COMMAND_FLAGS = {"run": (), "soak": ("--since",)}
+COMMAND_FLAGS = {"run": (), "soak": ("--since",), "bundle": ("--check-dir", "--mapping")}
+
+# the owner commands (plan 05-05)
+BUNDLE_DIR = "secrets"
+BUNDLE_PREFIX = "secrets_"
+BUNDLE_REFUSAL_REASONS = (
+    "in_ci", "private_path", "records_missing", "mapping_missing", "network_refused",
+    "mapping_refused", "preflight_refused", "placeholder", "too_large", "exists")
 # the solver labels the gap check can print: the two tags, the gap check's own `unknown` for a
 # label that is not a plain tag, and `other` for any other plain tag
 SOLVER_WORDS = (contract.SOLVER_PSSE, engine.SOLVER, "unknown", "other")
@@ -116,6 +138,11 @@ HOURLY_LINE_PATTERNS = tuple(re.compile(pattern + r"\Z") for pattern in (
     "gap check: could not run",
     "soak: consecutive_slots=%s of %d fallback_slots=%s" % (_NUM, soak.SOAK_SLOTS, _NUM),
     "soak: (?:pass|not yet)",
+    "bundle: (?:network|mapping|settings|scaling) bytes=%s base64=%s (?:fits|does not fit)" % (
+        _NUM, _NUM),
+    "bundle: verified",
+    "bundle: written",
+    "bundle: refused \\(%s\\)" % _alt(BUNDLE_REFUSAL_REASONS),
 ))
 
 
@@ -434,6 +461,206 @@ def _soak_command(say, environ, connect, since_text):
     return code
 
 
+# -- the owner's bundle command (D-08): reads data/private, never runs on a runner -----------------
+
+
+class BundleRefused(ValueError):
+    """The bundle was refused; `reason` is one of BUNDLE_REFUSAL_REASONS and the message holds
+    nothing else (no value, no path). `sizes` is the list of size rows when they were already
+    known (the `too_large` refusal), else None."""
+
+    def __init__(self, reason, sizes=None):
+        self.reason = reason
+        self.sizes = sizes
+        ValueError.__init__(self, "bundle refused: %s" % reason)
+
+
+class BundleMismatch(Exception):
+    """The files the bundle was about to write did not load back as the source (a programming
+    error; the command prints only this class name)."""
+
+
+BundleResult = collections.namedtuple("BundleResult", ["folder", "sizes"])
+
+
+def bundle_documents(backend):
+    """`(settings_bytes, scaling_bytes)`: the two recorded-settings documents rebuilt from a
+    validated backend (D-08). The settings document holds the key `settings` with the six keys of the
+    check command's record and the report marker; the scaling document the three details and the
+    marker. Nothing else of the check report (session hashes, NET-03 verdicts, parity detail,
+    scaling evidence) can pass through, because nothing is copied from it. Strict JSON, sorted
+    keys, ASCII bytes."""
+    values = backend.solve_settings
+    details = backend.scaling_details
+    settings = {
+        "settings": {
+            "enforce_q_lims": values.enforce_q_lims, "tolerance_mva": values.tolerance_mva,
+            "max_iteration": values.max_iteration,
+            "collapse_voltage_pu": values.collapse_voltage_pu,
+            "sources": dict(values.sources), "deviations": list(values.deviations)},
+        cli.REPORT_MARKER: 1}
+    scaling = {
+        "swing_in_total": details.swing_in_total, "clamped_at_limits": details.clamped_at_limits,
+        "q_scales_with_p": details.q_scales_with_p, cli.REPORT_MARKER: 1}
+    return tuple(json.dumps(document, sort_keys=True, allow_nan=False).encode("ascii")
+                 for document in (settings, scaling))
+
+
+def _read_bytes(path, limit):
+    try:
+        with open(path, "rb") as handle:
+            return handle.read(limit + 1)
+    except OSError:
+        return None
+
+
+def _instant(now):
+    value = now() if callable(now) else now
+    if value is None:
+        value = datetime.datetime.now(datetime.timezone.utc)
+    if value.tzinfo is not None:
+        value = value.astimezone(datetime.timezone.utc)
+    return value
+
+
+def _repo_of(repo_root):
+    return os.path.dirname(os.path.dirname(private.private_root(repo_root)))
+
+
+def _verify_bundle(backend, encoded, network_sha, mapping_sha):
+    """Decode the four values into a temporary folder (removed in `finally`) and show that they
+    load back as the source: a recorded backend with equal settings and details, the engine's
+    preflight passing on the loaded mapping, and the run preparation giving the hashes of the
+    source files. Raises BundleMismatch (or BundleRefused too_large) otherwise."""
+    folder = tempfile.mkdtemp(prefix=TEMP_PREFIX + "bundle_")
+    try:
+        environ = dict((name, encoded[word]) for word, name, _file, _cap in SECRET_ENV)
+        try:
+            paths = materialize(environ, folder)
+        except InputsRefused as problem:
+            if problem.reason == "too_large":
+                raise BundleRefused("too_large") from None
+            raise BundleMismatch() from None
+        loaded_backend = engine.load_recorded_backend(folder)
+        same = (loaded_backend.solve_settings == backend.solve_settings
+                and all(getattr(loaded_backend.scaling_details, name)
+                        == getattr(backend.scaling_details, name) for name in engine._DETAIL_FIELDS))
+        if not same or engine.is_placeholder(loaded_backend):
+            raise BundleMismatch()
+        loaded = mapping_module.load_mapping(paths["mapping"], False)
+        if engine.preflight(loaded.settings, loaded_backend) is not None:
+            raise BundleMismatch()
+        prepared = engine.prepare_run(
+            loaded_backend, paths["network"], paths["mapping"], allow_placeholder=False)
+        if prepared.case_sha256 != network_sha or prepared.mapping_sha256 != mapping_sha:
+            raise BundleMismatch()
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+
+
+def bundle(repo_root=None, check_dir=None, mapping_path=None, now=None, say=None):
+    """Write the four base64 secret files of D-08 into a new folder
+    `data/private/pandapower/secrets/secrets_STAMP/` and return a BundleResult (the folder and the
+    size rows `(word, bytes, base64 length, fits)`). `say`, when given, receives the counts-only
+    lines in order: the four size lines, `bundle: verified`, `bundle: written`.
+
+    The newest check folder (or `check_dir`) and the mapping (or `mapping_path`) are read after the
+    private-path guard; the recorded backend is loaded and validated through the engine, the network
+    and the mapping are checked, the engine's preflight must pass and the backend must not be a
+    placeholder. Every value must fit `convert.SECRET_LIMIT_BYTES` (read at call time) or nothing is
+    written (`too_large`). Before writing, the four values are decoded into a temporary folder and
+    shown to load back as the source with the source's hashes. BundleRefused for each refusal;
+    engine.RecordsRefused when the recorded settings are refused. No path, hash or value is ever
+    printed or put in a message."""
+    from pandapower_job import replay_cli
+
+    say = say if say is not None else (lambda text: None)
+    repo = _repo_of(repo_root)
+    check = check_dir if check_dir is not None else replay_cli._newest_check(repo)
+    if check is None or not all(os.path.isfile(os.path.join(check, member))
+                                for member in replay_cli._CHECK_FILES):
+        raise BundleRefused("records_missing")
+    mapping_file = (mapping_path if mapping_path is not None
+                    else replay_cli._default_mapping(repo))
+    if not os.path.isfile(mapping_file):
+        raise BundleRefused("mapping_missing")
+    network_file = os.path.join(check, "converted_network.json")
+    try:
+        for path in (check, mapping_file, network_file):
+            private.require_private(path, repo_root)
+    except private.PrivatePathRefused:
+        raise BundleRefused("private_path") from None
+
+    backend = engine.load_recorded_backend(check)
+    if engine.is_placeholder(backend):
+        raise BundleRefused("placeholder")
+    network = _read_bytes(network_file, convert.MAX_CONVERTED_BYTES)
+    try:
+        if network is None:
+            raise convert.ConvertRefused("not_json")
+        convert.case_from_json(network)
+    except convert.ConvertRefused:
+        raise BundleRefused("network_refused") from None
+    mapping_data = _read_bytes(mapping_file, engine.MAX_RECORD_BYTES)
+    try:
+        if mapping_data is None:
+            raise mapping_module.MappingError(["mapping file could not be read"])
+        loaded = mapping_module.load_mapping(mapping_file, False)
+    except mapping_module.MappingError:
+        raise BundleRefused("mapping_refused") from None
+    if engine.preflight(loaded.settings, backend) is not None:
+        raise BundleRefused("preflight_refused")
+
+    settings_bytes, scaling_bytes = bundle_documents(backend)
+    payloads = {"network": network, "mapping": mapping_data, "settings": settings_bytes,
+                "scaling": scaling_bytes}
+    encoded = dict((word, base64.b64encode(payloads[word]).decode("ascii"))
+                   for word, _name, _file, _cap in SECRET_ENV)
+    limit = convert.SECRET_LIMIT_BYTES
+    sizes = [(word, len(payloads[word]), len(encoded[word]), len(encoded[word]) <= limit)
+             for word, _name, _file, _cap in SECRET_ENV]
+    for word, count, length, fits in sizes:
+        say("bundle: %s bytes=%d base64=%d %s" % (word, count, length, "fits" if fits else "does not fit"))
+    if not all(fits for _word, _count, _length, fits in sizes):
+        raise BundleRefused("too_large", sizes)
+
+    _verify_bundle(backend, encoded, hashlib.sha256(network).hexdigest(),
+                   hashlib.sha256(mapping_data).hexdigest())
+    say("bundle: verified")
+
+    stamp = _instant(now).strftime("%Y%m%dT%H%M%SZ")
+    folder = os.path.join(private.private_root(repo_root), "pandapower", BUNDLE_DIR,
+                          BUNDLE_PREFIX + stamp)
+    try:
+        folder = private.make_private_dir(folder, repo_root)
+    except private.PrivatePathRefused as problem:
+        raise BundleRefused("exists" if problem.reason == "exists" else "private_path") from None
+    try:
+        for word, name, _file, _cap in SECRET_ENV:
+            private.write_private_bytes(
+                os.path.join(folder, name + ".txt"), encoded[word].encode("ascii"), repo_root)
+    except BaseException:
+        shutil.rmtree(folder, ignore_errors=True)
+        raise
+    say("bundle: written")
+    return BundleResult(folder, sizes)
+
+
+def _bundle_command(say, environ, repo_root, clock, check_dir, mapping_path):
+    if environ.get("GITHUB_ACTIONS") == "true":
+        say("bundle: refused (in_ci)")
+        return EXIT_USAGE
+    try:
+        bundle(repo_root, check_dir, mapping_path, now=clock, say=say)
+    except BundleRefused as problem:
+        say("bundle: refused (%s)" % problem.reason)
+        return EXIT_USAGE
+    except engine.RecordsRefused as problem:
+        say("records: refused (%s)" % problem.reason)
+        return EXIT_USAGE
+    return EXIT_OK
+
+
 # -- the main --------------------------------------------------------------------------------------
 
 
@@ -612,8 +839,8 @@ def main(argv, out=None, environ=None, repo_root=None, fetch=None, connect=None,
     stream for the printed lines (default stdout), `environ` the environment (default a copy of
     os.environ), `fetch` the ratings read, `connect` the writer connection of a live run, `clock` a
     function returning an aware datetime, `prepare` the engine's `prepare_run`, `backend_loader` the
-    loader of the recorded backend and `repo_root` the repository root; each of the last six
-    defaults to the real one and is a test seam. `sink` false leaves the output redirects off (a
+    loader of the recorded backend and `repo_root` the repository root (read only by the owner
+    commands); each of the last six defaults to the real one and is a test seam. `sink` false leaves the output redirects off (a
     test seam). Never raises.
     """
     environment = dict(os.environ) if environ is None else environ
@@ -622,12 +849,13 @@ def main(argv, out=None, environ=None, repo_root=None, fetch=None, connect=None,
         with stream as target:
             printer = _Printer(target)
             return _dispatch(argv, printer, environment, fetch, connect, clock, prepare,
-                             backend_loader)
+                             backend_loader, repo_root)
     except Exception:  # noqa: BLE001 - nothing may escape, not even a failing output stream
         return EXIT_USAGE
 
 
-def _dispatch(argv, printer, environment, fetch, connect, clock, prepare, backend_loader):
+def _dispatch(argv, printer, environment, fetch, connect, clock, prepare, backend_loader,
+              repo_root=None):
     say = printer.say
     try:
         try:
@@ -636,6 +864,9 @@ def _dispatch(argv, printer, environment, fetch, connect, clock, prepare, backen
                 raise _UsageError()
             if args.command == "soak":
                 return _soak_command(say, environment, connect, args.since)
+            if args.command == "bundle":
+                return _bundle_command(say, environment, repo_root, clock, args.check_dir,
+                                       args.mapping)
         except _UsageError:
             say(USAGE_LINE)
             say("usage error: bad or missing arguments")

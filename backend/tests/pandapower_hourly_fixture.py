@@ -65,6 +65,15 @@ def _single_line_base64(path):
         return base64.b64encode(handle.read()).decode("ascii")
 
 
+def read_env():
+    """The non-secret part of a runner environment: synthetic Supabase read settings and a job
+    version."""
+    return {
+        "SUPABASE_URL": "https://hourly-example-project.supabase.example",
+        "SUPABASE_PUBLISHABLE_KEY": psse_fakes.fake_publishable_key(),
+        "PSSE_JOB_VERSION": "test-version"}
+
+
 def hourly_env(tmp_path, live=False, island=False, **extra):
     """The environment of one runner call: each secret of `hourly.SECRET_ENV` as the single-line
     base64 text of its file, synthetic Supabase read settings, a job version and PANDAPOWER_LIVE
@@ -72,9 +81,7 @@ def hourly_env(tmp_path, live=False, island=False, **extra):
     files = secret_files(tmp_path, island=island)
     environ = dict((name, _single_line_base64(files[word]))
                    for word, name, _file, _cap in hourly.SECRET_ENV)
-    environ["SUPABASE_URL"] = "https://hourly-example-project.supabase.example"
-    environ["SUPABASE_PUBLISHABLE_KEY"] = psse_fakes.fake_publishable_key()
-    environ["PSSE_JOB_VERSION"] = "test-version"
+    environ.update(read_env())
     if live:
         environ[hourly.LIVE_VARIABLE] = "true"
     environ.update(extra)
@@ -98,3 +105,73 @@ def fast_prepare(backend, case_path, mapping_path, allow_placeholder=False, cloc
     `fake_pandapower_study`, so a test that is not about the solver takes milliseconds."""
     prepared = engine.prepare_run(backend, case_path, mapping_path, allow_placeholder, clock)
     return prepared._replace(study=fake_pandapower_study)
+
+
+# -- the owner's private tree (plan 05-05) ----------------------------------------------------------
+
+# Fake values the owner-command and leak tests plant, each assembled from pieces and on the
+# reserved `.invalid` top-level domain so none is credential-shaped. The first four sit in the check
+# folder's report and scaling files only, where the bundle must leave them; the rest stand for the
+# runner's connection settings.
+PLANTED = {
+    "session_case_sha256": "5a" * 32,
+    "session_mapping_sha256": "6b" * 32,
+    "net03_text": "net03" + "verdict" + "zq4417",
+    "parity_value": 4417.8832911,
+    "evidence_text": "evidence" + "zq4417",
+    "db_user": "writer" + "usr" + "zq4417",
+    "db_password": "pw" + "zq4417" + "@" + "x9",
+    "db_host": "db-" + "zq4417" + ".invalid",
+    "project_ref": "projref" + "zq4417",
+}
+
+
+def planted_writer_url():
+    """A writer URL of the planted user, percent-encoded password and host."""
+    from urllib.parse import quote
+    return "postgresql://%s:%s@%s:5432/postgres" % (
+        PLANTED["db_user"], quote(PLANTED["db_password"], safe=""), PLANTED["db_host"])
+
+
+def planted_supabase_url():
+    return "https://" + PLANTED["project_ref"] + ".supabase.invalid"
+
+
+def private_tree(repo, study=None, island=False):
+    """Write into the throwaway repository `repo` the private files the owner commands read, in the
+    shape the real tree has: the non-placeholder mapping at `data/private/pandapower/mapping.json`
+    and one check folder `sessions/session_one/check_20261120T000000Z/` holding the converted
+    network, `report.json` (the six settings keys, a `session` object with two hashes, `net03` and
+    `parity` objects and the marker) and `scaling_details.json` (the three details, an `evidence`
+    object and the marker), each planted value from PLANTED. `study` replaces the mapping's study
+    section. Returns a `replay_fixture.Layout`."""
+    root = os.path.join(str(repo), "data", "private", "pandapower")
+    check_dir = os.path.join(root, "sessions", "session_one", "check_20261120T000000Z")
+    os.makedirs(check_dir, exist_ok=True)
+    if study is None:
+        mapping = replay_fixture.write_mapping(root, island=island)
+    else:
+        mapping = study_fixture.write_placeholder_mapping(root, study=study)
+        with open(mapping, "r", encoding="utf-8") as handle:
+            document = json.load(handle)
+        document["placeholder"] = False
+        _write_json(mapping, document)
+    network = study_fixture.write_converted(check_dir, name="converted_network.json")
+    values = study_fixture.fixture_backend().solve_settings
+    details = study_fixture.fixture_backend().scaling_details
+    report = _write_json(os.path.join(check_dir, "report.json"), {
+        "settings": {
+            "enforce_q_lims": values.enforce_q_lims, "tolerance_mva": values.tolerance_mva,
+            "max_iteration": values.max_iteration,
+            "collapse_voltage_pu": values.collapse_voltage_pu,
+            "sources": dict(values.sources), "deviations": list(values.deviations)},
+        "session": {"case_sha256": PLANTED["session_case_sha256"],
+                    "mapping_sha256": PLANTED["session_mapping_sha256"]},
+        "net03": {"verdict": PLANTED["net03_text"]},
+        "parity": {"largest_difference": PLANTED["parity_value"]},
+        cli.REPORT_MARKER: 1})
+    scaling = _write_json(os.path.join(check_dir, "scaling_details.json"), {
+        "swing_in_total": details.swing_in_total, "clamped_at_limits": details.clamped_at_limits,
+        "q_scales_with_p": details.q_scales_with_p,
+        "evidence": {"note": PLANTED["evidence_text"]}, cli.REPORT_MARKER: 1})
+    return replay_fixture.Layout(str(repo), mapping, check_dir, network, report, scaling)
