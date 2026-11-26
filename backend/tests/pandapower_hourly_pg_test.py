@@ -26,6 +26,7 @@ bytes (Windows). Follows backend/tests/pandapower_study_job_test.py (module-leve
 asserts, no test classes).
 """
 
+import datetime
 import io
 import os
 import re
@@ -256,3 +257,189 @@ def test_tracer_dry_run_leaves_the_four_tables_unchanged_and_live_adds_one_tagge
     assert stored["run_id"] not in text
     assert "pp-" not in text
     assert os.listdir(tempfile.gettempdir()) == []
+
+
+# --------------------------------------------------------------------------- refusals as stored
+
+
+def test_live_placeholder_refusal_leaves_the_tables_unchanged(clean_pg, tmp_path, monkeypatch):
+    """D-03: a live run whose recorded settings are a placeholder is refused before the ratings are
+    read, before the study and before any connection; nothing is stored."""
+    _seed(clean_pg)
+    before = _fingerprint(clean_pg)
+    environ = _writer_env(tmp_path, clean_pg, live=True)
+
+    calls = []
+    with monkeypatch.context() as patch:
+        patch.setattr(writer, "connect", _fail_connect(calls))
+        code, lines = _main(
+            environ, backend_loader=lambda folder: engine.PLACEHOLDER_BACKEND,
+            fetch=_fail_connect(calls))
+    assert calls == []
+    assert code == 2
+    assert lines == ["mode: live", "inputs: ok", "placeholder: refused"]
+    assert _fingerprint(clean_pg) == before
+    assert os.listdir(tempfile.gettempdir()) == []
+
+
+def test_live_mapping_refusal_is_stored_as_a_failed_pandapower_run_and_prints_no_bus_key(
+        clean_pg, tmp_path, capfd, caplog):
+    """D-03, D-05: a mapping that lists one outage twice is refused at stage mapping; one failed
+    pandapower run with no result rows is stored (tag pandapower, a pp- id, no solver version), and
+    the duplicated branch key, in both orientations, reaches neither the printed lines nor the
+    captured descriptors nor the log."""
+    import json
+
+    import pandapower_replay_fixture as replay_fixture
+    import pandapower_study_fixture as study_fixture
+
+    folder = tmp_path / "duplicated"
+    folder.mkdir()
+    mapping_path = replay_fixture.write_mapping(folder, island=True)
+    with open(mapping_path, encoding="utf-8") as handle:
+        document = json.load(handle)
+    extra = document["study"]["contingency"]["extra"]
+    extra.append(dict(extra[0]))
+    with open(mapping_path, "w", encoding="utf-8") as handle:
+        json.dump(document, handle)
+    ref = study_fixture.ISLANDING_OUTAGE
+    keys = ["%d-%d-%s" % (ref.from_bus, ref.to_bus, ref.ckt),
+            "%d-%d-%s" % (ref.to_bus, ref.from_bus, ref.ckt)]
+
+    environ = _writer_env(tmp_path, clean_pg, live=True,
+                          PANDAPOWER_MAPPING_B64=fixture._single_line_base64(mapping_path))
+    buffer = io.StringIO()
+    code = hourly.main(["run"], out=buffer, environ=environ,
+                       fetch=fixture.fake_fetch_for(fixture.FIXED_NOW), clock=_clock(), sink=True)
+    captured = capfd.readouterr()
+    lines = buffer.getvalue().splitlines()
+    assert _vocabulary_ok(lines)
+    assert code == 1
+    assert "study: failed at stage mapping" in lines
+    assert lines[-1] == "run status: failure_recorded"
+    assert "outcome: failed" in lines
+
+    stored_runs = pg_helper.admin_rows(clean_pg, "select * from public.psse_run")
+    assert len(stored_runs) == 1
+    stored = stored_runs[0]
+    assert stored["outcome"] == "failed"
+    assert stored["failed_stage"] == "mapping"
+    assert stored["solver"] == "pandapower"
+    assert stored["solver_version"] is None
+    assert stored["run_id"].startswith("pp-")
+    assert _counts(clean_pg, stored["run_id"]) == [1, 0, 0, 0]
+    assert [row for row in _checks(clean_pg) if not row["ok"]] == []
+    # the key was there to leak: the stored error names it; only the public channels must not
+    assert keys[0] in stored["error"]
+
+    everything = buffer.getvalue() + captured.out + captured.err + caplog.text
+    for key in keys:
+        assert key not in everything
+    assert stored["run_id"] not in everything
+    # capfd keeps its own capture files in the scratch folder, so look for the runner's folder only
+    assert [name for name in os.listdir(tempfile.gettempdir())
+            if name.startswith(hourly.TEMP_PREFIX)] == []
+
+
+# --------------------------------------------------------------------------- the soak on Postgres
+
+
+def _database_hour(admin_url):
+    """The database's current UTC hour, read as the superuser the way the gap check reads it."""
+    value = pg_helper.admin_rows(
+        admin_url,
+        "select (date_trunc('hour', now() at time zone 'UTC') at time zone 'UTC') as h")[0]["h"]
+    return value.astimezone(datetime.timezone.utc)
+
+
+def _seed_slots(admin_url, hour, skipped_back=None, count=24):
+    """`count` pandapower runs, one in each hour from `hour` minus `count` hours to `hour` minus one
+    hour, except the hour `skipped_back` hours before `hour` (all fallback runs)."""
+    with psycopg.connect(admin_url) as conn:
+        for back in range(1, count + 1):
+            if back == skipped_back:
+                continue
+            started = hour - datetime.timedelta(hours=back) + datetime.timedelta(minutes=5)
+            run_id = pg_helper.make_run_id(back, started, prefix="pp")
+            _insert_run_set(conn, _pandapower_rows(run_id, started))
+
+
+def _soak_on(admin_url, skipped_back=None):
+    """Seed 24 slots (less `skipped_back`) before the database's current hour, then run `soak` and
+    `soak --since` for the whole window as the writer role. Returns the two (exit code, lines)
+    results. Retried once from an empty table if the database's hour changed meanwhile."""
+    environ = {constants.ENV_PSSE_DB_URL: _writer_url(admin_url)}
+    for _attempt in range(2):
+        pg_helper.reset(admin_url)
+        hour = _database_hour(admin_url)
+        _seed_slots(admin_url, hour, skipped_back)
+        before = _fingerprint(admin_url)
+        plain = _main(environ, "soak")
+        since = (hour - datetime.timedelta(hours=24)).strftime("%Y-%m-%dT%H:00:00Z")
+        closing = _main(environ, ("soak", "--since", since))
+        unchanged = _fingerprint(admin_url) == before
+        if _database_hour(admin_url) == hour:
+            assert unchanged
+            return plain, closing
+    raise AssertionError("the database's hour changed twice in a row")
+
+
+def test_soak_reads_24_consecutive_slots_from_postgres(clean_pg):
+    """OPS-05, D-09, D-12: 24 consecutive pandapower slots ending at the hour before the database's
+    current hour are `consecutive_slots=24` and `soak: pass`, and removing one makes it `not yet`;
+    the hourly soak exits 0 either way, the closing check only for the whole 24, and neither writes."""
+    (code, lines), (closing_code, closing_lines) = _soak_on(clean_pg)
+    assert code == 0
+    assert lines == ["gap check: solver pandapower runs=24 gaps=0",
+                     "soak: consecutive_slots=24 of 24 fallback_slots=24", "soak: pass"]
+    assert closing_code == 0
+    assert closing_lines == lines
+
+    (code, lines), (closing_code, closing_lines) = _soak_on(clean_pg, skipped_back=12)
+    assert code == 0
+    assert lines == ["gap check: solver pandapower runs=23 gaps=1",
+                     "soak: consecutive_slots=11 of 24 fallback_slots=11", "soak: not yet"]
+    assert closing_code == 5
+    assert closing_lines == lines
+
+
+# --------------------------------------------------------------------------- the owner's size query
+
+SIZE_SQL = os.path.join(pg_helper.REPO_ROOT, "supabase", "ops", "psse_result_size.sql")
+SIZE_TABLES = ["public.psse_run", "public.psse_dispatched_capacity", "public.psse_voltage_margin",
+               "public.psse_contingency_result", "all four result tables", "whole database"]
+
+
+def _statement_text(path):
+    """The file's text with the comment lines removed."""
+    text = pg_helper._read(path)
+    return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("--"))
+
+
+def test_result_size_sql_is_read_only_text():
+    text = _statement_text(SIZE_SQL).strip()
+    statements = [part for part in text.split(";") if part.strip()]
+    assert len(statements) == 1
+    assert statements[0].lstrip().lower().startswith("select")
+    forbidden = ("insert", "update", "delete", "truncate", "drop", "alter", "create", "grant",
+                 "revoke", "copy", "call", "do", "vacuum", "analyze", "comment", "set", "reset",
+                 "merge", "lock", "refresh", "reindex", "cluster", "into", "begin", "commit")
+    for word in forbidden:
+        assert re.search(r"\b" + word + r"\b", text, re.IGNORECASE) is None, word
+
+
+def test_result_size_sql_runs_on_the_local_cluster(clean_pg):
+    seeded = _seed(clean_pg)
+    per_table = [sum(counts) for counts in zip(*[_counts(clean_pg, run_id) for run_id in seeded])]
+    assert per_table == [2, 8, 8, 4]
+
+    rows = pg_helper.admin_rows(clean_pg, _statement_text(SIZE_SQL))
+    assert [row["table_name"] for row in rows] == SIZE_TABLES
+    assert [row["row_count"] for row in rows[:4]] == per_table
+    assert rows[4]["row_count"] == sum(per_table)
+    assert rows[4]["total_bytes"] == sum(row["total_bytes"] for row in rows[:4])
+    assert rows[5]["row_count"] is None
+    for row in rows:
+        assert row["total_bytes"] >= 0
+        assert row["total_size"]
+    assert rows[5]["total_bytes"] > 0
