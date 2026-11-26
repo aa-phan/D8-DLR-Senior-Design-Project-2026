@@ -1,7 +1,9 @@
 """
-public.latest_grid_study (supabase/migrations/20261116200000_expose_latest_grid_study.sql): the
-newest complete grid-study run per city, readable with the dashboard's key while the four psse_*
-result tables stay private.
+public.latest_grid_study, created by supabase/migrations/20261116200000_expose_latest_grid_study.sql
+and, after the whole chain, defined by 20261126200000_latest_grid_study_per_solver.sql (one row per
+city per solver): the newest complete grid-study run, readable with the dashboard's key while the
+four psse_* result tables stay private. Every run these tests insert is PSS/E, so they see one row
+per city.
 
 The text tests always run. The database tests need a local Postgres (DLR_TEST_PG_AUTOSTART=1 or
 DLR_TEST_DATABASE_URL), like the other migration tests.
@@ -242,9 +244,9 @@ def test_the_migration_reapplies_cleanly(pg_url):
                            ).fetchone()[0]
         return definition, acl
 
-    # The grid-study file on its own would restore the unguarded view that the solver-tag migration
-    # replaces (the PSS/E-only guard, decision D-03), so the whole chain from this file onward is
-    # re-applied, in name order, twice.
+    # The grid-study file on its own would restore the view that later migrations replace (the
+    # PSS/E-only guard of 20261118200000, then the per-solver view of 20261126200000), so the whole
+    # chain from this file onward is re-applied, in name order, twice.
     grid_study_name = os.path.basename(_MIGRATION)
     chain = [path for path in local_pg.migration_files() if os.path.basename(path) >= grid_study_name]
     assert os.path.basename(chain[0]) == grid_study_name and len(chain) >= 2

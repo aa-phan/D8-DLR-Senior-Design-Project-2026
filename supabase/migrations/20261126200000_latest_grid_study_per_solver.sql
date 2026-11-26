@@ -33,9 +33,9 @@
 -- that file alone afterwards restores the PSS/E-only view, so re-apply this file after it.
 --
 -- The owner applies it to the live project only after the Phase 5 soak passes (D-02), with
--- `supabase db push --db-url ...`, then runs the read-only checks supabase/ops/verify_solver_tag.sql
--- (6 checks), supabase/ops/verify_psse_results.sql (7 checks) and supabase/ops/verify_exposure.sql
--- (37 checks), every ok true.
+-- `supabase db push --db-url ...`, then runs the read-only checks
+-- supabase/ops/verify_solver_tag.sql (6 checks), supabase/ops/verify_psse_results.sql (7 checks) and
+-- supabase/ops/verify_exposure.sql (37 checks), every ok true.
 
 create or replace view public.latest_grid_study with (security_invoker = false) as
 with newest_run as (
