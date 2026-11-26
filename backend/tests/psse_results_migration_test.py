@@ -37,7 +37,7 @@ _SOLVER_TAG_MIGRATION = "20261118200000_psse_run_solver_tag.sql"
 # The per-solver grid-study view (pandapower-solver phase 6) replaces the view again, so it sorts after the solver tag.
 _GRID_STUDY_PER_SOLVER_MIGRATION = "20261126200000_latest_grid_study_per_solver.sql"
 _EXPOSURE_CHECKS_WITHOUT_GRID_STUDY = 29
-_EXPOSURE_CHECKS = 36
+_EXPOSURE_CHECKS = 37
 _EXPOSE_MIGRATION = "20261108120100_expose_day_ahead_forecast.sql"
 
 _BEGIN = "-- BEGIN psse_results_v1"
