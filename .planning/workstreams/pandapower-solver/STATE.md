@@ -4,18 +4,18 @@ milestone: v1.7
 milestone_name: pandapower Solver
 current_phase: 6
 current_phase_name: Dashboard Read Access and DEF-01
-current_plan: 3
+current_plan: 4
 status: executing
-stopped_at: Completed 06-02-PLAN.md
-last_updated: "2026-11-26T10:00:47.219Z"
+stopped_at: Completed 06-03-PLAN.md
+last_updated: "2026-11-26T10:09:19.750Z"
 last_activity: 2026-11-26
 last_activity_desc: Phase 6 execution started
-state_head: 2193d04ad69b207d58fcc1230182c716c70c6877
+state_head: 1603291bca14056064384c43c40eebefea7514b9
 progress:
   total_phases: 6
   completed_phases: 4
   total_plans: 40
-  completed_plans: 35
+  completed_plans: 36
 ---
 
 # Project State
@@ -50,20 +50,20 @@ See: .planning/PROJECT.md (shared). Builds on the pss-e-integration workstream (
 ## Current Position
 
 Phase: 6 (Dashboard Read Access and DEF-01) — EXECUTING
-Plan: 3 of 5
+Plan: 4 of 5
 Status: Ready to execute
 Last activity: 2026-11-26 — Phase 6 execution started
 
 ## Progress
 
 **Phases Complete:** 1 of 6
-**Current Plan:** 3
+**Current Plan:** 4
 
 ## Session Continuity
 
-**Last session:** 2026-11-26T10:00:44.575Z
+**Last session:** 2026-11-26T10:09:17.108Z
 
-**Stopped At:** Completed 06-02-PLAN.md
+**Stopped At:** Completed 06-03-PLAN.md
 **Resume File:** None
 
 To resume:
@@ -99,6 +99,7 @@ Known items from execution:
 | Phase 05 P06 | 50min | 3 tasks | 4 files |
 | Phase 06 P01 | 55min | 3 tasks | 8 files |
 | Phase 06 P02 | 35min | 2 tasks | 4 files |
+| Phase 06 P03 | 30 min | 2 tasks | 4 files |
 
 ## Decisions
 
@@ -135,3 +136,5 @@ Known items from execution:
 - [Phase 05]: 05-06: the runbook's printed-line table is validated against HOURLY_LINE_PATTERNS by sample lines, so a renamed vocabulary line fails the text test
 - [Phase 06]: 06-01: the per-solver latest_grid_study replacement is one new additive migration (20261126200000); tasks 1 and 2 committed together so no commit is red; no SHA pin for it until the owner's live apply (D-02)
 - [Phase 06]: 06-02: the new exposure check compares the per-solver view with the result tables (distinct on solver CTE), counts-only detail, inside the grid_study regions; verify_exposure.sql has 37 checks
+- [Phase 06]: 06-03: the DEF-01 branch-state test skips by default and runs only with DEF01_EXPECT or DEF01_REQUIRE_BRANCH=1, so the dashboard owner's routine edits cannot turn this suite red
+- [Phase 06]: 06-03: every pandapower-is-running statement in the DEF-01 replacement is tied to the apply-date placeholder; no date is claimed before the owner's live apply
