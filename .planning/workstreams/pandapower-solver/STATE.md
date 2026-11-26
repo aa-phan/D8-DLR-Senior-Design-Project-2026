@@ -4,18 +4,18 @@ milestone: v1.7
 milestone_name: pandapower Solver
 current_phase: 5
 current_phase_name: Hourly Workflow, Dry Run and Live Soak
-current_plan: 2
+current_plan: 3
 status: executing
-stopped_at: Completed 05-01-PLAN.md
-last_updated: "2026-11-26T06:27:02.593Z"
+stopped_at: Completed 05-02-PLAN.md
+last_updated: "2026-11-26T06:31:30.864Z"
 last_activity: 2026-11-26
 last_activity_desc: Phase 5 execution started
-state_head: 90f08a0bc18d93b0edab31448cd20e92bce59c76
+state_head: 062b409ed7dc36943cd5bc73087de2cf1aa5a692
 progress:
   total_phases: 6
   completed_phases: 4
   total_plans: 35
-  completed_plans: 28
+  completed_plans: 29
 ---
 
 # Project State
@@ -50,20 +50,20 @@ See: .planning/PROJECT.md (shared). Builds on the pss-e-integration workstream (
 ## Current Position
 
 Phase: 5 (Hourly Workflow, Dry Run and Live Soak) — EXECUTING
-Plan: 2 of 8
+Plan: 3 of 8
 Status: Ready to execute
 Last activity: 2026-11-26 — Phase 5 execution started
 
 ## Progress
 
 **Phases Complete:** 1 of 6
-**Current Plan:** 2
+**Current Plan:** 3
 
 ## Session Continuity
 
-**Last session:** 2026-11-26T06:27:02.026Z
+**Last session:** 2026-11-26T06:31:30.339Z
 
-**Stopped At:** Completed 05-01-PLAN.md
+**Stopped At:** Completed 05-02-PLAN.md
 **Resume File:** None
 
 To resume:
@@ -92,6 +92,7 @@ Known items from execution:
 | Phase 03 P04 | 13min | 3 tasks | 5 files |
 | Phase 03 P05 | 30min | 3 tasks | 4 files |
 | Phase 05 P01 | 45min | 3 tasks | 4 files |
+| Phase 05 P02 | 10min | 2 tasks | 4 files |
 
 ## Decisions
 
@@ -118,3 +119,5 @@ Known items from execution:
 - [Phase 03]: 03-05: owner's live steps: supabase db push, then verify_solver_tag.sql (seven checks), verify_psse_results.sql and verify_exposure.sql all ok; DB-01 left Pending (database proofs of the migration, the check and the guard only SKIPPED here); Mac command: DLR_TEST_PG_AUTOSTART=1 PSSE_REQUIRE_PG=1 pytest over solver_tag_owner_check_test, solver_tag_migration_test, grid_study_expose_test, expose_migration_test, psse_results_migration_test, 0 skipped
 - [Phase 05]: 05-01: a fresh-interpreter proof compares psycopg with a pandapower-only baseline and blocks psycopg.connect, because pandapower itself imports psycopg
 - [Phase 05]: 05-01: secret size cap is inclusive (exactly at the cap accepted, one byte over is too_large); outer whitespace stripped before strict base64
+- [Phase 05]: 05-02: soak count walks back from the hour before the database's current hour; any non-failed outcome counts; fallback-only hours reported separately
+- [Phase 05]: 05-02: retention keeps every row (about 5,100 rows a day); 100,000-row trigger replaced by an owner-named size limit read with psse_result_size.sql

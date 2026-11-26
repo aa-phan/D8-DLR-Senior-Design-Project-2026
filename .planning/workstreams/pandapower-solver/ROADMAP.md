@@ -212,12 +212,12 @@ Plans:
   4. A written retention decision for the permanent result rows (about 24 row sets a day) exists before the first live write.
   5. The per-solver gap check shows a pandapower result for 24 consecutive hourly slots.
 
-**Plans**: 1/8 plans executed
+**Plans**: 2/8 plans executed
 
 Plans:
 **Wave 1**
 - [x] 05-01-PLAN.md — Runner `run` command: base64 secrets to a temporary folder, dry path with no connection, live call tagged pandapower, placeholder refusal, output sinks and closed vocabulary (wave 1)
-- [ ] 05-02-PLAN.md — Pure 24-slot soak count against an oracle and the gap check; the retention decision (about 5,100 rows a day) and the owner's size query (wave 1)
+- [x] 05-02-PLAN.md — Pure 24-slot soak count against an oracle and the gap check; the retention decision (about 5,100 rows a day) and the owner's size query (wave 1)
 - [ ] 05-03-PLAN.md — The hourly workflow (dispatch only, main only, own group, 30-minute timeout, dry unless the variable is true) and its text test (wave 1)
 
 **Wave 2** *(blocked on Wave 1 completion)*
@@ -260,5 +260,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6. Phases 2 and 3
 | 2. PandapowerApi and Study Engine | 7/7 | Complete (verified, passed with limits) | 2026-11-23 |
 | 3. Solver Tag, Migration and Per-Solver Gaps | 5/5 | Complete (live apply and checks confirmed by owner 2026-11-25) | 2026-11-25 |
 | 4. Replay and Agreement Check | 4/4 | Complete (verified, passed with limits) | 2026-11-21 |
-| 5. Hourly Workflow, Dry Run and Live Soak | 1/8 | In Progress | - |
+| 5. Hourly Workflow, Dry Run and Live Soak | 2/8 | In Progress | - |
 | 6. Dashboard Read Access and DEF-01 | 0/TBD | Not started | - |
