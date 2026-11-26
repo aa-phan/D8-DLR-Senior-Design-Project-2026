@@ -247,14 +247,14 @@ Plans:
   4. With the same key, reading any of the four result tables is refused, and the exposure checks (`verify_exposure.sql` and its test) are updated and pass.
   5. The DEF-01 section of the software-dashboard workstream's requirements says the blockers are cleared and names the view and its columns.
 
-**Plans**: 1/5 plans executed
+**Plans**: 2/5 plans executed
 
 Plans:
 **Wave 1**
 - [x] 06-01-PLAN.md — Per-solver view migration read as the dashboard's key; check 7 retired and the Phase 3 pins moved; full proof set and contract constants (wave 1)
 
 **Wave 2** *(blocked on Wave 1 completion)*
-- [ ] 06-02-PLAN.md — Behavioural per-solver check in verify_exposure.sql (36 to 37), the owner's trio 6/7/37 and three sabotages (wave 2)
+- [x] 06-02-PLAN.md — Behavioural per-solver check in verify_exposure.sql (36 to 37), the owner's trio 6/7/37 and three sabotages (wave 2)
 - [ ] 06-03-PLAN.md — Tracked DEF-01 hand-over text (three blocks, apply-date placeholder) with its branch check, and the REST doc per solver (wave 2)
 
 **Wave 3** *(blocked on Wave 2 completion)*
@@ -275,4 +275,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6. Phases 2 and 3
 | 3. Solver Tag, Migration and Per-Solver Gaps | 5/5 | Complete (live apply and checks confirmed by owner 2026-11-25) | 2026-11-25 |
 | 4. Replay and Agreement Check | 4/4 | Complete (verified, passed with limits) | 2026-11-21 |
 | 5. Hourly Workflow, Dry Run and Live Soak | 6/8 | In Progress | - |
-| 6. Dashboard Read Access and DEF-01 | 1/5 | In Progress | - |
+| 6. Dashboard Read Access and DEF-01 | 2/5 | In Progress | - |

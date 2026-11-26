@@ -4,18 +4,18 @@ milestone: v1.7
 milestone_name: pandapower Solver
 current_phase: 6
 current_phase_name: Dashboard Read Access and DEF-01
-current_plan: 2
+current_plan: 3
 status: executing
-stopped_at: Completed 06-01-PLAN.md
-last_updated: "2026-11-26T09:47:52.270Z"
+stopped_at: Completed 06-02-PLAN.md
+last_updated: "2026-11-26T10:00:47.219Z"
 last_activity: 2026-11-26
 last_activity_desc: Phase 6 execution started
-state_head: 10f08ea4c89a437964dc5bdb7919fdbd51192eae
+state_head: 2193d04ad69b207d58fcc1230182c716c70c6877
 progress:
   total_phases: 6
   completed_phases: 4
   total_plans: 40
-  completed_plans: 34
+  completed_plans: 35
 ---
 
 # Project State
@@ -50,20 +50,20 @@ See: .planning/PROJECT.md (shared). Builds on the pss-e-integration workstream (
 ## Current Position
 
 Phase: 6 (Dashboard Read Access and DEF-01) — EXECUTING
-Plan: 2 of 5
+Plan: 3 of 5
 Status: Ready to execute
 Last activity: 2026-11-26 — Phase 6 execution started
 
 ## Progress
 
 **Phases Complete:** 1 of 6
-**Current Plan:** 2
+**Current Plan:** 3
 
 ## Session Continuity
 
-**Last session:** 2026-11-26T09:47:49.453Z
+**Last session:** 2026-11-26T10:00:44.575Z
 
-**Stopped At:** Completed 06-01-PLAN.md
+**Stopped At:** Completed 06-02-PLAN.md
 **Resume File:** None
 
 To resume:
@@ -98,6 +98,7 @@ Known items from execution:
 | Phase 05 P05 | 1h 10m | 3 tasks | 4 files |
 | Phase 05 P06 | 50min | 3 tasks | 4 files |
 | Phase 06 P01 | 55min | 3 tasks | 8 files |
+| Phase 06 P02 | 35min | 2 tasks | 4 files |
 
 ## Decisions
 
@@ -133,3 +134,4 @@ Known items from execution:
 - [Phase 05]: 05-06: the local count comparison is written as owner machine against the runner and does not require Linux on the owner's side; it is the check for an operating-system difference
 - [Phase 05]: 05-06: the runbook's printed-line table is validated against HOURLY_LINE_PATTERNS by sample lines, so a renamed vocabulary line fails the text test
 - [Phase 06]: 06-01: the per-solver latest_grid_study replacement is one new additive migration (20261126200000); tasks 1 and 2 committed together so no commit is red; no SHA pin for it until the owner's live apply (D-02)
+- [Phase 06]: 06-02: the new exposure check compares the per-solver view with the result tables (distinct on solver CTE), counts-only detail, inside the grid_study regions; verify_exposure.sql has 37 checks
