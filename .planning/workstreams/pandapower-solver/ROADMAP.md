@@ -212,7 +212,28 @@ Plans:
   4. A written retention decision for the permanent result rows (about 24 row sets a day) exists before the first live write.
   5. The per-solver gap check shows a pandapower result for 24 consecutive hourly slots.
 
-**Plans**: TBD
+**Plans**: 8 plans
+
+Plans:
+**Wave 1**
+- [ ] 05-01-PLAN.md — Runner `run` command: base64 secrets to a temporary folder, dry path with no connection, live call tagged pandapower, placeholder refusal, output sinks and closed vocabulary (wave 1)
+- [ ] 05-02-PLAN.md — Pure 24-slot soak count against an oracle and the gap check; the retention decision (about 5,100 rows a day) and the owner's size query (wave 1)
+- [ ] 05-03-PLAN.md — The hourly workflow (dispatch only, main only, own group, 30-minute timeout, dry unless the variable is true) and its text test (wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+- [ ] 05-04-PLAN.md — Database tier: dry run leaves the tables unchanged with a live positive control; the `soak` command with the per-solver gap check (wave 2)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+- [ ] 05-05-PLAN.md — Owner commands `bundle` and `scan-log`; the planted-identifier leak test over every output (wave 3)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+- [ ] 05-06-PLAN.md — Subprocess rehearsal of the workflow's commands, the owner runbook and its agreement test, the Proposed live-write decision record (wave 4)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+- [ ] 05-07-PLAN.md — Hand-off check, then the owner's merge, secrets, dispatches, cron job, three green dry runs, real-log scan, Linux comparison and go-live decision (wave 5, checkpoints)
+
+**Wave 6** *(blocked on Wave 5 completion)*
+- [ ] 05-08-PLAN.md — Record the decision and retention limit, the owner's flip and 24-hour soak, the counts-only soak record (wave 6, checkpoints)
 
 ### Phase 6: Dashboard Read Access and DEF-01
 
@@ -239,5 +260,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6. Phases 2 and 3
 | 2. PandapowerApi and Study Engine | 7/7 | Complete (verified, passed with limits) | 2026-11-23 |
 | 3. Solver Tag, Migration and Per-Solver Gaps | 5/5 | Complete (live apply and checks confirmed by owner 2026-11-25) | 2026-11-25 |
 | 4. Replay and Agreement Check | 4/4 | Complete (verified, passed with limits) | 2026-11-21 |
-| 5. Hourly Workflow, Dry Run and Live Soak | 0/TBD | Not started | - |
+| 5. Hourly Workflow, Dry Run and Live Soak | 0/8 | Planned | - |
 | 6. Dashboard Read Access and DEF-01 | 0/TBD | Not started | - |
