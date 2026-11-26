@@ -1,8 +1,9 @@
 ---
 phase: 03-solver-tag-migration-and-per-solver-gaps
 verified: 2026-11-23T00:00:00Z
-status: human_needed
-score: 3/4 must-haves verified
+status: passed
+score: 4/4 must-haves verified
+live_check_recorded: 2026-11-25
 covered_files:
   - .planning/workstreams/pandapower-solver/phases/03-solver-tag-migration-and-per-solver-gaps/03-01-PLAN.md
   - .planning/workstreams/pandapower-solver/phases/03-solver-tag-migration-and-per-solver-gaps/03-01-SUMMARY.md
@@ -33,20 +34,21 @@ covered_files:
 covered_digest: "v3:sha256:689dee19b2883c9d4713486da4ea6c9e37065cde64a4fc20d2aedac3cabfe798"
 behavior_unverified: 0
 overrides_applied: 0
-human_verification:
+human_verification: []
+resolved_human_verification:
   - test: "Apply migration 20261118200000_psse_run_solver_tag.sql to the live Supabase project, then run supabase/ops/verify_solver_tag.sql, verify_psse_results.sql and verify_exposure.sql in the SQL editor"
-    expected: "Every ok is true in all three; the existing runs read solver psse with solver_version NULL; the dashboard still shows the newest PSS/E result per city"
-    why_human: "The migration is not applied to the live project and only the owner applies it. Every proof in this report is on a throwaway local database. Roadmap success criterion 4 is this step."
+    resolved: 2026-11-25
+    result: "Owner (Aaron) applied it with no errors; all three check files all ok, the tag counts and the dashboard confirmed (see Live check, 2026-11-25)."
 ---
 
 # Phase 3: Solver Tag, Migration and Per-Solver Gaps Verification Report
 
 **Phase Goal:** The four result tables can hold PSS/E and pandapower runs side by side, every run carries the solver that produced it, and the gap check shows which solver missed which hour.
 **Verified:** 2026-11-23
-**Status:** human_needed. Every code-side and throwaway-database truth holds. The one open item is the owner's live apply and read-only check (roadmap success criterion 4), which cannot be done from here.
-**Re-verification:** No, initial verification.
+**Status:** passed (2026-11-25). Every code-side and throwaway-database truth held on 2026-11-23; the owner's live apply and read-only checks were reported on 2026-11-25 and are recorded in "Live check, 2026-11-25" below.
+**Re-verification:** No, initial verification, plus the owner's live result added 2026-11-25.
 
-Limit stated first: migration `20261118200000_psse_run_solver_tag.sql` is NOT applied to the live Supabase project. All database proofs below ran on a throwaway local PostgreSQL 17.12 cluster (Windows). Nothing in this report says the live project has the columns, the constraints or the guarded view.
+Limit as of the 2026-11-23 verification: the migration was not yet applied to the live Supabase project, and every database proof in the sections between here and "Live check, 2026-11-25" ran on a throwaway local PostgreSQL 17.12 cluster (Windows). Those sections are left as written; read them with the live section below. The live result is the owner's report, not something this verifier ran.
 
 Private data rule kept: nothing under `data/private/pandapower/` was opened, read, grepped or printed.
 
@@ -63,9 +65,9 @@ Plans 03-01 to 03-05 each recorded their database tier as only SKIPPED (no Postg
 | 1 | SC1 / DB-01: one additive migration keeps pre-existing runs valid and tagged `psse` (default), adds `solver_version`, accepts a `pp-` run id only with `solver = 'pandapower'`; a deliberately mismatched insert is refused by the database; the applied v1 migration is not edited | VERIFIED on a throwaway database (live apply pending, see Truth 4) | Migration read in full (`supabase/migrations/20261118200000_psse_run_solver_tag.sql:46-63`): `add column if not exists solver text not null default 'psse'`, `solver_version text`, four named check constraints (`psse_run_solver_ck`, `psse_run_solver_version_ck`, widened `psse_run_run_id_ck`, tie `psse_run_solver_run_id_ck`: `(solver='psse' and left(run_id,5)='psse-') or (solver='pandapower' and left(run_id,3)='pp-')`), each dropped-if-exists then added, no `NOT VALID`, no UPDATE, no grant/revoke on the table. `solver_tag_migration_test.py`: 16 passed on Postgres (9 text, 7 database): existing runs read `psse` and NULL after the migration with no UPDATE, each constraint refuses its case by constraint name, re-applying twice changes nothing, the unchanged 17-column PSS/E insert still writes. The applied files are untouched: `20261109233541_psse_results.sql` and `20261116200000_expose_latest_grid_study.sql` each have exactly one commit in git history (`fbd3e22`, `17bccbd`) and their committed blobs hash to the pinned values (psse_results `08e7e103...`, expose_latest_rating `7e2d5f01...`, expose_day_ahead `253a539e...`). |
 | 2 | SC2 / DB-02: the pandapower job writes through the existing all-or-nothing writer as `dlr_psse_writer` and stamps every run with its solver; a pandapower run cannot be stored as `psse`; the unchanged PSS/E job's tests still pass | VERIFIED with limits (see "DB-02 sentence checked against the code" below) | `api.py:472` registers tag `pandapower`, prefix `pp`, on import; `engine._recording_study` stamps `solver` and `solver_version`; `job.run_once(solver=)` builds a `pp-` id (`run_record.new_run_id`), a 19-key record and refuses results whose solver differs (`run_record.py:145`); `writer._check_tag` refuses every mismatch before any statement (`writer.py:122-150`); the database tie is the last layer. `pandapower_solver_tag_test.py` 9 passed on Postgres including `test_db_tagged_rehearsal_through_the_real_writer` (real writer as `dlr_psse_writer`: 1 run, 4 dispatch and 4 margin rows, tagged), `test_db_a_pandapower_run_cannot_be_stored_as_psse` (both INSERTs refused by `psse_run_solver_run_id_ck`, no row left) and `test_db_both_solvers_side_by_side_in_one_hour`. `psse_solver_tag_test.py` 13 passed, `psse_writer_test.py` 13 passed, `psse_schema_pg_test.py` 45 passed. PSS/E launcher still calls `job.run_once` with the default tag (`launcher.py:578`). |
 | 3 | SC3 / DB-03: with a PSS/E run in an hour and no pandapower run in that hour, the gap check reports that hour as missing for pandapower; PSS/E offline gaps are listed separately and neither hide nor are hidden by pandapower gaps | VERIFIED with limits (library only; see Limits) | `gaps.compute_gaps` (`gaps.py:226-247`) walks each solver from its own first slot over its own rows. I called it myself on PSS/E at 07, 09, 10, 11 and pandapower at 09, 11 (current hour 12): the report prints a PSS/E section with one gap (08:00 `no_run`) and a separate pandapower section with one gap (10:00 `no_run`), although PSS/E has a run at 10:00. `psse_gaps_solver_test.py` 15 passed on Postgres, including `test_db_run_by_solver_on_the_migrated_schema` (real `RUNS_SQL` and `CURRENT_HOUR_SQL`, exit 5, exactly H-2h missing for the second solver, a write on the session raises `ReadOnlySqlTransaction`), the independent plain-loop oracle comparison over 300 seeded histories and `test_pss_e_offline_is_listed_separately`. `psse_gaps_pg_test.py` (legacy pooled check) 13 passed, unchanged. |
-| 4 | SC4: after the owner applies the migration to the live project, a read-only check shows the existing runs tagged `psse` and nothing else changed | NOT YET VERIFIABLE (owner step) | The check exists and runs: `supabase/ops/verify_solver_tag.sql` is one read-only SELECT of seven checks. `solver_tag_owner_check_test.py` 13 passed on Postgres: all seven ok after the chain, and each check is made false once by its own sabotage (`test_db_each_check_can_fail`, 7 cases, each rolled back). Nothing has been run against the live project. This is the open human item in the frontmatter. |
+| 4 | SC4: after the owner applies the migration to the live project, a read-only check shows the existing runs tagged `psse` and nothing else changed | VERIFIED 2026-11-25 on the owner's report (see "Live check, 2026-11-25"). Text below is the 2026-11-23 state: | The check exists and runs: `supabase/ops/verify_solver_tag.sql` is one read-only SELECT of seven checks. `solver_tag_owner_check_test.py` 13 passed on Postgres: all seven ok after the chain, and each check is made false once by its own sabotage (`test_db_each_check_can_fail`, 7 cases, each rolled back). Nothing has been run against the live project. This is the open human item in the frontmatter. |
 
-**Score:** 3 of 4 truths verified here; the fourth is waiting on the owner. 0 present-but-behavior-unverified (every state-transition or constraint truth has a passing database test).
+**Score:** 4 of 4 as of 2026-11-25 (3 of 4 on 2026-11-23; the fourth was the owner's live step). 0 present-but-behavior-unverified (every state-transition or constraint truth has a passing database test).
 
 ## The test run, as I ran it
 
@@ -195,7 +197,27 @@ No finding is a BLOCKER: no truth failed.
 - Per-solver gaps are a function, not yet a command or a scheduled check.
 - Windows byte-hash and missing-package failures are environmental; not reproduced on the Mac.
 
-## Human Verification Required
+## Live check, 2026-11-25
+
+Reported by the project owner (Aaron) to the user; counts and pass/fail only, no connection strings. Not run by this verifier.
+
+| Step | Reported result |
+|------|-----------------|
+| Apply `20261118200000_psse_run_solver_tag.sql` in the Supabase SQL Editor | Applied, no errors |
+| `verify_solver_tag.sql` | 7 of 7 ok; 19 runs tagged `psse`, 0 tagged `pandapower` |
+| `verify_psse_results.sql` | 7 of 7 ok |
+| `verify_exposure.sql` | 36 of 36 ok (first reported as 37, a miscount; see below) |
+| `latest_grid_study` after the apply | Unchanged: the same four cities from the 2026-11-12 15:00 UTC run |
+
+Follow-up from the owner, same day, closing the three notes that were open when the phase was closed:
+
+- **Check count: resolved, a miscount.** `verify_exposure.sql` is the same file on `main` and on this branch, and it returned 36 of 36 ok. The earlier "37 of 37" was the owner's miscount. The live result is therefore 36 of 36, matching the repo file and the local run.
+- **`solver_version`: resolved.** `select solver, solver_version, count(*) from psse_run group by 1, 2` returned one row: `psse | NULL | 19`. Every existing run reads `psse` with `solver_version` NULL, as expected.
+- **Dashboard: checked, with a limit.** The owner ran the dashboard from `main` locally against the live project: the home and forecast pages load for all four cities and show "using Dynamic Line Ratings". Those pages read `latest_rating` and `day_ahead_upcoming`, not `latest_grid_study`, so this shows the dashboard still works after the apply; it does not exercise the replaced view. The view itself was checked separately: its output is unchanged (same four cities, 2026-11-12 15:00 UTC run).
+
+## Human Verification Required (resolved 2026-11-25)
+
+The item below was resolved by the live check above. Kept for the record.
 
 ### 1. Apply the migration to the live project and run the three read-only checks
 
@@ -205,7 +227,7 @@ No finding is a BLOCKER: no truth failed.
 
 ## Gaps Summary
 
-No gaps in code or in the throwaway-database proofs. The status is human_needed because roadmap success criterion 4 is the owner's live apply and read-only check, and because three requirement sentences carry the limits above.
+No gaps in code, in the throwaway-database proofs or in the owner's reported live check. The status is passed (2026-11-25); the three requirement sentences still carry the limits above, and the live check's three follow-up notes are all resolved.
 
 ---
 

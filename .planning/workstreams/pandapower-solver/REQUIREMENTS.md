@@ -91,9 +91,9 @@
 | ENG-04 | Phase 2 | Complete |
 | ENG-05 | Phase 2 | Complete |
 | ENG-06 | Phase 2 | Complete (throwaway local database only) |
-| DB-01 | Phase 3 | Complete (throwaway local database; live apply pending) |
-| DB-02 | Phase 3 | Complete (throwaway local database; live apply pending) |
-| DB-03 | Phase 3 | Complete (throwaway local database; live apply pending) |
+| DB-01 | Phase 3 | Complete (live apply confirmed by owner 2026-11-25) |
+| DB-02 | Phase 3 | Complete (live apply confirmed by owner 2026-11-25) |
+| DB-03 | Phase 3 | Complete (live apply confirmed by owner 2026-11-25) |
 | AGR-01 | Phase 4 | Complete |
 | AGR-02 | Phase 4 | Complete |
 | AGR-03 | Phase 4 | Complete |
