@@ -26,7 +26,18 @@ Each item needs its evidence on record before the variable is set (D-02, D-11).
 
 ## Local evidence
 
-Not recorded yet.
+Run on 2026-11-26 (UTC) at commit `36df6bf` on the branch `feature/pandapower-solver`, from the repository root, with pandapower 3.5.6 and the database-tier flags set. Nothing was skipped in any set.
+
+| Set | Files | Result |
+|---|---|---|
+| Quick set | `pandapower_hourly_workflow_test.py`, `pandapower_soak_test.py`, `pandapower_hourly_test.py` | 103 passed, 0 skipped |
+| Leak and owner set | `pandapower_hourly_leak_test.py`, `pandapower_hourly_owner_test.py`, `pandapower_hourly_runbook_test.py` | 25 passed, 0 skipped |
+| Database tier and rehearsal | `pandapower_hourly_pg_test.py`, `pandapower_hourly_rehearsal_test.py` | 9 passed, 0 skipped |
+| Regression set | `dlr_live_workflow_test.py`, `psse_gaps_solver_test.py`, `pandapower_import_gate_test.py`, `pandapower_replay_output_test.py`, `pandapower_study_job_test.py`, `pandapower_solver_tag_test.py`, `psse_writer_test.py` | 53 passed, 0 skipped |
+
+Tree leak scan (`backend/private_leak_scan.py`): exit code 0, no finding lines; 36 files were not scanned because they are binary or over 2 MiB.
+
+If the branch gains commits before the owner merges, these commands are run again at the merged commit before the first dispatch.
 
 (Plan 05-07 replaces this line with counts and words only: the four `bundle` size lines, `bundle: verified`, `bundle: written`, and the printed lines of the local dry run. No value, path, hash or id.)
 
