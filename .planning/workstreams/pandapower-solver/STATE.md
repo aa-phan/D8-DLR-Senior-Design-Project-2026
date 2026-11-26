@@ -2,20 +2,20 @@
 gsd_state_version: "1.0"
 milestone: v1.7
 milestone_name: pandapower Solver
-current_phase: 02
-current_phase_name: PandapowerApi and Study Engine
-current_plan: 7
-status: verifying
-stopped_at: "Phase 4 plans 04-01 to 04-04 complete (2026-11-21). Real replay of Aaron's export: 19 of 19 runs passed, verdict pass (04-REPLAY-RECORD.md); AGR-01 to AGR-04 complete; voltage_low and non_convergence not exercised by the recorded runs. Next: Phase 4 verification, then plan Phase 5. Phase 2 and 3 verification pending (need Postgres)."
-last_updated: "2026-11-20T22:48:53.555Z"
-last_activity: 2026-11-21
-last_activity_desc: Phase 4 plan 04-04 complete - real replay verdict pass (19 of 19 runs)
-state_head: 0ef35dca620672a9613221399be8e1866042d3d7
+current_phase: 5
+current_phase_name: Hourly Workflow, Dry Run and Live Soak
+current_plan: 2
+status: executing
+stopped_at: Completed 05-01-PLAN.md
+last_updated: "2026-11-26T06:27:02.593Z"
+last_activity: 2026-11-26
+last_activity_desc: Phase 5 execution started
+state_head: 90f08a0bc18d93b0edab31448cd20e92bce59c76
 progress:
   total_phases: 6
-  completed_phases: 1
-  total_plans: 23
-  completed_plans: 23
+  completed_phases: 4
+  total_plans: 35
+  completed_plans: 28
 ---
 
 # Project State
@@ -25,7 +25,7 @@ progress:
 See: .planning/PROJECT.md (shared). Builds on the pss-e-integration workstream (v1.6, complete 2026-11-16).
 
 **Core value:** The dashboard always has fresh hourly power-flow results for each city's rating, without depending on a licensed PSS/E machine.
-**Current focus:** Phase 01 — PSS/E Reference Session and Network Parity
+**Current focus:** Phase 5 — Hourly Workflow, Dry Run and Live Soak
 
 ## Accumulated Context
 
@@ -49,22 +49,22 @@ See: .planning/PROJECT.md (shared). Builds on the pss-e-integration workstream (
 
 ## Current Position
 
-Phase: 02 — PandapowerApi and Study Engine
-Plan: 7 of 7
-Status: Phase complete — ready for verification
-Last activity: 2026-11-20 — Phase 1 complete, transitioned to Phase 02
+Phase: 5 (Hourly Workflow, Dry Run and Live Soak) — EXECUTING
+Plan: 2 of 8
+Status: Ready to execute
+Last activity: 2026-11-26 — Phase 5 execution started
 
 ## Progress
 
 **Phases Complete:** 1 of 6
-**Current Plan:** 7
+**Current Plan:** 2
 
 ## Session Continuity
 
-**Last session:** 2026-11-18T22:04:27.368Z
+**Last session:** 2026-11-26T06:27:02.026Z
 
-**Stopped At:** Phase 1 complete, ready to execute Phase 02
-**Resume File:** .planning/workstreams/pandapower-solver/phases/01-pss-e-reference-session-and-network-parity/01-11-PLAN.md
+**Stopped At:** Completed 05-01-PLAN.md
+**Resume File:** None
 
 To resume:
 1. The teammate runs the session per `docs/data-science/decisions/psse_pandapower_session_guide.md`. Laptop paths are in `.planning/workstreams/pss-e-integration/HANDOFF.md`. Pass `-Mapping` a COPY of `dlr-psse\mapping_real.json`, because the session deletes the file it is given, and the original is the hourly job's mapping.
@@ -91,6 +91,7 @@ Known items from execution:
 | Phase 03 P03 | 25min | 3 tasks | 2 files |
 | Phase 03 P04 | 13min | 3 tasks | 5 files |
 | Phase 03 P05 | 30min | 3 tasks | 4 files |
+| Phase 05 P01 | 45min | 3 tasks | 4 files |
 
 ## Decisions
 
@@ -115,3 +116,5 @@ Known items from execution:
 - [Phase 03]: 03-04: DB-02 left Pending: Python half and vocabulary parity with the migration proven here, tagged database rehearsal (3 test_db_* plus 4 study-job tests) only SKIPPED here; Mac command: DLR_TEST_PG_AUTOSTART=1 PSSE_REQUIRE_PG=1 pytest over pandapower_solver_tag_test and pandapower_study_job_test, 0 skipped
 - [Phase 03]: 03-05: D-03 answered by the owner on 2026-11-18 (interactive question): guard. The solver-tag migration ends with latest_grid_study replaced by its earlier statement plus one predicate (solver psse), 20 columns, order, owner rights, grants and comments unchanged; the dashboard never shows a pandapower result as PSS/E, Phase 5's live write no longer waits on Phase 6 for that reason
 - [Phase 03]: 03-05: owner's live steps: supabase db push, then verify_solver_tag.sql (seven checks), verify_psse_results.sql and verify_exposure.sql all ok; DB-01 left Pending (database proofs of the migration, the check and the guard only SKIPPED here); Mac command: DLR_TEST_PG_AUTOSTART=1 PSSE_REQUIRE_PG=1 pytest over solver_tag_owner_check_test, solver_tag_migration_test, grid_study_expose_test, expose_migration_test, psse_results_migration_test, 0 skipped
+- [Phase 05]: 05-01: a fresh-interpreter proof compares psycopg with a pandapower-only baseline and blocks psycopg.connect, because pandapower itself imports psycopg
+- [Phase 05]: 05-01: secret size cap is inclusive (exactly at the cap accepted, one byte over is too_large); outer whitespace stripped before strict base64

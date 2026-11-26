@@ -44,8 +44,8 @@
 ### Hourly operation (OPS)
 
 - [ ] **OPS-01**: A GitHub Actions workflow runs the pandapower job once an hour at :20 UTC, triggered by the existing cron-job.org pattern, main branch only, with its own concurrency group and a timeout under one hour.
-- [ ] **OPS-02**: The workflow reads the writer connection, the ratings read settings and the private mapping from GitHub secrets, writes the mapping only to the runner's temporary folder, and never prints a secret, a bus number or a study value to the public log.
-- [ ] **OPS-03**: The workflow first runs as a dry run (no writes), and writes to the live tables only after NET-03 and AGR-02 pass.
+- [x] **OPS-02**: The workflow reads the writer connection, the ratings read settings and the private mapping from GitHub secrets, writes the mapping only to the runner's temporary folder, and never prints a secret, a bus number or a study value to the public log.
+- [x] **OPS-03**: The workflow first runs as a dry run (no writes), and writes to the live tables only after NET-03 and AGR-02 pass.
 - [ ] **OPS-04**: A written retention decision for the permanent result rows (about 24 row sets a day) exists before live writes begin.
 - [ ] **OPS-05**: Results land in Supabase for 24 consecutive hourly slots, shown by the per-solver gap check.
 
@@ -99,8 +99,8 @@
 | AGR-03 | Phase 4 | Complete |
 | AGR-04 | Phase 4 | Complete |
 | OPS-01 | Phase 5 | Pending |
-| OPS-02 | Phase 5 | Pending |
-| OPS-03 | Phase 5 | Pending |
+| OPS-02 | Phase 5 | Complete |
+| OPS-03 | Phase 5 | Complete |
 | OPS-04 | Phase 5 | Pending |
 | OPS-05 | Phase 5 | Pending |
 | VIEW-01 | Phase 6 | Pending |
