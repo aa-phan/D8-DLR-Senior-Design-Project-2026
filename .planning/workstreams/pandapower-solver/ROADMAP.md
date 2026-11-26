@@ -212,7 +212,7 @@ Plans:
   4. A written retention decision for the permanent result rows (about 24 row sets a day) exists before the first live write.
   5. The per-solver gap check shows a pandapower result for 24 consecutive hourly slots.
 
-**Plans**: 5/8 plans executed
+**Plans**: 6/8 plans executed
 
 Plans:
 **Wave 1**
@@ -227,7 +227,7 @@ Plans:
 - [x] 05-05-PLAN.md — Owner commands `bundle` and `scan-log`; the planted-identifier leak test over every output (wave 3)
 
 **Wave 4** *(blocked on Wave 3 completion)*
-- [ ] 05-06-PLAN.md — Subprocess rehearsal of the workflow's commands, the owner runbook and its agreement test, the Proposed live-write decision record (wave 4)
+- [x] 05-06-PLAN.md — Subprocess rehearsal of the workflow's commands, the owner runbook and its agreement test, the Proposed live-write decision record (wave 4)
 
 **Wave 5** *(blocked on Wave 4 completion)*
 - [ ] 05-07-PLAN.md — Hand-off check, then the owner's merge, secrets, dispatches, cron job, three green dry runs, real-log scan, Linux comparison and go-live decision (wave 5, checkpoints)
@@ -260,5 +260,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6. Phases 2 and 3
 | 2. PandapowerApi and Study Engine | 7/7 | Complete (verified, passed with limits) | 2026-11-23 |
 | 3. Solver Tag, Migration and Per-Solver Gaps | 5/5 | Complete (live apply and checks confirmed by owner 2026-11-25) | 2026-11-25 |
 | 4. Replay and Agreement Check | 4/4 | Complete (verified, passed with limits) | 2026-11-21 |
-| 5. Hourly Workflow, Dry Run and Live Soak | 5/8 | In Progress | - |
+| 5. Hourly Workflow, Dry Run and Live Soak | 6/8 | In Progress | - |
 | 6. Dashboard Read Access and DEF-01 | 0/TBD | Not started | - |

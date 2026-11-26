@@ -4,18 +4,18 @@ milestone: v1.7
 milestone_name: pandapower Solver
 current_phase: 5
 current_phase_name: Hourly Workflow, Dry Run and Live Soak
-current_plan: 6
+current_plan: 7
 status: executing
-stopped_at: Completed 05-05-PLAN.md
-last_updated: "2026-11-26T07:27:27.475Z"
+stopped_at: Completed 05-06-PLAN.md
+last_updated: "2026-11-26T07:41:34.968Z"
 last_activity: 2026-11-26
 last_activity_desc: Phase 5 execution started
-state_head: d6f1564106a0bcfd198cbd6b803c772288634377
+state_head: 8985eb88c92751024eed155076e6ed138b32d6fb
 progress:
   total_phases: 6
   completed_phases: 4
   total_plans: 35
-  completed_plans: 32
+  completed_plans: 33
 ---
 
 # Project State
@@ -50,20 +50,20 @@ See: .planning/PROJECT.md (shared). Builds on the pss-e-integration workstream (
 ## Current Position
 
 Phase: 5 (Hourly Workflow, Dry Run and Live Soak) — EXECUTING
-Plan: 6 of 8
+Plan: 7 of 8
 Status: Ready to execute
 Last activity: 2026-11-26 — Phase 5 execution started
 
 ## Progress
 
 **Phases Complete:** 1 of 6
-**Current Plan:** 6
+**Current Plan:** 7
 
 ## Session Continuity
 
-**Last session:** 2026-11-26T07:27:26.350Z
+**Last session:** 2026-11-26T07:41:34.474Z
 
-**Stopped At:** Completed 05-05-PLAN.md
+**Stopped At:** Completed 05-06-PLAN.md
 **Resume File:** None
 
 To resume:
@@ -96,6 +96,7 @@ Known items from execution:
 | Phase 05 P03 | 15min | 2 tasks | 2 files |
 | Phase 05 P04 | 75min | 3 tasks | 3 files |
 | Phase 05 P05 | 1h 10m | 3 tasks | 4 files |
+| Phase 05 P06 | 50min | 3 tasks | 4 files |
 
 ## Decisions
 
@@ -128,3 +129,5 @@ Known items from execution:
 - [Phase 05]: 05-04: with --since the gap check windows the gaps shown (gaps=N) but not the run count, so a gap older than the window does not fail the closing check; the 24-slot count covers the last 24 hours
 - [Phase 05]: 05-04: any failure of the soak's two reads or its report parse is one fixed line, gap check: could not run, exit 6, with no error text or variable name
 - [Phase 05]: 05-05: bundle rebuilds the settings and scaling documents from the validated backend (evidence and report detail never travel); scan-log refuses every input the scanner would skip silently (adds log_binary)
+- [Phase 05]: 05-06: the local count comparison is written as owner machine against the runner and does not require Linux on the owner's side; it is the check for an operating-system difference
+- [Phase 05]: 05-06: the runbook's printed-line table is validated against HOURLY_LINE_PATTERNS by sample lines, so a renamed vocabulary line fails the text test
