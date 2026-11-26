@@ -9,7 +9,8 @@ created: 2026-11-25
 
 Builds the per-city detail view of the operator dashboard, alongside the `software-dashboard`
 workstream. Requirements: [`REQUIREMENTS.md`](REQUIREMENTS.md); roadmap: [`ROADMAP.md`](ROADMAP.md).
-Owner: Allie (Software sub-team).
+Owner: Allie (Software sub-team). Start with [`HANDOFF.md`](HANDOFF.md): setup, tools, reading
+order, ground rules and the starter prompt.
 
 ## Current Position
 
