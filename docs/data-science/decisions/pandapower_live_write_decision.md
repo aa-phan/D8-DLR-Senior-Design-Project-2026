@@ -39,13 +39,16 @@ Tree leak scan (`backend/private_leak_scan.py`): exit code 0, no finding lines; 
 
 If the branch gains commits before the owner merges, these commands are run again at the merged commit before the first dispatch.
 
-(Plan 05-07 replaces this line with counts and words only: the four `bundle` size lines, `bundle: verified`, `bundle: written`, and the printed lines of the local dry run. No value, path, hash or id.)
+The owner `bundle` command ran on 2026-11-26 and produced the four files (network 33,588, mapping 1,880, settings 400 and scaling 144 characters). The dry run on the real engine is the local count comparison under "Dry-run evidence" below, which matched the runner.
 
 ## Dry-run evidence
 
-Not recorded yet.
+Recorded 2026-11-27 (UTC), after the owner merged the branch into `main` and created the seven secrets of the `production` environment.
 
-(Plan 05-07 replaces this line with the number of consecutive green scheduled dry runs, the `scan-log` result line, whether the local count comparison matched, and the state of the `DLR-PSSE-Hourly` laptop task. No run id, no hash, no connection detail.)
+- **Scheduled dry runs:** 3 consecutive green runs, at 01:20, 02:20 and 03:20 UTC on 2026-11-27, each started by the cron-job.org job. Two manual dispatches from `main` before them were also green. A dispatch from the branch `feature/pandapower-solver` was skipped by the main-only `if`, as intended. Every run printed `mode: dry`.
+- **Log scan:** one real downloaded Actions log (the 03:20 UTC run, 306 lines) scanned with `scan-log`: `scan-log: lines=306 findings=0`, exit 0. The downloaded copy was deleted afterwards.
+- **Local count comparison:** matched. The owner's Windows machine, in the same hour as the 03:20 UTC run, printed lines identical to the Linux runner's: `mode: dry`, `inputs: ok`, `ratings: city_rating=4 static=0`, `study: ok`, `outcome: ok`, `rows: run=1 dispatch=4 margin=4 contingency=205`, `dry run: nothing was written to the database`. (The network secret is 33,588 characters, above Windows' limit of about 32,700 for one environment variable, so the local run held the four values in memory through a small launcher outside the repository, not in environment variables. The job's own code was unchanged.)
+- **`DLR-PSSE-Hourly` laptop task:** state not recorded yet.
 
 ## Owner decision
 
