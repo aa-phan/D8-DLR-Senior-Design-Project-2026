@@ -16,8 +16,8 @@ Keep every row. Nothing is pruned, archived or deleted in this phase (D-01).
 
 Two lines are filled by plan 05-08 Task 1, from the owner's answer at plan 05-07 Task 3, before the first live write:
 
-- Review limit named by the owner: (recorded at the go-live decision)
-- Size before the first live write (all four result tables, whole database): (recorded at the go-live decision)
+- Review limit named by the owner: **250 MB** for all four result tables together (owner's answer, 2026-11-27). At the rate of about 5,100 rows a day (about 430 bytes a row on the first reading, so about 2.2 MB a day) that is roughly 3.5 months of live running.
+- Size before the first live write, read by the owner with `supabase/ops/psse_result_size.sql` on 2026-11-27 at 05:17 UTC: `psse_run` 19 rows, 112 kB; `psse_dispatched_capacity` 76 rows, 96 kB; `psse_voltage_margin` 76 rows, 104 kB; `psse_contingency_result` 3,895 rows, 1,432 kB; **all four result tables 4,066 rows, 1,744 kB (1,785,856 bytes)**; whole database 22 MB. All of these rows are PSS/E runs; no pandapower row has been written.
 
 ## Context
 

@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Proposed |
+| **Status** | Accepted |
 | **Date** | 2026-11-25 (UTC), drafted |
 | **Deciders** | the repository and Supabase owner (Aaron) with Tejaswini Kalikiri; the deciding person and date are recorded below when decided |
 
@@ -52,9 +52,9 @@ Recorded 2026-11-27 (UTC), after the owner merged the branch into `main` and cre
 
 ## Owner decision
 
-Not recorded yet.
+Decided: go live, by Tejaswini Kalikiri, on 2026-11-27 (UTC).
 
-(Plan 05-08 replaces this line with exactly one of: "Decided: go live, by NAME, on YYYY-MM-DD (UTC)" or "Decided: stay dry, by NAME, on YYYY-MM-DD (UTC)". On a go-live decision the Status above changes from Proposed to Accepted in the same change.)
+The owner's review limit of 250 MB for the four result tables and the size read before the first live write are in `05-RETENTION-DECISION.md`. The variable `PANDAPOWER_LIVE` is set by the repository owner, at repository level only, to exactly `true`.
 
 ## How to undo
 
