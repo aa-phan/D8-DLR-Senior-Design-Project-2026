@@ -17,6 +17,11 @@ Environment:
 
 `psycopg` is imported inside functions only, so importing this module needs no
 driver.
+
+The pandapower-solver workstream adds `SOLVER_TAG_MIGRATION`, `apply_solver_tag_migration` and
+`apply_solver_schema` (`apply_schema` plus the solver-tag migration) and a `prefix` argument on
+`make_run_id`; `apply_schema` deliberately stays without the solver migration, so every
+existing PSS/E database test keeps running against a table without `solver`.
 """
 
 import contextlib
@@ -45,6 +50,10 @@ PHASE4_MIGRATIONS = (
     ),
 )
 REFERENCE_DDL = os.path.join(REPO_ROOT, "docs", "data-science", "schema", "psse_results_v1.sql")
+# The solver-tag migration, by explicit path (never a glob), applied only by apply_solver_schema.
+SOLVER_TAG_MIGRATION = os.path.join(
+    REPO_ROOT, "supabase", "migrations", "20261118200000_psse_run_solver_tag.sql"
+)
 CHECKS_SQL = os.path.join(REPO_ROOT, "docs", "data-science", "schema", "psse_results_v1_checks.sql")
 
 RESULT_TABLES = (
@@ -208,6 +217,21 @@ def apply_schema(admin_url):
     apply_reference_ddl(admin_url)
 
 
+def apply_solver_tag_migration(admin_url):
+    """Apply the solver-tag migration alone, in one transaction (a re-apply test calls it again)."""
+    import psycopg
+
+    sql = _read(SOLVER_TAG_MIGRATION)
+    with psycopg.connect(admin_url) as conn:
+        conn.execute(sql)
+
+
+def apply_solver_schema(admin_url):
+    """`apply_schema`, then the solver-tag migration: the schema the tagged-run tests use."""
+    apply_schema(admin_url)
+    apply_solver_tag_migration(admin_url)
+
+
 def role_url(admin_url, role):
     """The same database as `role` (trust auth: no credential locally)."""
     parts = urlsplit(admin_url)
@@ -259,10 +283,10 @@ def insert_rows(conn, table, rows):
         )
 
 
-def make_run_id(n, when):
-    """A run_id that matches the DDL pattern: psse-<UTC yyyymmddThhmmssZ>-<8 hex>."""
+def make_run_id(n, when, prefix="psse"):
+    """A run_id that matches the DDL pattern: <prefix>-<UTC yyyymmddThhmmssZ>-<8 hex> (psse or pp)."""
     stamp = when.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    return "psse-{}-{:08x}".format(stamp, n)
+    return "{}-{}-{:08x}".format(prefix, stamp, n)
 
 
 def _hour_floor(when):

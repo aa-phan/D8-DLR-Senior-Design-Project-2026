@@ -75,9 +75,10 @@ def _log_run(run_id, outcome, status, stage, selection, error):
 
 
 def run_once(fetch, study, connect, case_id, case_sha256=None, mapping_sha256=None,
-             clock=None, env=None):
+             clock=None, env=None, solver=contract.SOLVER_PSSE):
     """
     Run the job once and return a RunOutcome (see the module docstring for the exit codes).
+    The solver tag defaults to PSS/E; the second solver's runner passes its registered tag.
 
     `fetch()` reads the latest_rating rows, `study(selection, context)` runs the study,
     `connect()` returns the writer connection and is called only after the study. `clock()`
@@ -87,10 +88,10 @@ def run_once(fetch, study, connect, case_id, case_sha256=None, mapping_sha256=No
     """
     clock = clock or (lambda: datetime.datetime.now(datetime.timezone.utc))
     started_at = clock()
-    run_id = run_record.new_run_id(started_at)  # ValueError for a naive start
+    run_id = run_record.new_run_id(started_at, solver)  # ValueError for a naive start
     context = contract.RunContext(
         run_id, started_at, run_record.case_label(case_id), case_sha256, mapping_sha256,
-        run_record.job_version(env),
+        run_record.job_version(env), solver,
     )
 
     # Never raises for a failed read: the run continues on static ratings (D-02).

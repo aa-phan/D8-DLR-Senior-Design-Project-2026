@@ -1,6 +1,7 @@
 """
-The published column list of public.latest_grid_study (supabase/migrations/
-20261116200000_expose_latest_grid_study.sql), in order.
+The published column list of public.latest_grid_study, in order. The view was created by
+supabase/migrations/20261116200000_expose_latest_grid_study.sql and is replaced per solver by
+20261126200000_latest_grid_study_per_solver.sql; the column list is unchanged.
 
 One-way: a name is never renamed or dropped, and a column is only ever appended after the last
 one. backend/tests/grid_study_expose_test.py fails if this list and the view differ.
@@ -38,3 +39,9 @@ FORBIDDEN = (
 )
 
 STALE_AFTER_MINUTES = 90
+
+# The values of public.psse_run.solver, in the order of constraint psse_run_solver_ck.
+SOLVERS = ("psse", "pandapower")
+
+# The most rows the view returns: four cities times two solvers.
+MAX_ROWS = 8

@@ -26,7 +26,7 @@
 | `GET /rest/v1/day_ahead_upcoming` | The day-ahead forecast values whose target is still in the future, ordered by `city` then `valid_time`, with `lead_minutes` added (26 columns). Labelled `day-ahead-24h; engineering-selection; not-validated`. See "Day-ahead forecast". Readable once the owner applies the expose migration `20261108120100_expose_day_ahead_forecast.sql`. |
 | `GET /rest/v1/day_ahead_status` | Exactly four rows, one per city: when the next target is, how many future values exist, when the newest was issued, which targets due within the next 12 hours have no value, and `is_late` (7 columns). |
 | `GET /rest/v1/day_ahead_forecast` | The full day-ahead history (OD-6: public), 25 columns, including targets that have passed. Always give an explicit `order` and page it like `city_rating`. |
-| `GET /rest/v1/latest_grid_study` | **Preliminary** grid-study results: up to four rows, one per city, from the newest complete grid-study run: the rating the study applied, the voltage-stability limit, the capacity the grid can use and which limit binds, with `age_minutes` and `is_stale` (20 columns). No rows until a complete run exists. See "Grid-study results (preliminary)". Readable once the owner applies `20261116200000_expose_latest_grid_study.sql`. |
+| `GET /rest/v1/latest_grid_study` | **Preliminary** grid-study results: one row per city per solver (`psse`, `pandapower`; at most 8 rows), each from that solver's newest complete grid-study run: the rating the study applied, the voltage-stability limit, the capacity the grid can use and which limit binds, with `age_minutes` and `is_stale` (20 columns). Filter on `solver`. No rows until a complete run exists. See "Grid-study results (preliminary)". Readable once the owner applies `20261116200000_expose_latest_grid_study.sql`; one row per city per solver once the owner applies `20261126200000_latest_grid_study_per_solver.sql`. |
 | `GET /rest/v1/rpc/assert_fresh?max_age_minutes=90` | A freshness check across all four cities: HTTP 200 with a small JSON document when every city is fresh, HTTP 503 (code `PT503`) naming the missing or stale cities when not, HTTP 400 (code `22023`) for a bad parameter. |
 
 Details that matter:
@@ -243,14 +243,14 @@ The view always has four rows, one per city, and seven columns in this order. Ch
 
 **Label:** preliminary. Show "Preliminary grid study (IEEE 39-bus test case; not reviewed by Power Systems)" wherever you show a value from this view.
 
-A grid study applies each city's rating to a power-flow model, runs the load flow and the single-line outages, and finds how much of the rating the grid can actually use before voltage limits are reached. `latest_grid_study` returns the result of the newest complete run, one row per city.
+A grid study applies each city's rating to a power-flow model, runs the load flow and the single-line outages, and finds how much of the rating the grid can actually use before voltage limits are reached. `latest_grid_study` returns, for each solver, the result of that solver's newest complete run: one row per city per solver.
 
-- **Where the numbers come from.** Siemens PSS/E (`solver` = `psse`), on the public IEEE 39-bus test case scaled to each city's load and generation, not on a utility network. Power Systems has not reviewed the results. Use them to demonstrate the pipeline, not as an operating limit.
-- **How often.** Hourly while a licensed PSS/E machine runs the job. The job is currently paused, so the newest result is from the November 2026 trial and every row shows `is_stale` true. Show the study time (`slot_time`) and a "Study not current" state when `is_stale` is true, as for ratings.
+- **Where the numbers come from.** Two power-flow programs run the same study: Siemens PSS/E (`solver` = `psse`) and the open-source pandapower (`solver` = `pandapower`). Both run on the public IEEE 39-bus test case scaled to each city's load and generation, not on a utility network. Power Systems has not reviewed the results. Use them to demonstrate the pipeline, not as an operating limit.
+- **How often.** pandapower runs every hour, at about 20 minutes past the hour (UTC), once its hourly job writes live. PSS/E runs hourly only while a licensed PSS/E machine runs its job; that job is currently paused, so its newest result is from the November 2026 trial and PSS/E rows show `is_stale` true. Show the study time (`slot_time`) and a "Study not current" state when `is_stale` is true, as for ratings.
 - **The headline.** `usable_pct` is the share of the applied rating the grid can use: 100 when the rating itself is the limit (`limiting_factor` = `dlr_rating`), less when voltage limits bind first (`voltage_stability`). For example: "Grid can use 92% of this rating; voltage is the limit."
 - **Units.** `*_amps_per_conductor` is per wire, the same unit as `latest_rating.rating_amps`. The MVA and MW columns are per circuit and are not comparable with `city_rating.rating_mw` (per conductor).
 - **The rating it used.** `rating_source` says whether the study used the city's live rating (`city_rating`, with `city_rating_valid_time` naming the rating hour) or its static rating (`static_fallback`, with `fallback_reason`). The study's rating can be older than the current `latest_rating`.
-- **Solvers.** Every row today is `psse`. A later release adds an open-source solver (pandapower) that runs every hour; the view will then return one row per city per solver, and `solver` tells them apart. Filter on `solver` rather than assuming one row per city.
+- **Solvers.** The view returns one row per city per solver (at most 8 rows), and `solver` tells them apart. Filter on `solver` rather than assuming one row per city. A solver with no complete run has no rows.
 - **Empty is a state.** When no complete run exists the view returns no rows; show "No grid study available".
 
 ## `latest_grid_study` columns
@@ -259,7 +259,7 @@ The view has 20 columns, in this order. New columns are only ever appended after
 
 | Column | Type | Unit | Meaning |
 |---|---|---|---|
-| `solver` | text | none (identifier) | The power-flow program: `psse` today; `pandapower` in a later release. |
+| `solver` | text | none (identifier) | The power-flow program: `psse` (Siemens PSS/E) or `pandapower` (open-source). The view returns one row per city per solver; filter on it. |
 | `city` | text | none (identifier) | City key: `AUSTIN`, `CORPUS_CHRISTI`, `MIDLAND` or `EL_PASO`. |
 | `slot_time` | timestamptz | UTC instant | The hour the study belongs to (the UTC hour its run started in). |
 | `study_finished_at` | timestamptz | UTC instant | When the study run finished. |

@@ -305,8 +305,8 @@ _OLD_LIVE_BASIS = (
 _MANIFEST = os.path.join(local_pg.REPO_ROOT, "docs", "data-science", "decisions", "real_data_validation",
                          "manifest.json")
 
-# Phase 6 checks (18, one renamed in Phase 8), the eleven Phase 8 day-ahead checks and the seven
-# grid-study view checks: 36 in all, in name order.
+# Phase 6 checks (18, one renamed in Phase 8), the eleven Phase 8 day-ahead checks and the eight
+# grid-study view checks (the eighth added by the pandapower-solver workstream's phase 6, D-05): 37 in all, in name order.
 _VERIFY_CHECKS = (
     "anon_authenticated_grants_are_select_on_published_objects_only",
     "anon_authenticated_hold_no_write_or_column_privilege_in_public",
@@ -329,6 +329,7 @@ _VERIFY_CHECKS = (
     "is_provisional_matches_the_labels",
     "is_stale_matches_age_minutes",
     "latest_grid_study_columns_all_commented",
+    "latest_grid_study_has_each_solvers_newest_complete_run",
     "latest_grid_study_is_stale_matches_age_minutes",
     "latest_grid_study_matches_the_contract",
     "latest_grid_study_one_row_per_city_per_solver",

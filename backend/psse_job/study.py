@@ -33,6 +33,11 @@ The run-time budget is shared; a city that cannot start for lack of it is "not a
 prepare_base (the four cities in one unscaled case) is kept for the component tests of the
 screen and the margin.
 
+The adapter the study runs on is chosen by name: the entry points take a last keyword `solver`
+(default "psse") and look its factory up in API_FACTORIES. Another solver package registers its
+factory with register_solver when it is imported; this package never names or imports another
+solver, so the laptop job stays standard library only.
+
 Standard library and psse_job only, Python 3.7 syntax (D-05).
 """
 
@@ -318,12 +323,43 @@ def _read_solved_base(api, settings):
     return base_buses, base_flows
 
 
-def _open_case(psspy_module, case_path):
+def _psse_factory(backend, case_path):
+    """The PSS/E adapter: `backend` is the injected psspy module."""
+    return psse_api.PsseApi(backend, protected_path=case_path)
+
+
+# Solver name -> factory(backend, case_path) returning the adapter the study runs on.
+API_FACTORIES = {"psse": _psse_factory}
+
+
+def register_solver(name, factory):
+    """Register `factory(backend, case_path)` under `name`.
+
+    A solver package calls this once when it is imported; psse_job itself names no other
+    solver. A name already registered with a different factory is refused (the PSS/E factory
+    cannot be replaced); registering the same factory again does nothing.
+    """
+    if not isinstance(name, str) or not name or not callable(factory):
+        raise ValueError("a solver needs a non-empty name and a callable factory")
+    if name in API_FACTORIES:
+        if API_FACTORIES[name] is factory:
+            return
+        raise ValueError("solver %s is already registered" % name)
+    API_FACTORIES[name] = factory
+
+
+def _open_case(psspy_module, case_path, solver="psse"):
     """(api, label, psse_version, lines, transformers, buses) of the freshly loaded case; a
-    failure is StudyFailed("load_case")."""
+    failure is StudyFailed("load_case"). `solver` names the adapter factory in API_FACTORIES; for
+    a solver other than PSS/E, `psspy_module` carries that solver's backend object."""
     label = run_record.case_label(case_path)
+    if not isinstance(solver, str):
+        raise StudyFailed("load_case", "solver must be given by name")
+    factory = API_FACTORIES.get(solver)
+    if factory is None:
+        raise StudyFailed("load_case", "solver %s is not registered" % solver)
     try:
-        api = psse_api.PsseApi(psspy_module, protected_path=case_path)
+        api = factory(psspy_module, case_path)
         psse_version = api.version()
         api.load_case(case_path)
         lines, transformers = api.branch_table()
@@ -344,7 +380,7 @@ def _save_solved(api, path):
             "the solved base case could not be saved to a temporary file: %s" % error.meaning)
 
 
-def prepare_base(psspy_module, case_path, mapping, selection, budget=None):
+def prepare_base(psspy_module, case_path, mapping, selection, budget=None, solver="psse"):
     """Load, check, rate, solve and save the base case with all four cities in one unscaled
     case; see the module docstring.
 
@@ -355,7 +391,8 @@ def prepare_base(psspy_module, case_path, mapping, selection, budget=None):
     settings = mapping.settings
     if budget is None:
         budget = Budget(max_seconds=settings.max_runtime_seconds)
-    api, label, psse_version, lines, transformers, buses = _open_case(psspy_module, case_path)
+    api, label, psse_version, lines, transformers, buses = _open_case(
+        psspy_module, case_path, solver)
     resolved, problems = check_mapping(mapping, lines, transformers, buses)
     if problems:
         raise StudyFailed("mapping", "; ".join(problems))
@@ -380,11 +417,12 @@ def prepare_base(psspy_module, case_path, mapping, selection, budget=None):
 # -- one copy of the case per city (Phase 4) --------------------------------------------------------
 
 
-def index_case(psspy_module, case_path, mapping):
+def index_case(psspy_module, case_path, mapping, solver="psse"):
     """Load the case once and index it: lines, transformers and buses, then the whole mapping
     checked against them (a problem is one `mapping` failure, as before). Reads no totals and
     writes nothing, so a mapping failure leaves no write call behind (IN-02)."""
-    api, label, psse_version, lines, transformers, buses = _open_case(psspy_module, case_path)
+    api, label, psse_version, lines, transformers, buses = _open_case(
+        psspy_module, case_path, solver)
     resolved, problems = check_mapping(mapping, lines, transformers, buses)
     if problems:
         raise StudyFailed("mapping", "; ".join(problems))
@@ -566,12 +604,12 @@ def _study_city(index, mapping, selection, city, budget, temp_dir):
     return dispatch_row, margin_row, screened.rows, screened.n_contingencies
 
 
-def make_study(psspy_module, case_path, mapping, clock=None):
+def make_study(psspy_module, case_path, mapping, clock=None, solver="psse"):
     """study(selection, context) for run_once: for each city, on its own freshly loaded and
     scaled copy of the case, the base load flow, the N-1 screen, a margin and a dispatch row, as
     contract.StudyResults.
 
-    Every call builds a new PsseApi, indexes the case once and loads the case file afresh for
+    Every call builds a new adapter from the chosen solver's factory, indexes the case once and loads the case file afresh for
     every city (one study per process, never an adapter reused across runs), and removes its
     temporary files on every path. Every city is attempted (CD-8): a city that fails with a
     StudyFailed is remembered and the next one is studied; when any city failed the run fails
@@ -583,7 +621,7 @@ def make_study(psspy_module, case_path, mapping, clock=None):
     """
     def study(selection, context):
         budget = Budget(clock, mapping.settings.max_runtime_seconds)
-        index = index_case(psspy_module, case_path, mapping)
+        index = index_case(psspy_module, case_path, mapping, solver)
         temp_dir = tempfile.mkdtemp(prefix=_TEMP_PREFIX)
         try:
             outcomes = []
@@ -624,12 +662,15 @@ def make_study(psspy_module, case_path, mapping, clock=None):
     return study
 
 
-def prepare_run(psspy_module, case_path, mapping_path, allow_placeholder=False, clock=None):
+def prepare_run(psspy_module, case_path, mapping_path, allow_placeholder=False, clock=None,
+                solver="psse"):
     """Everything Phase 3's launcher passes to job.run_once: the study, the case label, the case
     file's sha256 and the mapping's sha256.
 
     A mapping that cannot be read, parsed or validated (a refused placeholder included) gives a
-    study that fails at stage mapping and mapping_sha256 None, "the mapping was not loaded"; a
+    study that fails at stage mapping and mapping_sha256 None, "the mapping was not loaded" (and
+    no adapter is built); `solver` names the adapter factory, and for a solver other than PSS/E
+    `psspy_module` carries that solver's backend object; a
     mapping that loads keeps its hash even when it does not match the case (that failure comes
     from inside the study). The case is hashed from the same path the study loads; the gap
     between the hash and the load is accepted.
@@ -643,5 +684,5 @@ def prepare_run(psspy_module, case_path, mapping_path, allow_placeholder=False, 
         return PreparedRun(
             failing_study("mapping", "mapping file not usable: %s" % text),
             case_id, case_sha256, None, text)
-    return PreparedRun(make_study(psspy_module, case_path, loaded, clock),
+    return PreparedRun(make_study(psspy_module, case_path, loaded, clock, solver),
                        case_id, case_sha256, loaded.sha256, None)

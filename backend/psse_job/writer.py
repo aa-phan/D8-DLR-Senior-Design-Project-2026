@@ -10,6 +10,11 @@ of the attempt remains; a second, separate transaction then records the run as `
 (failed_stage 'write'). `record_failure` writes a failed run alone. The run record is written
 once, at the end of a run: there is no 'running' row (D-04).
 
+The solver tag (DB-02): `_check_tag` refuses, before any statement or transaction, a record whose
+tag and run id disagree. A PSS/E record has no tag keys and is written with the 17-column
+INSERT_RUN_SQL; a record of another solver has solver and solver_version and is written with the
+19-column INSERT_RUN_TAGGED_SQL.
+
 psycopg is imported inside `connect` only, so importing this module needs no driver. Every
 message raised or stored here is redacted (psse_job.redaction); the exceptions are raised
 outside any `except` block, so no original exception (and no part of its message) is chained.
@@ -114,11 +119,51 @@ def _failure_text(exc):
     return redact(str(exc), limit=constants.ERROR_MAX_CHARS) or type(exc).__name__
 
 
+def _check_tag(record):
+    """
+    ValueError (fixed text, never a value) unless the record's solver tag and run id agree:
+    both tag keys or neither; no tag keys means a PSS/E run id; a tag is a registered solver
+    other than PSS/E whose prefix starts the run id; solver_version is None or 1 to 100
+    characters of text. Raised before any statement is executed.
+    """
+    has_solver = "solver" in record
+    has_version = "solver_version" in record
+    if has_solver != has_version:
+        raise ValueError("a run record carries both solver tag keys or neither")
+    run_id = record.get("run_id")
+    if not isinstance(run_id, str):
+        raise ValueError("the run id is not text")
+    if not has_solver:
+        if not run_id.startswith(contract.RUN_ID_PREFIXES[contract.SOLVER_PSSE] + "-"):
+            raise ValueError("an untagged run record needs a PSS/E run id")
+        return
+    solver = record["solver"]
+    if not isinstance(solver, str) or solver not in contract.RUN_ID_PREFIXES:
+        raise ValueError("the solver tag is not a registered solver")
+    if solver == contract.SOLVER_PSSE:
+        raise ValueError("a PSS/E run record is written without the solver tag keys")
+    if not run_id.startswith(contract.RUN_ID_PREFIXES[solver] + "-"):
+        raise ValueError("the run id does not match the solver tag")
+    version = record["solver_version"]
+    if version is not None and (not isinstance(version, str)
+                                or not 1 <= len(version) <= run_record.SOLVER_VERSION_MAX_CHARS):
+        raise ValueError("solver_version is not text of 1 to 100 characters")
+
+
+def _run_insert(record):
+    """(columns, sql) of the run row: the 19-column insert for a tagged record, else the 17."""
+    if "solver" in record:
+        return contract.TAGGED_RUN_COLUMNS, contract.INSERT_RUN_TAGGED_SQL
+    return contract.PSSE_RUN_COLUMNS, contract.INSERT_RUN_SQL
+
+
 def _insert_run(conn, record):
     """Insert the run row in its own transaction: WRITTEN, or ALREADY_RECORDED when it exists."""
-    params = _params(contract.PSSE_RUN_COLUMNS, record)
+    _check_tag(record)
+    columns, sql = _run_insert(record)
+    params = _params(columns, record)
     with conn.transaction():
-        inserted = conn.execute(contract.INSERT_RUN_SQL, params).fetchone()
+        inserted = conn.execute(sql, params).fetchone()
     return WRITTEN if inserted is not None else ALREADY_RECORDED
 
 
@@ -134,13 +179,15 @@ def write_run(conn, record, rows):
     """
     if record.get("outcome") not in ("ok", "fallback"):
         raise ValueError("write_run takes an ok or fallback record; use record_failure for a failed run")
+    _check_tag(record)  # a plain ValueError, before the try: nothing is executed
 
     result = None
     failure = None
     try:
-        run_params = _params(contract.PSSE_RUN_COLUMNS, record)
+        run_columns, run_sql = _run_insert(record)
+        run_params = _params(run_columns, record)
         with conn.transaction():
-            inserted = conn.execute(contract.INSERT_RUN_SQL, run_params).fetchone()
+            inserted = conn.execute(run_sql, run_params).fetchone()
             if inserted is None:
                 result = ALREADY_RECORDED
             else:
@@ -181,6 +228,7 @@ def record_failure(conn, record):
     """
     if record.get("outcome") != "failed":
         raise ValueError("record_failure takes a failed record")
+    _check_tag(record)  # a plain ValueError, before the try: nothing is executed
     result = None
     failure = None
     try:

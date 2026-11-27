@@ -13,10 +13,19 @@ that returns StudyResults, or raises StudyFailed(stage, message). `dispatch`, `m
 `contingencies` are lists of dicts keyed by DISPATCH_COLUMNS, MARGIN_COLUMNS and
 CONTINGENCY_COLUMNS without run_id and run_outcome; dispatch and margins hold one row per city.
 
+The solver tag (DB-02): every run is stored with the solver that produced it. PSS/E is the
+default and the only tag registered here; the second solver's package registers its own name
+and run-id prefix on import with `register_solver_tag`, next to `study.register_solver`.
+There are two run INSERTs. A PSS/E run keeps the 17-column INSERT_RUN_SQL, so it still works
+on a database where the solver-tag migration has not been applied yet. Another solver's run
+uses the 19-column INSERT_RUN_TAGGED_SQL (adds solver and solver_version) and needs migration
+20261118200000.
+
 Standard library only, Python 3.7 syntax (D-05).
 """
 
 import collections
+import re
 
 PSSE_RUN_TABLE = "public.psse_run"
 DISPATCH_TABLE = "public.psse_dispatched_capacity"
@@ -34,6 +43,42 @@ PSSE_RUN_COLUMNS = (
     "ratings_used", "n_contingencies", "n_contingencies_with_results", "job_version",
     "psse_version",
 )
+
+# The solver tag. SOLVER_PSSE is the default; RUN_ID_PREFIXES maps each registered solver name
+# to its run-id prefix (a run id is `<prefix>-<stamp>-<8 hex>`).
+SOLVER_PSSE = "psse"
+RUN_ID_PREFIXES = {SOLVER_PSSE: "psse"}
+
+# The two columns the solver-tag migration adds; only a run of another solver carries them.
+SOLVER_RUN_COLUMNS = ("solver", "solver_version")
+TAGGED_RUN_COLUMNS = PSSE_RUN_COLUMNS + SOLVER_RUN_COLUMNS
+
+
+_PREFIX_PATTERN = re.compile(r"[a-z]{1,10}")
+
+
+def register_solver_tag(name, prefix):
+    """
+    Register a solver `name` with its run-id `prefix` (1 to 10 lowercase letters). The second
+    solver's package calls it once on import, next to `study.register_solver`; the database
+    accepts only the solver names in migration 20261118200000's check, and the parity test of
+    the solver package holds the two in step. ValueError (fixed text) when either argument is
+    not a non-empty str, when the prefix is not 1 to 10 lowercase letters, when the name is
+    already registered with another prefix, or when the prefix already belongs to another
+    name, so the PSS/E tag can never be re-bound. The identical pair again is a no-op.
+    """
+    if not isinstance(name, str) or not name or not isinstance(prefix, str) or not prefix:
+        raise ValueError("a solver tag needs a non-empty text name and prefix")
+    if not _PREFIX_PATTERN.fullmatch(prefix):
+        raise ValueError("a run-id prefix is 1 to 10 lowercase letters")
+    if name in RUN_ID_PREFIXES:
+        if RUN_ID_PREFIXES[name] != prefix:
+            raise ValueError("the solver is already registered with another prefix")
+        return
+    if prefix in RUN_ID_PREFIXES.values():
+        raise ValueError("the run-id prefix already belongs to another solver")
+    RUN_ID_PREFIXES[name] = prefix
+
 
 DISPATCH_COLUMNS = (
     "run_id", "run_outcome", "city", "rating_source", "fallback_reason",
@@ -66,14 +111,16 @@ TABLE_COLUMNS = {
 JSONB_COLUMNS = ("ratings_used", "details")
 
 
-def insert_sql(table, suffix=""):
+def insert_sql(table, suffix="", columns=None):
     """
     `insert into <table> (<columns>) values (<placeholders>) <suffix>`, built from
-    TABLE_COLUMNS only; an unknown table raises ValueError. JSONB columns get `::jsonb`.
+    TABLE_COLUMNS only (or from `columns`, a fixed tuple of this module such as
+    TAGGED_RUN_COLUMNS); an unknown table raises ValueError. JSONB columns get `::jsonb`.
     """
     if table not in TABLE_COLUMNS:
         raise ValueError("not a PSS/E result table: %r" % (table,))
-    columns = TABLE_COLUMNS[table]
+    if columns is None:
+        columns = TABLE_COLUMNS[table]
     placeholders = [
         ("%%(%s)s::jsonb" if column in JSONB_COLUMNS else "%%(%s)s") % column
         for column in columns
@@ -88,19 +135,27 @@ def insert_sql(table, suffix=""):
 # acknowledgement) is left alone and reported by returning no row (D-04).
 INSERT_RUN_SQL = insert_sql(PSSE_RUN_TABLE, "on conflict (run_id) do nothing returning run_id")
 
+# The same run row with the solver tag (19 columns), for a run of another solver.
+INSERT_RUN_TAGGED_SQL = insert_sql(
+    PSSE_RUN_TABLE, "on conflict (run_id) do nothing returning run_id", TAGGED_RUN_COLUMNS)
+
 INSERT_RESULT_SQL = dict((table, insert_sql(table)) for table in RESULT_TABLES)
 
 # What the job knows at start: run_id (stamped once, reused on a retry), the start instant,
-# the case label and hashes, and the job version label.
+# the case label and hashes, the job version label and the solver tag (default PSS/E).
 RunContext = collections.namedtuple(
     "RunContext",
-    ["run_id", "started_at", "case_id", "case_sha256", "mapping_sha256", "job_version"],
+    ["run_id", "started_at", "case_id", "case_sha256", "mapping_sha256", "job_version", "solver"],
+    defaults=(SOLVER_PSSE,),
 )
 
-# What a successful study returns.
+# What a successful study returns; `solver` names the solver that produced it (default PSS/E)
+# and `solver_version` is that solver's version text (None for PSS/E, which has psse_version).
 StudyResults = collections.namedtuple(
     "StudyResults",
-    ["dispatch", "margins", "contingencies", "n_contingencies", "rate_set", "psse_version"],
+    ["dispatch", "margins", "contingencies", "n_contingencies", "rate_set", "psse_version",
+     "solver", "solver_version"],
+    defaults=(SOLVER_PSSE, None),
 )
 
 # A failed run: the stage (one of constants.FAILED_STAGES) and a message.

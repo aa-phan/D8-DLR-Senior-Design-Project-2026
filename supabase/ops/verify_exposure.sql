@@ -47,15 +47,16 @@
 --   day_ahead_status_has_the_four_cities    the status view always lists all four cities
 --   day_ahead_view_columns_all_commented    every column of both day-ahead views has its unit-first description
 --   assert_fresh_has_one_signature          the alarm function exists once, so the alarm URL cannot meet an overload
--- The grid-study view (20261116200000_expose_latest_grid_study.sql):
+-- The grid-study view (20261116200000_expose_latest_grid_study.sql; one row per city per solver since 20261126200000_latest_grid_study_per_solver.sql):
 --   latest_grid_study_runs_with_owner_rights  the view runs with its owner's rights, on purpose, so the
 --                                           result tables can stay private (lint 0010 accepted for it)
---   anon_can_select_latest_grid_study       the public key can read the newest grid-study result per city
+--   anon_can_select_latest_grid_study       the public key can read the newest grid-study result per city and solver
 --   psse_tables_not_readable_by_public_roles  the four psse_* result tables stay private
 --   latest_grid_study_matches_the_contract  the view has its 20 columns, ending with age_minutes, is_stale
 --   latest_grid_study_columns_all_commented every published column has its unit-first description
 --   latest_grid_study_one_row_per_city_per_solver  never two rows for the same city and solver
 --   latest_grid_study_is_stale_matches_age_minutes  the stale flag never contradicts the minutes shown
+--   latest_grid_study_has_each_solvers_newest_complete_run  for each solver, the view shows exactly the city rows of its newest complete run (ok or fallback), and no other row
 
 with
 -- The six objects the public roles may read: Phase 6 (two), Phase 8 (three) and the grid-study view.
@@ -142,6 +143,13 @@ psse_readable as (
      cross join (values ('anon'), ('authenticated')) as r(rolname)
      where to_regclass('public.' || t.relation) is not null
        and has_table_privilege(r.rolname, to_regclass('public.' || t.relation), 'select')
+),
+-- The newest complete run (outcome ok or fallback) of each solver, newest slot first.
+newest_complete_run as (
+    select distinct on (r.solver) r.solver, r.run_id, r.slot_time
+      from public.psse_run r
+     where r.outcome in ('ok', 'fallback')
+     order by r.solver, r.slot_time desc, r.finished_at desc, r.run_id desc
 )
 -- END grid_study_ctes
 select check_name, ok, detail
@@ -361,6 +369,18 @@ select check_name, ok, detail
     select 'latest_grid_study_is_stale_matches_age_minutes',
            coalesce((select coalesce(bool_and(is_stale = (age_minutes > 90)), true) from public.latest_grid_study), false),
            'rows checked=' || coalesce((select count(*) from public.latest_grid_study)::text, 'view missing')
+    union all
+    select 'latest_grid_study_has_each_solvers_newest_complete_run',
+           coalesce(
+               not exists (select 1 from newest_complete_run n
+                            where (select count(*) from public.latest_grid_study v
+                                    where v.solver = n.solver and v.slot_time = n.slot_time)
+                                  <> (select count(*) from public.psse_dispatched_capacity d where d.run_id = n.run_id))
+               and (select count(*) from public.latest_grid_study)
+                   = (select count(*) from public.psse_dispatched_capacity d join newest_complete_run n on n.run_id = d.run_id),
+               false),
+           'view rows=' || coalesce((select count(*) from public.latest_grid_study)::text, 'view missing') ||
+               ', solvers with a complete run=' || (select count(*) from newest_complete_run)::text
     -- END grid_study_checks
   ) as checks
  order by check_name;
